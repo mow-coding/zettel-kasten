@@ -499,3 +499,59 @@ not complete at this checkpoint.
   gates and the 169-resource synchronization check passed. This candidate is
   recorded locally while the preceding run's final Windows shard completes;
   pushing early would cancel evidence that is still being collected.
+
+## Installed-only failure: diagnose once, retain the original evidence
+
+- The user asked to continue after an apparent interruption. Development
+  continued in the existing worktrees; the client archive and runtime remained
+  read-only. Candidate `10e5eb1e` completed all Ubuntu/Windows test matrix jobs
+  successfully, but its installed-entrypoint job failed. It is not releasable
+  on the strength of the other passing jobs.
+- The parent checker previously discarded bounded child stdout after a nonzero
+  exit. A shared, strict diagnostic contract now retains fixed error classes,
+  allowlisted reason codes and registered repository source coordinates while
+  still failing the job. It excludes exception messages, local values and
+  arbitrary paths. An initial-update-only diagnostic has a distinct schema and
+  cannot satisfy the complete installed journey. A bounded, exact-new failure
+  artifact preserves this observation when the process output is lost.
+- Two temporary diagnostic-launcher mistakes were separately reproduced and
+  corrected: a function used in place of the `Popen` class broke a later standard
+  library subclass import; combined console flags could briefly leave a console
+  host in the checker's process job. These are harness faults, not the product
+  failure. No product containment rule or job limit was weakened to hide them.
+- Reusing the preserved installed candidate avoided repeated builds and full
+  updates. Its failure was before the approval broker: the real candidate
+  `archive_cli --version` could not import the pinned native Unicode dependency.
+  Seven product source files matched the candidate wheel. Candidate and bootstrap
+  native binaries also had identical hashes, sizes and AMD64 machine types.
+- The actual native binary path was 265 characters. Loading that same file with
+  CPython's DLL flags failed with Windows error 206 using its ordinary absolute
+  path, but succeeded using the extended-length spelling. A memory-only path
+  diagnostic then ran the real CLI successfully in 23.360 seconds, with the
+  exact expected version and no stderr. This proves the observed loader cause;
+  it is not a product launcher fix, a completed update or client recovery.
+- The selected correction is limited to the pinned native Unicode dependency's
+  import boundary. It must retain the import system's selected file and engine,
+  without changing global search paths, Windows registry settings, project
+  location, runtime identity checks or approval. Both metadata and credential
+  normalization must use the same pinned engine; dependency failure must not
+  silently select the standard library's different Unicode database. Genuine
+  long-path native loading and a newly built complete installed-wheel journey
+  remain required after implementation and independent review.
+- This boundary follows the documented [Windows extended-length path form](https://learn.microsoft.com/en-us/windows/win32/fileio/maximum-file-path-limitation)
+  and Python's existing [extension loader and module specification APIs](https://docs.python.org/3/library/importlib.html).
+  Neither source is treated as evidence that all possible Windows filesystem
+  operations or native dependencies already support long paths.
+- Independent review reproduced an initial compatibility regression in the
+  adapter: a short dotted native path loaded normally but the new boundary
+  rejected it. Applicability is now decided before strict long-path checks;
+  short paths delegate unchanged. The same native-file comparison then passed.
+  This was corrected rather than redefining a formerly valid import as invalid.
+- The final adapter/metadata/Unicode/credential cohort passed 65 tests and 23
+  subtests in 15.34 seconds, including actual long-path native loading and a
+  damaged binary in separate processes. Ordinary concurrent import sees only
+  the fully initialized shared module; import failures leave no cached partial
+  module or reflected private exception context. The independent source review
+  found no additional blocker. Root also independently passed the fifteen
+  installed-failure observation tests in 18.294 seconds. Final installed-wheel
+  and supported-platform evidence is still required for this new candidate.

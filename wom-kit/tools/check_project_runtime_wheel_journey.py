@@ -18,14 +18,17 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 import threading
 import time
 from unittest import mock
+from types import CodeType
 
 
 SCHEMA = "wom-kit/installed-v0419-runtime-journey/v0.1"
+INITIAL_DIAGNOSTIC_SCHEMA = "wom-kit/installed-runtime-initial-update-diagnostic/v0.1"
 PHASE_SCHEMA = "wom-kit/installed-runtime-phase-event/v0.1"
 PHASE_PREFIX = "WOM_RUNTIME_PHASE_V1 "
 PHASES = (
@@ -54,9 +57,85 @@ SAFE_REASON_CODES = frozenset({
     "repair_worker_arguments_invalid", "repair_worker_origin_invalid",
 })
 
+FAILURE_OBSERVATION_SCHEMA = "wom-kit/installed-runtime-failure-observation/v0.1"
+FAILURE_OUTPUT_LIMIT_BYTES = 32 * 1024
+INITIAL_FAILURE_FILE = "initial-update-failure.json"
+# Literal allowlists, not a code-shaped regular expression or arbitrary class
+# attribute: the parent validates the same contract without importing WOM.
+OBSERVED_FAILURE_CODES = frozenset({
+    "unclassified_failure", "exact_human_approval_cancelled", "exact_human_approval_key_unavailable",
+    "exact_human_approval_claim_failed", "exact_human_approval_resume_claim_invalid",
+    "exact_human_approval_resume_candidate_missing", "exact_human_approval_resume_candidate_ambiguous",
+    "exact_human_approval_resume_checkpoint_invalid", "exact_human_approval_writer_result_invalid",
+    "exact_human_approval_operation_failed", "exact_human_approval_state_unknown",
+    "project_update_transaction_invalid", "project_update_transaction_exists",
+    "project_update_transaction_not_found", "project_update_transaction_path_unsafe",
+    "project_update_transaction_intent_invalid", "project_update_transaction_lock_invalid",
+    "project_update_transaction_checkpoint_invalid", "project_update_transaction_checkpoint_write_failed",
+    "project_update_transaction_state_transition_invalid", "project_update_transaction_journal_degraded",
+    "project_update_transaction_durability_unverified", "project_update_transaction_cleanup_refused",
+    "project_update_transaction_not_sealed", "project_update_transaction_candidate_invalid",
+    "project_update_transaction_scan_incomplete", "project_update_transaction_reservation_state_changed",
+    "project_update_transaction_reservation_busy", "project_update_transaction_reservation_guard_unavailable",
+    "project_update_git_runner_unavailable", "project_update_git_runner_unsafe",
+    "project_update_git_runner_binding_invalid", "project_update_git_runner_drift",
+    "project_update_git_runner_phase_invalid", "project_update_git_runner_command_invalid",
+    "project_update_git_runner_closed", "project_update_git_runner_close_unverified",
+    "project_update_git_runner_resolved_more_than_once", "project_update_git_runner_handoff_invalid",
+    "project_version_update_terminal_cleanup_required", "project_version_update_terminal_cleanup_outcome_unknown",
+})
+OBSERVED_SUBPROCESS_FAILURE_CODES = frozenset(
+    f"{prefix}-{stage}_{outcome}"
+    for prefix in ("project-runtime-candidate", "project-runtime-reference", "project-runtime-stage",
+                   "project-runtime-final", "project-runtime-reuse", "project-runtime-noop")
+    for stage in ("venv", "install", "pip-check", "version", "resources", "new-process",
+                  "package-inventory", "python-version")
+    for outcome in ("failed", "timeout")
+)
+OBSERVED_SOURCE_FUNCTIONS = {
+    "wom-kit/src/wom_kit/archive_cli.py": frozenset({
+        "_command_project_version_update_core", "_project_version_update_approval_read_boundary",
+        "_execute_project_version_update_exact_human_approved_write",
+        "_project_version_update_privacy_safe_failure_result", "prepare_operation_tracking", "complete_operation_tracking",
+    }),
+    "wom-kit/src/wom_kit/archive_services.py": frozenset({
+        "_wom_kit_project_version_update_live_approval_transaction", "_wom_kit_project_version_update_legacy_core",
+        "_wom_kit_project_version_update_legacy_core_generator", "_project_update_close_after_service_failure",
+    }),
+    "wom-kit/src/wom_kit/project_runtime.py": frozenset({
+        "prepare_runtime_candidate", "_initialize_runtime_payload", "_candidate_inventory_snapshot",
+        "_path_identity", "_runtime_payload_sha256", "_verify_retained_artifacts", "_run_bounded",
+    }),
+    "wom-kit/src/wom_kit/exact_human_approval_workflow.py": frozenset({
+        "_execute_exact_human_approved_write_core", "_run_started_claim_writer",
+    }),
+}
+OBSERVED_FAILURE_KINDS = frozenset({
+    "type_error", "index_error", "key_error", "value_error", "permission_error",
+    "file_not_found", "os_error", "unclassified_exception", "approval_workflow_error",
+    "transaction_error", "git_runner_error", "domain_error",
+})
+CLI_OBSERVATION_VALUES = {
+    "status": frozenset({"updated_restart_required", "no_change", "blocked", "failed", "error",
+        "reservation_busy", "reservation_guard_unavailable", "legacy_prewrite_recovery_blocked",
+        "terminal_cleanup_required", "terminal_cleanup_outcome_unknown", "runtime_bootstrap_required"}),
+    "state": frozenset({"blocked", "failed", "error", "unavailable", "passed", "not_reached"}),
+    "effects_state": frozenset({"none", "unknown", "partial", "complete"}),
+    "existing_operation_presence": frozenset({"present", "absent", "unavailable"}),
+    "preparation_revalidation_state": frozenset({"passed", "failed", "not_reached", "unavailable"}),
+}
+
 
 class JourneyCheckError(RuntimeError):
     """Only explicit harness assertions can supply public reason codes."""
+
+
+class InitialUpdateCheckError(JourneyCheckError):
+    """Carries only a revalidated, detached observation, never a CLI result."""
+
+    def __init__(self, observation):
+        super().__init__("public_update_failed")
+        self.observation = validate_first_update_observation(observation)
 
 
 class PhaseReporter:
@@ -177,11 +256,382 @@ class CallObservation:
         self.originals.clear()
 
 
+class FirstUpdateObservation:
+    """Bounded original-forwarding observations shared by both real journeys."""
+
+    _BOUNDARIES = ("runtime_prepare", "approval_broker")
+    _LITERAL_CODES = frozenset({
+        "project_version_update_archive_identity_unavailable",
+        "project_version_update_approval_archive_identity_changed",
+        "project_version_update_live_approval_executor_required",
+        "project_version_update_preflight_invalid",
+        "project_runtime_candidate_binding_invalid",
+        "project_runtime_candidate_preparation_incomplete",
+        "project_runtime_candidate_preimage_observation_unavailable",
+        "project_runtime_prepared_bundle_cleanup_unverified",
+        "project_runtime_tree_changed", "project_runtime_tree_unsafe",
+        "project_runtime_parent_identity_drift", "project_runtime_receipt_schema_invalid",
+        "project_runtime_preparation_binding_invalid", "project_runtime_preparation_failed",
+        "project_runtime_tree_unreadable", "project_runtime_tree_case_collision", "project_runtime_tree_too_large",
+        "project_runtime_file_unreadable_or_changed", "project_runtime_artifact_too_large",
+        "project_runtime_artifact_size_mismatch", "project_runtime_artifact_sha256_mismatch",
+        "project_runtime_wheel_payload_unsafe", "project_runtime_wheel_data_layout_unsupported",
+        "project_runtime_wheel_payload_too_large", "project_runtime_wheel_payload_unreadable",
+        "project_runtime_wheel_payload_empty", "project_runtime_site_packages_unsafe",
+        "project_runtime_wheel_dist_info_invalid", "project_runtime_wheel_payload_collision",
+        "project_runtime_wheel_root_collision", "project_runtime_installed_payload_unsafe",
+        "project_runtime_installed_payload_mismatch", "project_runtime_installed_payload_inventory_mismatch",
+        "project_runtime_trusted_pip_unavailable", "project_runtime_scripts_unsafe",
+        "project_runtime_scripts_cleanup_failed", "project_runtime_bytecode_cleanup_failed",
+        "project_runtime_pyvenv_unsafe", "project_runtime_pyvenv_write_failed",
+        "project_runtime_dist_info_extra_file", "project_runtime_payload_unreadable",
+        "project_runtime_prepared_bundle_unsafe", "project_runtime_prepared_bundle_unreadable",
+        "project_runtime_prepared_bundle_binding_invalid", "project_runtime_prepared_bundle_drift",
+        "project_runtime_artifact_directory_unsafe", "project_runtime_retained_supply_lock_mismatch",
+        "project_runtime_artifact_inventory_invalid", "project_runtime_artifact_inventory_unreadable",
+        "project_runtime_artifact_inventory_mismatch", "project_runtime_version_mismatch",
+        "project_runtime_resource_verification_failed", "project_runtime_new_process_mismatch",
+        "project_runtime_package_inventory_invalid", "project_runtime_package_inventory_mismatch",
+        "project_runtime_python_version_mismatch",
+    }) | OBSERVED_SUBPROCESS_FAILURE_CODES
+
+    def __init__(self):
+        from wom_kit import archive_cli, archive_services, project_runtime
+        from wom_kit import exact_human_approval_workflow
+        self._services, self._runtime, self._workflow = archive_services, project_runtime, exact_human_approval_workflow
+        self.boundaries = {name: {"entered": False, "returned": False} for name in self._BOUNDARIES}
+        self.failures = {}
+        self._source_codes = {}
+        source_functions = (
+            (archive_cli, "archive_cli.py", (
+                "_command_project_version_update_core", "_project_version_update_approval_read_boundary",
+                "_execute_project_version_update_exact_human_approved_write",
+                "_project_version_update_privacy_safe_failure_result",
+                "prepare_operation_tracking", "complete_operation_tracking",
+            )),
+            (archive_services, "archive_services.py", (
+                "_wom_kit_project_version_update_live_approval_transaction",
+                "_wom_kit_project_version_update_legacy_core",
+                "_wom_kit_project_version_update_legacy_core_generator",
+                "_project_update_close_after_service_failure",
+            )),
+            (project_runtime, "project_runtime.py", (
+                "prepare_runtime_candidate", "_initialize_runtime_payload", "_candidate_inventory_snapshot",
+                "_path_identity", "_runtime_payload_sha256", "_verify_retained_artifacts", "_run_bounded",
+            )),
+            (exact_human_approval_workflow, "exact_human_approval_workflow.py", (
+                "_execute_exact_human_approved_write_core", "_run_started_claim_writer",
+            )),
+        )
+        for module, basename, names in source_functions:
+            expected_file = os.path.normcase(os.path.abspath(module.__file__))
+            for name in names:
+                code = getattr(getattr(module, name, None), "__code__", None)
+                if isinstance(code, CodeType):
+                    self._register_code(code, expected_file, "wom-kit/src/wom_kit/" + basename, name)
+
+    def _register_code(self, code, expected_file, relative_file, owner_function=None):
+        if os.path.normcase(os.path.abspath(code.co_filename)) != expected_file:
+            return
+        owner_function = code.co_name if owner_function is None else owner_function
+        self._source_codes[id(code)] = (code, relative_file, owner_function)
+        # Nested functions belong to these exact, checked-in code objects;
+        # no frame globals/locals or arbitrary module members are inspected.
+        for constant in code.co_consts:
+            if isinstance(constant, CodeType):
+                self._register_code(constant, expected_file, relative_file, owner_function)
+
+    def _source_frame(self, error):
+        selected = None
+        trace = error.__traceback__
+        while trace is not None:
+            code = trace.tb_frame.f_code
+            known = self._source_codes.get(id(code))
+            if known is not None and known[0] is code:
+                selected = {"file": known[1], "line": trace.tb_lineno, "function": known[2]}
+            trace = trace.tb_next
+        return selected
+
+    def _error(self, error):
+        archive_services, project_runtime, exact_human_approval_workflow = self._services, self._runtime, self._workflow
+        kinds = {TypeError: "type_error", IndexError: "index_error", KeyError: "key_error",
+                 ValueError: "value_error", PermissionError: "permission_error",
+                 FileNotFoundError: "file_not_found", OSError: "os_error"}
+        kind, code = kinds.get(type(error), "unclassified_exception"), "unclassified_failure"
+        typed_codes = (
+            (exact_human_approval_workflow.ExactHumanApprovalWorkflowError, "approval_workflow_error"),
+            (archive_services.project_update_transaction.ProjectUpdateTransactionError, "transaction_error"),
+            (archive_services.project_update_git_runner.ProjectUpdateGitRunnerError, "git_runner_error"),
+        )
+        for error_type, fixed_kind in typed_codes:
+            if type(error) is error_type:
+                kind = fixed_kind
+                candidate = error.code
+                if type(candidate) is str and candidate in error_type._CODES and candidate in OBSERVED_FAILURE_CODES:
+                    code = candidate
+                break
+        else:
+            if type(error) in {archive_services.ArchiveServiceError, project_runtime.ProjectRuntimeError,
+                               project_runtime.PreparedRuntimeBundleCleanupError,
+                               project_runtime.PreparedRuntimeCandidateIncompleteError}:
+                kind = "domain_error"
+                if len(error.args) == 1 and type(error.args[0]) is str and error.args[0] in self._LITERAL_CODES:
+                    code = error.args[0]
+        return {"kind": kind, "code": code, "source": self._source_frame(error)}
+
+    def record(self, stage, error):
+        if stage not in {*self._BOUNDARIES, "cli_failure_projection", "first_cli_call"}:
+            raise ValueError("unknown_observation_stage")
+        if stage in self.failures:
+            return
+        chain, seen = [], set()
+        while isinstance(error, BaseException) and id(error) not in seen and len(chain) < 8:
+            seen.add(id(error))
+            chain.append(self._error(error))
+            error = error.__cause__ if error.__cause__ is not None else error.__context__
+        self.failures[stage] = chain
+
+    def boundary(self, stage, original):
+        if stage not in self._BOUNDARIES:
+            raise ValueError("unknown_observation_stage")
+
+        @wraps(original)
+        def observe(*args, **kwargs):
+            self.boundaries[stage]["entered"] = True
+            try:
+                result = original(*args, **kwargs)
+            except Exception as error:
+                self.record(stage, error)
+                raise
+            self.boundaries[stage]["returned"] = True
+            return result
+        return observe
+
+    def failure_projector(self, original):
+        @wraps(original)
+        def observe(error):
+            self.record("cli_failure_projection", error)
+            return original(error)
+        return observe
+
+    def diagnostic(self, *, native_observed):
+        return json.dumps({"stage": "first_update", "boundaries": self.boundaries,
+                           "failures": self.failures, "native_observed": bool(native_observed)},
+                          sort_keys=True)
+
+    def failure_payload(self, *, native_observed, cli_code=None, cli_result=None):
+        value = cli_result if type(cli_result) is dict else {}
+        fields = {name: value.get(name) for name in CLI_OBSERVATION_VALUES}
+        runtime = value.get("project_runtime")
+        revalidation = runtime.get("preparation_revalidation") if type(runtime) is dict else None
+        fields["preparation_revalidation_state"] = (
+            revalidation.get("state") if type(revalidation) is dict else None)
+        fields = {name: item if type(item) is str and item in CLI_OBSERVATION_VALUES[name] else None
+                  for name, item in fields.items()}
+        allowed = OBSERVED_FAILURE_CODES | self._LITERAL_CODES
+        supplied_codes = value.get("reason_codes")
+        if type(supplied_codes) is not list:
+            supplied_codes = []
+        candidates = [value.get("reason_code"), *supplied_codes[:32]]
+        fields["reason_codes"] = sorted({item for item in candidates
+                                         if type(item) is str and item in allowed})
+        fields["return_code"] = cli_code if type(cli_code) is int and cli_code in {0, 1, 2} else None
+        return validate_first_update_observation({
+            "schema": FAILURE_OBSERVATION_SCHEMA, "scope": "synthetic_harness_only",
+            "product_recovery_evidence": False, "private_values_echoed": False,
+            "stage": "first_update", "boundaries": self.boundaries, "failures": self.failures,
+            "native_observed": native_observed is True, "cli": fields,
+        })
+
+
+def validate_first_update_observation(value):
+    """Reject rather than echo any unexpected output from the child boundary."""
+    valid = type(value) is dict and set(value) == {
+        "schema", "scope", "product_recovery_evidence", "private_values_echoed", "stage",
+        "boundaries", "failures", "native_observed", "cli",
+    }
+    require(valid, "installed_runtime_journey_failed")
+    require(value["schema"] == FAILURE_OBSERVATION_SCHEMA and value["scope"] == "synthetic_harness_only"
+            and value["product_recovery_evidence"] is False and value["private_values_echoed"] is False
+            and value["stage"] == "first_update" and type(value["native_observed"]) is bool,
+            "installed_runtime_journey_failed")
+    boundaries = value["boundaries"]
+    require(type(boundaries) is dict and set(boundaries) == set(FirstUpdateObservation._BOUNDARIES),
+            "installed_runtime_journey_failed")
+    for row in boundaries.values():
+        require(type(row) is dict and set(row) == {"entered", "returned"}
+                and all(type(item) is bool for item in row.values())
+                and (not row["returned"] or row["entered"]), "installed_runtime_journey_failed")
+    failures = value["failures"]
+    require(type(failures) is dict and set(failures) <= {
+        *FirstUpdateObservation._BOUNDARIES, "cli_failure_projection", "first_cli_call"},
+        "installed_runtime_journey_failed")
+    for chain in failures.values():
+        require(type(chain) is list and 1 <= len(chain) <= 8, "installed_runtime_journey_failed")
+        for row in chain:
+            require(type(row) is dict and set(row) == {"kind", "code", "source"}
+                    and type(row["kind"]) is str and row["kind"] in OBSERVED_FAILURE_KINDS
+                    and type(row["code"]) is str
+                    and row["code"] in OBSERVED_FAILURE_CODES | FirstUpdateObservation._LITERAL_CODES,
+                    "installed_runtime_journey_failed")
+            source = row["source"]
+            if source is not None:
+                require(type(source) is dict and set(source) == {"file", "line", "function"}
+                        and type(source["file"]) is str and source["file"] in OBSERVED_SOURCE_FUNCTIONS
+                        and type(source["function"]) is str
+                        and source["function"] in OBSERVED_SOURCE_FUNCTIONS[source["file"]]
+                        and type(source["line"]) is int and 1 <= source["line"] <= 1_000_000,
+                        "installed_runtime_journey_failed")
+    cli = value["cli"]
+    require(type(cli) is dict and set(cli) == set(CLI_OBSERVATION_VALUES) | {"return_code", "reason_codes"},
+            "installed_runtime_journey_failed")
+    for name, allowed in CLI_OBSERVATION_VALUES.items():
+        require(cli[name] is None or type(cli[name]) is str and cli[name] in allowed,
+                "installed_runtime_journey_failed")
+    require(cli["return_code"] is None or type(cli["return_code"]) is int and cli["return_code"] in {0, 1, 2},
+            "installed_runtime_journey_failed")
+    codes = cli["reason_codes"]
+    require(type(codes) is list and len(codes) <= 32 and all(type(item) is str
+            and item in OBSERVED_FAILURE_CODES | FirstUpdateObservation._LITERAL_CODES for item in codes)
+            and codes == sorted(set(codes)), "installed_runtime_journey_failed")
+    return json.loads(json.dumps(value, allow_nan=False))
+
+
+def parse_failure_output(stdout):
+    """Pure strict parent/child failure protocol; this never proves completion."""
+    require(type(stdout) is str and len(stdout.encode("utf-8")) <= FAILURE_OUTPUT_LIMIT_BYTES,
+            "installed_runtime_journey_failed")
+
+    def unique(pairs):
+        value = {}
+        for key, item in pairs:
+            require(key not in value, "installed_runtime_journey_failed")
+            value[key] = item
+        return value
+
+    value = json.loads(stdout, object_pairs_hook=unique,
+                       parse_constant=lambda _value: require(False, "installed_runtime_journey_failed"))
+    require(type(value) is dict and set(value) in (
+        {"ok", "schema", "reason_code"}, {"ok", "schema", "reason_code", "failure_observation"}),
+        "installed_runtime_journey_failed")
+    require(value["ok"] is False and value["schema"] == SCHEMA and type(value["reason_code"]) is str
+            and value["reason_code"] in SAFE_REASON_CODES | {"installed_runtime_journey_failed"},
+            "installed_runtime_journey_failed")
+    if "failure_observation" in value:
+        require(value["reason_code"] == "public_update_failed", "installed_runtime_journey_failed")
+        value["failure_observation"] = validate_first_update_observation(value["failure_observation"])
+    return value
+
+
+def _initial_failure_root_identity(root):
+    # A fixed child filename below the newly created synthetic root only.
+    # Never follow a junction/symlink to preserve diagnostic output elsewhere.
+    root = Path(root)
+    for path in (root, *root.parents):
+        info = path.lstat()
+        if (not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode)
+                or getattr(info, "st_file_attributes", 0) & 0x400):
+            raise JourneyCheckError("installed_runtime_journey_failed")
+    info = root.lstat()
+    return (info.st_dev, info.st_ino)
+
+
+def write_initial_failure_observation(root, expected_identity, value):
+    """No-overwrite diagnostic artifact, not a claim/checkpoint or completion."""
+    valid = None
+    try:
+        valid = parse_failure_output(json.dumps(value, allow_nan=False))
+        raw = json.dumps(valid, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        if _initial_failure_root_identity(root) != expected_identity:
+            raise JourneyCheckError("installed_runtime_journey_failed")
+        # Reuse the installed durable writer's retained-parent/no-replace
+        # primitives. This is reached only after importing the candidate WOM.
+        from wom_kit import project_update_transaction as durable
+        with durable._bound_directory_for_move(root) as parent:
+            if parent.identity != expected_identity:
+                raise JourneyCheckError("installed_runtime_journey_failed")
+            if os.name == "nt":
+                durable._write_new(parent.path / INITIAL_FAILURE_FILE, raw, within=parent.path)
+            else:
+                descriptor = os.open(INITIAL_FAILURE_FILE,
+                    os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600, dir_fd=parent.descriptor)
+                try:
+                    durable._write_all(descriptor, raw)
+                    os.fsync(descriptor)
+                    os.fsync(parent.descriptor)
+                finally:
+                    os.close(descriptor)
+            durable._assert_named_reservation_directory_identity(parent.path, expected_identity)
+        return
+    except Exception:
+        pass
+    raise JourneyCheckError("installed_runtime_journey_failed")
+
+
+def read_initial_failure_observation(root):
+    """Bounded read-only recovery of strict data even after parent rejection."""
+    result = None
+    try:
+        root = Path(root)
+        root_identity = _initial_failure_root_identity(root)
+        path = root / INITIAL_FAILURE_FILE
+        before = path.lstat()
+        identity = lambda info: (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+        safe = lambda info: (stat.S_ISREG(info.st_mode) and not stat.S_ISLNK(info.st_mode)
+            and not getattr(info, "st_file_attributes", 0) & 0x400 and info.st_nlink == 1
+            and 0 < info.st_size <= FAILURE_OUTPUT_LIMIT_BYTES)
+        if not safe(before):
+            raise JourneyCheckError("installed_runtime_journey_failed")
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            opened = os.fstat(descriptor)
+            if not safe(opened) or identity(opened) != identity(before):
+                raise JourneyCheckError("installed_runtime_journey_failed")
+            with os.fdopen(descriptor, "rb", closefd=False) as stream:
+                raw = stream.read(FAILURE_OUTPUT_LIMIT_BYTES + 1)
+            if identity(os.fstat(descriptor)) != identity(opened):
+                raise JourneyCheckError("installed_runtime_journey_failed")
+        finally:
+            os.close(descriptor)
+        if identity(path.lstat()) != identity(before) or _initial_failure_root_identity(root) != root_identity:
+            raise JourneyCheckError("installed_runtime_journey_failed")
+        result = parse_failure_output(raw.decode("utf-8"))
+    except Exception:
+        pass
+    if result is None:
+        raise JourneyCheckError("installed_runtime_journey_failed")
+    return result
+
+
+
 def cli_json(archive_cli, argv):
     stdout, stderr = io.StringIO(), io.StringIO()
     with redirect_stdout(stdout), redirect_stderr(stderr):
         code = archive_cli.main(argv)
     return code, json.loads(stdout.getvalue())
+
+
+def observed_initial_update(archive_cli, project_runtime, cli, argv, native):
+    """Observe the real first call without substituting prepare/broker/writer."""
+    observation = FirstUpdateObservation()
+    code, result = None, None
+    with ExitStack() as stack:
+        stack.enter_context(mock.patch.object(project_runtime, "prepare_runtime_candidate",
+            new=observation.boundary("runtime_prepare", project_runtime.prepare_runtime_candidate)))
+        stack.enter_context(mock.patch.object(archive_cli, "_execute_project_version_update_exact_human_approved_write",
+            new=observation.boundary("approval_broker", archive_cli._execute_project_version_update_exact_human_approved_write)))
+        stack.enter_context(mock.patch.object(archive_cli, "_project_version_update_privacy_safe_failure_result",
+            new=observation.failure_projector(archive_cli._project_version_update_privacy_safe_failure_result)))
+        try:
+            code, result = cli(argv)
+        except Exception as error:
+            observation.record("first_cli_call", error)
+    if code != 0 or type(result) is not dict or result.get("status") != "updated_restart_required":
+        # Raise after leaving the exception handler: do not retain its private
+        # traceback as this public harness exception's context.
+        raise InitialUpdateCheckError(observation.failure_payload(
+            native_observed=native.called, cli_code=code, cli_result=result))
+    return code, result
 
 
 def approved_arguments(project: Path, version: str) -> list[str]:
@@ -580,12 +1030,24 @@ def exercise_installed_repair(wheel, root, project, version, project_runtime, ar
             "repair_independent_noop": round(time.monotonic() - started, 3)}
 
 
-def run_journey(wheel: Path, source: Path, shim: Path, root: Path, expected_version: str, *, phases=None) -> dict[str, object]:
+def initial_update_diagnostic(version, wheel_hash, import_seconds, update_seconds):
+    return {"ok": True, "schema": INITIAL_DIAGNOSTIC_SCHEMA,
+            "scope": "synthetic_harness_only", "full_journey_complete": False,
+            "candidate_wheel_not_public_release_proof": True,
+            "package_version": version, "wheel_sha256": wheel_hash,
+            "initial_update_completed": True, "private_values_echoed": False,
+            "seconds": {"bootstrap_import": round(import_seconds, 3), "update": round(update_seconds, 3)}}
+
+
+def run_journey(wheel: Path, source: Path, shim: Path, root: Path, expected_version: str, *,
+                phases=None, initial_update_only=False) -> dict[str, object]:
     phases = PhaseReporter() if phases is None else phases
     phases.begin("bootstrap_import")
     require(os.name == "nt" and sys.version_info[:2] == (3, 12), "windows_cpython312_required")
     require(not root.exists(), "synthetic_fixture_must_be_new")
     root.mkdir()
+    if initial_update_only:
+        phases.initial_diagnostic_root = (root, _initial_failure_root_identity(root))
     started = time.monotonic()
     from wom_kit import archive_cli, archive_services, project_runtime
     from wom_kit import exact_human_approval_windows, exact_human_approval_workflow
@@ -623,12 +1085,13 @@ def run_journey(wheel: Path, source: Path, shim: Path, root: Path, expected_vers
             exact_human_approval_windows._CtypesTaskDialogNative, "show",
             return_value=(exact_human_approval_windows.APPROVE_BUTTON_ID, False),
         ) as native:
-            code, first = cli(approved)
-        require(code == 0 and first.get("status") == "updated_restart_required", "public_update_failed")
+            code, first = observed_initial_update(archive_cli, project_runtime, cli, approved, native)
         require(native.call_count == 1, "public_native_broker_not_once")
         require(first.get("terminal_finalization", {}).get("transaction_cleanup_completed") is True, "update_cleanup_incomplete")
         update_seconds = time.monotonic() - update_start
         phases.passed()
+        if initial_update_only:
+            return initial_update_diagnostic(expected_version, wheel_hash, import_seconds, update_seconds)
         phases.begin("healthy_noop")
         runtime = project_runtime.runtime_path(project, expected_version)
         before = project_runtime._candidate_inventory_snapshot(runtime)
@@ -729,13 +1192,19 @@ def run_journey(wheel: Path, source: Path, shim: Path, root: Path, expected_vers
 
 def main() -> int:
     phases = None
+    initial_only = False
     try:
         if len(sys.argv) == 6 and sys.argv[1] == "--repair-worker":
             result = run_repair_worker(Path(sys.argv[2]).resolve(), Path(sys.argv[3]).resolve(), sys.argv[4], sys.argv[5])
         else:
             phases = PhaseReporter()
-            require(len(sys.argv) == 6, "journey_arguments_invalid")
-            result = run_journey(*(Path(value).resolve() for value in sys.argv[1:5]), sys.argv[5], phases=phases)
+            initial_only = len(sys.argv) == 7 and sys.argv[1] == "--initial-update-only"
+            arguments = sys.argv[2:] if initial_only else sys.argv[1:]
+            require(len(arguments) == 5, "journey_arguments_invalid")
+            options = {"phases": phases}
+            if initial_only:
+                options["initial_update_only"] = True
+            result = run_journey(*(Path(value).resolve() for value in arguments[:4]), arguments[4], **options)
     except Exception as error:
         if phases is not None:
             try:
@@ -747,6 +1216,17 @@ def main() -> int:
         reason = str(error) if isinstance(error, JourneyCheckError) else "installed_runtime_journey_failed"
         result = {"ok": False, "schema": SCHEMA,
                   "reason_code": reason if reason in SAFE_REASON_CODES else "installed_runtime_journey_failed"}
+        if type(error) is InitialUpdateCheckError:
+            try:
+                result["failure_observation"] = validate_first_update_observation(error.observation)
+            except Exception:
+                pass  # Corrupt diagnostics cannot leak or change failure into success.
+        if initial_only and phases is not None and hasattr(phases, "initial_diagnostic_root"):
+            try:
+                root, identity = phases.initial_diagnostic_root
+                write_initial_failure_observation(root, identity, result)
+            except Exception:
+                pass  # Preserve the original failed result if diagnostic storage fails.
     print(json.dumps(result, sort_keys=True))
     return 0 if result.get("ok") is True else 1
 
