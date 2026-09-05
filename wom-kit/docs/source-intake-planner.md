@@ -1,9 +1,26 @@
 # Source Intake Planner
 
-Status: v0.3.301 archive-root paths, distinct local identity, and batch recording
-Date: 2026-08-07
+Status: historical metadata-planner contract, with current writer routing below
+Updated: 2026-09-06
 
-Current v0.4.0 boundary: source-intake planning remains read-only.
+## Current writer routing
+
+`source-intake` is still a read-only metadata planner. Do not apply its
+metadata-only limits to the separate exact writers: `source-intake-record`
+has an exact-human one-file route since v0.4.9, and `source-intake-batch` has
+an exact-human batch route since v0.4.10. The latter hashes source bytes,
+records reviewed intake evidence and prepares a separate capture request;
+it does not itself preserve source files as objets. Use the
+[runtime entrypoints](runtime-canonical-entrypoints.md) and
+[capability matrix](capability-matrix.md) for the released routes.
+
+The v0.4.0 refusal and older composition descriptions below are historical,
+not a claim that currently released exact writers are closed. The unreleased
+v0.4.20 scoped route is described separately at the end of this document.
+
+## Historical v0.4.0 boundary
+
+At v0.4.0, source-intake planning remained read-only.
 `source-intake-record` and `source-intake-batch` approval fail with
 `compound_exact_human_approval_binding_required` before private input read or
 mutation and write no item/aggregate receipt. Approval examples below are
@@ -193,3 +210,35 @@ This release does not:
 - sync providers.
 
 MCP exposes only read-only `source_intake_plan`; it exposes no apply/capture/upload/sync/provider API tool.
+
+## Unreleased v0.4.20 session-bound batch route
+
+Status: source implementation and synthetic verification; not released and
+not proof of a client recovery. This section describes the explicit scoped
+CLI route, not MCP parity or replacement of the existing unscoped calls.
+
+An AI with an established, claimed work session supplies its retained app/task/
+session references and prepares the private request. The human reviews the
+native decision; they do not prepare JSON or copy identifiers.
+
+```text
+archive source-intake-batch <archive-root> --client-app-ref <app> --task-route-ref <task> --work-session-ref <session> --manifest <private-request.json> --dry-run --format json
+archive source-intake-batch <archive-root> --client-app-ref <app> --task-route-ref <task> --work-session-ref <session> --manifest <private-request.json> --approve --reviewed-by <reviewer> --format json
+archive source-intake-batch <archive-root> --client-app-ref <app> --task-route-ref <task> --resume --format json
+```
+
+Fresh preview/apply requires the private request; scoped apply does not take a
+copied expected-plan hash. Original resume accepts only the saved app/task route
+and an optional same-session assertion. It rejects replacement requests,
+reviewers, execution/approval identifiers and reconciliation flags. No explicit
+original re-review option is available in this first slice: missing original
+approval evidence is a blocker, not permission to manufacture another claim.
+
+Resume uses retained original input and authenticated checkpoints. Completed
+replay verifies output receipts and the prepared capture request, not absent
+source inputs; it can therefore remain read-only after caller JSON/source
+removal. `original_completion_verified` is not a claim that the source bytes
+were captured, uploaded or backed up. Source intake still reports
+`artifact_capture_performed: false`. The scoped downstream capture and Git
+producer must be connected and verified before advertising an end-to-end
+preservation workflow. Do not delete source files based on intake completion.

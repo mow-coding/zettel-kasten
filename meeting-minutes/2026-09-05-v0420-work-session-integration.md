@@ -1617,6 +1617,175 @@ bump, PR, tag, wheel or client application has occurred.
   verifies only retained output bytes; foreign same-ID archive claims refuse.
   Legacy started-only writer authority, reconciliation and admission remain.
 
+## Retained intake scale and the next complete chain
+
+- Checkpoint `e366ee51` remotely preserves the joined public session/Git journey,
+  typed intake selector refusals and claim-only completion verifier. Subsequent
+  scope/context, owned writer and CLI work remains uncommitted development.
+- The retained intake codec passed 17 tests in 5.624 seconds and independent
+  root review. It preserves original request bytes and canonical planned source
+  spelling without resolving missing inputs. Original source mapping is still
+  verified by the actual writer, not inferred from an unsigned private bundle.
+  Original operation evidence is recomputed through the planner's shared pure
+  builder; inconsistent counts/digests refuse even if every outer scope and
+  manifest hash is rebuilt. Its 32 MiB total metadata limit is explicit and does
+  not change the legacy route. No source bodies or new approval live in it.
+- A real synthetic 1,000-source metadata cycle passed with 1,001 exact targets,
+  15,893 total source bytes and a 108,877-byte request. Retained preparation was
+  8,333,515 bytes; original context was 8,334,305 bytes. Timings were: plan 29.180
+  seconds, scope 1.058, preparation 1.175, context factory 1.110, save 16.189,
+  independent load 8.105. There were 24 full input decodes across that complete
+  storage cycle. This is cardinality/metadata evidence, not a large-source-byte,
+  installed-runtime or completed domain-write performance result.
+- That measurement exposed the importance of avoiding a full retained decode
+  per output field: each 1,000-item decode is about a second on this host. The
+  concrete runner is therefore using one validated private operation view per
+  entry, exact retained-image/current-owner comparisons after callbacks and
+  before mutations, and the original per-source byte recheck. A cheap scope-to-
+  manifest/context invariant remains required; performance must not weaken it.
+- Additional downstream gap found by source inspection: the existing capture
+  batch's authenticated intake reader and chain validator admit only legacy
+  intake evidence v2. A newly scoped intake must not be advertised as a working
+  intake-to-capture chain until a typed authenticated scoped-intake reader is
+  connected and the actual chain is tested. Keep legacy behavior; do not accept
+  arbitrary new schema strings, infer capture ownership, or count metadata
+  receipts as preserved source bytes. This remains v0.4.20 integration work.
+
+## v0.4.19 release-evidence closeout and intake command review
+
+- Release-evidence PR #98 passed all 14 checks on exact head
+  `60481d649e93fc9a09b8f4ae2f7246f7c2c5e495` (run `33987880574`).
+  It merged at `84d55bd5871e852eef97da6e4b89dcba252d0d8b` with the reviewed
+  head and original release merge as its two parents. The existing v0.4.19 tag
+  remains on the original release merge; a documentation merge is not a retag.
+- The canonical development checkout was fast-forwarded and is clean, equal
+  to origin/main. Open PR count is zero. The clean completed release-evidence
+  checkout and its local branch were removed through normal Git operations;
+  its remote branch was already deleted. Only the canonical checkout and the
+  unfinished v0.4.20 worktree remain registered. The two previously policy-
+  blocked temporary installation environments remain preserved, not bypassed.
+  No client project, shared executable or provider was modified.
+- The explicit scoped intake CLI adapter passed its final 23-test cohort in
+  11.944 seconds: 17 new routing/projection/real held-lock-runtime tests with
+  a mocked domain, five existing legacy CLI/error/resume tests, and one startup
+  parser test. These are not actual scoped-domain or installed-wheel proof.
+  Root read review confirms fixed preview/completed/blocked text, read-only
+  preview domain-effect reporting, original route-only resume and closed
+  progress/result projections. The unscoped route remains unchanged; missing-
+  claim original re-review is deliberately not advertised by this first slice.
+
+## Actual intake journey and independent callback-boundary correction
+
+- The private first-slice cohort passed 11 tests in 233.249 seconds, including
+  provider-entry drift, actual progress-callback actor drift, partial and final-
+  receipt tails, original approval preservation and source-free completed proof.
+  Full retained-input decoding does not repeat per output field or extra pulse.
+- A separate actual public CLI journey passed in 40.575 seconds: public app
+  registration, task creation and claim; approval; first receipt publication
+  interrupted before its field checkpoint; deletion of only the caller JSON;
+  app/task-only resume; independent original MAC/checkpoint and whole-output
+  verification; then completed replay after both source files are removed.
+  The first receipt, original context and approval identity remain unchanged;
+  replay creates no claim, signature, actor change or domain write. Native input
+  and the local key are synthetic; runtime is Python 3.12, with 3.10 grammar
+  checked separately. This is not installed-wheel or client evidence.
+- Independent review subsequently identified a distinct callback window: the
+  low-level receipt publisher could invoke arbitrary progress after source
+  validation. Current-owner reauthentication alone does not detect a source-
+  bytes-only mutation in that callback. The above passes are pre-correction
+  observations, not final acceptance. A deterministic source-only reproduction
+  and narrow publication boundary correction are required before checkpointing.
+  Preserve the independent fixed reporter, legacy callback behavior and source-
+  free completed replay; do not rehash the whole batch for every metadata chunk.
+- The next intake-to-Git/capture step needs original typed context, completion
+  MAC and whole-output proof. It must not merely whitelist another evidence
+  schema. In particular, capture rederivation can occur inside a live approval
+  key consumer, so a historical reader must reuse that active claim or be
+  called outside it; nested provider consumption is not an acceptable shortcut.
+
+## Callback-window fix and typed Git output contract
+
+- The source-only callback regression was reproduced against the original
+  scoped runner: one test failed in 25.562 seconds after an actual intake
+  receipt publication, while the workflow reported authenticated completion.
+  This was a product boundary defect, not dismissed as a test-only problem.
+- The scoped runner now permits arbitrary progress before the source check
+  and after a completed field, but uses only concrete held/current/origin
+  verification throughout source hashing (including EOF) and publication.
+  The legacy writer and its callback behavior are unchanged; no second source
+  hash or batch-per-chunk decoding is added. The fixed independent CLI reporter
+  remains available. Native process interruption is not disabled.
+- All five final adversarial cases passed in 106.118 seconds on intake source
+  `64F7A68B93E00A508A8D541E759CFD50171D20681999DECDA1C55838FD546F80`:
+  actual owner loss before publication; no arbitrary publication callback and
+  resumed notifications; actual EOF callback protection; pre-entry source drift
+  refusal; post-field cancellation with held lock and original no-rewrite resume.
+  Independent read review cleared this source. Earlier fixture failures used
+  overly broad publication hooks and Windows short/long TEMP lexical equality;
+  final hooks select the actual intake artifact and compare physical identity.
+  The consolidated unchanged-source regression cohort was started next; its
+  final observation is recorded below.
+- Separately, the next Git data contract now has a closed v2 producer union
+  for intake receipts, prepared capture requests and common completion receipts.
+  V1 schema, bytes, hashes, evidence and 128-proof budget remain unchanged.
+  V2 is bounded to 8,192 proof rows and 16 MiB, refusing the whole scope on excess;
+  a synthetic 1,000-item intake binds all 1,002 output proofs without truncation.
+  Intake evidence does not invent a registry generation. Exact whole-new-file,
+  HEAD-absent and index-absent-or-identical rules remain required.
+- Seven new and five existing pure scope tests passed in 0.501 seconds on the
+  final independently reviewed data contract. The three intake path spellings
+  have literal independent oracles, not expectations derived from the helper
+  under test. This is data/partition validation only: authenticated discovery,
+  all original Git proof-consumer sites and actual remote backup remain to be
+  connected. Existing writer authority is not broadened by constructing v2 data.
+
+## Bounded historical context hints for the next producer
+
+- A new private, read-only intake-context inventory visits only the fixed
+  original-context directory. It distinguishes true absence from empty presence,
+  denied access and unsafe topology. Published and pending leaves both bind the
+  full name/identity/raw-byte generation, but pending leaves are never promoted
+  to context hints. Corrupt JSON remains opaque, unauthenticated input for a
+  later proof reader; enumeration itself establishes no provenance or ownership.
+- Count all entries before filtering. Refuse the whole snapshot above 128
+  entries or 32 MiB aggregate bytes, including pending files, before body reads;
+  each stable read is capped to the already budgeted size. Repeated hint access
+  performs no additional reads. Before/after observations include the complete
+  fixed private ancestor chain, not just its deepest directory. No file,
+  directory, pending record, key or receipt is created, removed or repaired.
+- Final inventory tests: 14 passed and one native-symlink privilege skip in
+  1.709 seconds; actual hardlink refusal and portable leaf/parent/intermediate
+  reparse models passed. Root independently reviewed the frozen source and test.
+  This still does not connect intake output authentication to scoped Git or
+  capture. The remaining consumers must verify original claim/context/MAC and
+  exact approved output membership, caching once per original operation.
+
+## Final first-slice regression checkpoint
+
+- The final unchanged-source cohort completed in 395.453 seconds with exit 0:
+  78 tests, 77 passed, one host-capability skip. Composition: private workflow
+  15; actual public CLI journey one; legacy intake 25, held runner 10 and
+  completion verifier nine; new adapter 17; startup parity one. The skip is
+  the prebound-receipt-parent directory-symlink test because native creation
+  is unavailable on this Windows host, not a disabled product guard.
+- Final intake source remains `64F7A68B93E00A508A8D541E759CFD50171D20681999DECDA1C55838FD546F80`;
+  workflow `F9E6B3220E51BBF5128DA3BAD74D4FEEEA72A43333EBFEF6A2A00CE91E0FE250`;
+  private tests `51C7685AFE7A518CBBEDCF0DB9F8234178D59ACC93EB01CEE28E1C43E81356C7`;
+  actual public test `ADFD90CBD7B47F0BF11A4659E48CB210FF73D07E4121339D504AFE6741BA40FB`.
+  All were independently reviewed. Actual runtime is Python 3.12; 3.10 grammar
+  was checked separately. Legacy authority, writer, verifier, execution,
+  reconciliation and completion helper ASTs remain unchanged; the extracted
+  pure evidence expression is identical to the original planner expression.
+- The staged checkpoint passed all four readiness/privacy checks and the
+  169-resource consistency check. No version bump, installed v0.4.20 acceptance,
+  cross-platform final CI or client recovery is implied. Intake original
+  re-review, authenticated downstream capture/Git, mixed-byte performance and
+  remaining writer coverage stay unfinished. The separate Git v2 data-contract
+  changes are intentionally excluded from this first intake commit.
+- Independent documentation review found no release/MCP/capture/backup claim
+  expansion. The ADR now explicitly says checks occur before domain mutations:
+  a refusal may still preserve private control evidence for safe original resume.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)

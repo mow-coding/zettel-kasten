@@ -275,3 +275,39 @@ approval, it must not generate a key when evidence is unavailable. The existing
 lifecycle original-review helper uses this same private broker entry. Its
 previous typed context, exact preimage and held publication checks remain;
 historical approval and context bytes are never rewritten by the migration.
+
+## Scoped intake and retained original input
+
+Extend the existing `source-intake-batch` command only when explicit app/task/
+session references select the new lane. Existing calls keep the legacy path.
+The AI prepares the private request and retains opaque routing; the person is
+not asked to write JSON, copy hashes, find receipts or select checkpoints.
+
+Fresh work binds original request bytes, exact source/receipt evidence and the
+current claimed session in a new exact manifest. A bounded private retained
+context is input evidence, never ownership or approval authority. On resume,
+load that original context and authenticate its claim; do not accept a new
+request, reviewer, digest, approval ID or replacement scope. Current ownership
+and the original establishment remain independently checked before domain
+mutations. A blocked domain write may still leave recoverable private control
+evidence; it must not be described as zero filesystem activity.
+
+Completed replay verifies the original authenticated common result and actual
+output bytes even when the caller JSON and source inputs no longer exist.
+It does not replan, rehash missing sources, sign another receipt or enter the
+writer. Historical completion, present ownership and final actor publication
+are reported as separate facts. A missing original approval remains a blocker
+in this first slice; explicit original re-review is not yet available here.
+
+The intake effect creates source-intake evidence and a prepared capture request,
+not preserved source bytes. Do not claim a downstream capture or scoped Git
+backup until its authenticated producer/consumer path is connected and tested.
+The existing legacy capture route must not be opened to a new scope merely by
+accepting another schema name. Reuse the same approval key consumer when a
+historical proof is needed inside another active approval; never nest providers.
+
+The CLI emits closed counts, booleans and digests, not request item names or
+private retained payloads. It distinguishes preview readiness from completion
+and read-only domain effects from interrupted writes. Callback-window findings,
+the actual synthetic public journey and final regression results belong in the
+integration minutes; this decision is not a release or client-recovery claim.

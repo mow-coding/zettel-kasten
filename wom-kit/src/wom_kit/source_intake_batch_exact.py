@@ -1040,59 +1040,11 @@ def plan_source_intake_batch(
             operation=OPERATION,
             archive_identity_sha256=archive_identity,
             items=operation_items,
-            operation_evidence={
-                "schema": EVIDENCE_SCHEMA,
-                "counts": {
-                    "source_item_count": len(items),
-                    "receipt_byte_count": sum(len(item.receipt_bytes) for item in items),
-                    "source_byte_count": sum(item.source_size_bytes for item in items),
-                    "warning_count": sum(len(item.warnings) for item in items),
-                    "prepared_capture_request_count": (
-                        1 if prepared_capture_request is not None else 0
-                    ),
-                },
-                "digests": {
-                    "item_receipt_set_sha256": _sha_document(
-                        [
-                            {
-                                "item_id": item.request_item_id,
-                                "receipt_bytes_sha256": _sha_bytes(item.receipt_bytes),
-                                "target_ref_sha256": _sha_bytes(item.receipt_relative_path.encode("utf-8")),
-                            }
-                            for item in items
-                        ]
-                    ),
-                    "item_source_set_sha256": _sha_document(
-                        [
-                            {
-                                "item_id": item.request_item_id,
-                                "source_bytes_sha256": item.source_bytes_sha256,
-                                "source_basis_sha256": _sha_bytes(item.source_basis_bytes),
-                            }
-                            for item in items
-                        ]
-                    ),
-                    "request_bytes_sha256": request_bytes_sha256,
-                    "request_document_sha256": request_document_sha256,
-                    "prepared_capture_request_sha256": (
-                        prepared_capture_request.request_sha256
-                        if prepared_capture_request is not None
-                        else _sha_document([])
-                    ),
-                    "intake_capture_chain_sha256": (
-                        prepared_capture_request.chain_binding_sha256
-                        if prepared_capture_request is not None
-                        else _sha_document([])
-                    ),
-                    "warning_set_sha256": _sha_document(
-                        [
-                            {"item_id": item.request_item_id, "warnings": list(item.warnings)}
-                            for item in items
-                        ]
-                    ),
-                },
-                "private_values_echoed": False,
-            },
+            operation_evidence=_source_intake_batch_operation_evidence(
+                items=items, request_bytes_sha256=request_bytes_sha256,
+                request_document_sha256=request_document_sha256,
+                prepared_capture_request=prepared_capture_request,
+            ),
         )
     except SourceIntakeBatchExactError as error:
         try:
@@ -1141,6 +1093,65 @@ def plan_source_intake_batch(
         state=state,
         blockers=blockers,
     )
+
+
+def _source_intake_batch_operation_evidence(
+    *, items, request_bytes_sha256, request_document_sha256, prepared_capture_request,
+) -> dict[str, Any]:
+    """Reconstruct original v2 evidence identically for planning and retention."""
+    return {
+        "schema": EVIDENCE_SCHEMA,
+        "counts": {
+            "source_item_count": len(items),
+            "receipt_byte_count": sum(len(item.receipt_bytes) for item in items),
+            "source_byte_count": sum(item.source_size_bytes for item in items),
+            "warning_count": sum(len(item.warnings) for item in items),
+            "prepared_capture_request_count": (
+                1 if prepared_capture_request is not None else 0
+            ),
+        },
+        "digests": {
+            "item_receipt_set_sha256": _sha_document(
+                [
+                    {
+                        "item_id": item.request_item_id,
+                        "receipt_bytes_sha256": _sha_bytes(item.receipt_bytes),
+                        "target_ref_sha256": _sha_bytes(item.receipt_relative_path.encode("utf-8")),
+                    }
+                    for item in items
+                ]
+            ),
+            "item_source_set_sha256": _sha_document(
+                [
+                    {
+                        "item_id": item.request_item_id,
+                        "source_bytes_sha256": item.source_bytes_sha256,
+                        "source_basis_sha256": _sha_bytes(item.source_basis_bytes),
+                    }
+                    for item in items
+                ]
+            ),
+            "request_bytes_sha256": request_bytes_sha256,
+            "request_document_sha256": request_document_sha256,
+            "prepared_capture_request_sha256": (
+                prepared_capture_request.request_sha256
+                if prepared_capture_request is not None
+                else _sha_document([])
+            ),
+            "intake_capture_chain_sha256": (
+                prepared_capture_request.chain_binding_sha256
+                if prepared_capture_request is not None
+                else _sha_document([])
+            ),
+            "warning_set_sha256": _sha_document(
+                [
+                    {"item_id": item.request_item_id, "warnings": list(item.warnings)}
+                    for item in items
+                ]
+            ),
+        },
+        "private_values_echoed": False,
+    }
 
 
 def approval_context(
@@ -1649,6 +1660,68 @@ def _run_source_intake_batch_exact_operation(
         plan, authority, store, request_items=request_items, resume=resume,
         progress_hook=progress_hook, completion_authenticator=_completion_authenticator(claim),
     )
+
+
+class _SessionSourceIntakeWriter(_Writer):
+    """Concrete admission with callbacks outside source-check/publication."""
+
+    def __init__(self, prepared, context, claim, held):
+        super().__init__(prepared.plan, request_items=prepared.request_items())
+        self.prepared, self.context, self.claim, self.held = prepared, context, claim, held
+
+    def _require(self):
+        from .work_session_source_intake_workflow import _require_pending_source_intake_scope_held
+
+        return _require_pending_source_intake_scope_held(self.prepared,
+            context=self.context, claim=self.claim, held=self.held)
+
+    def write_field(self, *, target_kind, target_ref, field_ref, value, heartbeat):
+        def guarded_heartbeat():
+            heartbeat()
+            self._require()
+        guarded_heartbeat()
+        # A user callback after the final source read could change bytes that
+        # were already hashed. Keep concrete ownership/MAC checks throughout
+        # this interval, then resume notifications at the safe field boundary.
+        super().write_field(target_kind=target_kind, target_ref=target_ref,
+            field_ref=field_ref, value=value, heartbeat=self._require)
+        guarded_heartbeat()
+
+
+def _run_session_source_intake_batch_exact_operation(
+    prepared, *, context, claim, writer_lock, resume, progress_hook,
+) -> dict[str, Any]:
+    """Only an exact retained typed session can enter the owned write lane.
+
+    The caller cannot supply a guard/authority flag. The concrete workflow
+    independently reloads original scope and checks current ownership and MACs.
+    Existing legacy entry points continue refusing every session-bound plan.
+    """
+    from .work_session_source_intake_bundle import PreparedSessionSourceIntakeBatch
+    from .work_session_source_intake_workflow import (
+        _require_pending_source_intake_scope_held, _source_intake_operation_view,
+    )
+
+    if type(prepared) is not PreparedSessionSourceIntakeBatch or type(resume) is not bool:
+        raise _fail("source_intake_batch_scope_context_required")
+    view = _source_intake_operation_view(prepared, context, writer_lock)
+    frozen = _require_pending_source_intake_scope_held(view,
+        context=context, claim=claim, held=writer_lock)
+    plan = frozen.plan
+    authority = _authority(plan, claim, context, allow_resume=True)
+    writer = _SessionSourceIntakeWriter(frozen, context, claim, writer_lock)
+
+    def authenticate(payload):
+        writer._require()
+        return _completion_authenticator(claim)(payload)
+
+    core = apply_exact_operation(plan.manifest, payloads=_Payloads(plan), writer=writer,
+        verifier=_Verifier(plan),
+        checkpoint_store=FileExactOperationCheckpointStore(plan.archive_root, writer_lock=writer_lock),
+        approval_authority=authority, completion_authenticator=authenticate,
+        resume=resume, progress_hook=progress_hook)
+    writer._require()
+    return _success_document(plan, core)
 
 
 def _execute_core(
