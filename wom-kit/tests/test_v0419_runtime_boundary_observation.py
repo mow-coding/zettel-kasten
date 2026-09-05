@@ -28,7 +28,7 @@ _STAT_NAMES = ('st_dev', 'st_ino', 'st_mode', 'st_size', 'st_mtime_ns', 'st_file
 
 class RuntimeBoundaryObservationTests(unittest.TestCase):
     @contextmanager
-    def stat_change(self, target, field):
+    def stat_change(self, target, field, *, xor=None):
         original = Path.lstat
         observed = {'count': 0}
         def changed(path, *args, **kwargs):
@@ -37,7 +37,7 @@ class RuntimeBoundaryObservationTests(unittest.TestCase):
                 observed['count'] += 1
                 if observed['count'] == 3:
                     fields = {name: getattr(value, name, 0) for name in _STAT_NAMES}
-                    fields[field] += 1
+                    fields[field] = fields[field] + 1 if xor is None else fields[field] ^ xor
                     return SimpleNamespace(**fields)
             return value
         with mock.patch.object(Path, 'lstat', new=changed):
@@ -122,6 +122,84 @@ class RuntimeBoundaryObservationTests(unittest.TestCase):
                 self.assertFalse(parsed['failure_observation']['boundaries']['approval_broker']['entered'])
                 self.assertNotIn('SYNTHETIC_PRIVATE', json.dumps(parsed))
                 self.assertNotIn(str(root), json.dumps(parsed))
+
+    def test_attribute_changes_keep_only_fixed_bit_names_from_original_comparison(self):
+        for bit, name in (*driver.RUNTIME_ATTRIBUTE_FLAGS, (0x80000000, None)):
+            with self.subTest(flag=name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                (root / 'SYNTHETIC_PRIVATE_FILE').write_bytes(b'synthetic')
+                observer = driver.FirstUpdateObservation()
+                with self.stat_change(root, 'st_file_attributes', xor=bit) as count, observer.runtime_boundaries():
+                    if name == 'archive':
+                        # Product normalization makes this administrative bit
+                        # invisible to content identity; diagnostics do not
+                        # invent an attribute failure for a successful read.
+                        runtime._runtime_payload_sha256(root)
+                    else:
+                        with self.assertRaises(runtime.ProjectRuntimeError) as caught:
+                            runtime._runtime_payload_sha256(root)
+                        observer.record('first_cli_call', caught.exception)
+                if name == 'archive':
+                    self.assertIsNone(observer.runtime_observation)
+                    self.assertNotIn('runtime_observation', observer.failure_payload(native_observed=False))
+                    continue
+                parsed = checker._parse_runtime_failure_output(json.dumps(self.envelope(observer)))
+                row = parsed['failure_observation']['runtime_observation']['events'][0]
+                self.assertEqual(count['count'], 3)
+                self.assertEqual(row['changed_identity_fields'], ['attributes'])
+                self.assertEqual(row['changed_attribute_flags'], [] if name is None else [name])
+                self.assertIs(row['unknown_attribute_bits_changed'], name is None)
+                self.assertNotIn(str(root), json.dumps(parsed))
+                self.assertNotIn('SYNTHETIC_PRIVATE', json.dumps(parsed))
+                self.assertNotIn('attribute_values', row)
+
+    def test_attribute_extension_rejects_unknown_labels_types_and_inconsistent_rows(self):
+        observer = driver.FirstUpdateObservation()
+        observation = driver.RuntimeBoundaryObservation(runtime)
+        observation._record('directory_identity', 'identity_changed', reason='project_runtime_tree_changed',
+                            operation='before_after_directory_comparison', site='directory_identity', fields=('attributes',),
+                            attribute_change={'changed_attribute_flags': ['archive'], 'unknown_attribute_bits_changed': False})
+        observer.runtime_observation = observation.snapshot()
+        original = self.envelope(observer)
+        self.assertEqual(checker._parse_runtime_failure_output(json.dumps(original)), original)
+
+        for key, value in (('changed_attribute_flags', ['SYNTHETIC_PRIVATE']),
+                           ('changed_attribute_flags', ['archive', 'archive']),
+                           ('changed_attribute_flags', ['archive', 'hidden']),
+                           ('changed_attribute_flags', []), ('changed_attribute_flags', 32),
+                           ('unknown_attribute_bits_changed', 1), ('unknown_attribute_bits_changed', None),
+                           ('changed_identity_fields', ['inode']), ('attribute_mask', 32)):
+            with self.subTest(key=key, value=value):
+                changed = deepcopy(original)
+                changed['failure_observation']['runtime_observation']['events'][0][key] = value
+                with self.assertRaises(checker.WheelCheckError):
+                    checker._parse_runtime_failure_output(json.dumps(changed))
+        for key in ('changed_attribute_flags', 'unknown_attribute_bits_changed'):
+            changed = deepcopy(original)
+            del changed['failure_observation']['runtime_observation']['events'][0][key]
+            with self.assertRaises(checker.WheelCheckError):
+                checker._parse_runtime_failure_output(json.dumps(changed))
+        # Older field-only observations remain valid, with no bit inference.
+        row = original['failure_observation']['runtime_observation']['events'][0]
+        del row['changed_attribute_flags'], row['unknown_attribute_bits_changed']
+        self.assertEqual(checker._parse_runtime_failure_output(json.dumps(original)), original)
+
+    def test_source_diagnostic_retains_same_validated_failure_observations(self):
+        observer = driver.FirstUpdateObservation()
+        observation = driver.RuntimeBoundaryObservation(runtime)
+        observation._record('directory_identity', 'identity_changed', reason='project_runtime_tree_changed',
+                            operation='before_after_directory_comparison', site='directory_identity', fields=('attributes',),
+                            attribute_change={'changed_attribute_flags': ['hidden'], 'unknown_attribute_bits_changed': False})
+        observer.runtime_observation = observation.snapshot()
+        cli_result = {'status': 'blocked', 'reason_codes': ['SYNTHETIC_PRIVATE'],
+                      'project_runtime': {'preparation_revalidation': {'state': 'failed'}},
+                      'private': 'SYNTHETIC_PRIVATE'}
+        payload = json.loads(observer.diagnostic(native_observed=False, cli_code=1, cli_result=cli_result))
+        self.assertEqual(payload, observer.failure_payload(native_observed=False, cli_code=1, cli_result=cli_result))
+        self.assertEqual(payload['runtime_observation']['events'][0]['changed_attribute_flags'], ['hidden'])
+        self.assertEqual(payload['cli']['status'], 'blocked')
+        self.assertEqual(payload['cli']['preparation_revalidation_state'], 'failed')
+        self.assertNotIn('SYNTHETIC_PRIVATE', json.dumps(payload))
 
     def test_other_real_tree_refusals_identify_site_without_guessing_directory_fields(self):
         for site in ('file_size', 'tree_generation'):

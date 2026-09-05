@@ -202,6 +202,19 @@ RUNTIME_BOUNDARY_SCHEMA = "wom-kit/test-runtime-boundary-observation/v1"
 RUNTIME_DIRECTORY_COMPARISON_LINE = 3345
 RUNTIME_COMPARISON_RAISES = {3346: "directory_identity", 3402: "file_size", 3405: "tree_generation"}
 RUNTIME_IDENTITY_FIELDS = ("device", "inode", "type", "size", "mtime_ns", "attributes")
+# Fixed WinNT.h vocabulary only; values never enter a failure envelope. The
+# shared EA/RECALL_ON_OPEN bit does not establish which provider meaning applies.
+RUNTIME_ATTRIBUTE_FLAGS = (
+    (0x1, "readonly"), (0x2, "hidden"), (0x4, "system"),
+    (0x10, "directory"), (0x20, "archive"), (0x40, "device"),
+    (0x80, "normal"), (0x100, "temporary"), (0x200, "sparse_file"),
+    (0x400, "reparse_point"), (0x800, "compressed"), (0x1000, "offline"),
+    (0x2000, "not_content_indexed"), (0x4000, "encrypted"),
+    (0x8000, "integrity_stream"), (0x10000, "virtual"),
+    (0x20000, "no_scrub_data"), (0x40000, "ea_or_recall_on_open"),
+    (0x80000, "pinned"), (0x100000, "unpinned"),
+    (0x400000, "recall_on_data_access"),
+)
 RUNTIME_BOUNDARY_TARGETS = (
     ("inspect_runtime", "installed_inspection"),
     ("_real_component_snapshot_observation", "component_chain"),
@@ -224,7 +237,8 @@ RUNTIME_BOUNDARY_REASONS = frozenset({
 def _runtime_boundary_row_valid(row):
     keys = {"boundary", "outcome", "reason_code", "operation", "cause_depth", "errno", "winerror",
             "comparison_site", "changed_identity_fields"}
-    if type(row) is not dict or set(row) != keys:
+    attribute_keys = {"changed_attribute_flags", "unknown_attribute_bits_changed"}
+    if type(row) is not dict or set(row) not in (keys, keys | attribute_keys):
         return False
     boundary, outcome, reason = row["boundary"], row["outcome"], row["reason_code"]
     boundaries = {value for _name, value in RUNTIME_BOUNDARY_TARGETS} | {"directory_identity"}
@@ -244,6 +258,14 @@ def _runtime_boundary_row_valid(row):
     for name in ("errno", "winerror"):
         number = row[name]
         if number is not None and (type(number) is not int or not 0 <= number <= 65535 or outcome != "os_error"):
+            return False
+    if attribute_keys <= set(row):
+        flags, unknown = row["changed_attribute_flags"], row["unknown_attribute_bits_changed"]
+        names = [name for _bit, name in RUNTIME_ATTRIBUTE_FLAGS]
+        if (boundary != "directory_identity" or outcome != "identity_changed" or "attributes" not in fields
+                or type(flags) is not list or any(type(name) is not str or name not in names for name in flags)
+                or flags != [name for name in names if name in flags]
+                or type(unknown) is not bool or not (flags or unknown)):
             return False
     if boundary == "directory_identity" or outcome == "identity_changed":
         return (boundary == "directory_identity" and outcome == "identity_changed" and bool(fields)
@@ -284,13 +306,16 @@ class RuntimeBoundaryObservation:
     def _number(value):
         return value if type(value) is int and 0 <= value <= 65535 else None
 
-    def _record(self, boundary, outcome, *, reason=None, error=None, operation=None, depth=0, site=None, fields=()):
+    def _record(self, boundary, outcome, *, reason=None, error=None, operation=None, depth=0, site=None, fields=(),
+                attribute_change=None):
         row = {"boundary": boundary, "outcome": outcome,
                "reason_code": reason if type(reason) is str and reason in RUNTIME_BOUNDARY_REASONS else None,
                "operation": operation, "cause_depth": depth,
                "errno": self._number(getattr(error, "errno", None)) if isinstance(error, OSError) else None,
                "winerror": self._number(getattr(error, "winerror", None)) if isinstance(error, OSError) else None,
                "comparison_site": site, "changed_identity_fields": list(fields)}
+        if attribute_change is not None:
+            row.update(attribute_change)
         if not _runtime_boundary_row_valid(row):
             return
         # Incidental repair-preimage failures cannot exhaust the decisive lane.
@@ -372,8 +397,17 @@ class RuntimeBoundaryObservation:
                 fields = tuple(name for name, before, after in zip(RUNTIME_IDENTITY_FIELDS, previous[1], result)
                                if before != after)
                 if fields:
+                    attribute_change = None
+                    if "attributes" in fields and all(0 <= value <= 0xffffffff for value in (previous[1][-1], result[-1])):
+                        changed_bits = previous[1][-1] ^ result[-1]
+                        known_bits = sum(bit for bit, _name in RUNTIME_ATTRIBUTE_FLAGS)
+                        attribute_change = {
+                            "changed_attribute_flags": [name for bit, name in RUNTIME_ATTRIBUTE_FLAGS if changed_bits & bit],
+                            "unknown_attribute_bits_changed": bool(changed_bits & ~known_bits),
+                        }
                     self._record("directory_identity", "identity_changed", reason="project_runtime_tree_changed",
-                                 operation="before_after_directory_comparison", site="directory_identity", fields=fields)
+                                 operation="before_after_directory_comparison", site="directory_identity", fields=fields,
+                                 attribute_change=attribute_change)
             except Exception:
                 self.identity_pair = None
             return result
@@ -893,10 +927,11 @@ class FirstUpdateObservation:
                 active, observed, pending_live = None, None, None
                 roles.clear()
 
-    def diagnostic(self, *, native_observed):
-        return json.dumps({"stage": self.stage, "boundaries": self.boundaries,
-                           "failures": self.failures, "native_observed": bool(native_observed)},
-                          sort_keys=True)
+    def diagnostic(self, *, native_observed, cli_code=None, cli_result=None):
+        # Source fixtures need the same bounded component/predicate evidence as
+        # the installed journey, not only the outer exception's caller frame.
+        return json.dumps(self.failure_payload(native_observed=native_observed,
+                          cli_code=cli_code, cli_result=cli_result), sort_keys=True)
 
     def failure_payload(self, *, native_observed, cli_code=None, cli_result=None):
         value = cli_result if type(cli_result) is dict else {}
