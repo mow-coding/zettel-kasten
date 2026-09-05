@@ -1110,6 +1110,68 @@ bump, PR, tag, wheel or client application has occurred.
 - No client project or real provider was changed. These are developer-side
   source/fixture results, not a public session-backup release or client receipt.
 
+## Original Git approval composition: bounded next steps
+
+- Independent read-only review confirmed three remaining gaps: the Git private
+  bundle lacks the original reviewer/context and is persisted after claim;
+  public legacy resume asks for identifiers and a pre-existing checkpoint;
+  current Git completion does not authenticate the actual terminal commit OIDs.
+  The already implemented held executor does not solve these by itself.
+- Split the immediate internal work along existing contracts: one immutable
+  original-context wrapper reusing the Git codec/context factory; one typed
+  in-memory v2 selection adapter reusing the entire current preparation body;
+  and explicit actor pending/completed operation kinds. None is public Git
+  authority or a newly completed end-to-end backup feature.
+- The memory selection avoids changing ignored inventory merely to pass JSON
+  between the complete provenance snapshot and exact preparation. The existing
+  planner, relation, full partition and source/hash validation remain mandatory.
+  No extra temporary selection file or alternate planning algorithm is needed.
+- Audit found lifecycle, recovery, handoff and re-review currently interpret
+  every pending manifest/context pair as a human session decision. Before a Git
+  pending kind can be stored, these consumers must explicitly refuse that kind,
+  not reinterpret its approval as another operation. Narrow refusal guards are
+  authorized; no new Git dispatch is exposed by this intermediate change.
+- The wrapper at this stage preserves original context only: current Git
+  manifests do not yet bind task route/current claim/producer-proof scope.
+  Later composition must bind and revalidate those digests within operation
+  evidence. An unsigned wrapper or a historical session binding is not current
+  claimant authority. Legacy approvals must retain their original bytes.
+- The later terminal path must authenticate ordered commit OIDs, the exact
+  remote binding and common final receipt SHA. A cut after common receipt but
+  before domain receipt requires original finalization, not a fresh Git run.
+  Historical commit proof and current HEAD/remote/actor alignment remain
+  separate. These requirements are not marked implemented by the three seams.
+- Development remains synthetic and isolated. Actual client installation,
+  provider operations, credentials, feedback status and shared PATH are outside
+  this development session's write scope.
+
+## Original context storage checkpoint
+
+- `work_session_git_bundle.py` now retains the full existing Git prepared codec
+  and exact original approval context under the private ignored control root.
+  Loading reconstructs both through the original codec/context factory. Views
+  are detached; no reviewer, route, claim or later binding is inferred.
+- Publication uses the existing no-replace move, parent identity binding,
+  pending-file fsync, directory durability and stable read-back machinery. An
+  identical repeat confirms the original without rewriting it. Conflicting,
+  corrupted, oversized, linked or legacy context-less evidence is not repaired
+  or upgraded into authority. Error text and exception chains are content-free.
+- The implementer passed ten synthetic Git preparation/storage tests in
+  110.575 seconds and a separate pending/published read-back tamper test in
+  11.806 seconds. Root review then identified a repeated-save race: its first
+  load preceded the durability flush, but it did not read the file again after
+  that flush. The repeat now reloads through the safe held reader and compares
+  the originally requested exact bytes before returning.
+- A fully valid alternate-reviewer context substituted during that flush is
+  rejected and preserved, never overwritten. This new case plus the original
+  successful repeat passed in 26.413 seconds. There are twelve unique passing
+  cases, not thirteen from double-counting the repeated normal case.
+- Independent review of the final read-back correction found no blocking
+  issue. The wrapper remains storage only: no approval authentication, current
+  task ownership, Git execution, automatic resume or terminal completion is
+  claimed. Those still require exact route evidence and authenticated domain
+  completion composition.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)
