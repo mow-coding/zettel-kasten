@@ -1004,3 +1004,46 @@ remote-storage attributes in [WinNT attribute definitions](https://learn.microso
   selection and caller-held Git execution have tested checkpoints; immutable
   original Git context and automatic original-approval resume are not yet a
   finished public session-backup workflow. No client project was modified.
+
+## Exact bit identified and comparison model corrected
+
+- Candidate `1b8febe7`, run `33979694945`, installed job `101342624029` failed
+  initial update, not repair/resume. It observed `attribute_bits_cleared:
+  [bit_28]`, no set bits, and no other identity-field changes at the original
+  predicate. Later workflow stages were not reached. The all-bit diagnostic
+  has therefore identified a concrete representation difference, not merely
+  another generic failed component.
+- Research found a matching primary report in
+  [CPython issue 126253](https://github.com/python/cpython/issues/126253): an
+  ordinary directory returns `0x10` through one observation and `0x10000010`
+  through another on NTFS/Windows build 26100. Maintainers discuss the extra
+  unfiltered bit and independently reproduce the values. Their linked test-
+  only broad mask is not copied into WOM's production identity policy.
+- Root and independent review agreed to normalize only this redundant bit
+  when both mode and the ordinary Win32 DIRECTORY bit already prove directory
+  kind. Files, contradictory kinds, every other unknown flag, reparse refusal,
+  IDs, mtime, exact members and byte hashes remain strict. No unknown-bit retry
+  or blanket mask was introduced. The comparison's source coordinates remain
+  unchanged so the existing exact-predicate diagnostic stays meaningful.
+- The actual underlying API/filesystem cause on this CI host remains an
+  inference, not an independently observed fact. Local cross-API research on
+  Windows build 26200 found no disagreement in 400 synthetic observations.
+  That negative local result is preserved rather than called a reproduction.
+- New directory-representation tests and exact-candidate CI are required
+  before this correction can be called validated. No client data was changed.
+- The new NTFS module has seven tests, including 384 pure flag/kind combinations
+  and 100 source-bound transition/drift cases. Its implementer passed those
+  tests together with the eight ARCHIVE and twelve observer tests (27 total)
+  in 1.779 seconds. Independent review separately passed those modules plus
+  five original directory-identity tests (32 total) in 1.915 seconds and found
+  no blocking issue. The AST outside `_stat_identity`, its first five fields,
+  total source line count and exact predicate coordinates are unchanged.
+- Root's combined final focused cohort also passed: 54 tests in 3.500 seconds,
+  including the strict installed-failure parent parser. Python 3.10 grammar
+  was verified under local 3.12; actual 3.10 remains a hosted CI requirement.
+- Before this NTFS correction was loaded, the `1b8febe7` source public
+  update/no-op/drift/cleanup journey completed successfully in 373.978 seconds.
+  That run is not evidence for the subsequently edited comparison. A new real
+  source journey is running against the frozen corrected product. Both runs
+  use only synthetic project/provider/approval input and real runtime/writer
+  code; final hosted installed acceptance remains separate.
