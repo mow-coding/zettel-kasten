@@ -944,3 +944,25 @@ not complete at this checkpoint.
 
 Reference: Microsoft distinguishes the ARCHIVE backup marker from reparse and
 remote-storage attributes in [WinNT attribute definitions](https://learn.microsoft.com/en-us/windows/win32/fileio/file-attribute-constants).
+
+## Advance the corrected candidate without concealing incomplete checks
+
+- Candidate `460cdc11` subsequently failed Windows shard 1's real candidate
+  finalization test as well. The coherent observer records attributes-only
+  directory drift and a runtime component classified unknown; the source
+  component was post-exact. The shard completed 1,469 tests with one failure.
+  This narrows that particular unknown-component refusal, but still does not
+  identify the attribute bit or prove every preceding failure has one cause.
+- At the next checkpoint, all four Ubuntu shards, all three scale gates and
+  readiness had passed. Installed acceptance and Windows shards 1, 3 and 4 had
+  failed; only Windows shard 2 was still running. That old candidate was already
+  ineligible for release, with the actionable failures preserved.
+- The independently reviewed directory ARCHIVE correction was committed as
+  `3a80a2e6`, with local focused and real update/no-op journey evidence above.
+  Development will now push the corrected candidate instead of serially
+  waiting for the last obsolete shard. This revises the earlier preference to
+  let the old matrix finish: normal PR concurrency may cancel that remaining
+  check. A cancelled or unfinished check stays unverified, never passed.
+- The new exact candidate must still run every required platform and installed
+  gate. No failed or cancelled old result is substituted for final acceptance;
+  the draft PR cannot be merged until the final candidate is green.
