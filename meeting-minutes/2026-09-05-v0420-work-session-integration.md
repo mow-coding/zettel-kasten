@@ -199,6 +199,39 @@ consistent read generation across writers, complete-generation handoff approval,
 assignment and session-scoped Git selection assembly. No public v0.4.20 version
 bump, PR, tag, wheel or client application has occurred.
 
+## Writer coverage audit and next integration
+
+- Checkpoint `1077042f` committed and pushed the original-context bundle,
+  retained reads, internal orchestration and genuine process-loss tests after
+  all four readiness gates and resource synchronization passed. The worktree
+  was clean before the next integration edits; it is not a v0.4.20 release.
+- An independent actual-parser audit found 47 approval-available paths, but
+  only 46 represent a writer or local record. `operation-control` exposes an
+  approval option for unsupported cancellation. Its availability correction
+  belongs to v0.4.19; the working control functions remain read-only.
+- The audit separates ten manifest paths, fifteen native/custom paths, one
+  mixed link path and twenty existing local-record paths. One broker edit
+  cannot cover all of them. The exact names and migration lanes are preserved
+  in the [writer coverage decision](../wom-kit/docs/archive-infra-decision-log-2026-09-05-v0420-writer-coverage.md).
+- The next narrow guard checks actual claimed ownership under the existing
+  held archive lock. It is for fresh domain writes, not historical resume or
+  read-only access. It must reject changed app/claim/revision without rejecting
+  unrelated generation changes or pretending opaque identity is app attestation.
+- That store guard is now implemented. Seventeen focused tests passed under
+  independent root execution in 15.51 seconds (36 subtests); the implementer's
+  combined registry/binding/operation run passed 42 tests and 90 subtests with
+  two documented platform skips. Readiness and resource synchronization passed.
+  The first fixture mistakenly read the held Windows byte-range lock using a
+  second descriptor; its no-write comparison now checks that lock's identity
+  while the actual held-lock verifier checks its bytes. No production guard
+  was weakened. Rejected operations preserve files and have fixed-code errors
+  with no private exception chain. Historical binding/read/resume behavior is
+  unchanged. This prerequisite is not yet all-writer integration.
+- Native/custom session composition was examined before implementation. Its
+  existing durable approval schemas and historical receipt readers also need
+  an explicit compatible transition. A half-wired receipt format was not added
+  while the current v0.4.19 CI failures and public integration lanes are open.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)

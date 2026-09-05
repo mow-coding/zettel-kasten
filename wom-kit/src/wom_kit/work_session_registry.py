@@ -545,11 +545,7 @@ class WorkSessionRegistryStore:
                 raise _fail("work_session_registry_changed")
             return raw
 
-    def commit(self, plan: RegistryTransition, *, held_lock: exact.ExactOperationWriterLock,
-               verify_human_authority: Callable[[str], bool] | None = None) -> RegistrySnapshot:
-        if type(plan) is not RegistryTransition:
-            raise _fail("work_session_transition_invalid")
-        plan.validate()
+    def _require_held_lock(self, held_lock: exact.ExactOperationWriterLock) -> None:
         if type(held_lock) is not exact.ExactOperationWriterLock:
             raise _fail("work_session_lock_required")
         try:
@@ -558,6 +554,96 @@ class WorkSessionRegistryStore:
                 raise _fail("work_session_lock_required")
         except (OSError, exact.ExactOperationManifestError):
             raise _fail("work_session_lock_required") from None
+
+    def require_claimed_binding(
+        self, *, client_app_ref: str, work_session_ref: str, claim_ref: str,
+        held_lock: exact.ExactOperationWriterLock,
+        expected_binding: WorkSessionBinding | None = None,
+    ) -> WorkSessionBinding:
+        """Recheck current ownership for a fresh domain write under its lock.
+
+        This is only an ownership prerequisite, not human approval, app
+        attestation, or isolation from malicious code in the same OS account.
+        Historical reads and old approved-operation resume must keep their
+        original binding and must not call this fresh-work guard implicitly.
+        The caller retains this same OS lock through approval and mutation,
+        rechecking this guard after any native/source wait before its writer.
+        """
+        code = "work_session_registry_invalid"
+        try:
+            return self._claimed_binding_current(
+                client_app_ref=client_app_ref, work_session_ref=work_session_ref,
+                claim_ref=claim_ref, held_lock=held_lock, expected_binding=expected_binding,
+            )
+        except WorkSessionRegistryError as error:
+            code = error.args[0] if error.args and error.args[0] in _ERRORS else code
+        except Exception:
+            pass
+        # Do not retain private labels, paths or claimant values in a lower
+        # reader/parser/callback exception chain, even when that reader fails.
+        raise _fail(code)
+
+    def _claimed_binding_current(self, *, client_app_ref, work_session_ref, claim_ref,
+                                 held_lock, expected_binding):
+        for value, prefix in ((client_app_ref, "client_app"), (work_session_ref, "work_session"),
+                              (claim_ref, "claim")):
+            if not _ref(value, prefix):
+                raise _fail("work_session_registry_invalid")
+        expected = None
+        if expected_binding is not None:
+            if type(expected_binding) is not WorkSessionBinding:
+                raise _fail("work_session_registry_invalid")
+            # Detached validation precedes any reader or lock callback. Never
+            # trust mutable caller convenience views as the approved binding.
+            expected = WorkSessionBinding.from_document(expected_binding.document())
+        self._require_held_lock(held_lock)
+        if self.path != self.root.joinpath(*PRIVATE_ROOT):
+            raise _fail("work_session_path_unsafe")
+
+        def archive_current():
+            from .exact_human_approval import _archive_identity, exact_human_approval_archive_identity_sha256
+
+            actual_root, archive_id = _archive_identity(self.root)
+            if (not os.path.samefile(actual_root, self.root)
+                    or exact_human_approval_archive_identity_sha256(archive_id) != self.archive_identity_sha256):
+                raise _fail("work_session_registry_changed")
+
+        def claimed(snapshot):
+            # read() supplies a validated private snapshot, while binding()
+            # intentionally remains state-agnostic for historical consumers.
+            binding = snapshot.binding(work_session_ref)
+            if binding.archive_identity_sha256 != self.archive_identity_sha256:
+                raise _fail("work_session_registry_changed")
+            session = snapshot._document["sessions"].get(work_session_ref)
+            if (session is None or session["state"] != "claimed"
+                    or session["client_app_ref"] != client_app_ref
+                    or not hmac.compare_digest(session["claim_ref"], claim_ref)
+                    or snapshot._document["workstreams"][session["workstream_ref"]]["active_session_ref"]
+                    != work_session_ref):
+                raise _fail("work_session_claim_conflict")
+            return binding
+
+        with self._read_boundary():
+            archive_current()
+            observed = claimed(self.read())
+            if expected is not None and observed != expected:
+                raise _fail("work_session_registry_changed")
+            current = claimed(self.read())
+            # An unrelated full-registry generation is not a session drift.
+            # Session revision, app/workstream labels and archive identity are
+            # all part of the immutable binding; the claim is checked above.
+            if current != observed:
+                raise _fail("work_session_registry_changed")
+            archive_current()
+            self._require_held_lock(held_lock)
+        return current
+
+    def commit(self, plan: RegistryTransition, *, held_lock: exact.ExactOperationWriterLock,
+               verify_human_authority: Callable[[str], bool] | None = None) -> RegistrySnapshot:
+        if type(plan) is not RegistryTransition:
+            raise _fail("work_session_transition_invalid")
+        plan.validate()
+        self._require_held_lock(held_lock)
         current = self.read()
         if (not hmac.compare_digest(current.sha256, plan.before_sha256)
                 or plan.after.revision != current.revision + 1
