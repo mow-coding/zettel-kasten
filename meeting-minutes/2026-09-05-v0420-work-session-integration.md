@@ -231,6 +231,14 @@ bump, PR, tag, wheel or client application has occurred.
   existing durable approval schemas and historical receipt readers also need
   an explicit compatible transition. A half-wired receipt format was not added
   while the current v0.4.19 CI failures and public integration lanes are open.
+- A bounded follow-up audit found approval-free effects outside the 47-path
+  inventory: index regeneration, dry-run result files and tracking journals,
+  catalog JSONL, and optional Doctor result/progress output. The coverage
+  decision now separates approval from actual invocation effects. This is not
+  a claim to have audited every approval-unexposed command. Ordinary read-only
+  and credential-read paths were checked rather than guessed to be writers.
+  Generated artifacts and child records inherit the responsible execution;
+  no new human approval is proposed for each automatic diagnostic or index file.
 
 ## Standard references
 

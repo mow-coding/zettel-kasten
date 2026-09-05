@@ -58,6 +58,41 @@ do not open the unavailable IMAP provider writers.
 
 ## Status
 
+### Approval-free effects are a separate coverage axis
+
+A second bounded source audit confirmed that the approval table is not an
+inventory of every filesystem or provider effect. It checked representative
+paths, not all 201 approval-unexposed commands.
+
+| Invocation | Observed effect beyond reading |
+| --- | --- |
+| `index` | Regenerates and commits the shared archive SQLite index without an approval option |
+| `index-health` or `staged-cleanup-check`, with `--dry-run --output` | Writes the diagnostic result and operation journal |
+| `ai-start-here`, `zet-catalog` or `upgrade-check`, with `--output` | Writes an AI/diagnostic artifact through the shared scratch capture helper |
+| `zet-catalog-pass --dry-run` | Writes the required private JSONL output and manages its own incomplete output |
+| `doctor --output` or `--progress-log` | Writes a new archive-relative result or an explicitly external progress log |
+
+Do not infer effects from names alone: the ordinary Doctor without output is
+read-only, the Notion object-link index is an in-memory projection, SQLite
+readers have read-only/sidecar preflight, secure credential verification reads
+an existing key without creating one, and upload-verify checks local bytes
+rather than proving a remote response. These observations are not a universal
+guarantee about all provider or query paths.
+
+The common parser-derived judgment needs an invocation-effect axis independent
+of human approval. Preserve exact canonical/alias/argument-mode interpretation;
+include generated-index, private-artifact, operational-metadata, credential and
+provider effects where actually present. Propagate the validated execution
+binding through the shared result-capture and operation-journal boundaries.
+Progress records and SQLite temporary files inherit their parent execution;
+they do not each demand a new human decision. The shared index remains
+archive-wide data even when its generation has a responsible work session.
+
+No-output reads remain available without a session. Historical checkpoints
+remain unchanged. Any bootstrap or emergency diagnostic exception must be
+explicit and cannot falsely report attribution to a current session. Complete
+effect coverage and these output/journal integrations remain acceptance work.
+
 The internal registry decision runner and its three real process-loss/resume
 journeys are implemented and development-tested. The complete family mapping,
 public CLI/MCP attachment and all-writer enforcement are **not yet complete**.
