@@ -127,43 +127,59 @@ def apply_or_resume_registration(root, *, selection, label,
                 or selected["label_sha256"] != registry._label_digest(original_label)):
             raise WorkSessionRegistrationError("work_session_registration_changed")
         with wait_for_archive_writer(Path(store.root), cancel_requested=cancel_requested, progress=progress) as held:
-            store._require_held_lock(held)
-            # Revalidate named archive identity after any lock wait.
-            if _store(store.root).archive_identity_sha256 != selected["archive_identity_sha256"]:
-                raise WorkSessionRegistrationError("work_session_registration_changed")
-            try:
-                intent = intents.load_registry_intent(store, plan_sha256=selected["plan_sha256"], held_lock=held)
-            except intents.WorkSessionRegistryIntentError as error:
-                if error.code != "work_session_registry_intent_missing":
-                    raise
-                before = store.read()
-                if before.sha256 != selected["before_sha256"]:
-                    raise WorkSessionRegistrationError("work_session_registration_changed")
-                transition = registry.plan_transition(
-                    before, action="register-app", label=original_label,
-                    _ref_factory=lambda _prefix: selected["client_app_ref"],
-                )
-                if (transition.plan_sha256 != selected["plan_sha256"]
-                        or transition.result_refs != (selected["client_app_ref"],)):
-                    raise WorkSessionRegistrationError("work_session_registration_changed")
-                intent = intents.prepare_registry_intent(store, transition, held_lock=held)
-                _match_original(store, selected, original_label, intent)
-                intents.save_registry_intent(store, intent, held_lock=held)
-            _match_original(store, selected, original_label, intent)
-            outcome = intents.observe_or_apply_registry_intent(
-                store, plan_sha256=selected["plan_sha256"], held_lock=held,
+            return _apply_or_resume_registration_held(
+                store.root, held=held, selection=selected, label=original_label,
             )
-            _match_original(store, selected, original_label, outcome.intent)
-            if (outcome.transition.action != "register-app"
-                    or outcome.transition.result_refs != (selected["client_app_ref"],)):
+    return _safe_call(run)
+
+
+def _apply_or_resume_registration_held(root, *, held, selection, label) -> dict:
+    """Original registration under the caller's existing same-archive lock.
+
+    This internal composition seam permits a public service to check its
+    runtime after waiting, without acquiring a second lock or replanning.
+    """
+    def run():
+        selected = _selection(selection)
+        original_label = registry._label(label)
+        store = _store(root)
+        store._require_held_lock(held)
+        if (store.archive_identity_sha256 != selected["archive_identity_sha256"]
+                or selected["label_sha256"] != registry._label_digest(original_label)):
+            raise WorkSessionRegistrationError("work_session_registration_changed")
+        try:
+            intent = intents.load_registry_intent(store, plan_sha256=selected["plan_sha256"], held_lock=held)
+        except intents.WorkSessionRegistryIntentError as error:
+            if error.code != "work_session_registry_intent_missing":
+                raise
+            before = store.read()
+            if before.sha256 != selected["before_sha256"]:
                 raise WorkSessionRegistrationError("work_session_registration_changed")
-            store._require_held_lock(held)
-            if _store(store.root).archive_identity_sha256 != selected["archive_identity_sha256"]:
+            transition = registry.plan_transition(
+                before, action="register-app", label=original_label,
+                _ref_factory=lambda _prefix: selected["client_app_ref"],
+            )
+            if (transition.plan_sha256 != selected["plan_sha256"]
+                    or transition.result_refs != (selected["client_app_ref"],)):
                 raise WorkSessionRegistrationError("work_session_registration_changed")
-            return {
-                **outcome.public_summary(), "schema": "wom-kit/work-session-registration-result/v1",
-                "ok": True, "client_app_ref": selected["client_app_ref"],
-                "identity_level": "self_declared", "identity_is_app_attestation": False,
-                "routing_is_write_authority": False,
-            }
+            intent = intents.prepare_registry_intent(store, transition, held_lock=held)
+            _match_original(store, selected, original_label, intent)
+            intents.save_registry_intent(store, intent, held_lock=held)
+        _match_original(store, selected, original_label, intent)
+        outcome = intents.observe_or_apply_registry_intent(
+            store, plan_sha256=selected["plan_sha256"], held_lock=held,
+        )
+        _match_original(store, selected, original_label, outcome.intent)
+        if (outcome.transition.action != "register-app"
+                or outcome.transition.result_refs != (selected["client_app_ref"],)):
+            raise WorkSessionRegistrationError("work_session_registration_changed")
+        store._require_held_lock(held)
+        if _store(store.root).archive_identity_sha256 != selected["archive_identity_sha256"]:
+            raise WorkSessionRegistrationError("work_session_registration_changed")
+        return {
+            **outcome.public_summary(), "schema": "wom-kit/work-session-registration-result/v1",
+            "ok": True, "client_app_ref": selected["client_app_ref"],
+            "identity_level": "self_declared", "identity_is_app_attestation": False,
+            "routing_is_write_authority": False,
+        }
     return _safe_call(run)

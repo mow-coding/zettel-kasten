@@ -1931,13 +1931,22 @@ def runtime_inspection_truth(
     }
 
 
+_RUNNING_ARCHIVE_CLI_MODULE_UNSET = object()
+
+
 def project_write_guard(
     inspection_root: Path,
     *,
     running_version: str,
     running_module_path: str | Path | None = None,
+    running_archive_cli_module_path: str | Path | None | object = _RUNNING_ARCHIVE_CLI_MODULE_UNSET,
 ) -> dict[str, Any]:
-    """Return a content-free blocker when a project pin and runtime differ."""
+    """Return a content-free blocker when a project pin and runtime differ.
+
+    Existing callers bind their running module as the CLI, unchanged. A
+    non-CLI caller may pass an explicit None CLI origin to observe the real
+    loaded canonical/legacy CLI instead; this does not waive any core check.
+    """
 
     root = Path(os.path.abspath(str(inspection_root)))
     search_roots = [root]
@@ -2112,7 +2121,11 @@ def project_write_guard(
                     project_root,
                     pinned_version,
                     running_module_path=running_module_path,
-                    running_archive_cli_module_path=running_module_path,
+                    running_archive_cli_module_path=(
+                        running_module_path
+                        if running_archive_cli_module_path is _RUNNING_ARCHIVE_CLI_MODULE_UNSET
+                        else running_archive_cli_module_path
+                    ),
                     runtime_inspection=installed,
                 )
                 binding_observation_state = str(

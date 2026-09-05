@@ -536,6 +536,74 @@ bump, PR, tag, wheel or client application has occurred.
   evidence. Public routing, installed-wheel session journeys and all-writer
   enforcement remain pending after the internal component checkpoint.
 
+## Public management integration checkpoint (not released)
+
+- The user asked to continue the approved recovery train after an apparent
+  interruption. Development continued in the two unfinished version worktrees;
+  the client archive, runtime, credentials, providers and feedback ledger were
+  not changed. v0.4.19 installation acceptance and its remaining CI are a
+  separate release gate, not evidence that v0.4.20 has shipped.
+- `work_session_service.py` connects registration, native task creation,
+  original creation continuation, original pre-claim re-review and original
+  claim continuation to the existing authorities. Each mutation takes the
+  archive lock once, rechecks the actually loaded runtime while held, and
+  calls the existing held implementation. It does not accept public native,
+  key-provider, approval-ID or test-context injection.
+- `project_runtime.project_write_guard` now has an optional internal CLI-origin
+  observation argument. Existing callers retain the exact former forwarding.
+  The new service supplies its own loaded module origin separately from the
+  actual loaded CLI origin. It does not guess a CLI filename to pass a runtime
+  check. Source tests cover the original contract, actual CLI origin, missing
+  or substituted origin and runtime drift during lock waiting.
+- `work_session_command_modes.py` provides the shared action/flag classifier.
+  The CLI, input router, invocation effects and capability display consume it.
+  Invalid combinations stop before input dispatch. A same-family read-only
+  `request-init` prepares a new opaque routing reference for an explicitly
+  registered app; it is neither a create dry-run nor a saved/approved task.
+  The AI retains that response before mutation and uses the original selector
+  on continuation. No latest-task inference or replacement resume route is
+  introduced. Humans are not asked to manufacture IDs or JSON.
+- `work_session_command.py` bounds private input to one UTF-8 JSON object,
+  rejecting duplicate keys, invalid constants, unexpected fields and oversized
+  requests with fixed errors. Labels are accepted through private stdin/MCP
+  input, not command-line arguments, and are not copied into public output.
+  This input channel is not a credential-entry feature.
+- `archive_cli.py` exposes the supported management modes within `work-session`.
+  `mcp_server.py` preserves the original read-only query tool and adds a
+  separately write-declared management tool. Source integration actually calls
+  CLI main and MCP dispatch through registration, native creation, original
+  resume, claim and claim resume. Only the synthetic native interaction and
+  production key provider are replaced; the original writers, locks, runtime
+  checks and receipt validation execute.
+- Independent review found that inventory-only capability projection could
+  incorrectly advertise action-dependent dry-run support. It now requires a
+  trusted parsed action/mode before reporting availability. Follow-up review
+  caught both a stale top-level approval-availability field and loss of the
+  unevaluated-scope reason in parser-free suggestions. The exact predicate
+  result is retained, and namespace-free results remain conservative. The
+  regressions check inventory, trusted namespace and suggested-command output.
+- The first root public test invocation had a missing test-list delimiter;
+  the next exposed an incorrect test call to a nonexistent MCP helper and an
+  older all-dry-runs assertion that did not describe action-dependent session
+  management. These test wiring errors were corrected, not hidden. A later
+  37-test/239-subtest cohort passed in 55.55 seconds, but capability amendments
+  were being finalized during that run; it is not the frozen final candidate
+  evidence. The frozen seven-module root cohort then passed 59 tests and 303
+  subtests in 187.93 seconds, including the public routing-only request-init
+  response and original create/resume/claim flow. A separate existing
+  capability/query/read-only MCP regression cohort passed 41 tests and 93
+  subtests in 75.79 seconds. These are real source handler invocations in one
+  process, not installed-wheel or actual MCP-stdio transport acceptance.
+- Final bounded source review found no further blocker in the public
+  routing/request-init slice. All four release-readiness checks passed, and
+  the current 169 packaged resources remained synchronized. The package is
+  still the unpublished integration base version; no v0.4.20 release is implied.
+- Remaining work includes app installation attachment, lifecycle handoff,
+  all-writer session coverage, installed-wheel session journeys, final version
+  integration and full supported-platform CI. The source-level public path
+  does not establish client recovery, a released feature, or completion of
+  v0.4.20 through v0.4.24.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)

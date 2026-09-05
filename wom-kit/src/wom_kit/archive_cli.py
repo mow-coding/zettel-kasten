@@ -30198,9 +30198,41 @@ def command_principal_register(args: argparse.Namespace) -> int:
 
 
 def command_work_session(args: argparse.Namespace) -> int:
-    """Read-only public registry routing; no app identity is inferred."""
+    """Shared query/management routing; no app or task identity is inferred."""
+    from .work_session_command import (WorkSessionRequestError, dispatch_work_session_management,
+                                       management_failure, read_private_request)
+    from .work_session_command_modes import resolve_work_session_mode
     from .work_session_query import WorkSessionQueryError, query_work_sessions
 
+    flags = {key: getattr(args, key, False) for key in
+             ("dry_run", "approve", "apply", "resume", "review_original")}
+    resolved = resolve_work_session_mode(action=args.action, **flags)
+    if not resolved["available"]:
+        print_json(management_failure("work_session_mode_unavailable"))
+        return 1
+    if resolved["mode"] != "read_only_query":
+        if (args.ref is not None or args.workstream_ref is not None or args.cursor is not None
+                or args.kind != "session" or args.page_size != 20):
+            print_json(management_failure("work_session_request_invalid"))
+            return 1
+        try:
+            request = read_private_request(sys.stdin) if args.request_stdin else None
+        except WorkSessionRequestError:
+            print_json(management_failure("work_session_request_invalid"))
+            return 1
+        result = dispatch_work_session_management(
+            args.archive_root, action=args.action, **flags, client_app_ref=args.client_app_ref,
+            task_route_ref=args.task_route_ref, work_session_ref=args.work_session_ref, request=request,
+            progress=(lambda event: print("[wom] work-session: " + (
+                "rechecking state" if event.get("stage") == "writer_acquired_revalidation_required"
+                else "waiting for writer"), file=sys.stderr, flush=True))
+                     if args.progress else (lambda _event: None),
+        )
+        print_json(result)
+        return 0 if result.get("ok") else 1
+    if args.request_stdin or args.task_route_ref is not None or args.work_session_ref is not None:
+        print_json(management_failure("work_session_request_invalid"))
+        return 1
     try:
         result = query_work_sessions(
             args.archive_root, action=args.action, kind=args.kind, reference=args.ref,
@@ -30212,6 +30244,14 @@ def command_work_session(args: argparse.Namespace) -> int:
                   "reason_code": error.code, "read_only": True, "private_values_echoed": False}
     print_json(result)
     return 0 if result.get("ok") else 1
+
+
+def _work_session_native_scope(args: argparse.Namespace) -> bool:
+    from .work_session_command_modes import resolve_work_session_mode
+    return resolve_work_session_mode(
+        action=args.action, approve=True, dry_run=False,
+        **{key: getattr(args, key, False) for key in ("apply", "resume", "review_original")},
+    )["native_approval_required"] is True
 
 
 def command_principal_list(args: argparse.Namespace) -> int:
@@ -46823,24 +46863,44 @@ def build_parser() -> argparse.ArgumentParser:
     init.set_defaults(func=command_init)
 
     work_session = subcommands.add_parser(
-        "work-session", help="Read one complete private work-session registry generation.",
+        "work-session", help="Query sessions or explicitly register, create and claim a task.",
         description=("List or inspect opaque app, workstream and session references. "
                      "Private labels and claim tokens are never printed. "
-                     "Lifecycle writes are not yet exposed by this development slice."),
+                     "Registration supports --dry-run then --apply/--resume using the original selection. "
+                     "Request-init prepares a new routing-only task reference for an explicit registered app; "
+                     "it does not create, approve or save a task. Retain its output before create, "
+                     "and use the same task reference for resume instead of initializing another request. "
+                     "Create uses --approve, or --resume with the original app/task references; "
+                     "--approve --review-original reopens only the original unclaimed human decision. "
+                     "Create has no dry-run preview yet. Claim uses --apply/--resume. "
+                     "The AI retains original opaque references; humans do not copy hashes or JSON. "
+                     "Pause, handoff and later lifecycle operations are not exposed yet."),
     )
     work_session.add_argument("archive_root", help="Archive root.")
-    work_session.add_argument("--action", choices=["list", "inspect"], default="list")
+    work_session.add_argument("--action", choices=["list", "inspect", "register-app", "request-init", "create", "claim"], default="list")
     work_session.add_argument("--kind", choices=["app", "workstream", "session"], default="session")
     work_session.add_argument("--ref", help="Opaque reference to inspect.")
-    work_session.add_argument("--client-app-ref", help="Filter listed sessions by their app reference.")
+    work_session.add_argument("--client-app-ref", help="Explicit registered app for management, or query filter.")
     work_session.add_argument("--workstream-ref", help="Filter listed sessions by their workstream reference.")
     work_session.add_argument("--page-size", type=int, default=20, help="Rows per page, from 1 through 2000.")
     work_session.add_argument("--cursor", help="Continuation cursor from the same generation and query.")
-    work_session.add_argument("--dry-run", action="store_true", help="Optional: this query never writes.")
+    work_session.add_argument("--dry-run", action="store_true", help="Read-only query, routing request-init or registration preview; not create.")
+    work_session.add_argument("--approve", action="store_true", help="Request the existing native decision for create only.")
+    work_session.add_argument("--apply", action="store_true", help="Apply original self-declared registration or task claim.")
+    work_session.add_argument("--resume", action="store_true", help="Continue the original operation; never create a new approval.")
+    work_session.add_argument("--review-original", action="store_true", help="With create --approve only: review original pre-claim content.")
+    work_session.add_argument("--task-route-ref", help="Original opaque task route retained by the AI before mutation.")
+    work_session.add_argument("--work-session-ref", help="Original opaque session reference for claim.")
+    work_session.add_argument("--request-stdin", action="store_true", help="AI-only bounded private JSON input; never credential input.")
     work_session.add_argument("--progress", action=argparse.BooleanOptionalAction, default=True,
                               help="Content-free startup status on stderr; disable with --no-progress.")
     work_session.add_argument("--format", choices=["json"], default="json")
-    work_session.set_defaults(func=command_work_session)
+    work_session.set_defaults(func=command_work_session, _wom_approval_scope={
+        "kind": "namespace_predicate", "predicate_ref": "work_session_original_human_decision",
+        "outside_scope_status": command_status.APPROVAL_FIXED_CLOSED,
+        "outside_scope_reason_code": command_status.COMPOUND_APPROVAL_REASON_CODE,
+    })
+    setattr(work_session, command_status._APPROVAL_SCOPE_PREDICATE_ATTRIBUTE, _work_session_native_scope)
 
     _mark_compound_approval_help(parser)
     return parser

@@ -116,3 +116,29 @@ all-writer scope enforcement and installed-wheel session journeys remain open.
 No private client archive, credential, provider or feedback ledger was changed.
 
 See [integration minutes](../../meeting-minutes/2026-09-05-v0420-work-session-integration.md).
+
+## Public management routing amendment
+
+Keep the existing query tool read-only and expose supported mutations through
+a separately write-declared MCP tool and the existing CLI command family.
+Reuse a single pure action/mode classifier for dispatch, effects and
+availability. Parser inventory alone cannot establish action-dependent mode
+availability. A trusted predicate result must not be lost in another display
+field, and unevaluated scope is not a completed negative mode check.
+
+Private requests are bounded structured stdin/MCP input; labels are not argv
+or output. Mutation facades wait for the existing OS lock once and check the
+actual loaded runtime while held before invoking the existing held writer.
+The service module and the loaded CLI origin are distinct observations, not
+interchangeable filenames. Old guard callers retain their original behavior.
+
+A routing-only request initialization may return a new opaque task route for
+an explicitly registered app without writing the archive or creating an
+approval. The AI must retain that response before create and reuse the same
+selector for resume. Missing original evidence does not authorize silently
+initializing a replacement request. Do not advertise this preparation as a
+create preview or write authority.
+
+These changes are an unpublished source integration checkpoint. Installed
+session workflows, later lifecycle actions, all-writer coverage and actual
+client outcomes remain separate gates.

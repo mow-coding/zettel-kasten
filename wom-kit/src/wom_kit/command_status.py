@@ -1209,6 +1209,17 @@ def _capability_availability_for_command(
                 or "approval_surface_unavailable"
             )
 
+    work_session_scope_pending = (
+        canonical_path == "work-session" and invocation_available and requested_mode != "conflicting"
+        and (requested_mode != "approve" or (
+            approval_status == APPROVAL_AVAILABLE and argument_predicate_matched is None
+        ))
+    )
+    if work_session_scope_pending:
+        # An inventory says an option exists, not that every action supports
+        # it. Exact action/mode truth requires the trusted parsed namespace.
+        available, state = False, CAPABILITY_MODE_UNAVAILABLE
+        reason_code = detail_reason_code = "work_session_argument_scope_required"
     return {
         "schema": CAPABILITY_AVAILABILITY_SCHEMA,
         "canonical_path": canonical_path,
@@ -1221,7 +1232,7 @@ def _capability_availability_for_command(
         "approval_exposure_history": dict(command["approval_exposure_history"]),
         "dry_run_exposed": dry_run_exposed,
         "parser_derived": True,
-        "argument_scope_evaluated": requested_mode == "approve",
+        "argument_scope_evaluated": requested_mode == "approve" and not work_session_scope_pending,
         "prerequisites_evaluated": False,
         "private_values_echoed": False,
         "external_effects_performed": False,
@@ -1330,6 +1341,9 @@ def _selected_canonical_parser_path(
 # and its public schema.  An added option/changed handler invalidates coverage
 # until its effects have been reviewed; aliases share the canonical parser.
 _AUDITED_INVOCATION_OPTIONS = {
+    "work-session": ("--action --kind --ref --client-app-ref --workstream-ref --page-size --cursor "
+                     "--dry-run --approve --apply --resume --review-original --task-route-ref "
+                     "--work-session-ref --request-stdin --progress --no-progress --format"),
     "index": "--format --output --progress",
     "index-health": "--dry-run --format --max-items --output --progress",
     "staged-cleanup-check": (
@@ -1486,6 +1500,17 @@ def resolve_namespace_invocation_effects(
         "entry_gate": "passed",
         "human_approval_requirement": "not_required",
     })
+    if canonical_path == "work-session":
+        mode = _work_session_namespace_mode(namespace)
+        if not mode["available"]:
+            result.update({"entry_gate": "work_session_mode_unavailable", "effects": []})
+            return result
+        effects = [{"kind": "local_read", "scope": "archive"}]
+        if mode["potential_write"]:
+            effects.append({"kind": "operational_metadata_write", "scope": "archive_session_operations"})
+        result.update({"effects": effects, "human_approval_requirement":
+                       "required" if mode["native_approval_required"] else "not_required"})
+        return result
     if "--dry-run" in option_names and not _invocation_effect_option_value(
         leaf_parser, namespace, "--dry-run"
     ):
@@ -1609,6 +1634,31 @@ def _namespace_approval_predicate_result(
     return result
 
 
+def _work_session_namespace_mode(namespace: argparse.Namespace) -> dict[str, Any]:
+    from .work_session_command_modes import resolve_work_session_mode
+    return resolve_work_session_mode(action=getattr(namespace, "action", "list"),
+                                     **{key: getattr(namespace, key, False) for key in
+                                        ("dry_run", "approve", "apply", "resume", "review_original")})
+
+
+def _apply_work_session_availability(availability: dict[str, Any], namespace) -> dict[str, Any]:
+    if availability.get("canonical_path") != "work-session" or namespace is None:
+        return availability
+    mode = _work_session_namespace_mode(namespace)
+    if mode is None or not mode["available"]:
+        return {**availability, "available": False, "state": CAPABILITY_MODE_UNAVAILABLE,
+                "reason_code": "work_session_mode_unavailable",
+                "detail_reason_code": "work_session_mode_unavailable",
+                "argument_scope_evaluated": namespace is not None}
+    # A supported action cannot override a closed approval surface or an
+    # invalid trusted-parser contract. Runtime/approval checks still follow.
+    if (availability.get("requested_mode") == "approve" and availability.get("available") is not True
+            and availability.get("reason_code") != "work_session_argument_scope_required"):
+        return availability
+    return {**availability, "available": True, "state": CAPABILITY_AVAILABLE,
+            "reason_code": None, "detail_reason_code": None, "argument_scope_evaluated": True}
+
+
 def resolve_namespace_capability_availability(
     parser: argparse.ArgumentParser,
     inventory: Mapping[str, Any],
@@ -1666,7 +1716,7 @@ def resolve_namespace_capability_availability(
         namespace,
         command.get("approval_scope"),
     )
-    return _capability_availability_for_command(
+    availability = _capability_availability_for_command(
         command,
         requested_mode=requested_mode,
         argument_tokens=argument_tokens,
@@ -1674,6 +1724,7 @@ def resolve_namespace_capability_availability(
             leaf_parser, namespace, command.get("approval_scope")
         ),
     )
+    return _apply_work_session_availability(availability, namespace)
 
 
 def _unresolved_suggested_command_status(
@@ -1946,6 +1997,7 @@ def resolve_suggested_command_mode(
         argument_tokens=argument_tokens,
         argument_predicate_matched=argument_predicate_matched,
     )
+    capability_availability = _apply_work_session_availability(capability_availability, parsed_namespace)
     requested_mode_available = capability_availability["available"]
     requested_mode_reason_code = capability_availability[
         "detail_reason_code"
@@ -1958,7 +2010,8 @@ def resolve_suggested_command_mode(
         requested_mode_reason_code = (
             "suggested_command_invocation_surface_unavailable"
         )
-    elif requested_mode == "dry_run" and requested_mode_available is False:
+    elif (requested_mode == "dry_run" and requested_mode_available is False
+          and command["canonical_path"] != "work-session"):
         requested_mode_reason_code = "suggested_command_dry_run_not_exposed"
 
     return {

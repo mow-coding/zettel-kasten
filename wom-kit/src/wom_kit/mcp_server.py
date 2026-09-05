@@ -87,6 +87,52 @@ def configure_stdio_utf8() -> None:
 
 TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
+        "name": "archive_work_session_manage",
+        "description": (
+            "Explicitly register an app, create a human-reviewed task, or claim its original session. "
+            "The AI retains original registration selection and app/task references before mutation; "
+            "Request-init returns a new routing-only task reference for an explicit registered app, "
+            "without creating, approving or saving a task. Retain it before create; "
+            "resume uses that original reference and never another request-init. "
+            "humans never copy hashes or JSON. Private labels are input only, not output. "
+            "Create dry-run and later pause/handoff actions are not supported. "
+            "Resume preserves the original authority and may write; it is not a new human approval."
+        ),
+        "annotations": {"readOnlyHint": False, "destructiveHint": False,
+                        "idempotentHint": False, "openWorldHint": False},
+        "inputSchema": {
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                "archive_root": {"type": "string"},
+                "action": {"type": "string", "enum": ["register-app", "request-init", "create", "claim"]},
+                "dry_run": {"type": "boolean", "default": False},
+                "approve": {"type": "boolean", "default": False},
+                "apply": {"type": "boolean", "default": False},
+                "resume": {"type": "boolean", "default": False},
+                "review_original": {"type": "boolean", "default": False},
+                "client_app_ref": {"type": "string"},
+                "task_route_ref": {"type": "string"},
+                "work_session_ref": {"type": "string"},
+                "request": {
+                    "type": "object", "additionalProperties": False,
+                    "properties": {
+                        "label": {"type": "string"},
+                        "reviewer_claim": {"type": "string"},
+                        "selection": {
+                            "type": "object", "additionalProperties": False,
+                            "properties": {key: {"type": "string"} for key in
+                                           ("schema", "archive_identity_sha256", "client_app_ref",
+                                            "plan_sha256", "before_sha256", "label_sha256")},
+                            "required": ["schema", "archive_identity_sha256", "client_app_ref",
+                                         "plan_sha256", "before_sha256", "label_sha256"],
+                        },
+                    },
+                },
+            },
+            "required": ["archive_root", "action"],
+        },
+    },
+    {
         "name": "archive_work_session",
         "description": (
             "Read one complete work-session registry generation using opaque references and cursor pages. "
@@ -3475,6 +3521,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
 
     if name == "archive_work_session":
         return tool_archive_work_session(arguments)
+    if name == "archive_work_session_manage":
+        return tool_archive_work_session_manage(arguments)
     if name == "wom_profile_list":
         return tool_wom_profile_list(arguments)
     if name == "wom_profile_resolve":
@@ -3846,6 +3894,38 @@ def tool_archive_runtime_context(arguments: dict[str, Any]) -> dict[str, Any]:
     add_mcp_redaction_warning(result, requested_redaction, redact_local_paths)
     state = "passed" if result["ok"] else "blocked"
     return tool_success_result(f"archive_runtime_context: {state}; mode={result['inspection']['mode']}.", result)
+
+
+def tool_archive_work_session_manage(arguments: dict[str, Any]) -> dict[str, Any]:
+    from .work_session_command import REQUEST_LIMIT_BYTES, dispatch_work_session_management
+
+    flags = {"dry_run", "approve", "apply", "resume", "review_original"}
+    refs = {"client_app_ref", "task_route_ref", "work_session_ref"}
+    allowed = {"archive_root", "action", "request", *flags, *refs}
+    if (type(arguments) is not dict or any(type(key) is not str for key in arguments)
+            or set(arguments) - allowed
+            or type(arguments.get("action")) is not str
+            or arguments["action"] not in {"register-app", "request-init", "create", "claim"}):
+        raise InvalidParamsError()
+    if (any(type(arguments[key]) is not bool for key in flags if key in arguments)
+            or any(type(arguments[key]) is not str for key in refs if key in arguments)
+            or ("request" in arguments and type(arguments["request"]) is not dict)):
+        raise InvalidParamsError()
+    valid_size = False
+    try:
+        valid_size = len(json.dumps(arguments, ensure_ascii=False, allow_nan=False).encode("utf-8")) <= REQUEST_LIMIT_BYTES
+    except (TypeError, ValueError, UnicodeError):
+        pass
+    if not valid_size:
+        raise InvalidParamsError()
+    archive_root = require_path_arg(arguments, "archive_root")
+    result = dispatch_work_session_management(archive_root, action=arguments["action"],
+        **{key: arguments.get(key, False) for key in flags},
+        **{key: arguments.get(key) for key in refs}, request=arguments.get("request"))
+    if not result["ok"]:
+        return {"content": [{"type": "text", "text": "Work-session operation could not be completed."}],
+                "structuredContent": result, "isError": True}
+    return tool_success_result("Work-session operation returned; original evidence and current ownership remain distinct.", result)
 
 
 def tool_archive_work_session(arguments: dict[str, Any]) -> dict[str, Any]:

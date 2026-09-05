@@ -156,6 +156,16 @@ class InvocationEffectTests(unittest.TestCase):
             with self.subTest(command=command):
                 result = self.resolve(command)
                 self.assertEqual(result["coverage"], "audited")
+                if command == "work-session":
+                    # Session list/inspect are optional dry-runs. Management
+                    # modes have their own explicit, shared action gate.
+                    self.assertEqual(result["entry_gate"], "passed")
+                    self.assertEqual(result["effects"], [{"kind": "local_read", "scope": "archive"}])
+                    rejected = self.resolve(command, "--action", "register-app")
+                    self.assertEqual(rejected["entry_gate"], "work_session_mode_unavailable")
+                    self.assertEqual(rejected["effects"], [])
+                    self.assertFalse(rejected["execution_authorized"])
+                    continue
                 self.assertEqual(result["entry_gate"], "required_dry_run_missing")
                 self.assertEqual(result["effects"], [])
                 self.assertFalse(result["execution_authorized"])
