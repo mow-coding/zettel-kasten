@@ -163,50 +163,70 @@ def _execute_session_decision_core(
     progress: Callable[[dict], None] = lambda _value: None,
     native=None, key_provider=None,
 ) -> dict[str, Any]:
-    """Only internal tests substitute the native input and secure key seams."""
+    """Acquire the existing lock once, then use the original decision runner."""
     with wait_for_archive_writer(Path(archive_root), cancel_requested=cancel_requested,
                                  progress=progress) as held:
-        store, archive_id = _store(archive_root)
-        transition = registry.plan_transition(
-            store.read(), action=action, client_app_ref=client_app_ref,
-            work_session_ref=work_session_ref, label=label,
-            claim_ref=claim_ref, target_app_ref=target_app_ref,
+        return _execute_session_decision_held(
+            archive_root, held=held, action=action, client_app_ref=client_app_ref,
+            reviewer_claim=reviewer_claim, work_session_ref=work_session_ref,
+            label=label, claim_ref=claim_ref, target_app_ref=target_app_ref,
+            native=native, key_provider=key_provider,
         )
-        prepared = operation.prepare_session_decision(transition)
-        context = prepared.context(archive_id=archive_id, reviewer_claim=reviewer_claim)
-        terminal = {}
 
-        def observe_target_binding():
-            held.verify_held()
-            prepared.validate()
-            if store.read().sha256 != prepared.transition.before_sha256:
-                raise WorkSessionExecutionError("work_session_execution_changed")
-            return prepared.manifest.target_set_sha256
 
-        @contextmanager
-        def publication():
-            held.verify_held()
-            if store.read().sha256 != prepared.transition.before_sha256:
-                raise WorkSessionExecutionError("work_session_execution_changed")
-            bundle.save_context_bound_session_decision(store, prepared, context=context, held_lock=held)
-            yield
+def _execute_session_decision_held(
+    archive_root, *, held, action, client_app_ref, reviewer_claim,
+    work_session_ref=None, label=None, claim_ref=None, target_app_ref=None,
+    native=None, key_provider=None,
+) -> dict[str, Any]:
+    """Internal composition seam; a same-archive held OS lock is mandatory.
 
-        def writer(claim):
-            _reload(store, prepared, context)
-            return operation.apply_session_decision_with_claim(
-                store, prepared, context=context, claim=claim, held_lock=held,
-            )
+    The public facade can re-read private actor selectors under this one lock
+    before planning. This grants no approval and exposes no new public inputs.
+    Only internal tests substitute the native input and secure key seams.
+    """
+    store, archive_id = _store(archive_root)
+    store._require_held_lock(held)
+    transition = registry.plan_transition(
+        store.read(), action=action, client_app_ref=client_app_ref,
+        work_session_ref=work_session_ref, label=label,
+        claim_ref=claim_ref, target_app_ref=target_app_ref,
+    )
+    prepared = operation.prepare_session_decision(transition)
+    context = prepared.context(archive_id=archive_id, reviewer_claim=reviewer_claim)
+    terminal = {}
 
-        def finish(claim):
-            terminal.update(_verified_terminal(store, prepared, context, claim))
+    def observe_target_binding():
+        held.verify_held()
+        prepared.validate()
+        if store.read().sha256 != prepared.transition.before_sha256:
+            raise WorkSessionExecutionError("work_session_execution_changed")
+        return prepared.manifest.target_set_sha256
 
-        outcome = workflow._execute_exact_human_approved_write_core(
-            store.root, context, writer, native=native, key_provider=key_provider,
-            post_decision_boundary=lambda: _claim_boundary(store, held, create=True),
-            claim_publication_boundary=publication, claim_succeeded_finalizer=finish,
-            target_collection=_local_preview(prepared), observe_target_binding=observe_target_binding,
+    @contextmanager
+    def publication():
+        held.verify_held()
+        if store.read().sha256 != prepared.transition.before_sha256:
+            raise WorkSessionExecutionError("work_session_execution_changed")
+        bundle.save_context_bound_session_decision(store, prepared, context=context, held_lock=held)
+        yield
+
+    def writer(claim):
+        _reload(store, prepared, context)
+        return operation.apply_session_decision_with_claim(
+            store, prepared, context=context, claim=claim, held_lock=held,
         )
-        return _result(prepared, outcome, terminal)
+
+    def finish(claim):
+        terminal.update(_verified_terminal(store, prepared, context, claim))
+
+    outcome = workflow._execute_exact_human_approved_write_core(
+        store.root, context, writer, native=native, key_provider=key_provider,
+        post_decision_boundary=lambda: _claim_boundary(store, held, create=True),
+        claim_publication_boundary=publication, claim_succeeded_finalizer=finish,
+        target_collection=_local_preview(prepared), observe_target_binding=observe_target_binding,
+    )
+    return _result(prepared, outcome, terminal)
 
 
 def _resume_session_decision_core(
@@ -215,49 +235,60 @@ def _resume_session_decision_core(
     progress: Callable[[dict], None] = lambda _value: None,
     key_provider=None,
 ) -> dict[str, Any]:
-    """No approval identifier, new reviewer, new context or native dialog.
-
-The manifest is an internal private-payload selector, not an authorization.
-Public task-scoped payload discovery remains the caller's responsibility.
-"""
+    """Discover the original approved operation under one cancelable OS lock."""
     with wait_for_archive_writer(Path(archive_root), cancel_requested=cancel_requested,
                                  progress=progress) as held:
-        store, _archive_id = _store(archive_root)
-        bound = bundle.load_context_bound_session_decision(store, manifest_sha256=manifest_sha256)
-        prepared, context = bound.prepared, bound.context
-        terminal, resume_state = {}, {}
-
-        def started_guard(claim):
-            _started_state(store, prepared, context, claim)
-            return True
-
-        def writer(claim):
-            state = _started_state(store, prepared, context, claim)
-            resume_state["started_resume_state"] = state
-            return operation.apply_session_decision_with_claim(
-                store, prepared, context=context, claim=claim, held_lock=held,
-                resume=state == "checkpoint_present",
-            )
-
-        def succeeded_guard(claim):
-            _verified_terminal(store, prepared, context, claim)
-            return True
-
-        def finish(claim):
-            terminal.update(_verified_terminal(store, prepared, context, claim))
-
-        outcome = workflow._resume_exact_human_approved_transaction_auto_core(
-            store.root, context, started_guard, writer, succeeded_guard, finish,
+        return _resume_session_decision_held(
+            archive_root, held=held, manifest_sha256=manifest_sha256,
             key_provider=key_provider,
-            resume_boundary=lambda: _claim_boundary(store, held, create=False),
         )
-        if resume_state.get("started_resume_state") == "authenticated_before_first_checkpoint":
-            # The shared historical router assumes every admitted candidate
-            # already had a checkpoint. This reachable cut has no chain yet;
-            # report its different, actual evidence without changing authority.
-            outcome = {**outcome, "resume_discovery": {
-                **outcome.get("resume_discovery", {}),
-                "checkpoint_chain_validated_read_only": False,
-                "authenticated_precheckpoint_preimage_verified": True,
-            }}
-        return _result(prepared, {**outcome, **resume_state}, terminal)
+
+
+def _resume_session_decision_held(
+    archive_root, *, held, manifest_sha256, key_provider=None,
+) -> dict[str, Any]:
+    """Resume under the caller's same-archive lock without renewed authority.
+
+    No approval identifier, new reviewer, new context or native dialog is
+    accepted. The manifest is only an internal private-payload selector.
+    """
+    store, _archive_id = _store(archive_root)
+    store._require_held_lock(held)
+    bound = bundle.load_context_bound_session_decision(store, manifest_sha256=manifest_sha256)
+    prepared, context = bound.prepared, bound.context
+    terminal, resume_state = {}, {}
+
+    def started_guard(claim):
+        _started_state(store, prepared, context, claim)
+        return True
+
+    def writer(claim):
+        state = _started_state(store, prepared, context, claim)
+        resume_state["started_resume_state"] = state
+        return operation.apply_session_decision_with_claim(
+            store, prepared, context=context, claim=claim, held_lock=held,
+            resume=state == "checkpoint_present",
+        )
+
+    def succeeded_guard(claim):
+        _verified_terminal(store, prepared, context, claim)
+        return True
+
+    def finish(claim):
+        terminal.update(_verified_terminal(store, prepared, context, claim))
+
+    outcome = workflow._resume_exact_human_approved_transaction_auto_core(
+        store.root, context, started_guard, writer, succeeded_guard, finish,
+        key_provider=key_provider,
+        resume_boundary=lambda: _claim_boundary(store, held, create=False),
+    )
+    if resume_state.get("started_resume_state") == "authenticated_before_first_checkpoint":
+        # The shared historical router assumes every admitted candidate
+        # already had a checkpoint. This reachable cut has no chain yet;
+        # report its different, actual evidence without changing authority.
+        outcome = {**outcome, "resume_discovery": {
+            **outcome.get("resume_discovery", {}),
+            "checkpoint_chain_validated_read_only": False,
+            "authenticated_precheckpoint_preimage_verified": True,
+        }}
+    return _result(prepared, {**outcome, **resume_state}, terminal)

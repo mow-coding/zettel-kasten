@@ -300,6 +300,32 @@ bump, PR, tag, wheel or client application has occurred.
   stay distinct. Current query help does not advertise those writers yet;
   internal decision/process-loss tests are not substituted for public routing.
 
+## Single-lock public lifecycle preparation
+
+- The existing decision and original-context resume runners now have private
+  held-lock composition seams. Their prior entry functions still acquire the
+  cancelable archive OS lock once. A facade can therefore re-read its private
+  actor context, plan and invoke the broker without trying to acquire the same
+  lock twice. A typed, live, same-archive lock is verified before planning or
+  loading a resume bundle. This is not a new approval or a public bypass.
+- Root ran the new held-lock tests with the existing actual broker/claim/
+  registry/receipt/resume cohort: sixteen tests passed in 25.181 seconds.
+  Actual create and completed-output-loss resume retain the same lock, claim
+  and terminal receipt with one native decision. Foreign, unheld and released
+  locks fail before plan/native/claim. Independent source review found no new
+  blocker; all four readiness gates and resource synchronization passed.
+- The next actor store reuses the registry's opaque client-app reference as
+  the installation selector. It does not mint a second app identity or infer
+  the current app/session from labels, PID, time or the newest entry. Its
+  selected binding/claim and pending original manifest/context remain private
+  routing assertions, not current write authority. Fresh writes still require
+  the independent claimed-binding guard; original approved work still requires
+  its existing authenticated claim and checkpoint.
+- Public registration and claim also need a durable original transition intent
+  before commit, so output loss cannot create another app or a replacement
+  claim. That bootstrap/discovery integration is explicitly pending; internal
+  components are not advertised as a completed public lifecycle.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)
