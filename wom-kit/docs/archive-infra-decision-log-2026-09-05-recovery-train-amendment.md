@@ -6,9 +6,9 @@ Status: accepted; implementation in progress
 ## Context
 
 A full feedback-history reassessment found both real client successes and
-regressions hidden by command-level release checks. The current candidate still
-rejects benign directory allocation-size changes, prepares a runtime before a
-same-version no-op, and uses tiny object bytes in its count-scale benchmark.
+regressions hidden by command-level release checks. At reassessment the candidate
+rejected benign directory allocation-size changes, prepared a runtime before a
+same-version no-op, and used tiny object bytes in its count-scale benchmark.
 
 ## Decisions
 
@@ -39,6 +39,16 @@ same-version no-op, and uses tiny object bytes in its count-scale benchmark.
    An observational heartbeat child must have no domain arguments or authority,
    inherit no archive locks, close on parent loss, and be joined before progress
    handoff. Keep the existing noninteractive Windows launch policy.
+10. Centralize command availability without changing established public action
+    identifiers or parsed output defaults. A closed writer is refused before
+    private prerequisite inspection. Contended, unavailable, changed and
+    unsupported native operations remain different observations; none implies
+    permission to repair, seize a lock or mint replacement approval authority.
+11. Mutable convenience views are not approved evidence. Reconstruct and detach
+    Git execution state through its existing strict bundle decoder, retain exact
+    legacy serialization, and recheck factory context before the writer starts.
+    Completed predecessor cleanup remains separate from prewrite recovery; only
+    authenticated matching evidence, not a phase label alone, permits effects.
 
 ## Consequences
 

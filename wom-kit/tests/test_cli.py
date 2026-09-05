@@ -1712,6 +1712,8 @@ class ArchiveCliTests(unittest.TestCase):
         self,
         project_root: Path,
         expected_reason: str,
+        *,
+        integrity_checked: bool = True,
     ) -> dict[str, Any]:
         code, output = self.run_cli(
             [
@@ -1730,7 +1732,21 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertEqual(alignment["status"], "project_source_update_required")
         self.assertEqual(alignment["reason_code"], expected_reason)
         integrity = alignment["integrity"]
-        self.assertTrue(integrity["checked"])
+        self.assertEqual(integrity["checked"], integrity_checked)
+        if not integrity_checked:
+            # Source-path admission can reject a mirror before the detailed
+            # integrity probe; legacy False flags do not mean checks ran.
+            source = result["project_source_mirror"]
+            self.assertEqual(source["status"], "unsafe_path")
+            self.assertEqual(source["observation_state"], "failed")
+            self.assertEqual(source["observation_reason_code"], expected_reason)
+            self.assertTrue(integrity["checks"])
+            self.assertTrue(
+                all(
+                    check["state"] == "not_reached"
+                    for check in integrity["checks"].values()
+                )
+            )
         self.assertFalse(integrity["verified"])
         self.assertEqual(integrity["reason_code"], expected_reason)
         self.assertFalse(integrity["cryptographic_tag_signature_verified"])
@@ -5020,7 +5036,12 @@ class ArchiveCliTests(unittest.TestCase):
                 ".zettel-kasten/installed-version.txt",
                 result["project_pin"]["checked_locations"],
             )
-            self.assertEqual(result["consistency_state"], "project_pin_mismatch")
+            # This fixture has a readable old pin but no source mirror. The
+            # source prerequisite now takes precedence in the overall result;
+            # the independently observed pin mismatch above remains visible.
+            self.assertEqual(result["consistency_state"], "project_source_mirror_mismatch")
+            self.assertEqual(result["runtime_alignment"]["reason_code"], "project_source_mirror_missing")
+            self.assertEqual(result["runtime_alignment"]["integrity"]["checks"]["origin_configured"]["state"], "not_reached")
             self.assertEqual(result["canonical_checks"]["human_readable"], "archive --version")
             self.assertTrue(result["redaction"]["local_paths_redacted"])
             self.assertNotIn("local_paths", result)
@@ -5034,7 +5055,8 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertTrue(ok_result["project_pin"]["matches_package_version"])
             self.assertEqual(ok_result["project_source_mirror"]["status"], "missing")
             self.assertEqual(ok_result["project_runtime"]["status"], "runtime_mismatch")
-            self.assertEqual(ok_result["consistency_state"], "project_runtime_mismatch")
+            self.assertEqual(ok_result["consistency_state"], "project_source_mirror_mismatch")
+            self.assertEqual(ok_result["runtime_alignment"]["reason_code"], "project_source_mirror_missing")
 
     def test_version_reports_aligned_only_for_receipted_bound_project_process(
         self,
@@ -5147,7 +5169,7 @@ class ArchiveCliTests(unittest.TestCase):
             result = json.loads(output)
 
         self.assertEqual(code, 1, output)
-        self.assertEqual(result["project_runtime"]["status"], "runtime_mismatch")
+        self.assertEqual(result["project_runtime"]["status"], "runtime_unavailable")
         self.assertEqual(
             result["project_runtime"]["inspection_truth"]["state"],
             "unavailable",
@@ -8237,8 +8259,8 @@ class ArchiveCliTests(unittest.TestCase):
         cases = (
             (
                 "non_git_mirror",
-                "project_git_worktree_root_unverified",
-                "git_worktree_root_exact",
+                "project_git_metadata_not_local_real",
+                "git_metadata_local_real",
             ),
             (
                 "dirty_wrapper",
@@ -8285,12 +8307,22 @@ class ArchiveCliTests(unittest.TestCase):
                 alignment = self.assert_runtime_alignment_integrity_failure(
                     fixture["project_root"],
                     expected_reason,
+                    integrity_checked=case_name != "non_git_mirror",
                 )
                 self.assertEqual(
                     alignment["project_source_version"],
                     archive_cli.__version__,
                 )
                 self.assertFalse(alignment["integrity"][failed_evidence])
+
+                self.assertEqual(
+                    alignment["integrity"]["checks"][failed_evidence]["state"],
+                    "not_reached" if case_name == "non_git_mirror" else "failed",
+                )
+                self.assertEqual(
+                    alignment["integrity"]["checks"]["origin_configured"]["state"],
+                    "not_reached",
+                )
 
     def test_version_runtime_alignment_integrity_rejects_concealed_execution_source_changes(self) -> None:
         cases = (
@@ -8845,21 +8877,21 @@ class ArchiveCliTests(unittest.TestCase):
                 credential_sentinel,
             )
 
-            real_git = archive_services._wom_kit_project_update_git
-            observed_git_results: list[tuple[list[str], tuple[bool, str]]] = []
+            real_git = archive_services._wom_kit_project_update_git_observation
+            observed_git_results: list[tuple[list[str], tuple[bool, int | None, str]]] = []
 
             def record_git_result(
                 mirror_path: Path,
                 args: list[str],
                 **kwargs: Any,
-            ) -> tuple[bool, str]:
+            ) -> tuple[bool, int | None, str]:
                 git_result = real_git(mirror_path, args, **kwargs)
                 observed_git_results.append((list(args), git_result))
                 return git_result
 
             with patch.object(
                 archive_services,
-                "_wom_kit_project_update_git",
+                "_wom_kit_project_update_git_observation",
                 side_effect=record_git_result,
             ):
                 code, stdout, stderr = self.run_cli_split(
@@ -8879,6 +8911,7 @@ class ArchiveCliTests(unittest.TestCase):
             integrity = result["runtime_alignment"]["integrity"]
             self.assertTrue(integrity["verified"])
             self.assertTrue(integrity["origin_config_key_present"])
+            self.assertEqual(integrity["checks"]["origin_configured"]["state"], "passed")
             self.assertFalse(integrity["origin_config_value_read"])
             self.assertFalse(integrity["origin_remote_contacted"])
             self.assertFalse(integrity["network_used"])
@@ -8911,7 +8944,7 @@ class ArchiveCliTests(unittest.TestCase):
                 for args, git_result in observed_git_results
                 if args == expected_origin_probe
             ]
-            self.assertEqual(origin_probe_results, [(True, "remote.origin.url")])
+            self.assertEqual(origin_probe_results, [(True, 0, "remote.origin.url")])
             self.assertFalse(
                 any(
                     args == ["config", "--get", "remote.origin.url"]
@@ -8962,16 +8995,16 @@ class ArchiveCliTests(unittest.TestCase):
                 f"\turl = {credential_sentinel}\n",
                 encoding="utf-8",
             )
-            real_git = archive_services._wom_kit_project_update_git
+            real_git = archive_services._wom_kit_project_update_git_observation
             observed_git_results: list[
-                tuple[list[str], tuple[bool, str]]
+                tuple[list[str], tuple[bool, int | None, str]]
             ] = []
 
             def record_git_result(
                 mirror_path: Path,
                 args: list[str],
                 **kwargs: Any,
-            ) -> tuple[bool, str]:
+            ) -> tuple[bool, int | None, str]:
                 git_result = real_git(mirror_path, args, **kwargs)
                 observed_git_results.append((list(args), git_result))
                 return git_result
@@ -8986,7 +9019,7 @@ class ArchiveCliTests(unittest.TestCase):
                 ),
                 patch.object(
                     archive_services,
-                    "_wom_kit_project_update_git",
+                    "_wom_kit_project_update_git_observation",
                     side_effect=record_git_result,
                 ),
             ):
@@ -9012,6 +9045,8 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertFalse(integrity["origin_configured"])
             self.assertFalse(integrity["origin_config_key_present"])
             self.assertFalse(integrity["origin_config_value_read"])
+            self.assertEqual(integrity["checks"]["origin_configured"]["state"], "failed")
+            self.assertEqual(integrity["checks"]["head_commit_available"]["state"], "not_reached")
             expected_origin_probe = [
                 "config",
                 "--local",
@@ -9040,7 +9075,7 @@ class ArchiveCliTests(unittest.TestCase):
                 for args, git_result in observed_git_results
                 if args == expected_origin_probe
             ]
-            self.assertEqual(origin_probe_results, [(False, "")])
+            self.assertEqual(origin_probe_results, [(True, 1, "")])
 
             returned_memory_boundary = repr(observed_git_results)
             for exposed_boundary in (
@@ -9058,6 +9093,50 @@ class ArchiveCliTests(unittest.TestCase):
                         credential_sentinel,
                         exposed_boundary,
                     )
+
+    def test_version_origin_observation_unavailable_is_not_missing_configuration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self.create_runtime_alignment_fixture(
+                Path(tmp),
+                source_version=archive_cli.__version__,
+                pyproject_version=archive_cli.__version__,
+                pin_version=archive_cli.__version__,
+                include_runtime_sources=True,
+            )
+            real_observation = archive_services._wom_kit_project_update_git_observation
+            expected_probe = ["config", "--local", "--no-includes", "--name-only",
+                              "--get-regexp", r"^remote\.origin\.url$"]
+            origin_probes = []
+
+            def unavailable_origin(mirror_path, args, **kwargs):
+                if args == expected_probe:
+                    origin_probes.append(list(args))
+                    return False, None, ""
+                return real_observation(mirror_path, args, **kwargs)
+
+            with patch.object(archive_services, "_wom_kit_project_update_git_observation",
+                              side_effect=unavailable_origin):
+                code, output = self.run_cli([
+                    "version", str(fixture["project_root"]), "--format", "json",
+                ])
+            result = json.loads(output)
+            alignment = result["runtime_alignment"]
+            integrity = alignment["integrity"]
+            self.assertEqual(code, 1, output)
+            self.assertEqual(origin_probes, [expected_probe])
+            self.assertEqual(alignment["status"], "project_source_observation_unavailable")
+            self.assertEqual(alignment["reason_code"], "project_origin_configuration_unavailable")
+            # False is retained for historical readers, but it does not mean
+            # an absent remote when the bounded observation did not complete.
+            self.assertFalse(integrity["origin_configured"])
+            self.assertEqual(integrity["checks"]["origin_configured"]["state"], "unavailable")
+            self.assertEqual(integrity["checks"]["head_commit_available"]["state"], "not_reached")
+            self.assertFalse(integrity["origin_config_value_read"])
+            self.assertFalse(integrity["origin_remote_contacted"])
+            self.assertFalse(integrity["network_used"])
+            self.assertFalse(alignment["project_scoped_bridge"]["available"])
+            self.assertNotIn("bridge_argv", alignment)
+            self.assertNotIn(str(fixture["project_root"]), output)
 
     def test_version_runtime_alignment_integrity_rejects_symlinked_wrapper_when_supported(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -9178,13 +9257,13 @@ class ArchiveCliTests(unittest.TestCase):
             )
             self.assertEqual(
                 alignment["reason_code"],
-                "project_source_metadata_path_unsafe",
+                "project_source_mirror_path_unsafe",
             )
             self.assertFalse(alignment["integrity"]["checked"])
             self.assertFalse(alignment["integrity"]["verified"])
             self.assertEqual(
                 alignment["integrity"]["reason_code"],
-                "project_source_metadata_path_unsafe",
+                "project_source_mirror_path_unsafe",
             )
             self.assertFalse(
                 alignment["integrity"]["mirror_real_directory_inside_project"]
@@ -9368,8 +9447,10 @@ class ArchiveCliTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     result["runtime_alignment"]["reason_code"],
-                    "project_source_metadata_path_unsafe",
+                    "project_source_mirror_path_unsafe",
                 )
+                self.assertEqual(result["project_source_mirror"]["observation_state"], "failed")
+                self.assertEqual(result["runtime_alignment"]["integrity"]["checks"]["origin_configured"]["state"], "not_reached")
                 self.assertFalse(
                     any(
                         path == mirror_path
@@ -9393,13 +9474,13 @@ class ArchiveCliTests(unittest.TestCase):
         cases = (
             (
                 "project_pin",
-                "project_pin_unreadable",
-                "unreadable",
+                "project_pin_missing_or_invalid",
+                "invalid",
             ),
             (
                 "source_version_metadata",
-                "project_source_metadata_unreadable",
-                "metadata_unreadable",
+                "project_source_version_missing_or_invalid",
+                "metadata_invalid",
             ),
         )
         for case_name, expected_reason, expected_status in cases:
@@ -9472,6 +9553,9 @@ class ArchiveCliTests(unittest.TestCase):
                         result["project_source_mirror"]["status"],
                         expected_status,
                     )
+                observation = result["project_pin"] if case_name == "project_pin" else result["project_source_mirror"]
+                self.assertEqual(observation["observation_state"], "failed")
+                self.assertEqual(result["runtime_alignment"]["integrity"]["checks"]["origin_configured"]["state"], "not_reached")
                 self.assertNotIn(target_path, opened_paths)
                 combined = stdout + stderr + json.dumps(
                     result,
@@ -11570,6 +11654,22 @@ class ArchiveCliTests(unittest.TestCase):
     ) -> None:
         """The released predecessor's complete tombstone is cleanup-resumable."""
 
+        self._assert_actual_v0415_completed_cleanup_resume("cleanup_tombstone")
+
+    @unittest.skipUnless(
+        WINDOWS_PROJECT_RUNTIME,
+        "the production runtime supply is Windows CPython 3.12",
+    )
+    def test_actual_v0415_completed_original_resumes_without_writer_or_new_approval(
+        self,
+    ) -> None:
+        """A real predecessor exit before its cleanup plan keeps its approval."""
+
+        self._assert_actual_v0415_completed_cleanup_resume("completed_original")
+
+    def _assert_actual_v0415_completed_cleanup_resume(self, boundary: str) -> None:
+        self.assertIn(boundary, {"cleanup_tombstone", "completed_original"})
+
         self.assertIsNotNone(shutil.which("git"))
         repository_root = KIT_ROOT.parent
         with tempfile.TemporaryDirectory() as tmp:
@@ -11662,6 +11762,25 @@ class V0415CleanupTombstoneWorker(ArchiveCliTests):
             .ProjectUpdateTransaction
         )
 
+        def crash_before_cleanup_plan(instance: Any, *, cleanup_authority_sha256: str) -> bool:
+            module = archive_services.project_update_transaction
+            original = instance.transaction_root
+            self.assertTrue(original.is_dir())
+            self.assertFalse((original / "cleanup-plan.json").exists())
+            checkpoint_lines = (original / "checkpoints.jsonl").read_bytes().splitlines()
+            checkpoints = [json.loads(line.decode("utf-8")) for line in checkpoint_lines if line]
+            self.assertEqual(checkpoints[-1]["phase"], "completed")
+            self.assertEqual(checkpoints[-1]["stage"], "verified")
+            approval = next(item for item in checkpoints if item["phase"] == "approval_bound")
+            self.assertEqual(cleanup_authority_sha256, approval["approval_reference_sha256"])
+            control.update({
+                "cleanup_authority_sha256": cleanup_authority_sha256,
+                "terminal_checkpoint_sha256": module.sha256_bytes(checkpoint_lines[-1]),
+                "transaction_ref": instance.transaction_ref,
+            })
+            write_control()
+            os._exit(86)
+
         def crash_with_complete_cleanup_tombstone(
             cls: type[Any],
             project: Path,
@@ -11739,13 +11858,17 @@ class V0415CleanupTombstoneWorker(ArchiveCliTests):
             write_control()
             os._exit(86)
 
+        boundary_patcher = (
+            patch.object(transaction_type, "exact_cleanup", new=crash_before_cleanup_plan)
+            if os.environ.get("WOM_TEST_PROJECT_UPDATE_COMPLETION_BOUNDARY") == "completed_original"
+            else patch.object(
+                transaction_type, "_resume_cleanup_paths",
+                new=classmethod(crash_with_complete_cleanup_tombstone),
+            )
+        )
         with self.fast_project_runtime_candidate_patches(
             artifacts
-        ), patch.object(
-            transaction_type,
-            "_resume_cleanup_paths",
-            new=classmethod(crash_with_complete_cleanup_tombstone),
-        ), patch.object(
+        ), boundary_patcher, patch.object(
             operation_control.OperationRunJournal,
             "_heartbeat_loop",
             return_value=None,
@@ -11798,6 +11921,7 @@ if __name__ == "__main__":
                     "WOM_TEST_PROJECT_UPDATE_HARD_EXIT_ROOT": str(
                         operation_root
                     ),
+                    "WOM_TEST_PROJECT_UPDATE_COMPLETION_BOUNDARY": boundary,
                 }
             )
             crashed = subprocess.run(
@@ -11847,8 +11971,8 @@ if __name__ == "__main__":
                 transaction_parent
                 / f".cleanup-proof_{transaction_ref}.json"
             )
-            self.assertFalse(original.exists())
-            self.assertTrue(tombstone.is_dir())
+            self.assertEqual(original.exists(), boundary == "completed_original")
+            self.assertEqual(tombstone.is_dir(), boundary == "cleanup_tombstone")
             self.assertFalse(proof.exists())
             candidate = (
                 archive_services.project_update_transaction
@@ -11856,20 +11980,26 @@ if __name__ == "__main__":
                 .discover_complete_cleanup_tombstone_for_resume_read_only(
                     project_root
                 )
+                if boundary == "cleanup_tombstone"
+                else None
             )
-            self.assertIsNotNone(candidate)
-            self.assertEqual(candidate.transaction_ref, transaction_ref)
-            self.assertEqual(
-                candidate.cleanup_authority_sha256,
-                legacy_cleanup_authority,
-            )
-            self.assertEqual(
-                candidate.terminal_checkpoint_sha256,
-                control["terminal_checkpoint_sha256"],
-            )
+            if boundary == "cleanup_tombstone":
+                self.assertIsNotNone(candidate)
+                self.assertEqual(candidate.transaction_ref, transaction_ref)
+                self.assertEqual(candidate.cleanup_authority_sha256, legacy_cleanup_authority)
+                self.assertEqual(candidate.terminal_checkpoint_sha256, control["terminal_checkpoint_sha256"])
+            else:
+                self.assertIsNone(candidate)
+                self.assertFalse((original / "cleanup-plan.json").exists())
+                self.assertIsNone(
+                    archive_services.project_update_transaction.ProjectUpdateTransaction.open(
+                        project_root, transaction_ref,
+                    ).cleanup_authority_sha256_read_only()
+                )
+            preserved_transaction_root = tombstone if boundary == "cleanup_tombstone" else original
 
             intent_document = json.loads(
-                (tombstone / "intent.json").read_text(encoding="ascii")
+                (preserved_transaction_root / "intent.json").read_text(encoding="ascii")
             )
             private_records = {
                 item["logical_key"]: item
@@ -11882,7 +12012,7 @@ if __name__ == "__main__":
                 self.assertFalse(
                     logical.is_absolute() or ".." in logical.parts
                 )
-                raw = tombstone.joinpath(*logical.parts).read_bytes()
+                raw = preserved_transaction_root.joinpath(*logical.parts).read_bytes()
                 self.assertEqual(len(raw), record["size"])
                 self.assertEqual(
                     archive_services.project_update_transaction
@@ -12063,12 +12193,12 @@ if __name__ == "__main__":
                 self.assertEqual(
                     pending["payload"]
                     ["legacy_cleanup_authority_sha256"],
-                    legacy_cleanup_authority,
+                    legacy_cleanup_authority if boundary == "cleanup_tombstone" else None,
                 )
                 self.assertEqual(
                     ready["payload"]
                     ["legacy_cleanup_authority_sha256"],
-                    legacy_cleanup_authority,
+                    legacy_cleanup_authority if boundary == "cleanup_tombstone" else None,
                 )
                 ready_handoffs.append(ready_sha256)
                 return ready_sha256
@@ -12081,12 +12211,10 @@ if __name__ == "__main__":
                 self.assertEqual(ready_handoffs and len(ready_handoffs), 1)
                 self.assertEqual(
                     cleanup_authority_sha256,
-                    legacy_cleanup_authority,
+                    legacy_cleanup_authority if boundary == "cleanup_tombstone" else ready_handoffs[0],
                 )
-                self.assertNotEqual(
-                    cleanup_authority_sha256,
-                    ready_handoffs[0],
-                )
+                if boundary == "cleanup_tombstone":
+                    self.assertNotEqual(cleanup_authority_sha256, ready_handoffs[0])
                 active, _guard = (
                     archive_services._project_update_terminal_handoff_paths(
                         project_root
@@ -12775,6 +12903,30 @@ if __name__ == "__main__":
                 sealed_runtime_policy = sealed_private_plan[
                     "runtime_policy"
                 ]
+                sealed_bootstrap_summary = sealed_private_plan[
+                    "runtime_bootstrap"
+                ]
+                # The worker used a synthetic installed public-wheel origin.
+                # Recreate that same external metadata observation after the
+                # process loss; do not replace any resumed writer/verifier.
+                sealed_bootstrap = archive_services.project_runtime.BootstrapWheel(
+                    version=control["target_version"],
+                    tag=control["target_tag"],
+                    url=(
+                        "https://example.invalid/releases/"
+                        + control["target_tag"]
+                        + "/"
+                        + sealed_bootstrap_summary["wheel_file_name"]
+                    ),
+                    sha256=sealed_bootstrap_summary["wheel_sha256"].removeprefix(
+                        "sha256:"
+                    ),
+                    file_name=sealed_bootstrap_summary["wheel_file_name"],
+                )
+                self.assertEqual(
+                    sealed_bootstrap.public_summary(),
+                    sealed_bootstrap_summary,
+                )
                 sealed_runtime_supply = (
                     archive_services.project_runtime
                     .project_runtime_supply_lock(
@@ -12828,6 +12980,10 @@ if __name__ == "__main__":
                     archive_services,
                     "wom_kit_project_update_runtime_supply",
                     return_value=sealed_runtime_supply,
+                ), patch.object(
+                    archive_services.project_runtime,
+                    "bootstrap_wheel_for_target",
+                    return_value=(sealed_bootstrap, sealed_bootstrap_summary),
                 ), patch.object(
                     archive_services.project_runtime,
                     "_verify_retained_artifacts",
@@ -13349,7 +13505,13 @@ if __name__ == "__main__":
             "automatic_resume_discovery": True,
             "operator_resume_identifiers_supplied": True,
         }
+        # This is a dispatch-only unit test. Native terminal serialization is
+        # exercised by the Windows output-order and installed-runtime journeys.
         with patch.object(
+            archive_services,
+            "_project_update_terminal_control_boundary",
+            side_effect=lambda *_args: nullcontext(),
+        ), patch.object(
             archive_services,
             "_project_update_terminal_cleanup_unknown_preflight_read_only",
             return_value=None,
@@ -13461,6 +13623,10 @@ if __name__ == "__main__":
         for label, identifier_args, expected_flag in identifier_cases:
             with self.subTest(identifier=label), patch.object(
                 archive_services,
+                "_project_update_terminal_control_boundary",
+                side_effect=lambda *_args: nullcontext(),
+            ), patch.object(
+                archive_services,
                 "_project_update_terminal_cleanup_unknown_preflight_read_only",
                 return_value=None,
             ), patch.object(
@@ -13543,6 +13709,10 @@ if __name__ == "__main__":
         for label, identifier_args, expected_approval_flag in identifier_cases:
             with self.subTest(identifier=label), patch.object(
                 archive_services,
+                "_project_update_terminal_control_boundary",
+                side_effect=lambda *_args: nullcontext(),
+            ), patch.object(
+                archive_services,
                 "_project_update_terminal_cleanup_unknown_preflight_read_only",
                 return_value=None,
             ), patch.object(
@@ -13582,6 +13752,7 @@ if __name__ == "__main__":
                 True,
             )
 
+    @unittest.skipUnless(os.name == "nt", "native terminal serialization is Windows-only")
     def test_project_version_update_terminal_output_precedes_journal_and_atomic_consumption(
         self,
     ) -> None:
@@ -13823,12 +13994,8 @@ if __name__ == "__main__":
                     )
 
                 self.assertEqual(code, 0, stderr)
-                boundary_prefix = (
-                    ["boundary-enter"] if os.name == "nt" else []
-                )
-                boundary_suffix = (
-                    ["boundary-exit"] if os.name == "nt" else []
-                )
+                boundary_prefix = ["boundary-enter"]
+                boundary_suffix = ["boundary-exit"]
                 self.assertEqual(
                     events,
                     [
@@ -15245,6 +15412,10 @@ if __name__ == "__main__":
             "project_update_legacy_recovery_guard_unavailable",
             cli_codes,
         )
+        self.assertIn(
+            "project_update_legacy_recovery_platform_unsupported",
+            cli_codes,
+        )
         self.assertNotIn(
             "DEBUG_LEGACY",
             (SRC_ROOT / "wom_kit" / "archive_services.py").read_text(
@@ -15257,6 +15428,122 @@ if __name__ == "__main__":
                 encoding="utf-8"
             ),
         )
+
+    def test_project_version_update_reservation_wait_failure_is_fixed_public_json(
+        self,
+    ) -> None:
+        for reason, status, category in (
+            ("project_update_transaction_reservation_busy", "reservation_busy", "contention"),
+            ("project_update_transaction_reservation_guard_unavailable", "reservation_guard_unavailable", "inspection"),
+        ):
+            with self.subTest(reason=reason), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp) / "project"
+                archive = root / "archive"
+                archive.mkdir(parents=True)
+                (archive / "archive.yml").write_text(
+                    "archive_id: archive:test\n", encoding="utf-8",
+                )
+
+                @contextmanager
+                def approval_boundary(_root):
+                    yield archive, "archive:test"
+
+                with patch.object(
+                    archive_services, "_project_update_terminal_cleanup_unknown_preflight_read_only",
+                    return_value=None,
+                ), patch.object(
+                    archive_services, "_project_update_terminal_control_boundary",
+                    side_effect=lambda *_args: nullcontext(),
+                ), patch.object(
+                    archive_cli, "_project_version_update_approval_read_boundary",
+                    side_effect=approval_boundary,
+                ), patch.object(
+                    archive_services, "_wom_kit_project_version_update_resume_live_transaction",
+                    side_effect=archive_services.ArchiveServiceError(reason),
+                ), patch.object(
+                    archive_cli, "_execute_project_version_update_exact_human_approved_write",
+                    side_effect=AssertionError("reservation wait opened replacement approval"),
+                ) as approval:
+                    code, stdout, stderr = self.run_cli_split([
+                        "project-version-update", str(root), "--resume",
+                        "--affirm-external-writers-quiescent", "--format", "json",
+                    ])
+                self.assertEqual(code, 1, stdout + stderr)
+                result = json.loads(stdout)
+                self.assertEqual(result["reason_code"], reason)
+                self.assertEqual(result["status"], status)
+                self.assertEqual(result["error_class"], category)
+                self.assertEqual(result["effects_state"], "unknown")
+                self.assertIsNone(result["existing_operation_resume_required"])
+                self.assertEqual(result["existing_operation_presence"], "unavailable")
+                for name in (
+                    "automatic_retry_authorized", "fresh_approval_authorized",
+                    "repair_authorized", "cleanup_authorized", "lock_steal_authorized",
+                ):
+                    self.assertFalse(result[name])
+                approval.assert_not_called()
+                self.assertNotIn(str(root), stdout + stderr)
+                private_marker = "private_lowercase_marker"
+                for forged in (
+                    RuntimeError(reason),
+                    archive_services.ArchiveServiceError(reason + " " + private_marker),
+                    archive_services.ArchiveServiceError(reason, private_marker),
+                ):
+                    self.assertIsNone(
+                        archive_cli._project_version_update_privacy_safe_failure_result(forged)
+                    )
+                self.assertNotIn(private_marker, stdout + stderr)
+
+    def test_project_version_update_reservation_wait_service_keeps_typed_reason(
+        self,
+    ) -> None:
+        archive_id = "archive:test"
+        resolved = SimpleNamespace(
+            paths=SimpleNamespace(recovery_ref="recovery_" + "a" * 32),
+            locator={"state": "intent_sealed"},
+            intent={"archive_identity_sha256": archive_services.exact_human_approval_archive_identity_sha256(archive_id)},
+            checkpoints=(), prospective_plan=None, terminal_receipt=None,
+        )
+
+        def observe_handoff(_root, *, _observation_out=None):
+            _observation_out.append(None)
+            return None
+
+        for code in (
+            "project_update_transaction_reservation_busy",
+            "project_update_transaction_reservation_guard_unavailable",
+            "project_update_transaction_reservation_state_changed",
+        ):
+            expected = (
+                code if code != "project_update_transaction_reservation_state_changed"
+                else "project_version_update_legacy_recovery_state_ambiguous"
+            )
+            with self.subTest(code=code), patch.object(
+                archive_services, "_project_update_terminal_control_boundary",
+                side_effect=lambda *_args: nullcontext(),
+            ), patch.object(
+                archive_services.project_update_legacy_recovery, "legacy_recovery_process_guard",
+                side_effect=lambda *_args, **_kwargs: nullcontext(),
+            ), patch.object(
+                archive_services.project_update_legacy_recovery, "resolve_active_recovery",
+                return_value=resolved,
+            ), patch.object(
+                archive_services, "_project_update_terminal_handoff_state_read_only",
+                side_effect=observe_handoff,
+            ), patch.object(
+                archive_services, "_project_update_resume_legacy_preplan",
+                side_effect=archive_services.project_update_transaction.ProjectUpdateTransactionError(code),
+            ) as preplan:
+                with self.assertRaisesRegex(archive_services.ArchiveServiceError, "^" + expected + "$"):
+                    archive_services._project_update_resume_active_legacy_recovery(
+                        Path("synthetic-project"), project_root=Path("synthetic-project"),
+                        expected_approval_root=Path("synthetic-archive"), expected_archive_id=archive_id,
+                        approval_executor=lambda *_args, **_kwargs: self.fail("new approval entered"),
+                        progress_callback=None,
+                        key_provider=SimpleNamespace(use_key=lambda *_args, **_kwargs: None),
+                        resume_boundary=lambda: None,
+                    )
+                preplan.assert_called_once()
 
     def test_project_version_update_unapproved_terminal_capsule_is_distinct(
         self,
@@ -15356,6 +15643,35 @@ if __name__ == "__main__":
                     )
                 )
 
+    def test_project_version_update_posix_terminal_control_refuses_without_effects(
+        self,
+    ) -> None:
+        # The portable routing tests replace only this native boundary. Keep
+        # the real unsupported-platform contract independently executable on
+        # Windows CI too, without replacing Path's host implementation.
+        posix_os = SimpleNamespace(**(vars(os) | {"name": "posix"}))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            root.mkdir()
+            before = root.stat()
+            with patch.object(archive_services, "os", posix_os):
+                with self.assertRaisesRegex(
+                    OSError,
+                    "^project_update_terminal_control_platform_unsupported$",
+                ):
+                    with archive_services._project_update_terminal_control_boundary(root):
+                        self.fail("unsupported terminal writer entered")
+            after = root.stat()
+            self.assertEqual(list(root.iterdir()), [])
+            self.assertEqual(
+                (after.st_dev, after.st_ino, after.st_mtime_ns),
+                (before.st_dev, before.st_ino, before.st_mtime_ns),
+            )
+            self.assertIsNone(
+                archive_services._PROJECT_UPDATE_TERMINAL_CONTROL_LEASE.get()
+            )
+
+    @unittest.skipUnless(os.name == "nt", "native terminal lease is Windows-only")
     def test_project_version_update_cancellation_restart_reauthenticates_capability(
         self,
     ) -> None:
@@ -15469,6 +15785,10 @@ if __name__ == "__main__":
                 return None
 
             with patch.object(
+                archive_services,
+                "_project_update_terminal_control_boundary",
+                side_effect=lambda *_args: nullcontext(),
+            ), patch.object(
                 archive_services,
                 "_project_update_resume_project_root_read_only",
                 return_value=project_root,
@@ -15680,6 +16000,7 @@ if __name__ == "__main__":
                 self.assertEqual(result, sentinel)
                 self.assertEqual(preplan.call_count, 1)
 
+    @unittest.skipUnless(os.name == "nt", "native exact legacy publication is Windows-only")
     def test_project_version_update_legacy_preplan_durable_boundaries_resume_without_ui(
         self,
     ) -> None:
@@ -16017,6 +16338,7 @@ if __name__ == "__main__":
                     )
                     self.assertEqual(transaction_refs, [fresh_ref])
 
+    @unittest.skipUnless(os.name == "nt", "native exact legacy publication is Windows-only")
     def test_project_version_update_legacy_plan_seal_boundaries_are_idempotent(
         self,
     ) -> None:
@@ -16403,6 +16725,7 @@ if __name__ == "__main__":
                         [fresh_ref],
                     )
 
+    @unittest.skipUnless(os.name == "nt", "native exact legacy publication is Windows-only")
     def test_project_version_update_legacy_c_inventory_hard_exit_resumes(
         self,
     ) -> None:
@@ -16748,6 +17071,10 @@ if __name__ == "__main__":
                 return None
 
             with patch.object(
+                archive_services,
+                "_project_update_terminal_control_boundary",
+                side_effect=lambda *_args: nullcontext(),
+            ), patch.object(
                 archive_services,
                 "_project_update_terminal_cleanup_unknown_preflight_read_only",
                 return_value=None,
@@ -17817,6 +18144,7 @@ if __name__ == "__main__":
                 *,
                 claim_publication_boundary: Any = None,
                 claim_succeeded_finalizer: Any = None,
+                _key_provider: Any = None,
             ) -> Any:
                 nonlocal approval_started
                 self.assertTrue(
@@ -17836,6 +18164,7 @@ if __name__ == "__main__":
                         claim_succeeded_finalizer=(
                             claim_succeeded_finalizer
                         ),
+                        _key_provider=_key_provider,
                     )
                     self.assertEqual(len(resolved_runners), 1)
                     self.assertTrue(
@@ -18253,6 +18582,50 @@ if __name__ == "__main__":
                 ]
             )
 
+    @unittest.skipUnless(os.name == "nt", "approved updater preparation is Windows-only")
+    def test_project_version_update_reservation_wait_never_runs_unowned_lock_cleanup(
+        self,
+    ) -> None:
+        for reason in (
+            "project_update_transaction_reservation_busy",
+            "project_update_transaction_reservation_guard_unavailable",
+        ):
+            with self.subTest(reason=reason), tempfile.TemporaryDirectory() as tmp:
+                fixture = self.create_project_version_update_fixture(Path(tmp))
+                metadata = fixture["metadata_root"]
+                pin_before = (metadata / "installed-version.txt").read_bytes()
+                head_before = self.git_fixture_command(fixture["mirror"], "rev-parse", "HEAD")
+                with patch.object(
+                    archive_services.project_update_transaction.ProjectUpdateTransaction,
+                    "reserve",
+                    side_effect=archive_services.project_update_transaction.ProjectUpdateTransactionError(reason),
+                ) as reserve, patch.object(
+                    archive_services, "_wom_kit_project_update_reconcile_lock_after_acquire_failure",
+                    side_effect=AssertionError("unowned reservation wait invoked lock cleanup"),
+                ) as cleanup, patch.object(
+                    archive_cli, "_execute_project_version_update_exact_human_approved_write",
+                    side_effect=AssertionError("reservation wait opened new approval"),
+                ) as approval:
+                    code, stdout, stderr = self.run_cli_split([
+                        "project-version-update", str(fixture["project_root"]),
+                        "--target", fixture["target_tag"], "--approve",
+                        "--affirm-external-writers-quiescent",
+                        "--reviewed-by", "person:synthetic-reviewer", "--format", "json",
+                    ])
+                self.assertEqual(code, 1, stdout + stderr)
+                result = json.loads(stdout)
+                self.assertEqual(result["reason_code"], reason)
+                self.assertIsNone(result["existing_operation_resume_required"])
+                self.assertEqual(result["existing_operation_presence"], "unavailable")
+                reserve.assert_called_once()
+                cleanup.assert_not_called()
+                approval.assert_not_called()
+                self.assertEqual((metadata / "installed-version.txt").read_bytes(), pin_before)
+                self.assertEqual(self.git_fixture_command(fixture["mirror"], "rev-parse", "HEAD"), head_before)
+                self.assertFalse((metadata / "version-update.lock").exists())
+                self.assertFalse((metadata / "receipts" / "version-updates").exists())
+
+    @unittest.skipUnless(os.name == "nt", "approved updater preparation is Windows-only")
     def test_project_version_update_fetch_preparation_failure_never_opens_approval_or_writes(
         self,
     ) -> None:
@@ -19001,8 +19374,10 @@ if __name__ == "__main__":
                     *,
                     claim_publication_boundary: Any = None,
                     claim_succeeded_finalizer: Any = None,
+                    _key_provider: Any = None,
                 ) -> Any:
                     del claim_publication_boundary, claim_succeeded_finalizer
+                    self.assertIsNone(_key_provider)
                     nonlocal approval_reached
                     approval_reached = True
                     try:
@@ -19160,6 +19535,7 @@ if __name__ == "__main__":
                 *,
                 claim_publication_boundary: Any = None,
                 claim_succeeded_finalizer: Any = None,
+                _key_provider: Any = None,
             ) -> Any:
                 nonlocal approval_started
                 approval_started = True
@@ -19173,6 +19549,7 @@ if __name__ == "__main__":
                     claim_succeeded_finalizer=(
                         claim_succeeded_finalizer
                     ),
+                    _key_provider=_key_provider,
                 )
 
             command = [
@@ -19437,6 +19814,7 @@ if __name__ == "__main__":
                 *,
                 claim_publication_boundary: Any = None,
                 claim_succeeded_finalizer: Any = None,
+                _key_provider: Any = None,
             ) -> Any:
                 return self.execute_test_exact_human_transaction(
                     root,
@@ -19448,6 +19826,7 @@ if __name__ == "__main__":
                     claim_succeeded_finalizer=(
                         claim_succeeded_finalizer
                     ),
+                    _key_provider=_key_provider,
                 )
 
             command = [
@@ -19853,11 +20232,14 @@ if __name__ == "__main__":
         )
         self.assertEqual(write_result["files_written"], [])
         self.assertNotIn("mixed-state-lock-body", write_output)
-        self.assertEqual(collision_code, 3, collision_output)
+        # The parser-known closed writer is rejected without inspecting an
+        # incomplete runtime.  The live index writer above still hits its lock.
+        self.assertEqual(collision_code, 1, collision_output)
         self.assertEqual(
             json.loads(collision_output)["reason_codes"],
-            ["project_update_recovery_required"],
+            ["compound_exact_human_approval_binding_required"],
         )
+        self.assertEqual(json.loads(collision_output)["effects_state"], "none")
         self.assertNotIn("mixed-state-lock-body", collision_output)
         self.assertEqual(read_code, 43)
         self.assertEqual(recovery_code, 44)
@@ -20072,6 +20454,8 @@ if __name__ == "__main__":
                     str(archive_root),
                     "--title",
                     "must remain blocked",
+                    "--creation-mode",
+                    "ai_assisted",
                     "--approve",
                     "--format",
                     "json",
@@ -20119,6 +20503,7 @@ if __name__ == "__main__":
                 *,
                 claim_publication_boundary: Any = None,
                 claim_succeeded_finalizer: Any = None,
+                _key_provider: Any = None,
             ) -> Any:
                 nonlocal approval_count
                 approval_count += 1
@@ -20132,6 +20517,7 @@ if __name__ == "__main__":
                     claim_succeeded_finalizer=(
                         claim_succeeded_finalizer
                     ),
+                    _key_provider=_key_provider,
                 )
 
             approved_command = [
@@ -21437,6 +21823,7 @@ if __name__ == "__main__":
         mirror_fixture = tempfile.TemporaryDirectory()
         self.addCleanup(mirror_fixture.cleanup)
         mirror_path = Path(mirror_fixture.name).resolve()
+        runner = self.trusted_project_update_git_runner()
         cases = (
             (
                 "branch",
@@ -21512,15 +21899,15 @@ if __name__ == "__main__":
                 ),
                 patch.object(
                     archive_services,
-                    "_wom_kit_project_update_git",
-                    return_value=git_result,
+                    "_wom_kit_project_update_git_observation",
+                    return_value=(True, 0 if git_result[0] else 1, git_result[1]),
                 ) as git_call,
             ):
                 actual = (
                     archive_services
                     .wom_kit_project_update_symbolic_head_state(
                         mirror_path,
-                        runner=self.trusted_project_update_git_runner(),
+                        runner=runner,
                     )
                 )
 
@@ -21538,7 +21925,7 @@ if __name__ == "__main__":
                         "feature+rollback",
                     ],
                     max_output_bytes=4096,
-                    runner=self.trusted_project_update_git_runner(),
+                    runner=runner,
                 )
             elif case_name == "branch_rejected_by_git":
                 git_call.assert_called_once()
@@ -23581,7 +23968,8 @@ if __name__ == "__main__":
                 "parent_of_archive/.zettel-kasten/installed-version.txt",
                 result["project_pin"]["checked_locations"],
             )
-            self.assertEqual(result["consistency_state"], "project_pin_mismatch")
+            self.assertEqual(result["consistency_state"], "project_source_mirror_mismatch")
+            self.assertEqual(result["runtime_alignment"]["reason_code"], "project_source_mirror_missing")
             self.assertTrue(result["redaction"]["local_paths_redacted"])
             self.assertNotIn(str(project_root), output)
             self.assertNotIn(str(archive_root), output)
@@ -59519,9 +59907,11 @@ state:
             self.assertEqual(approve_code, 1, approve_output)
             fixed_close = json.loads(approve_output)
             self.assertEqual(
-                fixed_close["blockers"],
+                fixed_close["reason_codes"],
                 ["compound_exact_human_approval_binding_required"],
             )
+            self.assertEqual(fixed_close["capability_state"], "writer_unavailable")
+            self.assertEqual(fixed_close["effects_state"], "none")
             self.assertFalse(proposal_path.exists())
 
             applied_copy = (
@@ -61893,9 +62283,15 @@ state:
                 self.assertEqual(code, 1, output)
                 self.assertEqual(
                     output.strip(),
-                    "Exact compound human-approval binding is not implemented "
-                    "for this command; the write did not start. Use its dry-run "
-                    "or plan mode only.",
+                    (
+                        "Choose exactly one execution mode: --dry-run or --approve. "
+                        "The command did not start."
+                        if "--dry-run" in arguments else
+                        "Writer unavailable in this installed WOM version. Exact compound "
+                        "human-approval binding is not implemented for this command; the "
+                        "write did not start. Use the command's dry-run, plan, or audit "
+                        "mode and check `archive capabilities --machine`."
+                    ),
                 )
                 for private_value in (
                     wrong_sha256,
@@ -66132,10 +66528,12 @@ state:
                         ]
                     )
                     self.assertEqual(forbidden_code, 1)
-                    self.assertIn(
-                        "rejects approval or reviewer flags",
-                        forbidden_output,
-                    )
+                    if "--approve" in forbidden_args:
+                        conflict = json.loads(forbidden_output)
+                        self.assertEqual(conflict["reason_codes"], ["capability_mode_conflicting"])
+                        self.assertEqual(conflict["effects_state"], "none")
+                    else:
+                        self.assertIn("rejects approval or reviewer flags", forbidden_output)
                     self.assertNotIn(
                         "PRIVATE_REMOVAL_REVIEWER",
                         forbidden_output,
@@ -70255,12 +70653,10 @@ state:
             self.assertTrue(result["bom_stripped"], result)
             review = result["human_review_plan"]
             self.assertIn("--strip-bom", review["commands"]["review_visible_dry_run"])
-            self.assertIn("--strip-bom", review["commands"]["approve_if_intentional"])
-            self.assertIn(result["review_plan_sha256"], review["commands"]["approve_if_intentional"])
-            self.assertTrue(
-                any("--strip-bom" in action and "--content-changed-ack" in action for action in result["next_safe_actions"]),
-                result,
-            )
+            self.assertIsNone(review["commands"]["approve_if_intentional"])
+            self.assertEqual(review["approval_state"], "writer_unavailable")
+            self.assertFalse(result["approval_would_write"])
+            self.assertFalse(any("--approve" in action for action in result["next_safe_actions"]))
 
     def test_remint_reconcile_strip_bom_apply_content_edit_matches_dry_run(self) -> None:  # 2.T5
         # Apply agrees with the 2.T4 dry-run: BOM + title edit without ack is BLOCKED;
@@ -70444,8 +70840,9 @@ state:
             self.assertNotIn(body_marker, serialized_review)
             self.assertNotIn(receipt_marker, serialized_review)
             self.assertFalse(review["content_included"])
-            self.assertIn(zid, review["commands"]["approve_if_intentional"])
-            self.assertIn(result["review_plan_sha256"], review["commands"]["approve_if_intentional"])
+            self.assertIsNone(review["commands"]["approve_if_intentional"])
+            self.assertEqual(review["approval_state"], "writer_unavailable")
+            self.assertFalse(result["approval_would_write"])
 
     def test_retire_draft_reconcile_pointer_ref_mismatch_is_content_change(self) -> None:
         # v0.3.167 Item 2: the mint_receipt pointer ref has no format dimension; ANY

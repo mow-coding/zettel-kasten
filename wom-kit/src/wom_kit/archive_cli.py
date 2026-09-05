@@ -10402,8 +10402,9 @@ def _project_version_update_privacy_safe_failure_result(
 
     ``ArchiveServiceError`` is also used for messages that may contain private
     paths or values, so a syntactically code-shaped message is not sufficient.
-    Only the three exact literals above may cross this boundary.  Every other
-    exception continues through the generic redacted failure artifact.
+    Only explicitly allowlisted cleanup, reservation, and legacy literals may
+    cross this boundary. Every other exception continues through the generic
+    redacted failure artifact.
     """
 
     if not isinstance(error, archive_services.ArchiveServiceError):
@@ -10411,6 +10412,44 @@ def _project_version_update_privacy_safe_failure_result(
     if len(error.args) != 1 or type(error.args[0]) is not str:
         return None
     private_code = error.args[0]
+    if private_code in {
+        "project_update_transaction_reservation_busy",
+        "project_update_transaction_reservation_guard_unavailable",
+    }:
+        busy = private_code == "project_update_transaction_reservation_busy"
+        return {
+            "schema": "wom-kit/project-version-update-cli-failure/v0.4.19",
+            "ok": False,
+            "status": "reservation_busy" if busy else "reservation_guard_unavailable",
+            "lifecycle_action": "project_version_update",
+            "error_class": "contention" if busy else "inspection",
+            "reason_code": private_code,
+            "reason_codes": [private_code],
+            "blockers": [private_code],
+            "effects_state": "unknown",
+            "automatic_retry_authorized": False,
+            "fresh_approval_authorized": False,
+            "repair_authorized": False,
+            "cleanup_authorized": False,
+            "lock_steal_authorized": False,
+            "existing_operation_resume_required": None,
+            "existing_operation_presence": "unavailable",
+            "project_domain_files_written": None,
+            "files_written": None,
+            "private_paths_echoed": False,
+            "private_identifiers_echoed": False,
+            "private_values_echoed": False,
+            "raw_errors_echoed": False,
+            "next_safe_actions": [
+                (
+                    "Another invocation still holds the reservation guard. Wait for it to finish, then inspect existing control evidence."
+                    if busy else
+                    "The reservation guard could not be observed. Recheck OS lock availability, then inspect existing control evidence."
+                ),
+                "If a resumable operation is found, continue it with project-version-update --resume; this failure does not prove that an existing operation is present.",
+                "Preserve existing control evidence; do not steal the lock, repair data, or start a replacement approval.",
+            ],
+        }
     failure_kind = _PROJECT_VERSION_UPDATE_TERMINAL_CLEANUP_FAILURE_KINDS.get(
         private_code
     )
@@ -47092,6 +47131,52 @@ def _project_write_runtime_guard(
     return None
 
 
+# Public lifecycle identifiers predate the shared availability gate.  Preserve
+# them without calling a handler (which may inspect private files), and do not
+# infer them from a callable name: wrappers and mocks can change that name.
+_UNAVAILABLE_WRITER_LIFECYCLE_ACTIONS = {
+    "add-source": "add_source_binding",
+    "credential-lifecycle": "authenticated_credential_lifecycle_decision",
+    "delegate-zet": "delegate",
+    "discard-draft": "discard_draft_apply",
+    "github-repo": "approve_github_repository_setup_plan",
+    "identity-reconcile": "archive_identity_reconcile",
+    "import-external": "import_external_archive",
+    "init": "archive_init",
+    "migrate": "migrate_archive",
+    "notion-page-recovery": "authenticated_notion_page_recovery_execute",
+    "object-storage-upload": "object_storage_upload_run",
+    "object-storage-upload-evidence": "object_storage_upload_evidence_register",
+    "objet-capture-selection": "objet_capture_selection_record",
+    "objet-source-metadata-write": "private_objet_source_metadata_write",
+    "pack": "pack_work_context",
+    "parcel": "pack_work_context",
+    "prehashed-objet-ledger": "prehashed_objet_ledger_register",
+    "relation-candidate-decide": "relation_candidate_accept",
+    "revert-edge": "zettel_edge_revert",
+    "revert-batch": "zettel_edge_batch_revert",
+    "transfer-ownership": "transfer_archive_ownership",
+}
+
+
+def _unavailable_writer_lifecycle_action(
+    canonical_path: str, args: argparse.Namespace,
+) -> str:
+    if canonical_path == "derive-text capture":
+        return (
+            "derived_text_capture_manifest_apply"
+            if getattr(args, "from_manifest", None)
+            else "derived_text_capture_apply"
+        )
+    action = _UNAVAILABLE_WRITER_LIFECYCLE_ACTIONS.get(
+        canonical_path, canonical_path.replace("-", "_").replace(" ", "_")
+    )
+    return (
+        action if re.fullmatch(r"[a-z][a-z0-9_]{0,95}", action)
+        else "capability_availability_dispatch"
+    )
+
+
 def _writer_unavailable_dispatch_error(
     args: argparse.Namespace,
     availability: Mapping[str, Any],
@@ -47106,13 +47191,7 @@ def _writer_unavailable_dispatch_error(
         availability.get("detail_reason_code")
         or command_status.COMPOUND_APPROVAL_REASON_CODE
     )
-    lifecycle_action = str(
-        getattr(getattr(args, "func", None), "__name__", "command_dispatch")
-    )
-    if lifecycle_action.startswith("command_"):
-        lifecycle_action = lifecycle_action[len("command_") :]
-    if not re.fullmatch(r"[a-z][a-z0-9_]{0,95}", lifecycle_action):
-        lifecycle_action = "capability_availability_dispatch"
+    lifecycle_action = _unavailable_writer_lifecycle_action(canonical_path, args)
     if json_requested:
         print_json(
             {
@@ -47371,6 +47450,11 @@ def main(argv: list[str] | None = None) -> int:
             }
         )
         return exit_code
+    # Parsing owns both explicit format choices and command-specific defaults.
+    # Raw argv detection is only for failures that occur before a namespace
+    # exists; otherwise JSON-only commands would lose their established output.
+    if hasattr(args, "format"):
+        json_requested = args.format == "json"
     try:
         capability_availability = (
             command_status.resolve_namespace_capability_availability(

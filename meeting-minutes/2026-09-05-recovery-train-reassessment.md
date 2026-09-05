@@ -246,3 +246,99 @@ not complete at this checkpoint.
   that measurement. This result does not erase the earlier unexplained mixed
   failure and does not prove the separate public-process startup or client
   byte-scale performance contracts.
+
+## Full-CI reconciliation before release
+
+- The next candidate passed both Ubuntu Doctor scale profiles and the Windows
+  installed public-entrypoint workflow. Its full test shards still failed;
+  these green gates are not permission to merge or publish the candidate.
+- The shared availability gate accidentally changed established JSON
+  `lifecycle_action` names to handler names and ignored command-specific JSON
+  defaults. Restore the public identifiers and parsed format defaults without
+  invoking handlers or inspecting private prerequisites. The original blocked,
+  no-write and privacy assertions remain. The first affected CLI cohort passed
+  57 tests and 59 subtests with no expectation changes. Independent comparison
+  against published handlers and current inventory also found the canonical
+  `parcel` alias and the discard-draft action; both are corrected. An available
+  session-evidence writer remains outside the fixed-closed compatibility map.
+- Remaining test corrections distinguish intentional contracts from bugs:
+  unavailable observation is not mismatch, skipped checks are not failures,
+  diagnostics must not recommend a fixed-closed writer, and mutually exclusive
+  execution modes fail before dispatch. A parser-known unavailable writer does
+  not inspect a damaged runtime merely to produce another blocker.
+- Native retained-handle legacy moves and exact deletions were already
+  Windows-only. Their unsupported-platform result is now explicit. Portable
+  schema, identity and refusal tests remain portable; only actual Windows
+  effect/lease integration cases are Windows-scoped. No POSIX mutation safety
+  claim is fabricated by weakening those primitives.
+- A Windows two-process reservation test exposed an eight-second wait timeout
+  mislabeled as state drift. Use a bounded thirty-second wait with distinct
+  busy/unavailable results, keep the existing OS lock, and keep the independent
+  progress reporter live. A deterministic hold exceeding eight seconds,
+  timeout heartbeats, failed-wait classification and post-lock directory drift
+  checks passed locally. Public propagation also passed fixed-code/privacy
+  tests and the real synthetic Git-preparation path: a failed reservation did
+  not invoke foreign-lock cleanup or native approval, and kept the pin and
+  source HEAD. The remaining full shards are still being verified; no automatic
+  repair or new approval follows contention.
+- Subsequent local groups passed 30 CLI regressions plus the separately
+  corrected conflicting-mode case, and 56 capability/quarantine/bytecode
+  tests with 1,896 subtests. These are bounded local evidence, not a claim that
+  the whole CI or the private client recovery has completed.
+- Python 3.10 had one additional test import failure because a checkout-shim
+  test imported Python 3.11's `tomllib`. It now checks the repository-owned
+  literal project version without requiring that unsupported standard module
+  or changing runtime dependencies. The real new-process shim test passed
+  locally; the lowest supported interpreter still requires fresh CI.
+- The full local version cohort's two remaining failures were corrected and
+  replayed separately. Native junction-path admission and non-Git pre-admission
+  now assert their actual early failure with downstream checks `not_reached`.
+  The independent origin-unavailable case remains distinct from exit-code-one
+  missing configuration and reads no remote URL value. A single fresh full
+  candidate run, not an aggregate claim based on partial reruns, is required.
+- v0.4.20 preparation remains isolated in its own unfinished worktree. The
+  binding, preview, Git selection and registry slices are not yet one public
+  workflow. Independent review corrected preview navigation reentrancy and
+  retained the registry parent during private pending-image creation. Their
+  passing component tests do not represent integration or release completion.
+- All shards of candidate `c4333f947d1161a938187371dfcfd30d55f8d368` have now
+  finished. The final Windows shard passed, but the aggregate run failed.
+  Windows updater callback-contract failures and two interruption/replay cases
+  require explicit reconciliation before a new complete candidate run.
+- Independent review found that a busy/unavailable reservation does not prove
+  an existing transaction exists: it can precede transaction creation. The
+  diagnostic now leaves existence and required resume unconfirmed, advises
+  inspection first, and offers resume only when matching evidence is found.
+  It still grants no retry, new approval, repair, cleanup or lock-steal authority.
+- Windows-specific failure reconciliation identified actual routing and replay
+  bugs in addition to stale synthetic callback signatures. A completed v0.4.15
+  cleanup tombstone was intercepted by the prewrite adapter; exact authenticated
+  terminal cleanup must retain its original route. Bootstrap replay also compared
+  a deliberately never-fetched sealed URL placeholder with the live wheel URL.
+  Exact version/tag/filename/hash and live public-origin checks, not placeholder
+  equality, define the retained supply identity. Focused interruption tests and
+  other actually reachable predecessor boundaries are being rerun.
+- Independent synthetic Git review reproduced selected-observation drift in both
+  the v0.4.20 preparation and legacy v1 writer. A mutable convenience dictionary
+  could disagree with approved source bytes. Reuse the strict private-bundle
+  decoder to reconstruct and detach execution state before claims and writes;
+  compare the exact approval context again at writer entry. New refusal tests
+  passed for changed views and matching changed disk bytes, with no commit/push
+  or private claim creation. A same-fixture comparison against actual predecessor
+  source preserved canonical legacy bundle, manifest, source, commit-message,
+  public-plan and approval-context bytes. Full Git cohorts remain required.
+- The corrected legacy Git writer plus new security regressions then passed
+  thirteen tests and two subtests. The isolated v0.4.20 Git cohort passed 23
+  tests and 25 subtests; neither synthetic remote is a client remote.
+- The original failing Windows updater group plus new pure boundaries passed
+  nine tests and sixteen subtests. A final predecessor group passed nine tests
+  and fourteen subtests, including actual v0.4.15 completed-original and
+  completed-tombstone process exits and public resume with no replacement writer
+  or new approval. Missing/tampered claim, checkpoint and context cases stayed
+  refused. A cleanup-authority read-error injection also confirmed owned guard
+  and runner release without private exception output.
+- Supported automatic legacy scope is now explicitly bounded: exact prewrite
+  recovery and authenticated completed-original/tombstone cleanup. Other
+  ambiguous or changed legacy journals remain preserved and blocked, not
+  silently counted as recovered. This source is frozen for a fresh complete CI
+  candidate; no partial local test sum is substituted for that release gate.

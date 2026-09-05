@@ -611,6 +611,20 @@ class V0419LockObservationTests(unittest.TestCase):
                     ._PROJECT_UPDATE_UNAVAILABLE_LIVE_COMPONENT,
                 ],
             ):
+                # Atomic publication is deliberately Windows-only. Keep the
+                # portable pre-observation check above, and on POSIX prove
+                # refusal preserves the preimage and creates no swap/candidate.
+                if archive_services.os.name != "nt":
+                    with self.assertRaisesRegex(
+                        archive_services.ArchiveServiceError,
+                        "component_atomic_publish_unsupported",
+                    ):
+                        archive_services._project_update_exact_write_bytes(
+                            state, component, after
+                        )
+                    self.assertEqual(path.read_bytes(), before)
+                    self.assertEqual(list(project_root.iterdir()), [path])
+                    return
                 with self.assertRaisesRegex(
                     archive_services.ArchiveServiceError,
                     "component_verification_unavailable",
@@ -621,6 +635,11 @@ class V0419LockObservationTests(unittest.TestCase):
                         after,
                     )
             self.assertEqual(path.read_bytes(), after)
+
+    def test_posix_component_write_is_zero_effect_even_on_windows_test_host(self) -> None:
+        posix = SimpleNamespace(**(vars(os) | {"name": "posix"}))
+        with mock.patch.object(archive_services, "os", posix):
+            self.test_exact_component_write_stops_on_unavailable_observation()
 
     def test_owned_lock_observation_distinguishes_exact_and_changed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

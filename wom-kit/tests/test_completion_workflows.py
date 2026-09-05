@@ -3297,11 +3297,13 @@ class CompletionWorkflowTests(unittest.TestCase):
             self.assertEqual(revert_code, 1, revert_output)
             reverted = json.loads(revert_output)
             self.assertEqual(
-                reverted["blockers"],
+                reverted["reason_codes"],
                 ["compound_exact_human_approval_binding_required"],
             )
+            self.assertEqual(reverted["capability_state"], "writer_unavailable")
             self.assertEqual(reverted["files_written"], [])
-            self.assertFalse(reverted["privacy_guards"]["writes"])
+            self.assertEqual(reverted["effects_state"], "none")
+            self.assertFalse(reverted["private_values_echoed"])
             self.assertEqual(
                 {
                     path.relative_to(archive_root).as_posix(): path.read_bytes()

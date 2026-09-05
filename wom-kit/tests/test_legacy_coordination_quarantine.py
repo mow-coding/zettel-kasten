@@ -301,13 +301,19 @@ class LegacyCoordinationQuarantineTests(unittest.TestCase):
                 ]
             )
             self.assertEqual(code, 1, output)
+            blocked_result = json.loads(output)
+            availability = blocked_result["capability_availability"]
+            self.assertEqual(availability["state"], "writer_unavailable")
+            self.assertFalse(availability["prerequisites_evaluated"])
             self.assertEqual(
-                json.loads(output),
+                blocked_result,
                 {
                     "schema": "wom-kit/cli-error/v0.1",
                     "ok": False,
                     "state": "blocked",
+                    "capability_state": "writer_unavailable",
                     "command": "restore-drill",
+                    "canonical_command_path": "restore-drill",
                     "error_class": "policy",
                     "status_class": "blocked",
                     "effects_state": "none",
@@ -316,6 +322,11 @@ class LegacyCoordinationQuarantineTests(unittest.TestCase):
                     "reason_codes": [
                         "compound_exact_human_approval_binding_required"
                     ],
+                    "capability_reason_codes": [
+                        "writer_unavailable",
+                        "compound_exact_human_approval_binding_required",
+                    ],
+                    "capability_availability": availability,
                     "files_written": [],
                     "private_values_echoed": False,
                 },

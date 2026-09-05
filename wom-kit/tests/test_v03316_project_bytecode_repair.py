@@ -868,10 +868,8 @@ class Letter129BoundRepairCanaryTests(unittest.TestCase):
             plan = json.loads(plan_output)
             self.assertTrue(plan["summary"]["collision_binding_verified"])
 
-            # This in-process CLI harness cannot actually originate from the
-            # synthetic runtime interpreter.  Keep the real static receipt and
-            # live-payload checks above, and model only that process-bound fact
-            # so this canary reaches the command's separate fixed-close gate.
+            # A parser-known closed writer must not inspect the runtime at all.
+            # Keep the real receipt/payload checks in the read-only plan above.
             with patch.object(
                 project_runtime,
                 "current_project_runtime_binding",
@@ -898,7 +896,7 @@ class Letter129BoundRepairCanaryTests(unittest.TestCase):
                         "json",
                     ]
                 )
-            runtime_binding.assert_called_once()
+            runtime_binding.assert_not_called()
             self.assertEqual(repair_code, 1, repair_output)
             repaired = json.loads(repair_output)
             self.assertEqual(repaired["state"], "blocked")

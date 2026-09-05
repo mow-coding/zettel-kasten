@@ -125248,6 +125248,18 @@ def _project_update_resume_active_legacy_recovery(
         raise
     except project_update_legacy_recovery.LegacyProjectUpdateRecoveryError as failure:
         raise ArchiveServiceError(failure.code) from None
+    except project_update_transaction.ProjectUpdateTransactionError as failure:
+        if failure.code in {
+            "project_update_transaction_reservation_busy",
+            "project_update_transaction_reservation_guard_unavailable",
+        }:
+            # An OS guard wait did not acquire ownership. Keep that distinct
+            # from changed recovery evidence; neither result grants repair,
+            # lock takeover, or a new approval.
+            raise ArchiveServiceError(failure.code) from None
+        raise ArchiveServiceError(
+            "project_version_update_legacy_recovery_state_ambiguous"
+        ) from None
     except BaseException:
         raise ArchiveServiceError(
             "project_version_update_legacy_recovery_state_ambiguous"
@@ -130908,6 +130920,32 @@ def _project_update_approved_comparison_projection(
     return live
 
 
+def _project_update_approved_bootstrap_identity_matches(
+    live: project_runtime.BootstrapWheel | None,
+    sealed: project_runtime.BootstrapWheel,
+) -> bool:
+    """Compare approved wheel identity, not the resume-only non-fetch URL.
+
+    The caller must obtain ``live`` through bootstrap_wheel_for_target, which
+    verifies the running distribution's exact public origin. Reopened plans
+    intentionally reconstruct an unusable transport URL and never fetch it.
+    """
+
+    if not isinstance(live, project_runtime.BootstrapWheel):
+        return False
+    return (
+        live.version,
+        live.tag,
+        live.file_name,
+        live.sha256,
+    ) == (
+        sealed.version,
+        sealed.tag,
+        sealed.file_name,
+        sealed.sha256,
+    )
+
+
 def _project_update_assert_approved_snapshot_unchanged(
     state: _ProjectVersionUpdateDurableApprovalState,
 ) -> None:
@@ -131184,7 +131222,9 @@ def _project_update_assert_approved_snapshot_unchanged(
             ),
             "runtime_bootstrap": _wom_kit_project_update_preparation_check(
                 "runtime_bootstrap",
-                live_bootstrap == state.runtime_bootstrap
+                _project_update_approved_bootstrap_identity_matches(
+                    live_bootstrap, state.runtime_bootstrap
+                )
                 and live_bootstrap_summary == plan.get("runtime_bootstrap"),
                 available=live_bootstrap is not None,
             ),
@@ -133898,6 +133938,42 @@ def _project_update_resume_legacy_approval_bound_prewrite(
     )
     if not legacy_candidate:
         return None
+    existing_cleanup_authority = getattr(
+        state, "existing_cleanup_authority_sha256", None
+    )
+    if (
+        inspection.journal.state == "exact"
+        and checkpoints
+        and checkpoints[-1].phase == "completed"
+        and checkpoints[-1].stage == "verified"
+        and (
+            existing_cleanup_authority is None
+            or (
+                type(existing_cleanup_authority) is str
+                and re.fullmatch(
+                    r"sha256:[0-9a-f]{64}", existing_cleanup_authority
+                ) is not None
+            )
+        )
+    ):
+        try:
+            observed_cleanup_authority = (
+                transaction.cleanup_authority_sha256_read_only()
+            )
+        except BaseException:
+            _project_update_close_after_service_failure(
+                state.directory_guard.close,
+                lifetime,
+            )
+            raise ArchiveServiceError(
+                "project_version_update_legacy_recovery_state_ambiguous"
+            ) from None
+        # A completed predecessor can stop before its cleanup plan or after
+        # its tombstone move. Neither is an abandoned prewrite. Matching
+        # absence authorizes no cleanup: the ordinary terminal route must
+        # still authenticate the succeeded claim, receipts and live bytes.
+        if existing_cleanup_authority == observed_cleanup_authority:
+            return None
     if not eligible or key_provider is None or not callable(resume_boundary):
         _project_update_close_after_service_failure(
             state.directory_guard.close,
@@ -136725,7 +136801,25 @@ def _wom_kit_project_version_update_legacy_core_generator(
             ),
             close_owned_resources=directory_guard.close,
         )
-    except BaseException:
+    except BaseException as acquisition_failure:
+        if (
+            isinstance(
+                acquisition_failure,
+                project_update_transaction.ProjectUpdateTransactionError,
+            )
+            and acquisition_failure.code in {
+                "project_update_transaction_reservation_busy",
+                "project_update_transaction_reservation_guard_unavailable",
+            }
+            and durable_reservation is None
+            and not lock_acquired
+            and lock_reservation is None
+        ):
+            # The reservation guard was never acquired. In particular the
+            # old legacy lock belongs to the running operation, not to this
+            # invocation's generic acquisition-failure cleanup path.
+            directory_guard.close()
+            raise ArchiveServiceError(acquisition_failure.code) from None
         lock_identity = (
             lock_reservation.get("identity")
             if lock_reservation is not None

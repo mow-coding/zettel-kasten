@@ -13,6 +13,52 @@ from wom_kit import archive_cli, archive_services, command_status, mcp_server
 
 
 class V0419CapabilityAvailabilityTests(unittest.TestCase):
+    def test_shared_gate_preserves_public_action_names_without_handler_inspection(self) -> None:
+        expected = {
+            "add-source": "add_source_binding",
+            "discard-draft": "discard_draft_apply",
+            "credential-lifecycle": "authenticated_credential_lifecycle_decision",
+            "github-repo": "approve_github_repository_setup_plan",
+            "import-external": "import_external_archive",
+            "migrate": "migrate_archive",
+            "parcel": "pack_work_context",
+            "notion-page-recovery": "authenticated_notion_page_recovery_execute",
+            "objet-capture-selection": "objet_capture_selection_record",
+            "prehashed-objet-ledger": "prehashed_objet_ledger_register",
+            "transfer-ownership": "transfer_archive_ownership",
+            "revert-batch": "zettel_edge_batch_revert",
+            "mint-zet-batch": "mint_zet_batch",
+        }
+        args = argparse.Namespace(func=mock.Mock(), from_manifest=None)
+        for path, action in expected.items():
+            with self.subTest(path=path):
+                self.assertEqual(archive_cli._unavailable_writer_lifecycle_action(path, args), action)
+        args.func.assert_not_called()
+        for value, action in (
+            (None, "derived_text_capture_apply"),
+            ("PRIVATE_MANIFEST_MUST_NOT_BE_ECHOED", "derived_text_capture_manifest_apply"),
+        ):
+            args.from_manifest = value
+            self.assertEqual(
+                archive_cli._unavailable_writer_lifecycle_action("derive-text capture", args), action
+            )
+
+    def test_fixed_closed_command_preserves_parser_json_default(self) -> None:
+        output, errors = io.StringIO(), io.StringIO()
+        argv = ["principal-register", "synthetic-root-must-not-be-read", "--principal-id", "team:synthetic",
+                "--kind", "team", "--display-name", "Synthetic app", "--expected-plan-sha256",
+                "sha256:" + "a" * 64, "--approve", "--reviewed-by", "person:synthetic"]
+        with mock.patch.object(archive_cli, "command_principal_register") as handler:
+            with redirect_stdout(output), redirect_stderr(errors):
+                code = archive_cli.main(argv)
+        handler.assert_not_called()
+        result = json.loads(output.getvalue())
+        self.assertEqual(code, 1)
+        self.assertEqual(errors.getvalue(), "")
+        self.assertEqual(result["capability_state"], "writer_unavailable")
+        self.assertEqual(result["effects_state"], "none")
+        self.assertNotIn("synthetic-root", output.getvalue())
+
     def inventory(self) -> dict[str, object]:
         parser = archive_cli.build_parser()
         return archive_cli._parser_capability_inventory(parser)
