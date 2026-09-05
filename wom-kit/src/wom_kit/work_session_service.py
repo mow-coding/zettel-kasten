@@ -1,8 +1,8 @@
 """Bounded public management using the original work-session authorities.
 
 App registration, human task creation, original continuation/re-review,
-claiming, pause, paused-session resume, completion, handoff and acceptance are
-connected. No implicit latest selector, create preview, recovery or key injection
+claiming, pause, paused-session resume, completion, handoff, acceptance and
+human recovery are connected. No implicit latest selector, create preview or key injection
 is exposed. Handoff does not assign responsibility for existing artifacts.
 Every mutation waits once, checks the actual loaded runtime under that lock,
 then calls the existing held runner. A successful registration is self-declared;
@@ -19,6 +19,7 @@ from . import work_session_claim as claim
 from . import work_session_handoff as handoff
 from . import work_session_lifecycle as lifecycle
 from . import work_session_registration as registration
+from . import work_session_recovery as recovery
 from . import work_session_registry as registry
 from . import work_session_rereview as rereview
 from . import work_session_state as session_state
@@ -33,7 +34,7 @@ _RUNTIME_BLOCKERS = frozenset({
 _ERRORS = (frozenset({"work_session_service_invalid", "work_session_service_unavailable",
                      "work_session_wait_cancelled", "work_session_wait_root_changed"})
            | _RUNTIME_BLOCKERS | registration._ERRORS | lifecycle._ERRORS
-           | claim._ERRORS | rereview._ERRORS | session_state._ERRORS | handoff._ERRORS)
+           | claim._ERRORS | rereview._ERRORS | session_state._ERRORS | handoff._ERRORS | recovery._ERRORS)
 
 
 class WorkSessionServiceError(ValueError):
@@ -53,10 +54,11 @@ def _safe_call(call):
         code, committed = error.code, error.original_commit_verified
     except (registration.WorkSessionRegistrationError, lifecycle.WorkSessionLifecycleError,
             claim.WorkSessionClaimError, rereview.WorkSessionRereviewError,
-            session_state.WorkSessionStateError, handoff.WorkSessionHandoffError) as error:
+            session_state.WorkSessionStateError, handoff.WorkSessionHandoffError,
+            recovery.WorkSessionRecoveryError) as error:
         code = error.code if type(error.code) is str and error.code in _ERRORS else code
         committed = (isinstance(error, (claim.WorkSessionClaimError, session_state.WorkSessionStateError,
-                                       handoff.WorkSessionHandoffError))
+                                       handoff.WorkSessionHandoffError, recovery.WorkSessionRecoveryError))
                      and error.original_commit_verified is True)
     except WorkSessionWaitError as error:
         if error.args in (("work_session_wait_cancelled",), ("work_session_wait_root_changed",)):
@@ -319,6 +321,41 @@ def review_original_task_handoff(root, *, client_app_ref, task_route_ref, work_s
     return _safe_call(run)
 
 
+def recover_task(root, *, client_app_ref, task_route_ref, work_session_ref,
+                  original_resume, reviewer_claim=None,
+                  cancel_requested=lambda: False, progress=lambda _event: None):
+    """Human recovery of one explicit same-app session, never TTL lock theft."""
+    def run():
+        if type(original_resume) is not bool:
+            raise WorkSessionServiceError()
+        _refs(client_app_ref, task_route_ref, work_session_ref, require_session=True)
+        if original_resume:
+            if reviewer_claim is not None:
+                raise WorkSessionServiceError("work_session_task_context_mismatch")
+        elif (type(reviewer_claim) is not str
+                or native_approval._REVIEWER_CLAIM_RE.fullmatch(reviewer_claim) is None):
+            raise WorkSessionServiceError()
+        resolved = _root(root)
+        return _write(resolved, cancel_requested=cancel_requested, progress=progress,
+            run=lambda held: recovery._recover_task_held(
+                resolved, held=held, client_app_ref=client_app_ref, task_route_ref=task_route_ref,
+                work_session_ref=work_session_ref, original_resume=original_resume, reviewer_claim=reviewer_claim))
+    return _safe_call(run)
+
+
+def review_original_task_recovery(root, *, client_app_ref, task_route_ref, work_session_ref,
+                                  cancel_requested=lambda: False, progress=lambda _event: None):
+    """Review only the original pending recovery without replacing its input."""
+    def run():
+        _refs(client_app_ref, task_route_ref, work_session_ref, require_session=True)
+        resolved = _root(root)
+        return _write(resolved, cancel_requested=cancel_requested, progress=progress,
+            run=lambda held: recovery._review_original_recovery_held(
+                resolved, held=held, client_app_ref=client_app_ref, task_route_ref=task_route_ref,
+                work_session_ref=work_session_ref))
+    return _safe_call(run)
+
+
 def transition_task_state(root, *, action, original_resume, client_app_ref,
                           task_route_ref, work_session_ref,
                           cancel_requested=lambda: False, progress=lambda _event: None):
@@ -344,4 +381,4 @@ def transition_task_state(root, *, action, original_resume, client_app_ref,
 __all__ = ["WorkSessionServiceError", "preview_registration", "initialize_task_request", "apply_or_resume_registration",
            "create_task", "resume_task_create", "review_original_task_create", "apply_or_resume_task_claim",
            "transition_task_state", "accept_task", "resume_task_accept", "review_original_task_accept",
-           "handoff_task", "review_original_task_handoff"]
+           "handoff_task", "review_original_task_handoff", "recover_task", "review_original_task_recovery"]

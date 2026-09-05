@@ -205,3 +205,22 @@ Public native/key injection remains unavailable. All five service entrypoints
 reuse the existing runtime guard and one OS lock. This source checkpoint and
 its process-loss tests do not establish installed-wheel or client completion;
 recovery, all-writer binding and session Git backup remain unfinished.
+
+## Same-session human recovery
+
+Connect existing human recover through the same public service and actor CAS.
+Keep the original create/accept identity immutable. A stale actor is not proof
+of a currently owned claim: authenticate its explicit original route/session,
+bind the current same-app claimed active registry preimage, then obtain an
+exact human decision under the existing OS lock. Never infer recovery authority
+from time or PID, and do not treat recover as a cross-app handoff.
+
+Resume and explicit pre-claim re-review select only the saved recover. Reuse the
+shared claim-presence/native protocol and verify the exact generated claim in
+the committed postimage and current registry before terminal actor CAS. If the
+current state changed after the original commitment, report those facts
+separately; do not restore an old actor or manufacture present authority.
+
+Source/public/process-loss tests are recorded in the integration minutes.
+All-writer binding, session Git backup, installed acceptance and client outcomes
+remain separate unfinished gates.

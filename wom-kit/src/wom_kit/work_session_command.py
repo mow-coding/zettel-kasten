@@ -71,11 +71,13 @@ def dispatch_work_session_management(root, *, action, dry_run=False, approve=Fal
         "create": {"label", "reviewer_claim"},
         "accept": {"reviewer_claim"},
         "handoff": {"reviewer_claim"},
+        "recover": {"reviewer_claim"},
     }.get(mode, set())
     value = {} if request is None else request
     needs_session = mode.startswith("claim_") or mode in {
         "state_transition_apply", "original_state_transition_resume",
         "accept", "handoff", "original_handoff_resume", "original_handoff_rereview",
+        "recover", "original_recover_resume", "original_recover_rereview",
     }
     if (type(value) is not dict or any(type(key) is not str for key in value)
             or set(value) != required_request):
@@ -126,6 +128,11 @@ def dispatch_work_session_management(root, *, action, dry_run=False, approve=Fal
         elif mode == "original_handoff_rereview":
             result = service.review_original_task_handoff(root, **selected, work_session_ref=work_session_ref,
                                                          target_app_ref=target_app_ref, **wait)
+        elif mode in {"recover", "original_recover_resume"}:
+            result = service.recover_task(root, **selected, work_session_ref=work_session_ref,
+                original_resume=mode == "original_recover_resume", reviewer_claim=value.get("reviewer_claim"), **wait)
+        elif mode == "original_recover_rereview":
+            result = service.review_original_task_recovery(root, **selected, work_session_ref=work_session_ref, **wait)
         elif mode in {"state_transition_apply", "original_state_transition_resume"}:
             result = service.transition_task_state(root, **selected, action=action,
                 original_resume=mode == "original_state_transition_resume",

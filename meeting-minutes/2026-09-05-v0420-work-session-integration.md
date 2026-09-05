@@ -944,6 +944,57 @@ bump, PR, tag, wheel or client application has occurred.
   binding, session Git selection, installed-wheel acceptance or v0.4.20 release.
   Existing client data and the public v0.4.18 release remain unchanged.
 
+## Same-session human recovery continuation (2026-09-06 local time)
+
+- The public handoff/accept checkpoint was committed and pushed as `bc4ce2d4`;
+  the exact remote branch ref matched and that worktree was clean before this
+  next slice. The unfinished integration worktree was preserved, not deleted.
+- The existing human `recover` transition now has an actor-aware held facade.
+  It keeps the exact app, task route and existing session. An authentic original
+  create/accept decision is verified before a new native approval; stale actor
+  claims are historical routing, not current authority. The current claimed,
+  active same-app registry generation is bound separately. No heartbeat age,
+  PID, path inference or nonhuman recovery intent grants ownership.
+- Pending and terminal actor CAS reuse original bundles and the shared
+  re-review engine. The exact newly generated claim is verified against the
+  prepared postimage and current registry. Old evidence is not rewritten, and
+  an already committed recovery whose current state later changed cannot write
+  an actor or claim present ownership on replay.
+- CLI/MCP/service expose fresh approval, original resume and explicit original
+  pre-claim re-review with the same strict request shape and existing runtime
+  guard/OS lock. There are 29 valid combinations among 384 tested action/flag
+  combinations. No new top-level command, public native/key/context/claim input,
+  target-app recovery, or replacement resume reviewer was added.
+- Thirteen unique held-facade tests passed in focused groups, including actual
+  create/accept-origin continuation and a child-process exit followed by fresh
+  original re-review and terminal replay. An initial new-test oracle treated
+  authenticated failed and malformed claim evidence as the same error phase;
+  the test was corrected to the existing earlier origin-scanner rejection,
+  while retaining no-native/no-write byte checks. Product code was not changed
+  for that oracle. Independent source review found no actionable blocker.
+- Review suggested making the actor-drift no-write assertion explicit. The
+  final test also checks unchanged registry SHA and claim reference; that one
+  selected test passed in 13.420 seconds, with no production change.
+- Root's five public recovery tests plus seven mode tests passed together:
+  12 tests in 116.987 seconds. These include real CLI/MCP recovery, original
+  replay, pause/resume/complete, pre-claim and started interruption, and actual
+  runtime-pin mismatch before either held facade. The existing public
+  management/handoff and service signature cohort passed 13 tests in 157.722
+  seconds. Four readiness checks and 169-resource synchronization passed.
+- Public-route independent review caught a stale MCP description that still
+  said recover was unsupported although its schema and handler allowed it.
+  The description now states the supported approval/original modes and exact
+  app/task/session, no-target and no-replacement-reviewer contract. A focused
+  description regression was added; this was a real discovery/help mismatch,
+  not dismissed because the execution tests passed.
+- The final description/grammar/mode cohort passed ten tests in 0.260 seconds
+  (excluding import/startup). Independent review confirmed that the description
+  finding was closed, with no remaining actionable public-route issue.
+- This is still source integration, not an installed v0.4.20 or client result.
+  All-writer attribution, session-scoped artifacts/Git and the final installed
+  journey remain open. Public v0.4.19 acceptance is separately blocked; no
+  private client or global launcher was changed.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)

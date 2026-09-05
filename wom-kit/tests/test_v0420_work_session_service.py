@@ -86,7 +86,7 @@ class WorkSessionServiceTests(unittest.TestCase):
         expected = {"preview_registration", "initialize_task_request", "apply_or_resume_registration", "create_task", "resume_task_create",
                     "review_original_task_create", "apply_or_resume_task_claim", "transition_task_state",
                     "accept_task", "resume_task_accept", "review_original_task_accept",
-                    "handoff_task", "review_original_task_handoff"}
+                    "handoff_task", "review_original_task_handoff", "recover_task", "review_original_task_recovery"}
         self.assertEqual(set(subject.__all__), expected | {"WorkSessionServiceError"})
         forbidden = {"native", "key_provider", "context", "approval_id", "claim_ref", "manifest_sha256",
                      "running_version", "running_module_path", "running_archive_cli_module_path", "dry_run"}
