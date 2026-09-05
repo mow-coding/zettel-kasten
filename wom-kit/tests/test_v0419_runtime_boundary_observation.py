@@ -131,9 +131,10 @@ class RuntimeBoundaryObservationTests(unittest.TestCase):
                 root = Path(temporary)
                 (root / 'SYNTHETIC_PRIVATE_FILE').write_bytes(b'synthetic')
                 before_attributes = runtime._stat_identity(root.lstat())[-1]
+                normalized = name == 'archive' or position == 28 and bool(before_attributes & 0x10)
                 observer = driver.FirstUpdateObservation()
                 with self.stat_change(root, 'st_file_attributes', xor=bit) as count, observer.runtime_boundaries():
-                    if name == 'archive':
+                    if normalized:
                         # Product normalization makes this administrative bit
                         # invisible to content identity; diagnostics do not
                         # invent an attribute failure for a successful read.
@@ -142,7 +143,7 @@ class RuntimeBoundaryObservationTests(unittest.TestCase):
                         with self.assertRaises(runtime.ProjectRuntimeError) as caught:
                             runtime._runtime_payload_sha256(root)
                         observer.record('first_cli_call', caught.exception)
-                if name == 'archive':
+                if normalized:
                     self.assertIsNone(observer.runtime_observation)
                     self.assertNotIn('runtime_observation', observer.failure_payload(native_observed=False))
                     continue

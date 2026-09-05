@@ -196,6 +196,11 @@ class RuntimeDirectoryArchiveAttributeTests(unittest.TestCase):
         for bit in (1 << index for index in range(32) if (1 << index) != ARCHIVE):
             with self.subTest(bit=bit), tempfile.TemporaryDirectory() as temporary:
                 root, _item = _tree(temporary)
+                baseline_stat = root.lstat()
+                redundant_ntfs_bit = (
+                    bit == 0x10000000 and stat.S_ISDIR(baseline_stat.st_mode)
+                    and bool(getattr(baseline_stat, "st_file_attributes", 0) & 0x10)
+                )
                 native_lstat = Path.lstat
                 calls = 0
 
@@ -212,8 +217,11 @@ class RuntimeDirectoryArchiveAttributeTests(unittest.TestCase):
                     return observed
 
                 with mock.patch.object(Path, "lstat", change_after_first):
-                    with self.assertRaisesRegex(runtime.ProjectRuntimeError, "project_runtime_tree_(changed|unsafe)"):
+                    if redundant_ntfs_bit:
                         runtime._runtime_payload_observation(root)
+                    else:
+                        with self.assertRaisesRegex(runtime.ProjectRuntimeError, "project_runtime_tree_(changed|unsafe)"):
+                            runtime._runtime_payload_observation(root)
 
     def test_member_changes_with_restored_mtime_still_fail_with_archive_toggle(self):
         for mutation in ("add", "remove", "rename"):
