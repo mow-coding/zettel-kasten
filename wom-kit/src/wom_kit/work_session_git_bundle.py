@@ -5,11 +5,11 @@ proof. Callers must retain the context before publishing its original claim;
 only the existing broker can subsequently authenticate that claim. A wrapper
 hash cannot establish that an approval occurred or that a caller owns a route.
 
-The existing Git codec currently binds an optional work-session revision, but
-not a task route or session claim identity. This module accepts neither of those
-as unsigned sidecar assertions. A future route-aware workflow requires an exact
-manifest scope extension first. Existing Git bundles are never upgraded and
-their missing context is never inferred from a new reviewer or current session.
+The Git codec can bind the optional exact session scope, including task route
+and claim identity. This store accepts neither as unsigned sidecar assertions;
+the held workflow must still authenticate original evidence and current
+ownership. Existing Git bundles are never upgraded and their missing context
+is never inferred from a new reviewer or current session.
 """
 
 from __future__ import annotations

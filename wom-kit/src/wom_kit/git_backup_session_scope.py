@@ -2,7 +2,7 @@
 
 This binds supplied historical routing, claim and receipt-producer facts. It
 does not read the current actor/registry, authenticate receipt MACs, attest app
-identity, or grant approval. The future owned-session execution route must
+identity, or grant approval. The owned-session execution route must
 independently verify those facts before fresh work and after native review.
 """
 

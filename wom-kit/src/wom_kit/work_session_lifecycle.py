@@ -219,7 +219,7 @@ def _resume_task_establishment_held(root, *, held, action, client_app_ref, task_
                    else document.get("last_completed_operation"))
         if pointer is None:
             raise WorkSessionLifecycleError("work_session_original_operation_missing")
-        if pointer["kind"] == "git_backup":
+        if pointer["kind"] in actor._DOMAIN_OPERATION_KINDS:
             raise WorkSessionLifecycleError("work_session_original_operation_kind_unsupported")
         if pointer["kind"] != "human_session_decision":
             raise WorkSessionLifecycleError("work_session_original_operation_changed")

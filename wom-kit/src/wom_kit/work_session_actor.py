@@ -40,7 +40,8 @@ _KEYS = frozenset({
 })
 _CONTINUATION_KEYS = frozenset({"pending_registry_intent_plan_sha256", "last_completed_operation"})
 _EXTENSION_KEYS = _CONTINUATION_KEYS | {"established_origin", "pending_operation_kind"}
-_PENDING_OPERATION_KINDS = frozenset({"human_session_decision", "git_backup"})
+_DOMAIN_OPERATION_KINDS = frozenset({"git_backup", "source_intake_batch"})
+_PENDING_OPERATION_KINDS = _DOMAIN_OPERATION_KINDS | {"human_session_decision"}
 _UNSET = object()
 _ERRORS = frozenset({
     "work_session_actor_invalid", "work_session_actor_changed",
@@ -485,7 +486,7 @@ class WorkSessionActorStore:
         Unpublished .pending files are retained and never selected as context.
         New operation kinds require an exact PendingOperationSelector. Legacy
         digest pairs retain their old human meaning/bytes; an old caller cannot
-        relabel a saved Git pair as human. Clearing the pair also clears its kind.
+        relabel a saved domain pair as human. Clearing the pair also clears its kind.
         """
         code = "work_session_actor_invalid"
         try:
@@ -536,7 +537,7 @@ class WorkSessionActorStore:
         if expected != (previous.sha256 if previous is not None else None):
             raise _fail("work_session_actor_changed")
         previous_document = previous.document() if previous is not None else {}
-        if (previous_document.get("pending_operation_kind") == "git_backup"
+        if (previous_document.get("pending_operation_kind") in _DOMAIN_OPERATION_KINDS
                 and manifest is not None and pending_operation is _UNSET):
             raise _fail("work_session_actor_changed")
         if completed is None and previous_document.get("last_completed_operation") is not None:

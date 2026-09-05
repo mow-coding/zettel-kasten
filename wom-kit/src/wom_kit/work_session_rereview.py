@@ -205,7 +205,7 @@ def _review_original_session_decision_held(root, *, held, client_app_ref, task_r
         pending = pending_selector is not None
         pointer = (pending_selector.document() if pending
                    else document.get("last_completed_operation"))
-        if pointer is not None and pointer["kind"] == "git_backup":
+        if pointer is not None and pointer["kind"] in actor._DOMAIN_OPERATION_KINDS:
             raise WorkSessionRereviewError("work_session_original_operation_kind_unsupported")
         if pointer is None or (not pending and pointer["kind"] != "human_session_decision"):
             raise WorkSessionRereviewError("work_session_original_operation_missing")

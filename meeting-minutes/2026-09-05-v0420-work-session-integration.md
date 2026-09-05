@@ -1558,6 +1558,65 @@ bump, PR, tag, wheel or client application has occurred.
   Four readiness/privacy gates, 169-resource synchronization and diff checks
   passed. No full v0.4.20 platform or installed acceptance result is claimed.
 
+## Representative intake composition and remaining acceptance work
+
+- Checkpoint `0f9f0950` preserves and remotely backs up the reviewed original
+  re-review, fixed progress stage and legacy held-intake extraction. It is not a
+  v0.4.20 release. The next slice uses the existing broker and exact runner:
+  retain the original request/context, bind current actor/claim/establishment,
+  and verify completed output bytes with the already-authenticated live claim.
+  Do not copy Git's remote-terminal or mutation-worker machinery into intake.
+- A typed `source_intake_batch` actor selector is being added to the existing
+  closed operation kinds. Human create/accept/handoff/recovery continuation must
+  refuse domain selectors before key access or loading human proof. Legacy
+  absent-kind actor bytes keep their human meaning. The selector is only routing;
+  adding it does not open a writer or confer approval. Initial actor regression
+  results are 48 tests in 66.003 seconds, with 47 passing and one host-capability
+  skip. Public lifecycle/handoff/re-review regressions are running separately.
+- Independent acceptance mapping found that public lifecycle and receipt-only
+  Git tests existed separately, but not as one public create/write/handoff/
+  accept/successor-write journey. A joined test is being added using real CLI,
+  actor, broker, exact writer and bare-remote pushes. Native/key input and the
+  legacy read-only Git planning handoff prerequisite remain synthetic; it is
+  explicitly not final installed acceptance or whole-document custody proof.
+- Do not treat the following remaining work as completed or quietly remove it
+  from v0.4.20: a complete artifact generation bound to handoff approval; explicit
+  legacy responsibility assignment; other writer and local-record families'
+  actual session coverage; intake's typed authenticated Git producer; final
+  installed-wheel/transport journey and exact-head platform CI. Existing large
+  inventory/pagination and selection fixtures are useful primitives, not proof
+  that those missing compositions work. Current receipt-only Git cannot claim
+  canonical-document backup or predecessor artifact custody.
+- Intake output provenance can cover the exact source-intake receipt, prepared
+  capture-request file and common completion receipt after original-context/MAC
+  and whole-byte checks. It cannot attribute the supplied request JSON, source
+  binaries, later object capture or minted documents to intake. No filename,
+  label, timestamp or path alone supplies ownership. Old unsigned evidence is
+  never upgraded to a new authenticated success.
+- The original-operation selector/refusal changes passed independent read
+  review. The additional 22 public recovery/handoff/original-review regressions
+  passed in 275.819 seconds. The earlier actor skip was independently identified
+  as unavailable directory-symlink privilege; the hardlink refusal test passed.
+  These observations do not substitute for the later cross-platform CI gate.
+- The final joined public CLI journey passed in 205.000 seconds. Both pushes
+  occurred against a real isolated bare remote. The test verifies the same
+  workstream, the exact successor/predecessor link, former-owner claim release,
+  successor claimed ownership, stale-app refusal before native/key/transport,
+  exact per-session receipt commits and unchanged excluded bytes/index entries.
+  Its earlier 190.054-second pass lacked the additional lineage oracle and is
+  retained only as an earlier observation. No product source was stubbed to
+  make the joined journey succeed; declared native/key/legacy read-only planning
+  fixtures remain distinct from installed or provider acceptance.
+- The private intake completion verifier passed independent review and its
+  serial 44-test cohort: 43 passed, one existing host symlink skip, in 21.469
+  seconds. It requires an actual succeeded claim under the same held archive
+  lock, derives execution identity, verifies common completion/checkpoint MAC
+  and whole output bytes, and reauthenticates evidence after observation. It
+  does not open another key consumer, sign, finalize, replan or write. The test
+  explicitly removes supplied JSON/source files after completion and still
+  verifies only retained output bytes; foreign same-ID archive claims refuse.
+  Legacy started-only writer authority, reconciliation and admission remain.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)

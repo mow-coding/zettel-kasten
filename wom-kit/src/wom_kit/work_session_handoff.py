@@ -188,7 +188,7 @@ def _handoff_task_held(root, *, held, client_app_ref, task_route_ref, work_sessi
             raise WorkSessionHandoffError("work_session_original_operation_pending")
         pending_selector = selected.pending_operation()
         pending = pending_selector is not None
-        if pending and pending_selector.document()["kind"] == "git_backup":
+        if pending and pending_selector.document()["kind"] in actor._DOMAIN_OPERATION_KINDS:
             raise WorkSessionHandoffError("work_session_original_operation_kind_unsupported")
         scope = dict(app=client_app_ref, route=task_route_ref, session=work_session_ref, target=target_app_ref)
         if original_resume:
@@ -196,7 +196,7 @@ def _handoff_task_held(root, *, held, client_app_ref, task_route_ref, work_sessi
                        else document.get("last_completed_operation"))
             if pointer is None:
                 raise WorkSessionHandoffError("work_session_original_operation_missing")
-            if pointer["kind"] == "git_backup":
+            if pointer["kind"] in actor._DOMAIN_OPERATION_KINDS:
                 raise WorkSessionHandoffError("work_session_original_operation_kind_unsupported")
             bound = _bound_handoff(store, pointer, **scope)
             _verify_origin(root, store, routing, selected, held=held, app=client_app_ref,
@@ -285,7 +285,7 @@ def _review_original_handoff_held(root, *, held, client_app_ref, task_route_ref,
                    else document.get("last_completed_operation"))
         if pointer is None:
             raise WorkSessionHandoffError("work_session_original_operation_missing")
-        if pointer["kind"] == "git_backup":
+        if pointer["kind"] in actor._DOMAIN_OPERATION_KINDS:
             raise WorkSessionHandoffError("work_session_original_operation_kind_unsupported")
         scope = dict(app=client_app_ref, route=task_route_ref, session=work_session_ref, target=target_app_ref)
         bound = _bound_handoff(store, pointer, **scope)

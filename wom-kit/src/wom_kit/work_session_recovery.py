@@ -145,7 +145,7 @@ def _pointer(selected):
                else document.get("last_completed_operation"))
     if pointer is None:
         raise WorkSessionRecoveryError("work_session_original_operation_missing")
-    if pointer["kind"] == "git_backup":
+    if pointer["kind"] in actor._DOMAIN_OPERATION_KINDS:
         raise WorkSessionRecoveryError("work_session_original_operation_kind_unsupported")
     return pointer, pending
 
@@ -204,8 +204,8 @@ def _recover_task_held(root, *, held, client_app_ref, task_route_ref, work_sessi
         store, routing, selected = _selected(root, held=held, **scope)
         document = selected.document()
         pending_selector = selected.pending_operation()
-        if ((pending_selector is not None and pending_selector.document()["kind"] == "git_backup")
-                or (original_resume and (document.get("last_completed_operation") or {}).get("kind") == "git_backup"
+        if ((pending_selector is not None and pending_selector.document()["kind"] in actor._DOMAIN_OPERATION_KINDS)
+                or (original_resume and (document.get("last_completed_operation") or {}).get("kind") in actor._DOMAIN_OPERATION_KINDS
                     and pending_selector is None)):
             raise WorkSessionRecoveryError("work_session_original_operation_kind_unsupported")
         if not original_resume and document["pending_manifest_sha256"] is not None:
