@@ -58472,20 +58472,17 @@ def zettel_source_refs_without_ai_scratch(frontmatter: dict[str, Any]) -> list[d
 
 
 def ai_artifact_inventory_normalize_root(raw_root: str, blockers: list[str]) -> str | None:
-    if Path(str(raw_root or "")).is_absolute():
-        blockers.append("AI artifact inventory roots must be archive-relative.")
+    if type(raw_root) is not str or Path(raw_root).is_absolute():
+        blockers.append("ai_artifact_inventory_root_not_relative")
         return None
     try:
         normalized = normalize_archive_relative_path(raw_root)
-    except ArchivePathError as exc:
-        blockers.append(f"AI artifact inventory root is unsafe: {exc}.")
+    except (ArchivePathError, ValueError):
+        blockers.append("ai_artifact_inventory_root_unsafe")
         return None
     folder = normalized.rstrip("/") + "/"
     if not any(folder.startswith(prefix) for prefix in AI_ARTIFACT_INVENTORY_ALLOWED_ROOT_PREFIXES):
-        blockers.append(
-            "AI artifact inventory roots must stay under allowlisted AI folders: "
-            + ", ".join(AI_ARTIFACT_INVENTORY_ALLOWED_ROOT_PREFIXES)
-        )
+        blockers.append("ai_artifact_inventory_root_outside_allowlist")
         return None
     return folder
 
@@ -58550,6 +58547,102 @@ def source_intake_recorded_ai_artifact_refs(root: Path) -> set[str]:
                 if value:
                     refs.add(value)
     return refs
+
+
+def _ai_artifact_inventory_control_payload(
+    generation: Any, path: Path, *, metadata: Any,
+) -> bytes:
+    """Reuse the lifecycle collector's bounded, identity-checked control read."""
+    before = generation.observe(path)
+    if (
+        before is None or not stat.S_ISREG(before.st_mode)
+        or stat.S_ISLNK(before.st_mode) or metadata._is_reparse_point(before)
+        or int(before.st_nlink) != 1
+        or before.st_size > metadata.MAX_CONTROL_FILE_BYTES
+    ):
+        raise ValueError("ai_artifact_inventory_control_unavailable")
+    payload = metadata._read_verified_control_bytes(
+        path, before, max_bytes=metadata.MAX_CONTROL_FILE_BYTES,
+    )
+    generation.control(path, payload)
+    return payload
+
+
+def _ai_artifact_inventory_scan_scope(root: Path, spec: Any, generation: Any, *, metadata: Any):
+    try:
+        return metadata._scan_recursive_scope(
+            root, spec, max_entries=metadata.MAX_ENTRIES_PER_ROOT, generation=generation,
+        )
+    except (OSError, ValueError, TypeError):
+        # Some directory iterators fail after opening; never expose their raw
+        # exception or turn an unfinished iterator into a successful zero.
+        return {
+            "coverage_complete": False, "symlink_or_reparse_count": 0,
+            "special_file_count": 0,
+        }, [], ["ai_artifact_inventory_scope_unavailable"]
+
+
+def _ai_artifact_inventory_reject_json_constant(_value: str) -> None:
+    raise ValueError("ai_artifact_inventory_control_json_invalid")
+
+
+def _ai_artifact_inventory_recorded_refs(
+    root: Path, archive_id: str, generation: Any, *, metadata: Any,
+) -> tuple[set[str], dict[str, Any], list[str], list[Path]]:
+    """Observe the entire receipt tree, but read only source-intake controls.
+
+    A recorded ref is not proof of capture, preservation, ownership or cleanup
+    authority. Invalid control records prevent a complete fate inventory.
+    """
+    spec = metadata.ScopeSpec(
+        "ai_intake_receipts", SOURCE_SCAN_RECEIPTS_DIR,
+        "DURABLE_ARCHIVE_RECORD", "keep", False,
+    )
+    summary, entries, blockers = _ai_artifact_inventory_scan_scope(
+        root, spec, generation, metadata=metadata,
+    )
+    refs: set[str] = set()
+    controls: list[Path] = []
+    control_bytes = 0
+    summary = {**summary, "control_file_count": 0, "control_bytes_read": 0}
+    for entry in sorted(entries, key=lambda item: item.relative_path):
+        if entry.is_directory or not entry.relative_path.endswith(".source-intake-plan.json"):
+            continue
+        path = root.joinpath(*PurePosixPath(entry.relative_path).parts)
+        try:
+            if control_bytes + entry.size > metadata.MAX_OBJECT_MANIFEST_BYTES:
+                raise ValueError("control budget")
+            payload = _ai_artifact_inventory_control_payload(generation, path, metadata=metadata)
+            control_bytes += len(payload)
+            controls.append(path)
+            data = json.loads(
+                payload.decode("utf-8"),
+                object_pairs_hook=metadata._reject_duplicate_json_pairs,
+                parse_constant=_ai_artifact_inventory_reject_json_constant,
+            )
+            if not isinstance(data, dict) or data.get("archive_id") != archive_id:
+                raise ValueError("receipt identity")
+            validation_blockers: list[str] = []
+            prepared = prepare_source_intake_plan_for_draft(data, validation_blockers)
+            if validation_blockers:
+                raise ValueError("receipt contract")
+            if data.get("source_kind") == "ai_artifact":
+                recorded = [
+                    item.get("value") for item in prepared["source_refs"]
+                    if item.get("type") == "ai_artifact"
+                ]
+                if not recorded or any(
+                    type(value) is not str or re.fullmatch(r"ai-artifact:[0-9a-f]{24}", value) is None
+                    for value in recorded
+                ):
+                    raise ValueError("artifact ref")
+                refs.update(recorded)
+        except (OSError, ValueError, TypeError, RecursionError, ArchiveServiceError):
+            blockers.append("ai_artifact_inventory_intake_receipt_invalid_or_unavailable")
+            summary["coverage_complete"] = False
+    summary["control_file_count"] = len(controls)
+    summary["control_bytes_read"] = control_bytes
+    return refs, summary, blockers, controls
 
 
 def ai_artifact_inventory_next_actions(*, has_unreviewed: bool, has_intake_recorded: bool) -> list[str]:
@@ -58754,68 +58847,96 @@ def ai_artifact_inventory(
     include_roots: list[str] | None = None,
     project_root: Path | str | None = None,
     max_items: int = 100,
+    cursor: str | None = None,
     show_relative_paths: bool = False,
     dry_run: bool = True,
 ) -> dict[str, Any]:
-    root = require_existing_archive_root(archive_root)
-    archive_id = read_archive_id(root)
+    # Shared private collection APIs keep both inventory surfaces on the same
+    # no-follow metadata/verified-control boundary; this is not a new scanner.
+    from . import artifact_lifecycle_inventory as metadata
+    from .snapshot_pagination import (
+        PAGINATION_SCHEMA, SnapshotPager, SnapshotPaginationError, content_sha256,
+    )
+
+    try:
+        root = require_existing_archive_root(archive_root)
+        generation = metadata._MetadataGeneration(root)
+        archive_payload = _ai_artifact_inventory_control_payload(
+            generation, root / "archive.yml", metadata=metadata,
+        )
+        archive_config = yaml.load(archive_payload.decode("utf-8"), Loader=metadata._NoDuplicateSafeLoader)
+        if not isinstance(archive_config, dict) or type(archive_config.get("archive_id")) is not str:
+            raise ValueError("archive identity")
+        archive_id = archive_config["archive_id"]
+    except (ArchiveServiceError, OSError, ValueError, TypeError, RuntimeError, yaml.YAMLError):
+        raise ArchiveServiceError("ai_artifact_inventory_archive_metadata_unavailable") from None
     blockers: list[str] = []
     warnings: list[str] = []
     if not dry_run:
         blockers.append("ai-artifact-inventory is read-only and requires --dry-run.")
     try:
+        if isinstance(max_items, bool):
+            raise ValueError("page size")
         limit = int(max_items)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         limit = 100
-        blockers.append("max_items must be an integer.")
+        blockers.append("ai_artifact_inventory_max_items_invalid")
     if limit < 1:
-        blockers.append("max_items must be at least 1.")
+        blockers.append("ai_artifact_inventory_max_items_below_minimum")
         limit = 1
     if limit > 1000:
         warnings.append("max_items was capped at 1000.")
         limit = 1000
 
     normalized_roots: list[str] = []
-    for raw_root in include_roots or list(AI_ARTIFACT_INVENTORY_DEFAULT_ROOTS):
+    requested_roots = include_roots or list(AI_ARTIFACT_INVENTORY_DEFAULT_ROOTS)
+    if not isinstance(requested_roots, (list, tuple)):
+        blockers.append("ai_artifact_inventory_roots_invalid")
+        requested_roots = []
+    for raw_root in requested_roots:
         normalized = ai_artifact_inventory_normalize_root(raw_root, blockers)
         if normalized and normalized not in normalized_roots:
             normalized_roots.append(normalized)
 
-    recorded_refs = source_intake_recorded_ai_artifact_refs(root)
-    items: list[dict[str, Any]] = []
-    total_candidates = 0
-    skipped_non_plain_file_count = 0
-    for relative_root in normalized_roots:
-        folder = archive_internal_path(root, relative_root)
-        if not folder.exists():
-            continue
-        if not folder.is_dir():
-            warnings.append(f"AI artifact inventory root is not a directory: {relative_root}")
-            continue
-        for path in sorted(folder.rglob("*")):
-            if not is_path_within_root(path, root):
+    # Shallow roots subsume requested descendants. A path is listed once even
+    # if include_roots overlap, and input ordering cannot change the snapshot.
+    normalized_roots = [
+        value for value in sorted(normalized_roots)
+        if not any(value != parent and value.startswith(parent) for parent in normalized_roots)
+    ]
+    recorded_refs, receipt_summary, receipt_blockers, control_paths = _ai_artifact_inventory_recorded_refs(
+        root, archive_id, generation, metadata=metadata,
+    )
+    blockers.extend(receipt_blockers)
+    all_items: list[dict[str, Any]] = []
+    scope_summaries: list[dict[str, Any]] = []
+    seen_paths: set[str] = set()
+    for ordinal, relative_root in enumerate(normalized_roots):
+        spec = metadata.ScopeSpec(
+            f"ai_artifacts_{ordinal:04d}", relative_root.rstrip("/"),
+            "DURABLE_UNTIL_RESOLVED", "fate_review_required", True,
+        )
+        summary, entries, scope_blockers = _ai_artifact_inventory_scan_scope(
+            root, spec, generation, metadata=metadata,
+        )
+        scope_summaries.append(summary)
+        blockers.extend(scope_blockers)
+        for entry in sorted(entries, key=lambda value: value.relative_path):
+            relative = entry.relative_path
+            if entry.is_directory or relative in seen_paths:
                 continue
-            if path.is_dir():
-                continue
-            if not ai_scratch_path_is_plain_file(path):
-                skipped_non_plain_file_count += 1
-                continue
-            total_candidates += 1
-            if len(items) >= limit:
-                continue
-            relative = archive_relative_path(path, root).replace("\\", "/")
+            seen_paths.add(relative)
             artifact_ref = ai_artifact_ref_for_relative_path(relative)
             kind = ai_artifact_kind_for_relative_path(relative)
-            stat_result = path.stat()
             fate_state = "source_intake_recorded" if artifact_ref in recorded_refs else "unreviewed_ai_artifact"
             item = {
                 "artifact_ref": artifact_ref,
                 "artifact_kind": kind,
                 "fate_state": fate_state,
-                "root": relative_root,
-                "extension": path.suffix.lower(),
-                "bytes": stat_result.st_size,
-                "modified_at": datetime.fromtimestamp(stat_result.st_mtime).astimezone().replace(microsecond=0).isoformat(),
+                "root": relative_root if show_relative_paths or relative_root in AI_ARTIFACT_INVENTORY_DEFAULT_ROOTS else spec.root_id,
+                "extension": PurePosixPath(relative).suffix.lower(),
+                "bytes": entry.size,
+                "modified_at": datetime.fromtimestamp(entry.mtime_ns / 1_000_000_000).astimezone().replace(microsecond=0).isoformat(),
                 "body_read": False,
                 "content_hash_calculated": False,
                 "recommended_fates": [
@@ -58829,24 +58950,77 @@ def ai_artifact_inventory(
             }
             if show_relative_paths:
                 item["relative_path"] = relative
-            items.append(item)
+            all_items.append(item)
 
     fate_counts: dict[str, int] = {}
     kind_counts: dict[str, int] = {}
-    for item in items:
+    for item in all_items:
         fate = str(item.get("fate_state") or "unknown")
         kind = str(item.get("artifact_kind") or "unknown")
         fate_counts[fate] = fate_counts.get(fate, 0) + 1
         kind_counts[kind] = kind_counts.get(kind, 0) + 1
-    if total_candidates > len(items):
-        warnings.append("AI artifact inventory reached max_items; rerun with a larger --max-items for the full listing.")
-
     has_unreviewed = bool(fate_counts.get("unreviewed_ai_artifact"))
     has_intake_recorded = bool(fate_counts.get("source_intake_recorded"))
-    unmanaged_project_scratch = ai_artifact_unmanaged_project_scratch_summary(
-        root,
-        project_root,
+    try:
+        unmanaged_project_scratch = ai_artifact_unmanaged_project_scratch_summary(root, project_root)
+        project_query_sha256 = (
+            content_sha256(os.path.abspath(os.fspath(project_root))) if project_root is not None else None
+        )
+    except (OSError, ValueError, TypeError, RuntimeError):
+        raise ArchiveServiceError("ai_artifact_inventory_project_diagnostic_unavailable") from None
+
+    # Re-read only the bounded controls; an unchanged file size/time or fate
+    # summary cannot conceal a changed receipt or archive identity payload.
+    try:
+        for path in [root / "archive.yml", *control_paths]:
+            _ai_artifact_inventory_control_payload(generation, path, metadata=metadata)
+        generation_sha256 = generation.revalidate()
+    except (OSError, ValueError, TypeError, RecursionError):
+        generation_sha256 = None
+    if generation_sha256 is None:
+        blockers.append("ai_artifact_inventory_generation_changed_or_unavailable")
+    complete = bool(
+        not blockers and generation_sha256 is not None
+        and receipt_summary["coverage_complete"]
+        and all(summary["coverage_complete"] for summary in scope_summaries)
     )
+    query_sha256 = content_sha256({
+        "schema": "wom-kit/ai-artifact-inventory-query/v1",
+        "archive_identity_sha256": content_sha256(archive_id),
+        "archive_path_sha256": content_sha256(os.path.abspath(root)),
+        "roots_sha256": content_sha256(normalized_roots),
+        "allowlisted_root_policy": AI_ARTIFACT_INVENTORY_ALLOWED_ROOT_PREFIXES,
+        "receipt_root": SOURCE_SCAN_RECEIPTS_DIR,
+        "show_relative_paths": bool(show_relative_paths),
+        "project_diagnostic_path_sha256": project_query_sha256,
+        "max_entries_per_root": metadata.MAX_ENTRIES_PER_ROOT,
+        "order": "normalized_root_then_relative_path",
+    })
+    pagination = {
+        "schema": PAGINATION_SCHEMA, "state": "incomplete_generation",
+        "snapshot_sha256": None, "generation_sha256": generation_sha256,
+        "query_sha256": query_sha256, "page_size": limit, "offset": None,
+        "total_count": None, "observed_count": len(all_items), "returned_count": 0,
+        "remaining_count": None, "next_cursor": None, "has_more": None,
+        "complete_listing": False, "cursor_is_authority": False, "prior_pages_read_proven": False,
+    }
+    items: list[dict[str, Any]] = []
+    if complete:
+        try:
+            pager = SnapshotPager.build(
+                all_items, generation_sha256=generation_sha256, query_sha256=query_sha256,
+            )
+            page = pager.page(page_size=limit, cursor=cursor)
+        except SnapshotPaginationError as failure:
+            blockers.append(failure.code)
+            pagination["state"] = "cursor_rejected"
+            complete = False
+        else:
+            items, pagination = page["items"], page["pagination"]
+    if not complete:
+        blockers.append("ai_artifact_inventory_coverage_incomplete")
+    if pagination["next_cursor"] is not None:
+        warnings.append("ai_artifact_inventory_page_has_more")
     if unmanaged_project_scratch["reason_codes"]:
         warnings.append(
             "The optional project-root scratch inspection was incomplete; it remains outside inventory and GC authority."
@@ -58862,6 +59036,12 @@ def ai_artifact_inventory(
         has_unreviewed=has_unreviewed,
         has_intake_recorded=has_intake_recorded,
     )
+    if not complete:
+        next_safe_actions = [
+            "Resolve the inventory or continuation blocker, then restart from the first page; no absence, complete count, or cleanup is established.",
+        ]
+    elif pagination["next_cursor"] is not None:
+        next_safe_actions.append("Continue with pagination.next_cursor and the same query and max_items; do not increase the page size to guess a complete listing.")
     if unmanaged_project_scratch["present"]:
         next_safe_actions.extend(unmanaged_project_scratch["next_safe_actions"])
     return {
@@ -58872,7 +59052,10 @@ def ai_artifact_inventory(
         "inventory_state": "blocked" if blockers else ("needs_review" if has_unreviewed else "clear_or_recorded"),
         "scan_policy": {
             "allowlisted_roots_only": True,
-            "roots": normalized_roots,
+            "roots": [
+                value if show_relative_paths or value in AI_ARTIFACT_INVENTORY_DEFAULT_ROOTS else f"ai_artifacts_{index:04d}"
+                for index, value in enumerate(normalized_roots)
+            ],
             "managed_archive_roots": list(AI_ARTIFACT_INVENTORY_DEFAULT_ROOTS),
             "archive_root_only": True,
             "external_project_roots_inventory_eligible": False,
@@ -58888,16 +59071,31 @@ def ai_artifact_inventory(
         },
         "unmanaged_project_scratch": unmanaged_project_scratch,
         "item_count": len(items),
-        "total_candidate_count": total_candidates,
-        "truncated": total_candidates > len(items),
-        "skipped_non_plain_file_count": skipped_non_plain_file_count,
-        "fate_counts": fate_counts,
-        "artifact_kind_counts": kind_counts,
+        "total_candidate_count": len(all_items) if complete else None,
+        "truncated": not complete or len(all_items) > len(items),
+        "skipped_non_plain_file_count": sum(
+            summary["symlink_or_reparse_count"] + summary["special_file_count"] for summary in scope_summaries
+        ),
+        "counts_complete": complete,
+        "fate_counts": fate_counts if complete else None,
+        "artifact_kind_counts": kind_counts if complete else None,
+        "observed_candidate_count": len(all_items),
+        "observed_fate_counts": fate_counts,
+        "observed_artifact_kind_counts": kind_counts,
+        "pagination": pagination,
+        "coverage": {
+            "complete": complete,
+            "source_intake_receipts_complete": receipt_summary["coverage_complete"],
+            "bounded_control_file_count": 1 + receipt_summary["control_file_count"],
+            "ordinary_artifact_bytes_read": False,
+        },
         "items": items,
         "next_safe_actions": next_safe_actions,
         "closed_actions": {
             "file_bodies_read": False,
             "content_hashes_calculated": False,
+            "bounded_control_metadata_read": True,
+            "bounded_control_hashes_calculated": True,
             "files_written": False,
             "provider_api_called": False,
             "cleanup_performed": False,
@@ -109307,7 +109505,45 @@ def session_handoff_operational_context_evidence(root: Path) -> dict[str, Any]:
     }
 
 
-def session_handoff_inventory_snapshot(inventory: dict[str, Any]) -> dict[str, Any]:
+def session_handoff_inventory_snapshot(
+    inventory: dict[str, Any], *, complete_generation: bool = False,
+) -> dict[str, Any]:
+    if complete_generation:
+        pagination = inventory.get("pagination")
+        pagination = pagination if isinstance(pagination, dict) else {}
+        total = inventory.get("total_candidate_count")
+        fates, kinds = inventory.get("fate_counts"), inventory.get("artifact_kind_counts")
+
+        def valid_counts(value: Any) -> bool:
+            return bool(
+                isinstance(value, dict)
+                and all(type(key) is str and type(count) is int and count >= 0 for key, count in value.items())
+                and sum(value.values()) == total
+            )
+
+        digests = {key: pagination.get(key) for key in ("snapshot_sha256", "generation_sha256", "query_sha256")}
+        complete = bool(
+            inventory.get("ok") is True and inventory.get("counts_complete") is True
+            and isinstance(inventory.get("coverage"), dict) and inventory["coverage"].get("complete") is True
+            and pagination.get("state") == "complete"
+            and type(total) is int and total >= 0
+            and type(pagination.get("total_count")) is int and type(pagination.get("observed_count")) is int
+            and pagination.get("total_count") == total and pagination.get("observed_count") == total
+            and valid_counts(fates) and valid_counts(kinds)
+            and all(type(value) is str and re.fullmatch(r"sha256:[0-9a-f]{64}", value) for value in digests.values())
+        )
+        # This full-generation basis excludes displayed rows, page size and
+        # offset. It is read-only evidence, never an old checkpoint approval.
+        return {
+            "schema": "wom-kit/session-handoff-inventory-generation/v1",
+            "complete": complete,
+            **{key: value if complete else None for key, value in digests.items()},
+            "total_candidate_count": total if complete else None,
+            "fate_counts": dict(fates) if complete else None,
+            "artifact_kind_counts": dict(kinds) if complete else None,
+            "diagnostic_only": True,
+            "approval_authority": False,
+        }
     items: list[dict[str, Any]] = []
     for item in inventory.get("items") or []:
         if not isinstance(item, dict):
@@ -109402,7 +109638,24 @@ def session_handoff_checkpoint(
             "The operational context matches a legacy newline-normalized receipt; the session checkpoint still binds the current exact file bytes."
         )
     inventory = ai_artifact_inventory(root, max_items=1000, show_relative_paths=False, dry_run=True)
-    inventory_snapshot = session_handoff_inventory_snapshot(inventory)
+    legacy_inventory = inventory
+    if inventory.get("counts_complete") is True:
+        # Reconstruct only the historical page order/count basis from rows
+        # already observed. Do not rescan, read more pages, or reissue approval.
+        # A formerly complete default-root inventory had at most 1000 rows.
+        legacy_inventory = dict(inventory)
+        old_order = {value: index for index, value in enumerate(AI_ARTIFACT_INVENTORY_DEFAULT_ROOTS)}
+        legacy_items = sorted(
+            inventory["items"], key=lambda item: old_order.get(item.get("root"), len(old_order)),
+        )
+        legacy_inventory["items"] = legacy_items
+        for field, item_field in (("fate_counts", "fate_state"), ("artifact_kind_counts", "artifact_kind")):
+            counts: dict[str, int] = {}
+            for item in legacy_items:
+                key = item[item_field]
+                counts[key] = counts.get(key, 0) + 1
+            legacy_inventory[field] = counts
+    inventory_snapshot = session_handoff_inventory_snapshot(legacy_inventory)
     inventory_digest = sha256_json_value(inventory_snapshot)
     fate_counts = inventory_snapshot["fate_counts"]
     unreviewed_count = int(fate_counts.get("unreviewed_ai_artifact") or 0)
@@ -109456,6 +109709,24 @@ def session_handoff_checkpoint(
     matching_checkpoint_refs.sort()
     current_checkpoint_ref = matching_checkpoint_refs[-1] if matching_checkpoint_refs else None
     current_checkpoint_verified = bool(current_checkpoint_ref and not durable_gaps)
+
+    full_snapshot = session_handoff_inventory_snapshot(inventory, complete_generation=True)
+    full_complete = full_snapshot["complete"]
+    full_fates = full_snapshot["fate_counts"]
+    full_unreviewed = full_fates.get("unreviewed_ai_artifact", 0) if full_complete else None
+    full_inventory_digest = sha256_json_value(full_snapshot)
+    diagnostic_state_digest = sha256_json_value({
+        "schema": "wom-kit/session-handoff-diagnostic-state/v1",
+        "operational_context_sha256": context_evidence.get("record_sha256"),
+        "operational_context_receipt_ref": context_evidence.get("matching_receipt_ref"),
+        "ai_artifact_inventory_generation_digest": full_inventory_digest,
+    })
+    if not full_complete:
+        # Unknown current observations cannot be promoted by an old receipt.
+        durable_gaps.append("AI artifact generation is incomplete or unavailable; counts and absence remain unknown.")
+        current_checkpoint_verified = False
+    pagination = inventory.get("pagination")
+    pagination = pagination if isinstance(pagination, dict) else {}
 
     if approve and expected_state_digest and expected_state_digest != state_digest:
         blockers.append("stale session handoff plan: expected_state_digest does not match the current archive evidence.")
@@ -109557,6 +109828,21 @@ def session_handoff_checkpoint(
         "status": status,
         "state_digest": state_digest,
         "expected_state_digest": expected_state_digest,
+        "diagnostic_state_digest": diagnostic_state_digest,
+        "diagnostic_digest_is_authority": False,
+        "ai_artifact_generation_diagnostic": {
+            "digest": full_inventory_digest,
+            **full_snapshot,
+            "unreviewed_count": full_unreviewed,
+            "rows_returned": inventory.get("item_count"),
+            "observed_candidate_count": inventory.get("observed_candidate_count"),
+            "display_rows_truncated": bool(inventory.get("truncated")),
+            "page_offset": pagination.get("offset"),
+            "checkpoint_approval_uses_this_generation": False,
+            "existing_checkpoint_contract_unchanged": True,
+            "complete_generation_writer_integration": "pending_work_session_handoff",
+            "next_safe_action": "Review the full-generation summary separately; never substitute diagnostic_state_digest for the legacy expected_state_digest.",
+        },
         "ready_for_context_reset": ready_for_context_reset,
         "readiness_scope": {
             "bounded_ai_artifact_inventory": True,
@@ -109575,7 +109861,8 @@ def session_handoff_checkpoint(
             "skipped_non_plain_file_count": inventory_snapshot["skipped_non_plain_file_count"],
             "fate_counts": fate_counts,
             "artifact_kind_counts": inventory_snapshot["artifact_kind_counts"],
-            "unreviewed_count": unreviewed_count,
+            "unreviewed_count": unreviewed_count if full_complete else None,
+            "count_scope": "legacy_checkpoint_page_projection",
             "file_bodies_read": False,
             "scan_policy": inventory.get("scan_policy"),
         },
@@ -109587,6 +109874,8 @@ def session_handoff_checkpoint(
         },
         "checkpoint_evidence": {
             "current_verified": current_checkpoint_verified,
+            "verification_scope": "legacy_v1_checkpoint_projection",
+            "complete_generation_approval_inferred": False,
             "current_receipt_ref": receipt_path,
             "matching_receipt_count": len(matching_checkpoint_refs),
             "stale_receipt_count": stale_checkpoint_count,

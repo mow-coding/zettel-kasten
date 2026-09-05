@@ -126,10 +126,39 @@ and target drift. Synthetic success is not a client result.
   These frozen component results support a development checkpoint, not a public
   v0.4.20 activation or a client recovery claim.
 
+- The complete AI-artifact collector now reuses the existing bounded metadata
+  and control-file observation boundary. It aggregates fates across the full
+  generation before paginating, detects overlapping roots and changed controls,
+  and leaves incomplete counts unknown. Ordinary artifact bodies remain unread.
+- Handoff review corrected an incorrect intermediate assumption that the legacy
+  public checkpoint writer was unavailable. Its actual CLI approval route is
+  still open and must remain compatible. The existing v1 digest and receipt
+  bytes are preserved; full-generation diagnostics are additive and explicitly
+  not an alternative approval digest. A 1,201-row case exposes the final
+  unreviewed artifact despite a 1,000-row display. The legacy truncation blocker
+  remains until the new session handoff writer binds the complete generation.
+  Ten handoff/public-CLI tests and ten subtests passed in 31.34 seconds before
+  the root agent's independent combined rerun. A local-offset timestamp change
+  was also reverted to keep the existing same-host digest basis compatible.
+- Prepared session plans now have private, bounded, immutable disk payloads.
+  Loading replays the exact request against its original predecessor and never
+  rebinds it to the latest registry. The payload is not approval authority.
+  Independent root review and 24 bundle/operation tests with 19 subtests passed
+  in 10.45 seconds; two POSIX-only cases remain for Linux verification.
+- Public resume integration uncovered a separate missing input: the original
+  approval context, including its reviewer claim, cannot be reconstructed from
+  a stored claim hash after process/output loss. The next integration must
+  persist the exact private context before approval and verify it on resume,
+  rather than inventing a reviewer or weakening the existing claim checks.
+- The root agent's combined AI/lifecycle pagination, handoff and prepared-bundle
+  run then passed 48 tests and 45 subtests in 95.37 seconds, with two documented
+  platform skips. All four release-readiness hygiene checks and resource
+  synchronization passed. These are development-checkpoint results only.
+
 Pending integration remains explicit: public work-session CLI and MCP routing,
 native production orchestration, durable private plan discovery and automatic
 resume, cancellation-aware lock waiting, all-writer ownership enforcement,
-consistent read generation, full artifact/fate aggregation, responsibility
+consistent read generation across writers, complete-generation handoff approval, responsibility
 assignment and session-scoped Git selection assembly. No public v0.4.20 version
 bump, PR, tag, wheel or client application has occurred.
 

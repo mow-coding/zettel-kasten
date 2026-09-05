@@ -79,8 +79,8 @@
     {
       "source": "schemas/artifact-lifecycle-inventory.schema.json",
       "packaged": "schemas/artifact-lifecycle-inventory.schema.json",
-      "bytes": 10942,
-      "sha256": "b7ed1698d3ca9f24da32a12db71373368731734bc23ac7eeb69d80b3c50543f2"
+      "bytes": 13450,
+      "sha256": "0c191d3173d659fc5370a4337c1f684843a46184080b542149968146a2b13e2e"
     },
     {
       "source": "schemas/attestation-receipt.schema.json",

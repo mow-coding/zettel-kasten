@@ -143,6 +143,7 @@
       "type": "array",
       "items": {"$ref": "#/$defs/item"}
     },
+    "pagination": {"$ref": "#/$defs/pagination"},
     "external_boundaries": {"$ref": "#/$defs/falseFlags"},
     "closed_actions": {
       "type": "object",
@@ -196,6 +197,60 @@
     "warnings": {"$ref": "#/$defs/stringArray"}
   },
   "$defs": {
+    "pagination": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema", "state", "snapshot_sha256", "generation_sha256", "query_sha256",
+        "page_size", "offset", "total_count", "observed_count", "returned_count",
+        "remaining_count", "next_cursor", "has_more", "complete_listing",
+        "cursor_is_authority", "prior_pages_read_proven"
+      ],
+      "properties": {
+        "schema": {"const": "wom-kit/snapshot-pagination/v1"},
+        "state": {"enum": ["complete", "incomplete_generation", "cursor_rejected"]},
+        "snapshot_sha256": {"type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$"},
+        "generation_sha256": {"type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$"},
+        "query_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "page_size": {"type": "integer", "minimum": 1, "maximum": 2000},
+        "offset": {"type": ["integer", "null"], "minimum": 0},
+        "total_count": {"type": ["integer", "null"], "minimum": 0},
+        "observed_count": {"type": "integer", "minimum": 0},
+        "returned_count": {"type": "integer", "minimum": 0},
+        "remaining_count": {"type": ["integer", "null"], "minimum": 0},
+        "next_cursor": {"type": ["string", "null"], "maxLength": 2048, "pattern": "^[A-Za-z0-9_-]+$"},
+        "has_more": {"type": ["boolean", "null"]},
+        "complete_listing": {"type": "boolean"},
+        "cursor_is_authority": {"const": false},
+        "prior_pages_read_proven": {"const": false}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"state": {"const": "complete"}}},
+          "then": {
+            "properties": {
+              "snapshot_sha256": {"type": "string"},
+              "generation_sha256": {"type": "string"},
+              "offset": {"type": "integer"},
+              "total_count": {"type": "integer"},
+              "remaining_count": {"type": "integer"},
+              "has_more": {"type": "boolean"}
+            }
+          },
+          "else": {
+            "properties": {
+              "snapshot_sha256": {"type": "null"},
+              "offset": {"type": "null"},
+              "total_count": {"type": "null"},
+              "remaining_count": {"type": "null"},
+              "next_cursor": {"type": "null"},
+              "has_more": {"type": "null"},
+              "complete_listing": {"const": false}
+            }
+          }
+        }
+      ]
+    },
     "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "stringArray": {
       "type": "array",

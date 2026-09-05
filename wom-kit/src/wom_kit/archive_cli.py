@@ -28207,6 +28207,7 @@ def command_ai_artifact_inventory(args: argparse.Namespace) -> int:
             include_roots=args.include_root,
             project_root=getattr(args, "project_root", None),
             max_items=args.max_items,
+            cursor=getattr(args, "cursor", None),
             show_relative_paths=args.show_relative_paths,
             dry_run=True,
         )
@@ -28222,6 +28223,9 @@ def command_ai_artifact_inventory(args: argparse.Namespace) -> int:
         print(f"Archive: {result.get('archive_id') or '-'}")
         print(f"Candidates: {result.get('total_candidate_count', 0)}")
         print(f"Listed: {result.get('item_count', 0)}")
+        pagination = result.get("pagination") or {}
+        if pagination.get("next_cursor") is not None:
+            print(f"Next cursor: {pagination['next_cursor']}")
         counts = result.get("fate_counts") if isinstance(result.get("fate_counts"), dict) else {}
         if counts:
             print("Fates:")
@@ -28250,6 +28254,7 @@ def command_artifact_lifecycle_inventory(args: argparse.Namespace) -> int:
             Path(args.archive_root),
             max_entries_per_root=args.max_entries_per_root,
             max_items=args.max_items,
+            cursor=getattr(args, "cursor", None),
             show_relative_paths=args.show_relative_paths,
             dry_run=True,
         )
@@ -28270,6 +28275,9 @@ def command_artifact_lifecycle_inventory(args: argparse.Namespace) -> int:
         print(f"Review candidates: {result.get('review_candidate_count', 0)}")
         print(f"Listed: {result.get('item_count', 0)}")
         print(f"Inventory digest: {result.get('inventory_digest') or '-'}")
+        pagination = result.get("pagination") or {}
+        if pagination.get("next_cursor") is not None:
+            print(f"Next cursor: {pagination['next_cursor']}")
         if result.get("blockers"):
             print("Blockers:")
             for blocker in result["blockers"]:
@@ -43087,7 +43095,8 @@ def build_parser() -> argparse.ArgumentParser:
             "without scanning, and its files are never inventory or GC candidates."
         ),
     )
-    ai_artifact_inventory.add_argument("--max-items", type=int, default=100, help="Maximum listed candidates; capped at 1000.")
+    ai_artifact_inventory.add_argument("--max-items", type=int, default=100, help="Maximum candidates per page, not the total listing limit; capped at 1000.")
+    ai_artifact_inventory.add_argument("--cursor", help="Continue the same metadata snapshot using the previous page's next_cursor.")
     ai_artifact_inventory.add_argument(
         "--show-relative-paths",
         action="store_true",
@@ -43117,9 +43126,13 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=artifact_lifecycle_inventory.DEFAULT_MAX_ITEMS,
         help=(
-            "Maximum content-free review rows listed; "
+            "Maximum content-free review rows per page, not the total listing limit; "
             f"capped at {artifact_lifecycle_inventory.MAX_ITEMS}."
         ),
+    )
+    artifact_lifecycle.add_argument(
+        "--cursor",
+        help="Continue the same metadata snapshot using the previous page's next_cursor.",
     )
     artifact_lifecycle.add_argument(
         "--show-relative-paths",

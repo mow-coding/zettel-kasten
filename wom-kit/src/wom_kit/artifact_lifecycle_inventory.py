@@ -20,12 +20,20 @@ from typing import Any
 
 import yaml
 
+from .snapshot_pagination import (
+    PAGINATION_SCHEMA,
+    SnapshotPager,
+    SnapshotPaginationError,
+    content_sha256,
+)
+
 
 INVENTORY_SCHEMA = "wom-kit/artifact-lifecycle-inventory/v0.1"
 DEFAULT_MAX_ENTRIES_PER_ROOT = 10_000
 MAX_ENTRIES_PER_ROOT = 100_000
 DEFAULT_MAX_ITEMS = 200
 MAX_ITEMS = 2_000
+# MAX_ITEMS bounds one response, never the complete candidate cohort.
 MAX_CONTROL_FILE_BYTES = 1 * 1024 * 1024
 MAX_OBJECT_MANIFEST_BYTES = 64 * 1024 * 1024
 OBJECT_ID_RE = re.compile(r"^sha256:(?P<digest>[0-9a-f]{64})$")
@@ -142,6 +150,103 @@ class _Entry:
     inode: int
 
 
+class _InventoryBoundaryUnsafeError(ValueError):
+    pass
+
+
+class _MetadataGeneration:
+    """Private metadata observations, rechecked together before publishing.
+
+    No ordinary file bytes are read. This is an inventory generation, not
+    byte-preservation evidence or permission to delete an artifact.
+    """
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.observations: dict[str, tuple[int, ...] | None] = {}
+        self.control_hashes: dict[str, str] = {}
+        self.changed = False
+
+    @staticmethod
+    def identity(info: os.stat_result) -> tuple[int, ...]:
+        return (
+            *_identity(info, directory=stat_module.S_ISDIR(info.st_mode)),
+            int(getattr(info, "st_nlink", 0)),
+            int(getattr(info, "st_file_attributes", 0)),
+        )
+
+    def record(self, path: Path, info: os.stat_result | None) -> None:
+        relative = path.relative_to(self.root).as_posix()
+        identity = self.identity(info) if info is not None else None
+        if relative in self.observations and self.observations[relative] != identity:
+            self.changed = True
+        else:
+            self.observations[relative] = identity
+
+    def observe(self, path: Path) -> os.stat_result | None:
+        """Check every declared path component without following a link."""
+        parts = path.relative_to(self.root).parts
+        current = self.root
+        missing = False
+        observed = None
+        for index in range(len(parts) + 1):
+            if index:
+                current = current / parts[index - 1]
+            if missing:
+                self.record(current, None)
+                continue
+            try:
+                observed = os.lstat(current)
+            except FileNotFoundError:
+                missing = True
+                observed = None
+            self.record(current, observed)
+            if observed is not None and index < len(parts) and (
+                not stat_module.S_ISDIR(observed.st_mode)
+                or stat_module.S_ISLNK(observed.st_mode)
+                or _is_reparse_point(observed)
+            ):
+                raise _InventoryBoundaryUnsafeError("inventory_scope_parent_unsafe")
+        return None if missing else observed
+
+    def control(self, path: Path, payload: bytes) -> None:
+        relative = path.relative_to(self.root).as_posix()
+        value = "sha256:" + hashlib.sha256(payload).hexdigest()
+        if relative in self.control_hashes and self.control_hashes[relative] != value:
+            self.changed = True
+        self.control_hashes[relative] = value
+
+    def revalidate(self) -> str | None:
+        if self.changed:
+            return None
+        # Parents precede children: do not inspect descendants after a parent
+        # changed into a link/reparse point or a different directory.
+        for relative, before in sorted(
+            self.observations.items(), key=lambda pair: (len(PurePosixPath(pair[0]).parts), pair[0]),
+        ):
+            path = self.root.joinpath(*PurePosixPath(relative).parts)
+            try:
+                info = os.lstat(path)
+                after = self.identity(info)
+            except FileNotFoundError:
+                after = None
+            except OSError:
+                return None
+            if after != before:
+                return None
+        return content_sha256({
+            "schema": "wom-kit/artifact-metadata-generation/v1",
+            "observations": [
+                [content_sha256(relative), value]
+                for relative, value in sorted(self.observations.items())
+            ],
+            "control_hashes": [
+                [content_sha256(relative), value]
+                for relative, value in sorted(self.control_hashes.items())
+            ],
+        })
+
+
 def _canonical_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
@@ -237,6 +342,7 @@ def _scan_recursive_scope(
     spec: ScopeSpec,
     *,
     max_entries: int,
+    generation: _MetadataGeneration | None = None,
 ) -> tuple[dict[str, Any], list[_Entry], list[str]]:
     scope_path = root.joinpath(*PurePosixPath(spec.relative_root).parts)
     blockers: list[str] = []
@@ -259,7 +365,13 @@ def _scan_recursive_scope(
         "truncated": False,
     }
     try:
-        root_stat = os.lstat(scope_path)
+        root_stat = generation.observe(scope_path) if generation else os.lstat(scope_path)
+        if root_stat is None:
+            return summary, entries, blockers
+    except _InventoryBoundaryUnsafeError:
+        summary["coverage_complete"] = False
+        summary["symlink_or_reparse_count"] = 1
+        return summary, entries, [f"{spec.root_id}_parent_link_or_reparse"]
     except FileNotFoundError:
         return summary, entries, blockers
     except OSError:
@@ -317,6 +429,8 @@ def _scan_recursive_scope(
                     # os.lstat() reports the real file identity, which would
                     # otherwise create a false changed-during-scan result.
                     item_stat = os.lstat(path)
+                    if generation is not None:
+                        generation.record(path, item_stat)
                 except OSError:
                     summary["unreadable_count"] += 1
                     blockers.append(f"{spec.root_id}_entry_unreadable")
@@ -400,7 +514,9 @@ def _scan_recursive_scope(
     return summary, entries, sorted(set(blockers))
 
 
-def _scan_index_files(root: Path) -> tuple[dict[str, Any], list[_Entry], list[str]]:
+def _scan_index_files(
+    root: Path, *, generation: _MetadataGeneration | None = None,
+) -> tuple[dict[str, Any], list[_Entry], list[str]]:
     summary = {
         "root_id": "generated_index",
         "relative_root": "db",
@@ -423,7 +539,13 @@ def _scan_index_files(root: Path) -> tuple[dict[str, Any], list[_Entry], list[st
     for relative in INDEX_RELATIVE_PATHS:
         path = root.joinpath(*PurePosixPath(relative).parts)
         try:
-            before_stat = os.lstat(path)
+            before_stat = generation.observe(path) if generation else os.lstat(path)
+            if before_stat is None:
+                continue
+        except _InventoryBoundaryUnsafeError:
+            summary["symlink_or_reparse_count"] += 1
+            blockers.append("generated_index_parent_link_or_reparse")
+            continue
         except FileNotFoundError:
             continue
         except OSError:
@@ -476,6 +598,8 @@ def _scan_index_files(root: Path) -> tuple[dict[str, Any], list[_Entry], list[st
 def _scan_never_touch_presence(
     root: Path,
     spec: ScopeSpec,
+    *,
+    generation: _MetadataGeneration | None = None,
 ) -> tuple[dict[str, Any], list[_Entry], list[str]]:
     """Classify only the root marker; never enumerate possible original bytes."""
 
@@ -498,7 +622,13 @@ def _scan_never_touch_presence(
         "truncated": False,
     }
     try:
-        before_stat = os.lstat(path)
+        before_stat = generation.observe(path) if generation else os.lstat(path)
+        if before_stat is None:
+            return summary, [], []
+    except _InventoryBoundaryUnsafeError:
+        summary["coverage_complete"] = False
+        summary["symlink_or_reparse_count"] = 1
+        return summary, [], [f"{spec.root_id}_parent_link_or_reparse"]
     except FileNotFoundError:
         return summary, [], []
     except OSError:
@@ -634,6 +764,7 @@ def _scan_object_manifest(
     root: Path,
     *,
     max_records: int,
+    generation: _MetadataGeneration | None = None,
 ) -> tuple[dict[str, Any], set[str], list[str]]:
     path = root / "objects" / "manifests" / "files.jsonl"
     result: dict[str, Any] = {
@@ -650,7 +781,12 @@ def _scan_object_manifest(
     object_ids: set[str] = set()
     blockers: list[str] = []
     try:
-        before_stat = os.lstat(path)
+        before_stat = generation.observe(path) if generation else os.lstat(path)
+        if before_stat is None:
+            return result, object_ids, blockers
+    except _InventoryBoundaryUnsafeError:
+        result.update({"valid": False, "complete": False})
+        return result, object_ids, ["object_manifest_parent_unsafe"]
     except FileNotFoundError:
         return result, object_ids, blockers
     except OSError:
@@ -674,6 +810,8 @@ def _scan_object_manifest(
             before_stat,
             max_bytes=MAX_OBJECT_MANIFEST_BYTES,
         )
+        if generation is not None:
+            generation.control(path, payload)
     except _ControlFileTooLargeError:
         result.update({"valid": False, "complete": False})
         blockers.append("object_manifest_size_limit_reached")
@@ -788,6 +926,7 @@ def _workpack_summary(
     workpack_entries: list[_Entry],
     *,
     now: datetime,
+    generation: _MetadataGeneration | None = None,
 ) -> tuple[dict[str, Any], dict[str, str], list[str]]:
     top_level_directories = {
         PurePosixPath(entry.relative_path).parts[1]
@@ -827,7 +966,9 @@ def _workpack_summary(
             states[row.relative_path] = "workpack_metadata_invalid"
             continue
         try:
-            before_stat = os.lstat(package_path)
+            before_stat = generation.observe(package_path) if generation else os.lstat(package_path)
+            if before_stat is None:
+                raise OSError("workpack metadata missing")
             expected_identity = _identity(before_stat, directory=False)
             if (
                 stat_module.S_ISLNK(before_stat.st_mode)
@@ -844,6 +985,8 @@ def _workpack_summary(
                 before_stat,
                 max_bytes=MAX_CONTROL_FILE_BYTES,
             )
+            if generation is not None:
+                generation.control(package_path, payload)
             data = yaml.load(
                 payload.decode("utf-8"),
                 Loader=_NoDuplicateSafeLoader,
@@ -899,16 +1042,32 @@ def artifact_lifecycle_inventory(
     *,
     max_entries_per_root: int = DEFAULT_MAX_ENTRIES_PER_ROOT,
     max_items: int = DEFAULT_MAX_ITEMS,
+    cursor: str | None = None,
     show_relative_paths: bool = False,
     dry_run: bool = True,
     _now: datetime | None = None,
 ) -> dict[str, Any]:
+    """Collect one verified metadata generation and return its requested page."""
     # Lazy import avoids turning this focused module into a second authority for
     # archive-root and archive-id validation.
     from . import archive_services
 
-    root = archive_services.require_existing_archive_root(archive_root)
-    archive_id = archive_services.read_archive_id(root)
+    try:
+        root = archive_services.require_existing_archive_root(archive_root)
+    except (archive_services.ArchiveServiceError, OSError, RuntimeError):
+        raise archive_services.ArchiveServiceError("artifact_lifecycle_inventory_root_unavailable") from None
+    generation = _MetadataGeneration(root)
+    try:
+        archive_metadata = generation.observe(root / "archive.yml")
+        if (
+            archive_metadata is None
+            or not stat_module.S_ISREG(archive_metadata.st_mode)
+            or _is_reparse_point(archive_metadata)
+        ):
+            raise _InventoryBoundaryUnsafeError("inventory_archive_metadata_unsafe")
+        archive_id = archive_services.read_archive_id(root)
+    except (archive_services.ArchiveServiceError, OSError, ValueError, yaml.YAMLError):
+        raise archive_services.ArchiveServiceError("artifact_lifecycle_inventory_archive_metadata_unavailable") from None
     blockers: list[str] = []
     warnings: list[str] = []
     if dry_run is not True:
@@ -937,20 +1096,21 @@ def artifact_lifecycle_inventory(
             root,
             spec,
             max_entries=entry_limit,
+            generation=generation,
         )
         scope_summaries.append(summary)
         all_entries.extend(entries)
         entries_by_root[spec.root_id] = entries
         blockers.extend(scope_blockers)
 
-    index_summary, index_entries, index_blockers = _scan_index_files(root)
+    index_summary, index_entries, index_blockers = _scan_index_files(root, generation=generation)
     scope_summaries.append(index_summary)
     all_entries.extend(index_entries)
     entries_by_root["generated_index"] = index_entries
     blockers.extend(index_blockers)
 
     never_touch_summary, never_touch_entries, never_touch_blockers = (
-        _scan_never_touch_presence(root, NEVER_TOUCH_PRESENCE_SCOPE)
+        _scan_never_touch_presence(root, NEVER_TOUCH_PRESENCE_SCOPE, generation=generation)
     )
     scope_summaries.append(never_touch_summary)
     all_entries.extend(never_touch_entries)
@@ -960,6 +1120,7 @@ def artifact_lifecycle_inventory(
     manifest, manifest_object_ids, manifest_blockers = _scan_object_manifest(
         root,
         max_records=entry_limit,
+        generation=generation,
     )
     blockers.extend(manifest_blockers)
     if manifest["duplicate_object_id_count"]:
@@ -1014,6 +1175,7 @@ def artifact_lifecycle_inventory(
         root,
         entries_by_root.get("workpacks", []),
         now=now,
+        generation=generation,
     )
     blockers.extend(workpack_blockers)
 
@@ -1061,8 +1223,8 @@ def artifact_lifecycle_inventory(
             candidates.append((matching, "DURABLE_WITH_EXPIRY", state))
 
     candidates.sort(key=lambda row: (row[0].relative_path, row[2]))
-    item_rows: list[dict[str, Any]] = []
-    for entry, artifact_class, review_state in candidates[:item_limit]:
+    all_item_rows: list[dict[str, Any]] = []
+    for entry, artifact_class, review_state in candidates:
         item = {
             "artifact_ref": _artifact_ref(archive_id, entry.relative_path),
             "root_id": entry.root_id,
@@ -1075,9 +1237,7 @@ def artifact_lifecycle_inventory(
         }
         if show_relative_paths:
             item["relative_path"] = entry.relative_path
-        item_rows.append(item)
-    if len(candidates) > len(item_rows):
-        warnings.append("review_item_listing_truncated")
+        all_item_rows.append(item)
 
     blockers = sorted(set(blockers))
     warnings = sorted(set(warnings))
@@ -1086,8 +1246,69 @@ def artifact_lifecycle_inventory(
         and manifest["complete"]
         and not any(code.endswith("_invalid") for code in blockers)
     )
+    generation_sha256 = generation.revalidate()
+    if generation_sha256 is None:
+        coverage_complete = False
+        blockers.append("inventory_generation_changed_during_scan")
     if not coverage_complete:
         blockers = sorted(set([*blockers, "declared_lifecycle_coverage_incomplete"]))
+    query_sha256 = content_sha256({
+        "schema": INVENTORY_SCHEMA,
+        "archive_identity_sha256": content_sha256(archive_id),
+        "root_ids": [summary["root_id"] for summary in scope_summaries],
+        "recursive_scope_policy": [
+            [spec.root_id, spec.relative_root, spec.artifact_class, spec.review_state, spec.list_files]
+            for spec in (*RECURSIVE_SCOPES, NEVER_TOUCH_PRESENCE_SCOPE)
+        ],
+        "index_relative_paths": INDEX_RELATIVE_PATHS,
+        "max_entries_per_root": entry_limit,
+        "show_relative_paths": bool(show_relative_paths),
+        "order": "relative_path_then_review_state",
+    })
+    pagination = {
+        "schema": PAGINATION_SCHEMA,
+        "state": "incomplete_generation",
+        "snapshot_sha256": None,
+        "generation_sha256": generation_sha256,
+        "query_sha256": query_sha256,
+        "page_size": item_limit,
+        "offset": None,
+        "total_count": None,
+        "observed_count": len(candidates),
+        "returned_count": 0,
+        "remaining_count": None,
+        "next_cursor": None,
+        "has_more": None,
+        "complete_listing": False,
+        "cursor_is_authority": False,
+        "prior_pages_read_proven": False,
+    }
+    item_rows: list[dict[str, Any]] = []
+    if (
+        coverage_complete and generation_sha256 is not None
+        and not limit_blockers and not item_blockers and dry_run is True
+    ):
+        pager = SnapshotPager.build(
+            all_item_rows, generation_sha256=generation_sha256, query_sha256=query_sha256,
+        )
+        try:
+            page = pager.page(page_size=item_limit, cursor=cursor)
+        except SnapshotPaginationError as failure:
+            blockers = sorted(set([*blockers, failure.code]))
+            pagination["state"] = "cursor_rejected"
+        else:
+            item_rows = page["items"]
+            pagination = page["pagination"]
+    elif cursor is None and generation_sha256 is not None:
+        # Historical partial diagnostics remain useful, but cannot issue a
+        # continuation, an exact total, or an end-of-inventory claim.
+        item_rows = all_item_rows[:item_limit]
+        pagination["returned_count"] = len(item_rows)
+    elif cursor is not None:
+        blockers = sorted(set([*blockers, "snapshot_pagination_generation_changed"]))
+    if len(candidates) > len(item_rows):
+        warnings.append("review_item_listing_truncated")
+    warnings = sorted(set(warnings))
     inventory_state = (
         "blocked"
         if blockers
@@ -1115,9 +1336,17 @@ def artifact_lifecycle_inventory(
         next_safe_actions.append(
             "Use Doctor and the artifact-hygiene in-root objets migration guide; this inventory never reads or moves original bytes."
         )
-    if blockers:
+    if not coverage_complete:
         next_safe_actions.append(
             "Resolve coverage blockers or rerun with a safe higher per-root limit before relying on absence or count claims."
+        )
+    elif blockers:
+        next_safe_actions.append(
+            "Resolve the input or continuation blocker, then restart at the first page; never combine pages from different snapshots or queries."
+        )
+    if pagination["next_cursor"] is not None:
+        next_safe_actions.append(
+            "Continue with the returned pagination.next_cursor and the same query and max_items; the page size is not a total listing limit."
         )
     if not next_safe_actions:
         next_safe_actions.append(
@@ -1178,6 +1407,7 @@ def artifact_lifecycle_inventory(
         "item_count": len(item_rows),
         "items_truncated": len(candidates) > len(item_rows),
         "items": item_rows,
+        "pagination": pagination,
         "external_boundaries": {
             "sibling_objet_stores_scanned": False,
             "provider_inventory_requested": False,
