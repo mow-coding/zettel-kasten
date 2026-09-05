@@ -47518,7 +47518,27 @@ def main(argv: list[str] | None = None) -> int:
                 capability_availability,
                 json_requested=json_requested,
             )
-        if capability_availability.get("available") is False:
+        # These two trusted raw delegates own privacy-safe usage errors as
+        # well as their grammar. Keep syntax unavailable in the shared truth,
+        # but let their real scanner return its existing rc=2/result schema
+        # before any archive execution. This is not permission to bypass a
+        # writer or other capability denial, and the runtime guard still runs.
+        delegated_usage_error = (
+            delegated_args is args
+            and capability_availability.get("canonical_path") == args.command
+            and capability_availability.get("approval_status")
+            == command_status.APPROVAL_NOT_EXPOSED
+            and capability_availability.get("state")
+            == command_status.CAPABILITY_MODE_UNAVAILABLE
+            and capability_availability.get("reason_code")
+            == "capability_argument_syntax_invalid"
+            and capability_availability.get("detail_reason_code")
+            == "capability_argument_syntax_invalid"
+        )
+        if (
+            capability_availability.get("available") is False
+            and not delegated_usage_error
+        ):
             return _capability_mode_unavailable_dispatch_error(
                 args,
                 capability_availability,

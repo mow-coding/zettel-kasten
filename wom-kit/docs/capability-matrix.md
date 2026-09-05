@@ -4,7 +4,7 @@ Status: v0.4.19 runtime, updater, capability, and Windows child-process truth
 Date: 2026-09-04
 Version: v0.4.19 implementation and release scope
 
-The current v0.4.19 working tree keeps the command inventory stable while one
+The current v0.4.19 working tree keeps canonical command paths stable while one
 `CapabilityAvailability` decision is consumed by help, `capabilities`, Doctor
 suggestions, dry-run interpretation, and actual dispatch. Runtime and updater
 checks distinguish `passed`, `failed`, `not_reached`, and `unavailable`, so a
@@ -13,6 +13,13 @@ observed mismatch or absence. Approved project-update preparation is
 revalidated dimension by dimension without exposing compared values, and
 noninteractive Windows child processes use the common no-console policy while
 native approval and credential interaction remain visible.
+
+The current parser inventory has 46 approval-available, 68 fixed-closed, and
+201 not-exposed canonical paths, including ten conditional approval scopes.
+The 68 fixed-closed paths comprise 67 compound-approval migrations plus
+`operation-control` with `operation_cancel_not_supported`. Cancellation has no
+writer; its status, wait, and recovery-plan dry-runs remain available. Historical
+v0.4.12 counts below describe that release, not this current inventory.
 
 The v0.4.18 working tree finished one completed project-update
 original that outlived its own cleanup after the project moved to another

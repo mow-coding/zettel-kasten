@@ -173,8 +173,12 @@ and does not infer success, failure, or cancellation, automatically retry, or
 delete that evidence. A full authenticated terminal handoff and terminal
 cleanup outcome reconstruction remain a v0.4.16 follow-up.
 
-The current parser-derived inventory is 47 approval-available, 67 fixed-closed,
-and 201 not-exposed paths. `zet-revision-restore-proposal-from-snapshot
+The current parser-derived inventory is 46 approval-available, 68 fixed-closed,
+and 201 not-exposed paths. The fixed-closed set includes 67 compound-approval
+migrations and the separately unsupported `operation-control` cancel writer,
+whose reason is `operation_cancel_not_supported`. Its status, wait, and
+recovery-plan actions remain read-only and available with `--dry-run`.
+`zet-revision-restore-proposal-from-snapshot
 --approve` and the canonical standalone command path `derive-text capture
 --approve` remain fixed closed before private snapshot, target, text, source, or
 manifest reads. The paired derived-text handling inside the separately approved
