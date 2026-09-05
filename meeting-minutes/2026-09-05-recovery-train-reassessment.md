@@ -728,3 +728,75 @@ not complete at this checkpoint.
   unchanged; the latest public release is still v0.4.18, with only the draft
   integration PR open. Open secret alerts were zero on recheck, not a guarantee
   that every possible disclosure has been excluded.
+
+## New candidate: installed repair continuation remains blocked
+
+- Candidate `d6d978d2` started full CI run `33966565133`. The installed Windows
+  workflow failed in job `101307620994` at `repair_fresh_resume`, after 95.110
+  seconds in that stage. This is a new failed acceptance result; the earlier
+  candidate's installed success does not waive it. No release is authorized.
+- The new bounded observer identified the actual nested refusal:
+  `exact_human_approval_state_unknown`, from the original approval workflow,
+  caused by `project_update_transaction_state_transition_invalid` at
+  `project_update_transaction.py:8156`. The broker was entered, but runtime
+  preparation was not entered in the resume process.
+- The exact source branch rejects `classification.overall == "unknown"`.
+  Thus at least one current component digest matches neither approved side;
+  this is not yet evidence that event order, a directory, runtime bytes or the
+  approval itself is wrong. The component and underlying observation remain
+  under investigation. Neither that guard nor its digest comparison is relaxed.
+- The previously failing Windows shard 4 passed on this candidate. Other
+  matrix jobs are still being collected. Partial passes are not full CI,
+  release completion or client recovery, and intermittent failures are not
+  erased by an earlier or later success.
+- A failure-only observer now composes the existing live-component helper,
+  its original sub-observations, classifier and exact validator. It retains
+  only fixed component roles, classification states, reason codes and source
+  field names. It adds no filesystem query, retry or successful substitute.
+  Mapping/result identity and owning thread bind a sample to the actual
+  failed validation. Decisive unknown classifications take priority within
+  the 32-row cap; the parent rejects impossible enum combinations as well as
+  unknown/private values. Original results, exceptions and cleanup remain.
+- The source candidate fixture enters the same observer, so its next failure
+  will not lose those component boundaries. Root independently checked the
+  combined observer, forwarding/restoration and source-fixture contracts:
+  32 tests and 44 subtests passed in 24.57 seconds. The implementer previously
+  passed the same count in 24.24 seconds. These are diagnostic tests, not a
+  correction to the still-unattributed product failure.
+- One local full installed-checker execution is underway. Only the diagnostic
+  caller's temporary-directory cleanup policy differs: a failed synthetic
+  fixture is retained for later inspection rather than automatically erased;
+  the global tempfile module, installer, approval, writer, cut and original
+  timeout are unchanged. This retained-fixture run is diagnostic evidence,
+  not a substitute for the final unchanged public release acceptance gate.
+- Run `33966565133` completed: all four Ubuntu shards, all four Windows shards,
+  readiness and all three scale checks passed. Installed acceptance failed,
+  so aggregate Required CI also failed. The new component observer is not yet
+  in that candidate and these results do not resolve the installed refusal.
+- The one local retained-fixture run also failed, but for a different observed
+  reason: the unchanged 1,200-second journey budget expired with repair resume
+  unfinished. The phase protocol was valid with 21 events. Initial update took
+  490.313 seconds; healthy noop 124.734, source drift 122.687, ref drift 115.797,
+  repair preparation to the cut 283.203, and cut validation 6.813. About 35
+  seconds remained for the fresh resume worker. No classifier-unknown error
+  was observed before termination. This is neither a pass nor proof that the
+  CI cause was fixed. The original synthetic wheel, runtime, approval and
+  transaction were retained; all contained processes were confirmed stopped.
+- The next bounded diagnostic inspects that exact interrupted state and, if
+  its original continuation is valid, runs only the original resume worker.
+  There is no rebuild, new approval, extended full-journey deadline or loop
+  rerunning the full checker until success. Its result remains independent
+  diagnostic evidence and cannot replace final public acceptance.
+- That selected original resume passed in 407.953 seconds after a read-only
+  exact-journal precheck. The same wheel and driver were used, with zero new
+  native approval, download, preparation or initialization. Independent caller
+  checks confirmed the same claim file set, unchanged older succeeded claim,
+  the original started claim becoming succeeded, unchanged pin and launcher,
+  exactly one added domain receipt, and repaired package bytes matching the
+  original wheel. All contained processes then exited. Thus the additional
+  timeout-induced interruption was recoverable with original authority.
+- This remains separate diagnostic evidence. The full local installed gate
+  failed its fixed total deadline, and the CI unknown-component failure did
+  not reproduce. Production bytes have not been changed on an unproven cause.
+  The next exact candidate retains that failure history and adds the reviewed
+  component observer to collect the decisive original state if CI fails again.

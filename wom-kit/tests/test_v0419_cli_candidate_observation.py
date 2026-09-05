@@ -9,6 +9,17 @@ import test_cli
 
 
 class CliCandidateObservationTests(unittest.TestCase):
+    def test_source_fixture_enters_and_restores_same_component_observer(self):
+        services = test_cli.archive_services
+        original = services._project_update_live_component_sha256
+        raised_error = RuntimeError("SYNTHETIC_PRIVATE_TOKEN")
+        with self.assertRaises(RuntimeError) as raised:
+            with test_cli._observe_project_update_fixture_boundaries():
+                self.assertIsNot(services._project_update_live_component_sha256, original)
+                raise raised_error
+        self.assertIs(raised.exception, raised_error)
+        self.assertIs(services._project_update_live_component_sha256, original)
+
     def test_original_calls_results_and_argument_identity_are_preserved(self):
         runtime, cli = test_cli.project_runtime, test_cli.archive_cli
         supplied, result, projected = object(), object(), object()

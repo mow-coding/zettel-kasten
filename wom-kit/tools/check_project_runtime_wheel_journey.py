@@ -9,7 +9,7 @@ controlled; policy, supply, installer, broker, writers and verifiers stay real.
 
 from __future__ import annotations
 
-from contextlib import ExitStack, redirect_stderr, redirect_stdout
+from contextlib import ExitStack, contextmanager, redirect_stderr, redirect_stdout
 from functools import wraps
 import hashlib
 import importlib.metadata
@@ -60,6 +60,63 @@ SAFE_REASON_CODES = frozenset({
 FAILURE_OBSERVATION_SCHEMA = "wom-kit/installed-runtime-failure-observation/v0.1"
 FAILURE_OBSERVATION_STAGES = frozenset({"first_update", "repair_fresh_resume"})
 FAILURE_OUTPUT_LIMIT_BYTES = 32 * 1024
+COMPONENT_OBSERVATION_SCHEMA = "wom-kit/test-live-component-observation/v1"
+COMPONENT_OBSERVATION_ROLES = frozenset({
+    "source", "runtime", "launcher", "non_active_pin", "receipt", "active_pin", "unclassified_component",
+})
+COMPONENT_OBSERVATION_BOUNDARIES = frozenset({"source", "runtime", "repair", "file", "classification"})
+COMPONENT_OBSERVATION_REASONS = frozenset({
+    "verified", "verified_missing", "not_applicable", "project_git_snapshot_unavailable",
+    "project_git_snapshot_invalid", "project_git_snapshot_unsafe", "project_git_snapshot_size_policy_exceeded",
+    "project_runtime_existing_observation_unavailable", "project_runtime_existing_missing",
+    "project_runtime_existing_unsafe", "project_runtime_existing_install_incomplete",
+    "project_runtime_existing_receipt_missing", "project_runtime_existing_receipt_mismatch",
+    "project_runtime_existing_receipt_invalid", "project_runtime_existing_integrity_mismatch",
+    "project_runtime_existing_artifact_mismatch", "project_runtime_existing_payload_mismatch",
+    "project_runtime_existing_supply_mismatch", "project_runtime_repair_observation_unavailable",
+    "project_runtime_repair_state_invalid", "project_update_component_size_policy_invalid",
+    "project_update_component_observation_unavailable", "project_update_component_path_unsafe",
+    "project_update_component_changed", "project_update_component_too_large",
+})
+COMPONENT_SOURCE_FIELDS = frozenset({
+    "head", "branch", "index_sha256", "index_matches_head", "flags_sha256", "eol_sha256",
+    "flags_safe", "raw_bytes_match_head", "worktree_sha256", "tracked_file_count", "untracked_paths", "eol_overrides",
+})
+COMPONENT_CLASSIFICATION_STATES = frozenset({"pre_exact", "post_exact", "pre_and_post_exact", "unknown", "unclassified"})
+COMPONENT_PROBE_STATES = frozenset({"passed", "failed", "unavailable", "exception", "unclassified"})
+
+
+def _component_observation_row_valid(row):
+    if (type(row) is not dict or set(row) != {"boundary", "role", "state", "reason_code", "changed_source_fields"}
+            or type(row["boundary"]) is not str or row["boundary"] not in COMPONENT_OBSERVATION_BOUNDARIES
+            or type(row["role"]) is not str or row["role"] not in COMPONENT_OBSERVATION_ROLES
+            or type(row["state"]) is not str):
+        return False
+    boundary, role, state, reason = (row[name] for name in ("boundary", "role", "state", "reason_code"))
+    fields = row["changed_source_fields"]
+    if (type(fields) is not list or len(fields) > len(COMPONENT_SOURCE_FIELDS)
+            or any(type(field) is not str or field not in COMPONENT_SOURCE_FIELDS for field in fields)
+            or fields != sorted(set(fields))):
+        return False
+    if boundary == "classification":
+        return state in COMPONENT_CLASSIFICATION_STATES and reason is None and not fields
+    if state not in COMPONENT_PROBE_STATES:
+        return False
+    if ((boundary == "source" and role != "source")
+            or (boundary in {"runtime", "repair"} and role != "runtime")
+            or (boundary == "file" and role in {"source", "runtime"})
+            or (fields and (boundary != "source" or state != "passed"))):
+        return False
+    if reason is None:
+        return True
+    if type(reason) is not str or reason not in COMPONENT_OBSERVATION_REASONS or state in {"exception", "unclassified"}:
+        return False
+    if state == "passed":
+        return reason in ({"verified", "verified_missing"} if boundary == "file" else
+                          {"verified", "not_applicable"} if boundary == "repair" else {"verified"})
+    prefix = {"source": "project_git_snapshot_", "runtime": "project_runtime_existing_",
+              "repair": "project_runtime_repair_", "file": "project_update_component_"}[boundary]
+    return reason.startswith(prefix) and (reason.endswith("unavailable") == (state == "unavailable"))
 INITIAL_FAILURE_FILE = "initial-update-failure.json"
 # Literal allowlists, not a code-shaped regular expression or arbitrary class
 # attribute: the parent validates the same contract without importing WOM.
@@ -326,6 +383,7 @@ class FirstUpdateObservation:
         self._services, self._runtime, self._workflow = archive_services, project_runtime, exact_human_approval_workflow
         self.boundaries = {name: {"entered": False, "returned": False} for name in self._BOUNDARIES}
         self.failures = {}
+        self.component_observation = None
         self._source_codes = {}
         source_functions = (
             (archive_cli, "archive_cli.py", (
@@ -451,6 +509,158 @@ class FirstUpdateObservation:
             return original(error)
         return observe
 
+    @contextmanager
+    def live_components(self):
+        """Failure-only views of existing calls; no reread, retry or tracing.
+
+        Private state is borrowed only while the original live helper runs.
+        Only fixed classifications survive that call. The original classifier
+        result object ties the sample to the exact subsequent validator call.
+        """
+        services, runtime = self._services, self._runtime
+        transaction = services.project_update_transaction
+        owner = threading.get_ident()
+        active = None
+        probes, roles, observed, pending_live = [], {}, None, None
+
+        def record(boundary, role, result=None, *, exception=False):
+            if len(probes) >= 32:
+                return
+            result = result if type(result) is dict else {}
+            raw_state = result.get("state")
+            raw_reason = result.get("reason_code")
+            state = "exception" if exception else (
+                raw_state if type(raw_state) is str and raw_state in COMPONENT_PROBE_STATES else "unclassified")
+            reason = raw_reason if type(raw_reason) is str and raw_reason in COMPONENT_OBSERVATION_REASONS else None
+            fields = []
+            if boundary == "source" and state == "passed" and active is not None:
+                expected = active.private_plan.get("preflight_git_snapshot")
+                current = result.get("snapshot")
+                if type(expected) is dict and type(current) is dict:
+                    fields = sorted(name for name in COMPONENT_SOURCE_FIELDS if expected.get(name) != current.get(name))
+            row = {"boundary": boundary, "role": role, "state": state,
+                   "reason_code": reason, "changed_source_fields": fields}
+            if not _component_observation_row_valid(row):
+                row["reason_code"] = None
+            if _component_observation_row_valid(row):
+                probes.append(row)
+
+        def safe_record(*args, **kwargs):
+            try:
+                record(*args, **kwargs)
+            except Exception:
+                pass  # Diagnostic failure must not replace original behavior.
+
+        def probe(boundary, original):
+            @wraps(original)
+            def forward(*args, **kwargs):
+                if threading.get_ident() != owner or active is None:
+                    return original(*args, **kwargs)
+                role = boundary if boundary in {"source", "runtime"} else (
+                    "runtime" if boundary == "repair" else "unclassified_component")
+                if boundary == "file" and len(args) >= 2:
+                    try:
+                        for reference, path in active.component_paths.items():
+                            if path == args[1]:
+                                role = roles.get(reference, "unclassified_component")
+                                break
+                    except Exception:
+                        pass
+                try:
+                    result = original(*args, **kwargs)
+                except Exception:
+                    safe_record(boundary, role, exception=True)
+                    raise
+                safe_record(boundary, role, result)
+                return result
+            return forward
+
+        original_live = services._project_update_live_component_sha256
+
+        @wraps(original_live)
+        def live(state):
+            nonlocal active, probes, roles, observed, pending_live
+            if threading.get_ident() != owner:
+                return original_live(state)
+            probes, roles, observed, pending_live = [], {}, None, None
+            try:
+                for component in state.transaction.intent.components:
+                    role = component.role
+                    roles[component.component_ref] = (
+                        role if type(role) is str and role in COMPONENT_OBSERVATION_ROLES else "unclassified_component")
+            except Exception:
+                roles = {}
+            active = state
+            try:
+                result = original_live(state)
+                pending_live = result
+                return result
+            finally:
+                active = None
+
+        original_classify = transaction.classify_components
+
+        @wraps(original_classify)
+        def classify(*args, **kwargs):
+            nonlocal observed
+            result = original_classify(*args, **kwargs)
+            supplied = args[1] if len(args) > 1 else kwargs.get("live_sha256")
+            if threading.get_ident() == owner and pending_live is not None and supplied is pending_live:
+                observed = result
+            return result
+
+        original_validate = transaction.ProjectUpdateTransaction._validate_live_for_event
+
+        @wraps(original_validate)
+        def validate(*args, **kwargs):
+            nonlocal observed
+            try:
+                return original_validate(*args, **kwargs)
+            except Exception:
+                classification = args[3] if len(args) > 3 else kwargs.get("classification")
+                if (threading.get_ident() == owner and observed is classification
+                        and observed is not None and self.component_observation is None):
+                    try:
+                        rows = []
+                        # Preserve the decisive unknown roles before ancillary
+                        # probes, even when a diagnostic fixture fills the cap.
+                        components = sorted(classification.component_states, key=lambda item: item[1] != "unknown")
+                        for reference, state in components:
+                            if len(rows) >= 32:
+                                break
+                            rows.append({"boundary": "classification",
+                                         "role": roles.get(reference, "unclassified_component"),
+                                         "state": state if type(state) is str and state in COMPONENT_CLASSIFICATION_STATES else "unclassified",
+                                         "reason_code": None, "changed_source_fields": []})
+                        rows.extend(probes[:32 - len(rows)])
+                        self.component_observation = {"schema": COMPONENT_OBSERVATION_SCHEMA, "events": rows}
+                    except Exception:
+                        pass
+                raise
+            finally:
+                if threading.get_ident() == owner:
+                    observed = None
+
+        with ExitStack() as stack:
+            for module, name, replacement in (
+                (services, "_project_update_live_component_sha256", live),
+                (services, "_wom_kit_project_update_git_snapshot_observation",
+                 probe("source", services._wom_kit_project_update_git_snapshot_observation)),
+                (services, "_project_update_runtime_candidate_observation",
+                 probe("runtime", services._project_update_runtime_candidate_observation)),
+                (runtime, "runtime_repair_state_observation", probe("repair", runtime.runtime_repair_state_observation)),
+                (services, "_project_update_component_bytes_observation",
+                 probe("file", services._project_update_component_bytes_observation)),
+                (transaction, "classify_components", classify),
+                (transaction.ProjectUpdateTransaction, "_validate_live_for_event", validate),
+            ):
+                stack.enter_context(mock.patch.object(module, name, new=replacement))
+            try:
+                yield
+            finally:
+                active, observed, pending_live = None, None, None
+                roles.clear()
+
     def diagnostic(self, *, native_observed):
         return json.dumps({"stage": self.stage, "boundaries": self.boundaries,
                            "failures": self.failures, "native_observed": bool(native_observed)},
@@ -473,21 +683,33 @@ class FirstUpdateObservation:
         fields["reason_codes"] = sorted({item for item in candidates
                                          if type(item) is str and item in allowed})
         fields["return_code"] = cli_code if type(cli_code) is int and cli_code in {0, 1, 2} else None
-        return validate_first_update_observation({
+        payload = {
             "schema": FAILURE_OBSERVATION_SCHEMA, "scope": "synthetic_harness_only",
             "product_recovery_evidence": False, "private_values_echoed": False,
             "stage": self.stage, "boundaries": self.boundaries, "failures": self.failures,
             "native_observed": native_observed is True, "cli": fields,
-        })
+        }
+        if self.component_observation is not None:
+            payload["component_observation"] = self.component_observation
+        return validate_first_update_observation(payload)
 
 
 def validate_first_update_observation(value):
     """Reject rather than echo any unexpected output from the child boundary."""
-    valid = type(value) is dict and set(value) == {
+    required = {
         "schema", "scope", "product_recovery_evidence", "private_values_echoed", "stage",
         "boundaries", "failures", "native_observed", "cli",
     }
+    valid = type(value) is dict and (set(value) == required or set(value) == required | {"component_observation"})
     require(valid, "installed_runtime_journey_failed")
+    if "component_observation" in value:
+        component = value["component_observation"]
+        require(type(component) is dict and set(component) == {"schema", "events"}
+                and component["schema"] == COMPONENT_OBSERVATION_SCHEMA
+                and type(component["events"]) is list and 1 <= len(component["events"]) <= 32,
+                "installed_runtime_journey_failed")
+        for row in component["events"]:
+            require(_component_observation_row_valid(row), "installed_runtime_journey_failed")
     require(value["schema"] == FAILURE_OBSERVATION_SCHEMA and value["scope"] == "synthetic_harness_only"
             and value["product_recovery_evidence"] is False and value["private_values_echoed"] is False
             and type(value["stage"]) is str and value["stage"] in FAILURE_OBSERVATION_STAGES
@@ -667,6 +889,7 @@ def _observed_runtime_call(archive_cli, project_runtime, cli, argv, native, *, s
                    else "_execute_project_version_update_exact_human_approved_write")
     code, result = None, None
     with ExitStack() as stack:
+        stack.enter_context(observation.live_components())
         stack.enter_context(mock.patch.object(project_runtime, "prepare_runtime_candidate",
             new=observation.boundary("runtime_prepare", project_runtime.prepare_runtime_candidate)))
         stack.enter_context(mock.patch.object(archive_cli, broker_name,
