@@ -510,6 +510,32 @@ bump, PR, tag, wheel or client application has occurred.
   routing, installed-wheel journeys and complete writer-family scope coverage
   remain open. No client archive, credential or provider was modified.
 
+## Next public routing boundary (reviewed, not implemented)
+
+- The existing public query remains read-only. A future management tool must
+  declare write effects separately; adding mutation to the read-only MCP tool
+  would misrepresent its contract. The same action/mode facts must drive CLI
+  capability presentation, dispatch and runtime write guards.
+- Registration already has a real read-only preview and an original selection
+  for apply/resume. Task creation currently has no read-only preview: its
+  default native argument means the actual approval dialog, not a dry-run.
+  Do not advertise a create preview by passing a null callback to that writer.
+- The AI/harness retains app registration selection and an explicit task route
+  before mutation. Humans do not copy hashes or manufacture JSON. Missing
+  original selection does not authorize choosing a latest app/task or silently
+  generating a replacement route for continuation.
+- The existing invocation-effect audit assumes its audited dry-run handlers
+  require that flag. Session management is action-dependent, so its effect
+  classification must precede that generic branch. Registration, claim and
+  continuation still require the runtime write guard even without a new human
+  approval. An empty effect list here would be a bug, not permission to write.
+- Existing cores already acquire the archive writer lock. Public composition
+  must reuse their held seams, not acquire the same lock twice. Original
+  re-review exposes neither key-provider nor native-test callbacks publicly.
+- These are integration constraints, not implemented commands or release
+  evidence. Public routing, installed-wheel session journeys and all-writer
+  enforcement remain pending after the internal component checkpoint.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)
