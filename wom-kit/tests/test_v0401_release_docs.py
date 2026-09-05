@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import re
 import unittest
 
 from jsonschema import Draft202012Validator
@@ -127,8 +128,8 @@ class V0401ReleaseDocsTests(unittest.TestCase):
         self.assertEqual(counts["canonical_executable_command_count"], 315)
         self.assertEqual(counts["alias_invocation_path_count"], 259)
         self.assertEqual(counts["invocation_path_count"], 574)
-        self.assertEqual(counts["approval_available_command_count"], 47)
-        self.assertEqual(counts["approval_fixed_closed_command_count"], 67)
+        self.assertEqual(counts["approval_available_command_count"], 46)
+        self.assertEqual(counts["approval_fixed_closed_command_count"], 68)
         self.assertEqual(counts["approval_not_exposed_command_count"], 201)
         self.assertEqual(counts["conditional_approval_command_count"], 10)
         self.assertEqual(counts["dry_run_exposed_command_count"], 272)
@@ -136,6 +137,37 @@ class V0401ReleaseDocsTests(unittest.TestCase):
         by_path = {
             row["canonical_path"]: row for row in inventory["commands"]
         }
+        # The current inventory includes one unsupported writer, separately
+        # from the 67 compound-approval migrations. Do not restore the old
+        # count by advertising a cancel writer that has never existed.
+        self.assertNotIn("operation-control", blocked)
+        self.assertEqual(
+            [
+                (row["canonical_path"], row["approval_reason_code"])
+                for row in inventory["commands"]
+                if row["approval_status"] == "approval_fixed_closed"
+                and row["canonical_path"] not in blocked
+            ],
+            [("operation-control", "operation_cancel_not_supported")],
+        )
+        self.assertTrue(by_path["operation-control"]["dry_run_exposed"])
+        self.assertEqual(
+            counts["approval_fixed_closed_command_count"],
+            counts["matched_fixed_closed_command_count"] + 1,
+        )
+        unavailable = command_status.resolve_capability_availability(
+            inventory, "operation-control", requested_mode="approve"
+        )
+        self.assertEqual(unavailable["state"], "writer_unavailable")
+        self.assertEqual(
+            unavailable["detail_reason_code"], "operation_cancel_not_supported"
+        )
+        self.assertEqual(
+            command_status.resolve_capability_availability(
+                inventory, "operation-control", requested_mode="dry_run"
+            )["state"],
+            "available",
+        )
         self.assertEqual(
             by_path["zettel-objet-link"]["approval_status"],
             "approval_available",
@@ -204,6 +236,34 @@ class V0401ReleaseDocsTests(unittest.TestCase):
                 ),
             },
         )
+
+    def test_current_inventory_docs_match_parser_and_unsupported_reason(self) -> None:
+        counts = command_status.build_command_status_inventory(
+            archive_cli.build_parser(), archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS
+        )["counts"]
+        capabilities = (KIT / "docs" / "agent-operator-capabilities.md").read_text(
+            encoding="utf-8"
+        )
+        for label, key in (
+            ("approval_available", "approval_available_command_count"),
+            ("approval_fixed_closed", "approval_fixed_closed_command_count"),
+            ("approval_not_exposed", "approval_not_exposed_command_count"),
+            ("conditional approval paths", "conditional_approval_command_count"),
+        ):
+            with self.subTest(label=label):
+                matches = re.findall(r"(?m)^" + re.escape(label) + r":\s+(\d+)$", capabilities)
+                self.assertEqual(matches, [str(counts[key])])
+        current_summary = (
+            f"{counts['approval_available_command_count']} approval-available, "
+            f"{counts['approval_fixed_closed_command_count']} fixed-closed, and "
+            f"{counts['approval_not_exposed_command_count']} not-exposed"
+        )
+        for name in ("capability-matrix.md", "exact-human-approval-contract.md"):
+            with self.subTest(document=name):
+                text = (KIT / "docs" / name).read_text(encoding="utf-8")
+                self.assertIn(current_summary, " ".join(text.split()))
+                self.assertIn("operation_cancel_not_supported", text)
+        self.assertIn("operation_cancel_not_supported", capabilities)
 
     def test_public_docs_separate_global_bootstrap_from_project_update(self) -> None:
         current_surfaces = (

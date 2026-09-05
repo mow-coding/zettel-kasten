@@ -315,16 +315,31 @@ class NotionPropertyBackfillCliTests(unittest.TestCase):
         )
         self.assertEqual(
             inventory["counts"]["approval_available_command_count"],
-            47,
+            46,
         )
         self.assertEqual(
             inventory["counts"]["approval_fixed_closed_command_count"],
-            67,
+            68,
+        )
+        # Unsupported cancellation is a separate fixed-close reason, not a
+        # change to the sole approved Notion migration target above.
+        self.assertEqual(
+            by_path["operation-control"]["approval_status"], "approval_fixed_closed"
+        )
+        self.assertEqual(
+            by_path["operation-control"]["approval_reason_code"],
+            "operation_cancel_not_supported",
+        )
+        self.assertNotIn("operation-control", archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS)
+        self.assertEqual(
+            inventory["counts"]["approval_fixed_closed_command_count"],
+            inventory["counts"]["matched_fixed_closed_command_count"] + 1,
         )
         self.assertEqual(
             inventory["counts"]["conditional_approval_command_count"],
-            9,
+            10,
         )
+        self.assertEqual(by_path["create-draft"]["approval_scope"]["kind"], "namespace_predicate")
 
         code, stdout, stderr = self.run_cli(
             [

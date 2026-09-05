@@ -13,6 +13,52 @@ from wom_kit import archive_cli, archive_services, command_status, mcp_server
 
 
 class V0419CapabilityAvailabilityTests(unittest.TestCase):
+    def test_shared_gate_preserves_public_action_names_without_handler_inspection(self) -> None:
+        expected = {
+            "add-source": "add_source_binding",
+            "discard-draft": "discard_draft_apply",
+            "credential-lifecycle": "authenticated_credential_lifecycle_decision",
+            "github-repo": "approve_github_repository_setup_plan",
+            "import-external": "import_external_archive",
+            "migrate": "migrate_archive",
+            "parcel": "pack_work_context",
+            "notion-page-recovery": "authenticated_notion_page_recovery_execute",
+            "objet-capture-selection": "objet_capture_selection_record",
+            "prehashed-objet-ledger": "prehashed_objet_ledger_register",
+            "transfer-ownership": "transfer_archive_ownership",
+            "revert-batch": "zettel_edge_batch_revert",
+            "mint-zet-batch": "mint_zet_batch",
+        }
+        args = argparse.Namespace(func=mock.Mock(), from_manifest=None)
+        for path, action in expected.items():
+            with self.subTest(path=path):
+                self.assertEqual(archive_cli._unavailable_writer_lifecycle_action(path, args), action)
+        args.func.assert_not_called()
+        for value, action in (
+            (None, "derived_text_capture_apply"),
+            ("PRIVATE_MANIFEST_MUST_NOT_BE_ECHOED", "derived_text_capture_manifest_apply"),
+        ):
+            args.from_manifest = value
+            self.assertEqual(
+                archive_cli._unavailable_writer_lifecycle_action("derive-text capture", args), action
+            )
+
+    def test_fixed_closed_command_preserves_parser_json_default(self) -> None:
+        output, errors = io.StringIO(), io.StringIO()
+        argv = ["principal-register", "synthetic-root-must-not-be-read", "--principal-id", "team:synthetic",
+                "--kind", "team", "--display-name", "Synthetic app", "--expected-plan-sha256",
+                "sha256:" + "a" * 64, "--approve", "--reviewed-by", "person:synthetic"]
+        with mock.patch.object(archive_cli, "command_principal_register") as handler:
+            with redirect_stdout(output), redirect_stderr(errors):
+                code = archive_cli.main(argv)
+        handler.assert_not_called()
+        result = json.loads(output.getvalue())
+        self.assertEqual(code, 1)
+        self.assertEqual(errors.getvalue(), "")
+        self.assertEqual(result["capability_state"], "writer_unavailable")
+        self.assertEqual(result["effects_state"], "none")
+        self.assertNotIn("synthetic-root", output.getvalue())
+
     def inventory(self) -> dict[str, object]:
         parser = archive_cli.build_parser()
         return archive_cli._parser_capability_inventory(parser)
@@ -590,7 +636,7 @@ class V0419CapabilityAvailabilityTests(unittest.TestCase):
         )
         self.assertFalse(status["private_values_echoed"])
 
-    def test_delegated_parser_rejects_invalid_suggestion_and_dispatch_before_handler(
+    def test_delegated_parser_rejects_invalid_suggestion_and_dispatch_before_archive(
         self,
     ) -> None:
         private_marker = "PRIVATE-DELEGATED-ARGUMENT-MARKER"
@@ -637,10 +683,9 @@ class V0419CapabilityAvailabilityTests(unittest.TestCase):
         stdout = io.StringIO()
         stderr = io.StringIO()
         with mock.patch(
-            "wom_kit.source_reference_coverage_audit."
-            "command_source_reference_coverage_audit_argv",
-            side_effect=AssertionError("invalid delegated handler must not run"),
-        ) as handler, redirect_stdout(stdout), redirect_stderr(stderr):
+            "wom_kit.source_reference_coverage_audit._execute",
+            side_effect=AssertionError("invalid delegated request must not read archive"),
+        ) as execute, redirect_stdout(stdout), redirect_stderr(stderr):
             exit_code = archive_cli.main(
                 [
                     "source-reference-coverage-audit",
@@ -652,14 +697,15 @@ class V0419CapabilityAvailabilityTests(unittest.TestCase):
                 ]
             )
 
-        self.assertEqual(exit_code, 1)
-        handler.assert_not_called()
+        self.assertEqual(exit_code, 2)
+        execute.assert_not_called()
         actual = json.loads(stdout.getvalue())
         self.assertEqual(
-            actual["reason_codes"],
-            ["capability_argument_syntax_invalid"],
+            actual["schema"],
+            "wom-kit/source-reference-coverage-audit-result/v0.1",
         )
-        self.assertEqual(actual["capability_availability"], dispatch)
+        self.assertEqual(actual["issues"][0]["code"], "request_invalid")
+        self.assertEqual(stderr.getvalue(), "")
         self.assertNotIn(private_marker, stdout.getvalue() + stderr.getvalue())
 
     def test_both_raw_delegates_pass_the_shared_gate_before_dispatch(self) -> None:
@@ -695,24 +741,62 @@ class V0419CapabilityAvailabilityTests(unittest.TestCase):
                 self.assertEqual(exit_code, 73)
                 handler.assert_called_once()
 
-    def test_find_objet_invalid_remainder_is_blocked_before_private_handler(
+    def test_find_objet_invalid_remainder_uses_private_scanner_before_archive(
         self,
     ) -> None:
         private_marker = "PRIVATE-FINDER-ARCHIVE-MARKER"
         stdout = io.StringIO()
         stderr = io.StringIO()
         with mock.patch(
-            "wom_kit.private_objet_finder.command_find_objet_argv",
-            side_effect=AssertionError("invalid private handler must not run"),
-        ) as handler, redirect_stdout(stdout), redirect_stderr(stderr):
+            "wom_kit.private_objet_finder._derive_archive_boundary",
+            side_effect=AssertionError("invalid private request must not read archive"),
+        ) as boundary, redirect_stdout(stdout), redirect_stderr(stderr):
             exit_code = archive_cli.main(
-                ["find-objet", private_marker, "--bogus"]
+                ["find-objet", private_marker, "--bogus", "--format", "json"]
             )
 
-        self.assertEqual(exit_code, 1)
-        handler.assert_not_called()
+        self.assertEqual(exit_code, 2)
+        boundary.assert_not_called()
         self.assertNotIn(private_marker, stdout.getvalue() + stderr.getvalue())
-        self.assertIn("requested command mode is unavailable", stderr.getvalue())
+        actual = json.loads(stdout.getvalue())
+        self.assertEqual(actual["schema"], "wom-kit/private-objet-finder-result/v0.1")
+        self.assertEqual(actual["diagnostic_codes"], ["find_objet_unknown_option"])
+        self.assertEqual(stderr.getvalue(), "")
+
+    def test_delegated_usage_error_is_not_an_approval_or_other_denial_bypass(self) -> None:
+        for command, executor in (
+            ("find-objet", "wom_kit.private_objet_finder._derive_archive_boundary"),
+            ("source-reference-coverage-audit", "wom_kit.source_reference_coverage_audit._execute"),
+        ):
+            with self.subTest(command=command), mock.patch(
+                executor, side_effect=AssertionError("invalid approve must not execute"),
+            ) as execute:
+                stdout, stderr = io.StringIO(), io.StringIO()
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    code = archive_cli.main([
+                        command, "PRIVATE-ROOT-NOT-READ", "--approve", "--format", "json",
+                    ])
+                self.assertEqual(code, 2)
+                self.assertEqual(stderr.getvalue(), "")
+                self.assertNotIn("PRIVATE-ROOT-NOT-READ", stdout.getvalue())
+                execute.assert_not_called()
+
+        denied = {
+            "canonical_path": "find-objet", "requested_mode": "unspecified",
+            "state": command_status.CAPABILITY_MODE_UNAVAILABLE, "available": False,
+            "reason_code": "capability_mode_not_exposed",
+            "detail_reason_code": "capability_mode_not_exposed",
+            "approval_status": command_status.APPROVAL_NOT_EXPOSED,
+        }
+        with mock.patch.object(
+            command_status, "resolve_namespace_capability_availability", return_value=denied,
+        ), mock.patch(
+            "wom_kit.private_objet_finder.command_find_objet_argv",
+            side_effect=AssertionError("non-syntax denial must not delegate"),
+        ) as handler, redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            code = archive_cli.main(["find-objet", "--help"])
+        self.assertEqual(code, 1)
+        handler.assert_not_called()
 
     def test_doctor_suggestion_carries_the_same_capability_record(self) -> None:
         parser = archive_cli.build_parser()

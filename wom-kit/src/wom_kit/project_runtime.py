@@ -623,23 +623,23 @@ def _stat_identity(stat_result: os.stat_result) -> tuple[int, int, int, int, int
     """Return the fields that must stay stable across a bound read.
 
     Windows does not expose one uniform generation counter through Python.  A
-    device/inode identity plus type, file size, mtime and reparse attributes is
-    the strongest portable observation available here. Directory allocation
+    device/inode identity plus type, file size, mtime and Windows attributes is
+    the portable observation used here. Directory allocation
     size is not a content generation: Windows can report it as zero before a
     later metadata observation without any member or byte change. Tree scans
-    bind exact member sets separately, so only that size field is normalized
-    for directories. The open descriptor is
-    still the authority for the bytes; the path observations only prove that
-    the name and its ancestors did not visibly move around that read.
+    bind exact members separately. Directory size/ARCHIVE are bookkeeping.
+    NTFS may also return redundant 0x10000000 (CPython #126253): normalize it
+    only with directory mode AND Win32 DIRECTORY (0x10). Retain all other bits.
+    Descriptors remain byte authority; paths prove stable names and ancestors.
     """
-
+    attributes = int(getattr(stat_result, "st_file_attributes", 0))
     return (
         int(stat_result.st_dev),
         int(stat_result.st_ino),
         int(stat_module.S_IFMT(stat_result.st_mode)),
         0 if stat_module.S_ISDIR(stat_result.st_mode) else int(stat_result.st_size),
         int(stat_result.st_mtime_ns),
-        int(getattr(stat_result, "st_file_attributes", 0)),
+        attributes & (~(0x20 | (0x10000000 if attributes & 0x10 else 0)) if stat_module.S_ISDIR(stat_result.st_mode) else -1),
     )
 
 

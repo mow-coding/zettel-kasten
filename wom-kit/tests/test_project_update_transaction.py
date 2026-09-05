@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from contextlib import ExitStack, contextmanager, nullcontext
 from pathlib import Path, PurePosixPath
@@ -3685,12 +3686,15 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
         )
         second_worker = "\n".join(
             (
-                "import json, sys",
+                "import json, sys, time",
                 "from pathlib import Path",
                 "from wom_kit.project_update_transaction import ProjectUpdateReservation, ProjectUpdateTransaction",
                 "reservation = ProjectUpdateReservation.from_document(json.loads(sys.argv[2]))",
+                "Path(sys.argv[3]).write_bytes(b'waiting')",
+                "started = time.monotonic()",
                 "result = ProjectUpdateTransaction.reserve_or_resume_exact(Path(sys.argv[1]), reservation=reservation)",
                 "assert result.reservation.sha256 == reservation.sha256",
+                "assert time.monotonic() - started > 8.0",
             )
         )
         environment = dict(os.environ)
@@ -3709,6 +3713,7 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
         )
         ready = self.project.parent / "reservation-first-ready"
         release = self.project.parent / "reservation-first-release"
+        waiting = self.project.parent / "reservation-second-waiting"
         first = subprocess.Popen(
             [
                 sys.executable,
@@ -3736,14 +3741,21 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
                 threading.Event().wait(0.02)
             self.assertTrue(ready.is_file())
             second = subprocess.Popen(
-                [sys.executable, "-B", "-c", second_worker, str(project), document],
+                [sys.executable, "-B", "-c", second_worker, str(project), document, str(waiting)],
                 cwd=KIT_ROOT,
                 env=environment,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
             )
-            threading.Event().wait(0.25)
+            for _attempt in range(1000):
+                if waiting.exists() or second.poll() is not None:
+                    break
+                threading.Event().wait(0.02)
+            self.assertTrue(waiting.is_file())
+            # A real holder remains active beyond the historical eight-second
+            # deadline. Both processes must converge; failure is not retried.
+            threading.Event().wait(8.25)
             self.assertIsNone(second.poll(), "second process did not wait on the guard")
             root = (
                 project
@@ -3772,6 +3784,91 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             tuple(sorted(item.name for item in reopened.transaction_root.iterdir())),
             ("append.guard", "marker.json"),
         )
+
+    def test_reservation_timeout_is_busy_without_writes_and_keeps_reporter_live(self) -> None:
+        parent = self.project / "reservation-guard-parent"
+        parent.mkdir()
+        before = os.lstat(parent)
+        acquired, release = threading.Event(), threading.Event()
+        failures = []
+
+        def holder():
+            try:
+                with transaction_module._reservation_materialization_guard(parent, self.DEFAULT_TRANSACTION_REF):
+                    acquired.set()
+                    release.wait(10)
+            except BaseException as exc:
+                failures.append(type(exc).__name__)
+
+        thread = threading.Thread(target=holder)
+        thread.start()
+        events = []
+
+        class ProgressStream:
+            def write(self, text):
+                events.append((time.monotonic(), text))
+            def flush(self):
+                pass
+
+        try:
+            self.assertTrue(acquired.wait(5))
+            with patch.object(sys, "stderr", ProgressStream()):
+                reporter = archive_cli.CommandProgressReporter(
+                    True, label="reservation", heartbeat_interval_seconds=0.05,
+                    detail="verbose",
+                )
+                try:
+                    reporter.progress("reservation-guard", "start", None, None)
+                    started = time.monotonic()
+                    with patch.object(transaction_module, "_RESERVATION_GUARD_WAIT_SECONDS", 0.3):
+                        with self.assertRaisesRegex(ProjectUpdateTransactionError, "^project_update_transaction_reservation_busy$"):
+                            with transaction_module._reservation_materialization_guard(parent, self.DEFAULT_TRANSACTION_REF):
+                                self.fail("contender acquired a live holder's mutex")
+                    ended = time.monotonic()
+                finally:
+                    reporter.close()
+            self.assertTrue(any(started < at < ended and "[reservation]" in text for at, text in events))
+            self.assertEqual(list(parent.iterdir()), [])
+            after = os.lstat(parent)
+            self.assertEqual((before.st_dev, before.st_ino, before.st_mtime_ns), (after.st_dev, after.st_ino, after.st_mtime_ns))
+            self.assertTrue(thread.is_alive())
+        finally:
+            release.set()
+            thread.join(timeout=5)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(failures, [])
+
+    @unittest.skipUnless(os.name == "nt", "Windows wait outcome classification")
+    def test_failed_reservation_wait_is_unavailable_not_busy_or_drift(self) -> None:
+        import ctypes
+
+        parent = self.project / "failed-reservation-wait"
+        parent.mkdir()
+        real_loader = ctypes.WinDLL
+        failed_waits = []
+
+        class FailedWait:
+            def __call__(self, _handle, milliseconds):
+                failed_waits.append(milliseconds)
+                return 0xFFFFFFFF  # WAIT_FAILED
+
+        class KernelProxy:
+            def __init__(self, library):
+                self.library = library
+                self.WaitForSingleObject = FailedWait()
+            def __getattr__(self, name):
+                return getattr(self.library, name)
+
+        def loader(name, *args, **kwargs):
+            library = real_loader(name, *args, **kwargs)
+            return KernelProxy(library) if str(name).lower() == "kernel32" else library
+
+        with patch.object(ctypes, "WinDLL", side_effect=loader):
+            with self.assertRaisesRegex(ProjectUpdateTransactionError, "^project_update_transaction_reservation_guard_unavailable$"):
+                with transaction_module._reservation_materialization_guard(parent, self.DEFAULT_TRANSACTION_REF):
+                    self.fail("failed wait granted reservation authority")
+        self.assertEqual(failed_waits, [30_000])
+        self.assertEqual(list(parent.iterdir()), [])
 
     def test_reserve_or_resume_exact_blocks_nonexact_prefixes_without_deleting(
         self,
@@ -3878,7 +3975,7 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
         )
         self.assertEqual(marker.read_bytes(), original_marker)
 
-    def test_reserve_or_resume_exact_rejects_hardlink_and_reparse_marker(self) -> None:
+    def _reservation_marker_fixture(self):
         reservation = ProjectUpdateTransaction.prepare_reservation(
             project_identity_sha256=digest("linked-project"),
             requested_target_tag="v0.4.19",
@@ -3890,6 +3987,10 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             self.project, reservation=reservation
         )
         marker = reserved.transaction_root / "marker.json"
+        return reservation, marker
+
+    def test_reserve_or_resume_exact_rejects_hardlinked_marker(self) -> None:
+        reservation, marker = self._reservation_marker_fixture()
         outside = self.project / "linked-marker-copy"
         outside.write_bytes(marker.read_bytes())
         marker.unlink()
@@ -3903,10 +4004,28 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
         self.assertTrue(marker.exists())
         self.assertTrue(outside.exists())
 
+    def test_reserve_or_resume_exact_rejects_real_symlink_marker(self) -> None:
+        reservation, marker = self._reservation_marker_fixture()
+        original = marker.read_bytes()
+        outside = self.project / "symlink-marker-source"
+        outside.write_bytes(original)
         marker.unlink()
-        marker.write_bytes(
-            canonical_json_bytes(reservation.document()) + b"\n"
+        try:
+            os.symlink(outside, marker)
+        except OSError:
+            self.skipTest("host does not permit synthetic symlink creation")
+        self.assert_code(
+            "project_update_transaction_reservation_state_changed",
+            lambda: ProjectUpdateTransaction.reserve_or_resume_exact(
+                self.project, reservation=reservation
+            ),
         )
+        self.assertTrue(marker.is_symlink())
+        self.assertEqual(outside.read_bytes(), original)
+
+    @unittest.skipUnless(os.name == "nt", "Windows reparse attributes")
+    def test_reserve_or_resume_exact_rejects_windows_reparse_marker(self) -> None:
+        reservation, marker = self._reservation_marker_fixture()
         original_lstat = Path.lstat
 
         def report_marker_reparse(path: Path):

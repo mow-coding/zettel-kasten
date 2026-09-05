@@ -53,6 +53,19 @@ COMPOUND_APPROVAL_REASON_CODE = (
     "compound_exact_human_approval_binding_required"
 )
 
+# These parsers retain --approve for syntax compatibility, but no writer
+# exists. Do not describe them as compound-approval migrations or enable a
+# write merely because the parser accepts its forward-compatible option.
+OPERATION_CANCEL_UNSUPPORTED_REASON_CODE = "operation_cancel_not_supported"
+UNSUPPORTED_APPROVAL_COMMAND_REASONS = {
+    "operation-control": OPERATION_CANCEL_UNSUPPORTED_REASON_CODE,
+}
+OPERATION_CANCEL_UNSUPPORTED_HELP = (
+    "Writer unavailable: cancel is unsupported and no cancel request is "
+    "written. Use status, wait, or recovery-plan with --dry-run; those "
+    "read-only actions remain available."
+)
+
 # One content-free source of truth for public approval surfaces that remain
 # deliberately closed.  CLI help, capability inventory, and read-only planners
 # must consume this registry instead of maintaining independent claims.
@@ -420,7 +433,8 @@ def build_command_status_inventory(
     canonical space-delimited command path.  Alias names never decide the
     approval classification.  A parser without ``--approve`` is always
     ``approval_not_exposed``, even if its name was supplied accidentally in
-    ``fixed_closed_commands``.
+    ``fixed_closed_commands``. Explicit unsupported-writer contracts retain
+    their own reason rather than inheriting a compound-approval diagnosis.
     """
 
     if not isinstance(parser, argparse.ArgumentParser):
@@ -465,6 +479,11 @@ def build_command_status_inventory(
                     if not approval_exposed:
                         approval_status = APPROVAL_NOT_EXPOSED
                         approval_reason_code = None
+                    elif canonical_path_text in UNSUPPORTED_APPROVAL_COMMAND_REASONS:
+                        approval_status = APPROVAL_FIXED_CLOSED
+                        approval_reason_code = UNSUPPORTED_APPROVAL_COMMAND_REASONS[
+                            canonical_path_text
+                        ]
                     elif matching_fixed_closed:
                         approval_status = APPROVAL_FIXED_CLOSED
                         approval_reason_code = COMPOUND_APPROVAL_REASON_CODE
@@ -774,7 +793,11 @@ def _validated_inventory_commands(inventory: Mapping[str, Any]) -> tuple[dict[st
                 raise ValueError("command_status_inventory_invalid")
         elif approval_status == APPROVAL_FIXED_CLOSED:
             if (
-                approval_reason_code != COMPOUND_APPROVAL_REASON_CODE
+                type(approval_reason_code) is not str
+                or approval_reason_code not in {
+                    COMPOUND_APPROVAL_REASON_CODE,
+                    UNSUPPORTED_APPROVAL_COMMAND_REASONS.get(canonical_path),
+                }
                 or approval_scope is not None
             ):
                 raise ValueError("command_status_inventory_invalid")

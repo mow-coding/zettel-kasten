@@ -150,6 +150,7 @@ PUBLIC_FAILURE_CODES = frozenset(
         "project_update_legacy_recovery_binding_invalid",
         "project_update_legacy_recovery_key_invalid",
         "project_update_legacy_recovery_path_unsafe",
+        "project_update_legacy_recovery_platform_unsupported",
         "project_update_legacy_recovery_state_changed",
         "project_update_legacy_recovery_state_ambiguous",
         "project_update_legacy_recovery_authentication_invalid",
@@ -6130,8 +6131,10 @@ def _move_exact_regular_no_replace(
 ) -> None:
     """Rename one exact retained Windows file without replacing any name."""
 
-    if os.name != "nt" or type(expected_raw) is not bytes:
+    if type(expected_raw) is not bytes:
         raise _fail("project_update_legacy_recovery_path_unsafe")
+    if os.name != "nt":
+        raise _fail("project_update_legacy_recovery_platform_unsupported")
     source = Path(os.path.abspath(str(source)))
     destination = Path(os.path.abspath(str(destination)))
     if source == destination or os.path.lexists(destination):
@@ -6681,6 +6684,10 @@ def delete_exact_inventory_tree(
     by_logical, root_identity, _total = _validated_tree_inventory(inventory)
     if not os.path.lexists(path):
         return "already_absent"
+    if os.name != "nt":
+        # A descriptor-relative unlink still cannot compare-and-delete the
+        # exact inode. Preserve every entry until the bound primitive exists.
+        raise _fail("project_update_legacy_recovery_platform_unsupported")
     path = Path(os.path.abspath(str(path)))
     root_info = _safe_directory(path)
     if (int(root_info.st_dev), int(root_info.st_ino)) != root_identity:

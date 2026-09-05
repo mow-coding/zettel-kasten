@@ -39,6 +39,15 @@ class _MemoryOnlyApprovalKey:
             key[:] = b"\0" * len(key)
 
 
+# The installed-only driver is stdlib-only until this observer is constructed.
+# Reuse its exact privacy/forwarding contract instead of maintaining two copies.
+import importlib.util
+_observation_spec = importlib.util.spec_from_file_location(
+    "wom_runtime_journey_observation", TESTS_ROOT.parent / "tools" / "check_project_runtime_wheel_journey.py")
+_observation_module = importlib.util.module_from_spec(_observation_spec)
+_observation_spec.loader.exec_module(_observation_module)
+_FirstUpdateObservation = _observation_module.FirstUpdateObservation
+
 @unittest.skipUnless(WINDOWS_RUNTIME, "Real Windows CPython 3.12 runtime")
 class UpdateNoopJourneyTests(unittest.TestCase):
     def test_update_then_real_noop_and_failed_revalidation(self):
@@ -75,16 +84,40 @@ class UpdateNoopJourneyTests(unittest.TestCase):
                     exact_human_approval_workflow, "_production_key_provider",
                     return_value=_MemoryOnlyApprovalKey(),
                 ))
+                observation = _FirstUpdateObservation()
+                first_failed = False
                 with mock.patch.object(
                     project_runtime, "_download_exact_artifact",
                     side_effect=artifacts["download"],
                 ), mock.patch.object(
                     exact_human_approval_windows._CtypesTaskDialogNative, "show",
                     return_value=(exact_human_approval_windows.APPROVE_BUTTON_ID, False),
-                ) as native_decision:
-                    first_code, first_stdout, first_stderr = helper.run_cli_split(approved)
-                self.assertEqual(first_code, 0, first_stdout + first_stderr)
-                first = json.loads(first_stdout)
+                ) as native_decision, mock.patch.object(
+                    project_runtime, "prepare_runtime_candidate",
+                    new=observation.boundary("runtime_prepare", project_runtime.prepare_runtime_candidate),
+                ), mock.patch.object(
+                    archive_cli, "_execute_project_version_update_exact_human_approved_write",
+                    new=observation.boundary("approval_broker", archive_cli._execute_project_version_update_exact_human_approved_write),
+                ), mock.patch.object(
+                    archive_cli, "_project_version_update_privacy_safe_failure_result",
+                    new=observation.failure_projector(archive_cli._project_version_update_privacy_safe_failure_result),
+                ), observation.live_components(), observation.runtime_boundaries():
+                    try:
+                        first_code, first_stdout, first_stderr = helper.run_cli_split(approved)
+                    except Exception as error:
+                        observation.record("first_cli_call", error)
+                        first_failed = True
+                # Exit observers before formatting: their exact final snapshots
+                # are captured on exit, including exception paths.
+                if first_failed:
+                    raise AssertionError(observation.diagnostic(native_observed=native_decision.called)) from None
+                try:
+                    first = json.loads(first_stdout)
+                except (TypeError, ValueError):
+                    first = None
+                self.assertEqual(first_code, 0, observation.diagnostic(native_observed=native_decision.called,
+                                                                       cli_code=first_code, cli_result=first))
+                self.assertIs(type(first), dict, "project_update_response_invalid")
                 self.assertEqual(first["status"], "updated_restart_required", first)
                 native_decision.assert_called_once()
                 self.assertTrue(first["terminal_finalization"]["transaction_cleanup_completed"])
@@ -195,8 +228,9 @@ class UpdateNoopJourneyTests(unittest.TestCase):
                         module.write_bytes(original_module + b"# post-proof mutation\n")
                     return observation
 
+                drift_observation = _FirstUpdateObservation()
                 try:
-                    with mock.patch.object(
+                    with drift_observation.live_components(), drift_observation.runtime_boundaries(), mock.patch.object(
                         project_runtime, "verify_existing_runtime_for_noop",
                         side_effect=change_after_first_proof,
                     ), mock.patch.object(
@@ -208,7 +242,13 @@ class UpdateNoopJourneyTests(unittest.TestCase):
                     ):
                         drift_code, drift_stdout, drift_stderr = helper.run_cli_split(approved)
                     self.assertNotEqual(drift_code, 0, drift_stdout + drift_stderr)
-                    self.assertIn("project_version_update_state_changed_during_runtime_preparation", drift_stdout + drift_stderr)
+                    try:
+                        drift_result = json.loads(drift_stdout)
+                    except (TypeError, ValueError):
+                        drift_result = None
+                    self.assertIn("project_version_update_state_changed_during_runtime_preparation", drift_stdout + drift_stderr,
+                                  drift_observation.diagnostic(native_observed=False, cli_code=drift_code,
+                                                               cli_result=drift_result))
                     self.assert_no_active_update(fixture)
                 finally:
                     module.write_bytes(original_module)

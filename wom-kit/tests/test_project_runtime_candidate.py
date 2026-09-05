@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import dataclasses
 import hashlib
+import importlib.util
 import inspect
 import json
 import os
@@ -17,6 +18,7 @@ import unittest
 import urllib.request
 from collections.abc import Callable
 from contextlib import ExitStack, contextmanager
+from functools import wraps
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -46,6 +48,100 @@ WINDOWS_RUNTIME = (
     and sys.version_info[:2] == (3, 12)
     and platform.machine().casefold() in {"amd64", "x86_64"}
 )
+
+
+@contextmanager
+def _expect_exact_runtime_fault(expected_code: str):
+    """Keep unexpected preflight failures' original traceback for diagnosis."""
+    try:
+        yield
+    except project_runtime.ProjectRuntimeError as error:
+        if error.args != (expected_code,):
+            raise
+    else:
+        raise AssertionError("The exact injected runtime fault was not raised.")
+
+
+_CANDIDATE_REUSE_REASONS = frozenset({
+    "project_runtime_existing_missing",
+    "project_runtime_existing_observation_unavailable",
+    "project_runtime_existing_unsafe",
+    "project_runtime_existing_install_incomplete",
+    "project_runtime_existing_receipt_missing",
+    "project_runtime_existing_receipt_invalid",
+    "project_runtime_existing_receipt_mismatch",
+    "project_runtime_existing_supply_mismatch",
+    "project_runtime_existing_integrity_mismatch",
+    "project_runtime_existing_artifact_mismatch",
+    "project_runtime_existing_payload_mismatch",
+    "project_runtime_existing_verified",
+})
+
+
+class _CandidateReuseObservation:
+    """Failure-only projection of the second preparation's original comparison.
+
+    The installed-journey observer supplies the same bounded runtime evidence.
+    No comparison is repeated and no paths, source values or exception text are
+    retained. Unknown results remain unclassified, never evidence of repair.
+    """
+
+    def __init__(self):
+        self.observation = {"state": "unclassified", "reason_code": "unclassified", "matches": None}
+        self.runtime_observation = None
+        self.stack = ExitStack()
+
+    def __enter__(self):
+        # Load before preparation; the observed call performs no loader I/O.
+        spec = importlib.util.spec_from_file_location(
+            "wom_candidate_reuse_observation_driver",
+            KIT_ROOT / "tools" / "check_project_runtime_wheel_journey.py",
+        )
+        driver = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(driver)
+        original = project_runtime._existing_runtime_candidate_observation
+        owner_thread = threading.get_ident()
+
+        @wraps(original)
+        def observed(*args, **kwargs):
+            if threading.get_ident() != owner_thread:
+                return original(*args, **kwargs)
+            self.observation = {"state": "unclassified", "reason_code": "unclassified", "matches": None}
+            self.runtime_observation = None
+            boundary = driver.RuntimeBoundaryObservation(project_runtime)
+            try:
+                with boundary:
+                    result = original(*args, **kwargs)
+            finally:
+                try:
+                    self.runtime_observation = boundary.snapshot()
+                except Exception:
+                    pass  # Diagnosis must not replace the original exception.
+            if type(result) is dict:
+                state, reason, matches = result.get("state"), result.get("reason_code"), result.get("matches")
+                self.observation = {
+                    "state": state if type(state) is str and state in {"passed", "failed", "unavailable"} else "unclassified",
+                    "reason_code": reason if type(reason) is str and reason in _CANDIDATE_REUSE_REASONS else "unclassified",
+                    "matches": matches if type(matches) is bool else None,
+                }
+            return result
+
+        self.stack.enter_context(patch.object(project_runtime, "_existing_runtime_candidate_observation", observed))
+        return self
+
+    def __exit__(self, *exception_info):
+        return self.stack.__exit__(*exception_info)
+
+    def failure_message(self, candidate):
+        reusable = candidate.existing_runtime_reusable
+        repair = candidate.existing_runtime_repair_required
+        return json.dumps({
+            "schema": "wom-kit/test-candidate-reuse-observation/v1",
+            "observation": self.observation,
+            "existing_runtime_reusable": reusable if type(reusable) is bool else None,
+            "existing_runtime_repair_required": repair if type(repair) is bool else None,
+            "runtime_observation": self.runtime_observation,
+        }, sort_keys=True)
 
 
 class CompleteRuntimeCandidateTests(unittest.TestCase):
@@ -3712,12 +3808,17 @@ class CompleteRuntimeCandidateTests(unittest.TestCase):
 
             # A second preapproval build is the sealed reference candidate for
             # reuse.  The postapproval reuse decision remains static-only.
-            reused_candidate, reused_bootstrap, reused_supply = self._prepare(
-                root,
-                project,
-                "txn-candidate-002",
+            with _CandidateReuseObservation() as reuse_observation:
+                reused_candidate, reused_bootstrap, reused_supply = self._prepare(
+                    root,
+                    project,
+                    "txn-candidate-002",
+                )
+            self.assertTrue(
+                reused_candidate.existing_runtime_reusable,
+                reuse_observation.failure_message(reused_candidate)
+                if not reused_candidate.existing_runtime_reusable else None,
             )
-            self.assertTrue(reused_candidate.existing_runtime_reusable)
             with (
                 patch.object(
                     subprocess,
@@ -3865,10 +3966,7 @@ class CompleteRuntimeCandidateTests(unittest.TestCase):
                 "_atomic_promote_directory_no_replace",
                 side_effect=fail_second_move,
             ):
-                with self.assertRaisesRegex(
-                    project_runtime.ProjectRuntimeError,
-                    "project_runtime_repair_promotion_rolled_back",
-                ):
+                with _expect_exact_runtime_fault("project_runtime_repair_promotion_rolled_back"):
                     project_runtime.promote_runtime_candidate(
                         project,
                         target="v0.4.3",

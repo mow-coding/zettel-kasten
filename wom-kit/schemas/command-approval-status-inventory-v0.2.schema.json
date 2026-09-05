@@ -251,6 +251,7 @@
         "approval_reason_code": {
           "oneOf": [
             {"const": "compound_exact_human_approval_binding_required"},
+            {"const": "operation_cancel_not_supported"},
             {"type": "null"}
           ]
         },
@@ -276,6 +277,19 @@
                 "approval_reason_code": {
                   "const": "compound_exact_human_approval_binding_required"
                 },
+                "approval_scope": {"type": "null"}
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/commandBase"},
+            {
+              "properties": {
+                "canonical_path": {"const": "operation-control"},
+                "approval_status": {"const": "approval_fixed_closed"},
+                "approval_reason_code": {"const": "operation_cancel_not_supported"},
                 "approval_scope": {"type": "null"}
               }
             }

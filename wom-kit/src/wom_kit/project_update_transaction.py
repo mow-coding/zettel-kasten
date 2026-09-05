@@ -129,7 +129,7 @@ MAX_CLAIM_EVIDENCE_ITEMS = 16
 MAX_RUNTIME_CANDIDATE_ENTRIES = 500_000
 MAX_RUNTIME_CANDIDATE_FILE_BYTES = 2 * 1024 * 1024 * 1024
 MAX_TERMINAL_CLEANUP_SCAN_ENTRIES = 256
-_RESERVATION_GUARD_WAIT_SECONDS = 8.0
+_RESERVATION_GUARD_WAIT_SECONDS = 30.0
 MAX_TRANSACTION_DESCENDANT_SCAN_ENTRIES = (
     MAX_RUNTIME_CANDIDATE_ENTRIES
     + MAX_PRIVATE_BLOBS
@@ -228,6 +228,8 @@ class ProjectUpdateTransactionError(RuntimeError):
             "project_update_transaction_candidate_invalid",
             "project_update_transaction_scan_incomplete",
             "project_update_transaction_reservation_state_changed",
+            "project_update_transaction_reservation_busy",
+            "project_update_transaction_reservation_guard_unavailable",
         }
     )
 
@@ -4000,8 +4002,9 @@ def _reservation_materialization_guard(
                 descriptor = binding.descriptor
                 if not isinstance(descriptor, int):
                     raise OSError("reservation directory binding missing")
-                # Stay below the ten-second progress heartbeat contract while
-                # leaving enough scheduler headroom for a loaded CI host.
+                # Contention is not evidence of changed reservation bytes.
+                # The caller's independent reporter remains live while these
+                # nonblocking probes sleep; never steal an active OS lock.
                 deadline = time.monotonic() + _RESERVATION_GUARD_WAIT_SECONDS
                 while True:
                     try:
@@ -4011,7 +4014,7 @@ def _reservation_materialization_guard(
                         if error.errno not in (errno.EACCES, errno.EAGAIN):
                             raise
                         if time.monotonic() >= deadline:
-                            raise _reservation_prefix_error() from None
+                            raise _fail("project_update_transaction_reservation_busy") from None
                         time.sleep(0.02)
                 try:
                     yield binding
@@ -4058,8 +4061,10 @@ def _reservation_materialization_guard(
                 result = int(
                     wait(mutex, int(_RESERVATION_GUARD_WAIT_SECONDS * 1000))
                 )
+                if result == 0x00000102:  # WAIT_TIMEOUT, not identity drift.
+                    raise _fail("project_update_transaction_reservation_busy")
                 if result not in (0x00000000, 0x00000080):
-                    raise _reservation_prefix_error()
+                    raise _fail("project_update_transaction_reservation_guard_unavailable")
                 acquired = True
                 yield binding
                 _assert_named_reservation_directory_identity(parent, binding.identity)

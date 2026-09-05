@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from wom_kit import project_update_legacy_recovery as recovery
@@ -130,17 +131,9 @@ class ProjectUpdateLegacyRecoveryPrimitiveTests(unittest.TestCase):
                 first = store.write_fresh_approval_seed(seed)
                 second = store.write_fresh_approval_seed(seed)
                 self.assertEqual(first, second)
-                intent_sha = store.initialize(self.intent(ref, first))
-                self.assertRegex(intent_sha, r"^sha256:[0-9a-f]{64}$")
                 self.assertEqual(
                     store.read_fresh_approval_seed()["reviewer"], raw_reviewer
                 )
-                public_control = (
-                    (store.paths.recovery_root / "intent.json").read_bytes()
-                    + store.paths.locator_path.read_bytes()
-                )
-                self.assertNotIn(raw_reviewer.encode("ascii"), public_control)
-                self.assertNotIn("reviewer", store.read_intent()[0])
                 changed = dict(seed)
                 changed["reviewer"] = "different private reviewer"
                 with self.assertRaisesRegex(
@@ -148,6 +141,21 @@ class ProjectUpdateLegacyRecoveryPrimitiveTests(unittest.TestCase):
                     "project_update_legacy_recovery_state_changed",
                 ):
                     store.write_fresh_approval_seed(changed)
+
+    @unittest.skipUnless(os.name == "nt", "exact locator publication is Windows-only")
+    def test_initialized_locator_preserves_seed_privacy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self.project(Path(tmp))
+            ref = "recovery_" + "0" * 32
+            with recovery.LegacyRecoveryStore(project, ref, self.key) as store:
+                intent_sha = self.initialize(store, ref)
+                self.assertRegex(intent_sha, r"^sha256:[0-9a-f]{64}$")
+                public_control = (
+                    (store.paths.recovery_root / "intent.json").read_bytes()
+                    + store.paths.locator_path.read_bytes()
+                )
+                self.assertNotIn(b"private human reviewer", public_control)
+                self.assertNotIn("reviewer", store.read_intent()[0])
 
     def test_seed_and_allocation_reject_missing_extra_and_cross_binding(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -207,8 +215,6 @@ class ProjectUpdateLegacyRecoveryPrimitiveTests(unittest.TestCase):
                 self.assertEqual(
                     store.read_fresh_approval_seed()["recovery_ref"], ref
                 )
-                store.initialize(self.intent(ref, seed_sha))
-
                 prepared = (
                     project_update_transaction.ProjectUpdateTransaction.prepare_reservation(
                         project_identity_sha256="sha256:" + "7" * 64,
@@ -249,6 +255,7 @@ class ProjectUpdateLegacyRecoveryPrimitiveTests(unittest.TestCase):
         ):
             recovery.verify_authenticated_document(tampered, self.key)
 
+    @unittest.skipUnless(os.name == "nt", "exact locator publication is Windows-only")
     def test_store_is_create_only_hash_chained_and_content_free(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project = self.project(Path(tmp))
@@ -305,6 +312,7 @@ class ProjectUpdateLegacyRecoveryPrimitiveTests(unittest.TestCase):
                 serialized = b"".join(lines) + store.paths.locator_path.read_bytes()
                 self.assertNotIn(str(project).encode(), serialized)
 
+    @unittest.skipUnless(os.name == "nt", "exact locator publication is Windows-only")
     def test_locator_compare_and_swap_refuses_stale_writer(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project = self.project(Path(tmp))
@@ -322,6 +330,7 @@ class ProjectUpdateLegacyRecoveryPrimitiveTests(unittest.TestCase):
                         previous_locator_sha256="sha256:" + "c" * 64,
                     )
 
+    @unittest.skipUnless(os.name == "nt", "exact locator publication is Windows-only")
     def test_locator_transition_crash_resumes_without_zero_or_two_active_names(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project = self.project(Path(tmp))
@@ -427,6 +436,7 @@ class ProjectUpdateLegacyRecoveryPrimitiveTests(unittest.TestCase):
                 self.assertEqual(store.paths.locator_path.read_bytes(), outsider)
                 self.assertTrue(displaced.exists())
 
+    @unittest.skipUnless(os.name == "nt", "exact locator publication is Windows-only")
     def test_locator_first_initialize_resumes_every_durable_boundary(self) -> None:
         class Provider:
             def __init__(self, key: bytes) -> None:
@@ -566,6 +576,7 @@ class ProjectUpdateLegacyRecoveryPrimitiveTests(unittest.TestCase):
                 "present_unverified",
             )
 
+    @unittest.skipUnless(os.name == "nt", "retained cancellation cleanup is Windows-only")
     def test_deny_or_ui_unavailable_restores_old_only_after_claim_absence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project = self.project(Path(tmp))
@@ -685,7 +696,7 @@ class ProjectUpdateLegacyRecoveryPrimitiveTests(unittest.TestCase):
             self.assertFalse(target.exists())
             self.assertNotIn("private-path", str(caught.exception))
 
-    def test_directory_inventory_progresses_for_directories_and_exact_delete(self) -> None:
+    def test_directory_inventory_progresses_for_directories(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project = self.project(Path(tmp))
             tree = project / ".zettel-kasten" / "private" / "tree"
@@ -707,11 +718,45 @@ class ProjectUpdateLegacyRecoveryPrimitiveTests(unittest.TestCase):
             self.assertTrue(
                 recovery.directory_tree_matches_inventory(tree, inventory)
             )
-            self.assertEqual(
-                recovery.delete_exact_inventory_tree(tree, inventory),
-                "deleted_exact",
-            )
+
+    @unittest.skipUnless(os.name == "nt", "retained exact deletion is Windows-only")
+    def test_exact_delete_removes_only_the_observed_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = self.project(Path(tmp)) / "tree"
+            (tree / "nested").mkdir(parents=True)
+            (tree / "nested" / "value").write_bytes(b"value")
+            inventory = recovery.directory_tree_inventory(tree)
+            self.assertEqual(recovery.delete_exact_inventory_tree(tree, inventory), "deleted_exact")
             self.assertFalse(tree.exists())
+
+    def test_posix_exact_mutation_is_explicitly_unsupported_without_effects(self) -> None:
+        # This selects the portable branch on Windows too, but does not mock
+        # file reads, inventory, hashes, identities, or filesystem mutations.
+        posix = SimpleNamespace(**(vars(os) | {"name": "posix"}))
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self.project(Path(tmp))
+            tree = project / "tree"
+            (tree / "nested").mkdir(parents=True)
+            source = tree / "nested" / "value"
+            source.write_bytes(b"approved bytes")
+            destination = tree / "destination"
+            inventory = recovery.directory_tree_inventory(tree)
+            before = recovery.sha256_document(inventory)
+            with patch.object(recovery, "os", posix):
+                for action in (
+                    lambda: recovery._move_exact_regular_no_replace(project, source, destination, b"approved bytes"),
+                    lambda: recovery.delete_exact_inventory_tree(tree, inventory),
+                ):
+                    with self.assertRaisesRegex(recovery.LegacyProjectUpdateRecoveryError, "^project_update_legacy_recovery_platform_unsupported$"):
+                        action()
+                self.assertEqual(recovery.delete_exact_inventory_tree(project / "absent", inventory), "already_absent")
+                with self.assertRaisesRegex(recovery.LegacyProjectUpdateRecoveryError, "binding_invalid"):
+                    recovery.delete_exact_inventory_tree(tree, {})
+                with self.assertRaisesRegex(recovery.LegacyProjectUpdateRecoveryError, "path_unsafe"):
+                    recovery._move_exact_regular_no_replace(project, source, destination, "not bytes")
+            self.assertFalse(destination.exists())
+            self.assertEqual(source.read_bytes(), b"approved bytes")
+            self.assertEqual(recovery.sha256_document(recovery.directory_tree_inventory(tree)), before)
 
     def test_process_guard_requires_terminal_first_and_serializes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -952,6 +997,7 @@ class ProjectUpdateLegacyRecoveryPrimitiveTests(unittest.TestCase):
                     "deleted_exact",
                 )
 
+    @unittest.skipUnless(os.name == "nt", "exact locator publication is Windows-only")
     def test_fresh_inventory_prepared_prefix_resumes_at_every_publish_boundary(
         self,
     ) -> None:
@@ -1118,6 +1164,7 @@ class ProjectUpdateLegacyRecoveryPrimitiveTests(unittest.TestCase):
                 recovery.sha256_document(inventory),
             )
 
+    @unittest.skipUnless(os.name == "nt", "exact locator publication is Windows-only")
     def test_checkpoint_chain_rejects_authenticated_invalid_grammar(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project = self.project(Path(tmp))
@@ -1214,6 +1261,7 @@ class ProjectUpdateLegacyRecoveryPrimitiveTests(unittest.TestCase):
             ):
                 recovery._checkpoint_chain_state(checkpoints(phases))
 
+    @unittest.skipUnless(os.name == "nt", "exact locator publication is Windows-only")
     def test_cancellation_documents_reopen_each_durable_prefix_and_rebuild_receipt(
         self,
     ) -> None:
@@ -2201,6 +2249,7 @@ class ProjectUpdateLegacyRecoveryPrimitiveTests(unittest.TestCase):
                 )
             self.assertEqual(unused.calls, 0)
 
+    @unittest.skipUnless(os.name == "nt", "exact locator publication is Windows-only")
     def test_terminal_locator_publish_and_retire_is_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project = self.project(Path(tmp))
@@ -2284,6 +2333,7 @@ class ProjectUpdateLegacyRecoveryPrimitiveTests(unittest.TestCase):
                     Provider(),
                 )
 
+    @unittest.skipUnless(os.name == "nt", "exact locator publication is Windows-only")
     def test_resolver_reconciles_exactly_one_forward_checkpoint(self) -> None:
         class Provider:
             def __init__(self, key: bytes) -> None:

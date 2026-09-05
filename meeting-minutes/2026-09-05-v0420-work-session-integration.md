@@ -1440,6 +1440,50 @@ bump, PR, tag, wheel or client application has occurred.
   spelling without changing the naming gate. Python 3.10 runtime and the entire
   v0.4.20 platform CI remain unrun; checkpoint commits are not release candidates.
 
+## Integration of the final v0.4.19 main
+
+- Preserved the reviewed source checkpoint as `2c15c61a` and pushed it before
+  bringing exact v0.4.19 main `591bb3ce` into this unfinished branch. No legacy
+  evidence or unfinished worktree was discarded. The one conflicting file was
+  the common Git writer: main's source/context-binding corrections were already
+  present in the scoped composition. Resolution preserves the v2 scope decoder,
+  deep-freeze checks, exact context comparison, legacy admission and shared held
+  runner; the resolved writer is byte-identical to the reviewed checkpoint.
+- Independent read review found no semantic conflict in the automatic CLI,
+  service and availability merges. The added unsupported-mode diagnosis applies
+  only to operation cancellation, not session writes; scoped Git and session
+  mode predicates and runtime guards remain. Combined post-merge regressions
+  are running separately; successful text merging is not their substitute.
+- A read-only map of the ten common-exact command paths selects the existing
+  source-intake batch as the next representative writer seam. It already has
+  authenticated common completion and whole output-receipt targets. Its intake
+  receipts/capture request are not captured source bytes or canonical documents.
+  Other writers' unsigned legacy receipts must not be retroactively signed;
+  field-local title/property proofs do not authorize whole-file Git selection.
+  Reuse the concrete held runner and existing broker with a digest-bound current
+  actor/route/claim scope, rather than treating a binding sidecar as authority.
+  Full writer coverage remains unfinished.
+- The preceding Git interruption gap is a real cut between retained pending
+  context and authenticated claim publication. Explicit native original review
+  must reuse the saved context/manifest/reviewer, keep pending actor bytes
+  unchanged, and refuse corrupt/ambiguous claims rather than calling them absent.
+  Existing authenticated claims always follow original resume. Claim absence
+  must survive key-provider entry before publication; the shared authenticated
+  scanner is the preferred seam, not a second signature or inferred approval.
+  This is the next implementation slice, not a claim that the gap is already fixed.
+- Post-merge validation completed: 126 CLI/runtime/availability regressions
+  passed in 69.062 seconds; 32 exact-source/scope/held/legacy Git tests passed
+  in 474.852 seconds. The common Git writer stayed byte-identical to its reviewed
+  checkpoint. Four readiness gates, resource synchronization and diff checks
+  also passed. Actual Python 3.10/Ubuntu execution remains the later full CI gate.
+- The separate v0.4.19 local installation supplement subsequently passed all
+  checks in 1,854.782 seconds, retaining the original failed observation. The
+  exact-merge wheel was tagged/published and independently fetched anonymously;
+  a fresh public-URL installation passed hash/resource/dependency checks and
+  the actual installed bootstrap-origin reader. Detailed release evidence is
+  recorded in that release's separate evidence PR, not as a v0.4.20 release or
+  client-recovery result. No client project was updated.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)

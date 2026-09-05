@@ -109,8 +109,8 @@
     {
       "source": "schemas/command-approval-status-inventory-v0.2.schema.json",
       "packaged": "schemas/command-approval-status-inventory-v0.2.schema.json",
-      "bytes": 9692,
-      "sha256": "f0dafb93f7e5ceb08605fafa0f917a3816abce57591673ddc612adad29a6136a"
+      "bytes": 10195,
+      "sha256": "206892b1ebf1975964b573bd24638e410a25b60c54085bd881407d3b85b8e0a3"
     },
     {
       "source": "schemas/credential-adapter-manifest.schema.json",
@@ -1015,8 +1015,8 @@
     {
       "source": "docs/releases/v0.4.19.md",
       "packaged": "release-notes/v0.4.19.md",
-      "bytes": 10942,
-      "sha256": "7fadc48ca9993ffd016afc66e65463086b2b4dd887e87afd43f89928b4a4becc"
+      "bytes": 12127,
+      "sha256": "8cd35fcaec869ae0bf9eae9f0813653dc97f1cc3314144ee76e487108dcaa1d0"
     }
   ]
 }
