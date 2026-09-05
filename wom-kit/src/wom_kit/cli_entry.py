@@ -48,10 +48,10 @@ zet-revision-receipt-audit zet-title-check zet-title-readiness zet-title-remap-p
 zet-title-remap-receipt-audit zet-title-remap-recover zet-title-remap-recovery-plan
 zet-title-remap-revert zet-title-remap-revert-plan zet-title-remap-revert-recover
 zet-title-remap-revert-recovery-plan zet-title-remap-write zettel-catalog
-zettel-objet-link
+zettel-objet-link work-session
 """.split()
 STARTUP_PROGRESS_DEFAULTS = {
-    command: command in {"doctor", "source-intake-batch", "objet-capture-batch"}
+    command: command in {"doctor", "source-intake-batch", "objet-capture-batch", "work-session"}
     for command in _PROGRESS_COMMANDS
 }
 STARTUP_STATUS = "[wom] startup: preparing command\n"

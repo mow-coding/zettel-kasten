@@ -240,6 +240,66 @@ bump, PR, tag, wheel or client application has occurred.
   Generated artifacts and child records inherit the responsible execution;
   no new human approval is proposed for each automatic diagnostic or index file.
 
+## Public query and invocation-effect integration checkpoint
+
+- After the user's request to continue, development remained split between the
+  v0.4.19 candidate and this unreleased v0.4.20 branch. No client runtime,
+  archive, credential, provider or feedback status was modified.
+- The bounded invocation-effect classifier now distinguishes audited index,
+  scratch/output, operation-journal, explicit input-file and credential reads
+  from approval availability. Unknown coverage has null effects, not an empty
+  read-only claim. Resume/bootstrap intent grants no authority. Independent
+  review found the external `--deferred` input read and that classification was
+  corrected, including final repeated-option semantics and privacy tests.
+- Actual CLI dispatch attaches this shared pure classification before the
+  existing runtime guard. Audited persistent writes now require runtime
+  alignment even without an approval switch. Ordinary reads and historical
+  explicit write/approval/resume guards remain intact. Bootstrap and emergency
+  feedback exceptions are unchanged. Session ownership enforcement, all-command
+  effect coverage and matching MCP writer enforcement are still pending; this
+  integration does not claim to cover every writer.
+- `archive work-session` now exposes read-only list/inspect queries. The shared
+  service projects one complete registry generation, keeps labels and claim
+  tokens private, reports selected and excluded registry counts, and uses the
+  existing snapshot pager. It explicitly does not evaluate legacy artifact
+  attribution. An actual 6,773-session fixture is returned through four pages
+  without truncation or per-row full-registry validation.
+- Independent review caught argparse reflecting invalid private values before
+  the service's safe error boundary. Work-session's default JSON errors are now
+  established before parsing. Invalid action/kind/page-size/format/unknown
+  option, malformed ref/cursor and help behavior have regression coverage.
+  Read-only queries also continue under another held writer lock, and a registry
+  append after capture cannot mix the earlier rows with later summary counts.
+- A separate process runs the public CLI entry module against the real synthetic
+  registry while the parent holds the writer lock; it returns the same generation
+  without changed bytes. This is source-install routing evidence, not a wheel
+  install or full session lifecycle proof. The existing content-free no-console
+  startup reporter is reused for this command and can be disabled explicitly.
+- `archive_work_session` in MCP shares exactly the same query service and cursor
+  semantics. Its strict read-only input rejects lifecycle/approval/native/key
+  injection, respects the existing root allowlist, and never prints outside the
+  JSON-RPC stream. Five real routing/stdio tests and nine subtests passed in
+  19.41 seconds; the full MCP regression suite remains separate.
+- Before adding MCP/startup integration, root's query/effect/dispatch cohort
+  passed 33 tests and 68 subtests in 47.21 seconds. Independent query/privacy
+  and dispatch review passed seven tests and fourteen subtests. The initial
+  dispatch fixture omitted required low-level runtime result fields; only the
+  fixture was corrected, not the production guard. A final combined cohort
+  and readiness checks are pending this checkpoint.
+- That final combined query/MCP/effect/dispatch/startup and existing capability
+  cohort passed 87 tests and 238 subtests in 79.25 seconds. All four readiness
+  gates, synchronization of 169 packaged resources and the whitespace check
+  passed. Final independent read-only MCP/startup review found no additional
+  blocker. Two existing actual MCP initialization/list/error-envelope regression
+  tests also passed in 35.87 seconds, followed by all four readiness gates and
+  resource synchronization. No release or installed-wheel claim follows from
+  these source tests.
+- The next public vertical slice is app registration, human-approved work
+  creation, one CAS claim and fresh-process continuation with private actor
+  context. Lifecycle `--action resume` and original-operation `--resume` must
+  stay distinct. Current query help does not advertise those writers yet;
+  internal decision/process-loss tests are not substituted for public routing.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)

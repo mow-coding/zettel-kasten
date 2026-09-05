@@ -30197,6 +30197,23 @@ def command_principal_register(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def command_work_session(args: argparse.Namespace) -> int:
+    """Read-only public registry routing; no app identity is inferred."""
+    from .work_session_query import WorkSessionQueryError, query_work_sessions
+
+    try:
+        result = query_work_sessions(
+            args.archive_root, action=args.action, kind=args.kind, reference=args.ref,
+            client_app_ref=args.client_app_ref, workstream_ref=args.workstream_ref,
+            page_size=args.page_size, cursor=args.cursor,
+        )
+    except WorkSessionQueryError as error:
+        result = {"ok": False, "schema": "wom-kit/work-session-query/v1",
+                  "reason_code": error.code, "read_only": True, "private_values_echoed": False}
+    print_json(result)
+    return 0 if result.get("ok") else 1
+
+
 def command_principal_list(args: argparse.Namespace) -> int:
     try:
         result = completion_workflows.principal_list(
@@ -46805,6 +46822,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     init.set_defaults(func=command_init)
 
+    work_session = subcommands.add_parser(
+        "work-session", help="Read one complete private work-session registry generation.",
+        description=("List or inspect opaque app, workstream and session references. "
+                     "Private labels and claim tokens are never printed. "
+                     "Lifecycle writes are not yet exposed by this development slice."),
+    )
+    work_session.add_argument("archive_root", help="Archive root.")
+    work_session.add_argument("--action", choices=["list", "inspect"], default="list")
+    work_session.add_argument("--kind", choices=["app", "workstream", "session"], default="session")
+    work_session.add_argument("--ref", help="Opaque reference to inspect.")
+    work_session.add_argument("--client-app-ref", help="Filter listed sessions by their app reference.")
+    work_session.add_argument("--workstream-ref", help="Filter listed sessions by their workstream reference.")
+    work_session.add_argument("--page-size", type=int, default=20, help="Rows per page, from 1 through 2000.")
+    work_session.add_argument("--cursor", help="Continuation cursor from the same generation and query.")
+    work_session.add_argument("--dry-run", action="store_true", help="Optional: this query never writes.")
+    work_session.add_argument("--progress", action=argparse.BooleanOptionalAction, default=True,
+                              help="Content-free startup status on stderr; disable with --no-progress.")
+    work_session.add_argument("--format", choices=["json"], default="json")
+    work_session.set_defaults(func=command_work_session)
+
     _mark_compound_approval_help(parser)
     return parser
 
@@ -46959,10 +46996,24 @@ def _project_write_runtime_guard(
         getattr(args, "resume", False)
         or str(getattr(args, "resume_approval_id", "") or "").strip()
     )
+    invocation_effects = getattr(args, "_wom_invocation_effects", None)
+    audited_write_effect = (
+        type(invocation_effects) is dict
+        and invocation_effects.get("coverage") == "audited"
+        and invocation_effects.get("entry_gate") == "passed"
+        and type(invocation_effects.get("effects")) is list
+        and any(
+            type(effect) is dict and effect.get("kind") in {
+                "generated_index_write", "private_artifact_write", "operational_metadata_write",
+            }
+            for effect in invocation_effects["effects"]
+        )
+    )
     if (
         runtime_effect != "project_write"
         and not bool(getattr(args, "approve", False))
         and not resume_write_effect
+        and not audited_write_effect
     ):
         return None
     candidate_attributes = (
@@ -47249,7 +47300,7 @@ def main(argv: list[str] | None = None) -> int:
     _harden_std_streams()
     raw_argv = sys.argv[1:] if argv is None else list(argv)
     parser = build_parser()
-    json_requested = any(
+    json_requested = raw_argv[:1] == ["work-session"] or any(
         item == "--format=json"
         or (item == "--format" and index + 1 < len(raw_argv) and raw_argv[index + 1] == "json")
         for index, item in enumerate(raw_argv)
@@ -47274,6 +47325,7 @@ def main(argv: list[str] | None = None) -> int:
             "zettel-objet-link",
             "zet-objet-link",
             "migrate",
+            "work-session",
         }
     )
     delegated_args: argparse.Namespace | None = None
@@ -47442,6 +47494,15 @@ def main(argv: list[str] | None = None) -> int:
                 json_requested=json_requested,
             )
 
+    try:
+        invocation_effects = command_status.resolve_namespace_invocation_effects(parser, args)
+    except (TypeError, ValueError):
+        # An unaudited invocation is not declared read-only. Preserve existing
+        # explicit runtime/approval/resume guards while coverage is integrated.
+        invocation_effects = {"coverage": "unknown", "effects": None,
+                              "reason_code": "invocation_effects_unresolved",
+                              "execution_authorized": False, "private_values_echoed": False}
+    setattr(args, "_wom_invocation_effects", invocation_effects)
     runtime_blocker = _project_write_runtime_guard(args, raw_argv)
     if runtime_blocker is not None:
         if json_requested:

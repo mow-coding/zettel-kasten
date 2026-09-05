@@ -100,3 +100,26 @@ No existing writer has been closed merely to claim session coverage. No client
 archive, provider, credential or feedback ledger was modified by this audit.
 
 See [integration minutes](../../meeting-minutes/2026-09-05-v0420-work-session-integration.md).
+
+## Bounded implementation and public query
+
+The pure invocation-effect decision is now implemented in `command_status` for
+twelve audited command paths. Parser/handler footprint drift returns unknown
+coverage, not an inferred read-only result. Independent review added the explicit
+external deferred-input read. The actual CLI attaches the result before its
+existing runtime guard; audited index, artifact and journal writes receive that
+guard without requiring a new human approval. Unknown coverage does not erase
+existing explicit writer guards. This is not yet session binding for every
+effect, nor runtime/session enforcement for existing MCP writers.
+
+The one new top-level command, `work-session`, and MCP `archive_work_session`
+now share a read-only list/inspect service. Its complete registry generation,
+opaque filters, pagination and counts do not infer legacy artifact ownership or
+expose labels/claim tokens. Reads may continue while the writer lock is held;
+new generations invalidate subsequent cursors rather than mixing snapshots.
+Default JSON parse errors are private-safe. The existing no-console startup
+reporter is reused; no custom UI or secondary approval system was introduced.
+
+Lifecycle writes and automatic private client-context attachment remain the
+next public integration slice. Read-only availability is not evidence that app
+registration, work creation, claims or original-operation resume are exposed.

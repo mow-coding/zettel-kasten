@@ -87,6 +87,28 @@ def configure_stdio_utf8() -> None:
 
 TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
+        "name": "archive_work_session",
+        "description": (
+            "Read one complete work-session registry generation using opaque references and cursor pages. "
+            "Does not disclose private labels or claim tokens, infer legacy artifact ownership, or grant write authority. "
+            "Only list/inspect are exposed by this development slice."
+        ),
+        "annotations": {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True,
+                        "openWorldHint": False},
+        "inputSchema": {
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                "archive_root": {"type": "string"},
+                "action": {"type": "string", "enum": ["list", "inspect"], "default": "list"},
+                "kind": {"type": "string", "enum": ["app", "workstream", "session"], "default": "session"},
+                "ref": {"type": "string"}, "client_app_ref": {"type": "string"},
+                "workstream_ref": {"type": "string"}, "cursor": {"type": "string"},
+                "page_size": {"type": "integer", "minimum": 1, "maximum": 2000, "default": 20},
+            },
+            "required": ["archive_root"],
+        },
+    },
+    {
         "name": "wom_profile_list",
         "description": "List read-only WOM profile registry entries before resolving archive runtime context.",
         "inputSchema": {
@@ -3451,6 +3473,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
     elif not isinstance(arguments, dict):
         raise InvalidParamsError("tools/call params.arguments must be an object.")
 
+    if name == "archive_work_session":
+        return tool_archive_work_session(arguments)
     if name == "wom_profile_list":
         return tool_wom_profile_list(arguments)
     if name == "wom_profile_resolve":
@@ -3822,6 +3846,37 @@ def tool_archive_runtime_context(arguments: dict[str, Any]) -> dict[str, Any]:
     add_mcp_redaction_warning(result, requested_redaction, redact_local_paths)
     state = "passed" if result["ok"] else "blocked"
     return tool_success_result(f"archive_runtime_context: {state}; mode={result['inspection']['mode']}.", result)
+
+
+def tool_archive_work_session(arguments: dict[str, Any]) -> dict[str, Any]:
+    from .work_session_query import WorkSessionQueryError, query_work_sessions
+
+    allowed = {"archive_root", "action", "kind", "ref", "client_app_ref",
+               "workstream_ref", "page_size", "cursor"}
+    if set(arguments) - allowed:
+        raise InvalidParamsError()
+    for key in allowed - {"page_size"}:
+        if key in arguments and type(arguments[key]) is not str:
+            raise InvalidParamsError()
+    page_size = arguments.get("page_size", 20)
+    if type(page_size) is not int or not 1 <= page_size <= 2000:
+        raise InvalidParamsError()
+    if arguments.get("action", "list") not in {"list", "inspect"} or arguments.get(
+            "kind", "session") not in {"app", "workstream", "session"}:
+        raise InvalidParamsError()
+    archive_root = require_path_arg(arguments, "archive_root")
+    try:
+        result = query_work_sessions(
+            archive_root, action=arguments.get("action", "list"), kind=arguments.get("kind", "session"),
+            reference=arguments.get("ref"), client_app_ref=arguments.get("client_app_ref"),
+            workstream_ref=arguments.get("workstream_ref"), page_size=page_size, cursor=arguments.get("cursor"),
+        )
+    except WorkSessionQueryError as error:
+        return {"content": [{"type": "text", "text": "Work-session query could not be completed."}],
+                "structuredContent": {"schema": "wom-kit/work-session-query/v1", "ok": False,
+                                      "reason_code": error.code, "read_only": True, "private_values_echoed": False},
+                "isError": True}
+    return tool_success_result("Read-only work-session registry query returned.", result)
 
 
 def tool_archive_capabilities(arguments: dict[str, Any]) -> dict[str, Any]:
