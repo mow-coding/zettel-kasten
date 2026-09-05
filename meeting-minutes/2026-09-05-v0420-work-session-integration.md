@@ -1172,6 +1172,32 @@ bump, PR, tag, wheel or client application has occurred.
   claimed. Those still require exact route evidence and authenticated domain
   completion composition.
 
+## In-memory Git selection checkpoint
+
+- A private immutable typed v2 selection now enters the existing preparation
+  algorithm without writing JSON into the archive. The public file-based
+  signature remains unchanged. Both routes re-use the same full Git planner,
+  exact plan comparison, remote relation and live selected/excluded partition
+  validation. An in-memory object is not an ownership or approval capability.
+- The declared syntax is validated before any planner callback; immutable bytes
+  are captured before that callback can mutate the caller's object. Actual
+  completeness is checked against the fresh real plan, not the declared refs.
+  Invalid, uninitialized or malformed inputs use fixed content-free errors.
+- Nine new tests passed: three pure cases in 0.002 seconds and six real
+  synthetic-Git cases in 118.172 seconds. Equivalent file/typed preparations
+  produced identical private bundles, manifests and approval contexts; no
+  ignored selection file was created. Actual source/ref and partition drift
+  were rejected, and the existing held writer still committed/pushed only the
+  selected changes in its synthetic fixture.
+- Eleven original writer tests passed in 261.052 seconds; 23 existing v2 tests
+  passed in 413.345 seconds. These are 43 distinct tests. Source-body AST
+  comparison confirms the shared original algorithm differs only at selection
+  acquisition. Independent root review found no blocking issue; Python 3.10
+  grammar checks passed under 3.12, not as native 3.10 execution.
+- Four readiness gates and 169-resource synchronization passed at this source
+  checkpoint. Session route evidence, original auto-resume and authenticated
+  terminal Git receipts remain necessary before public workflow integration.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)

@@ -489,6 +489,53 @@ def _selection_partition(
     return groups, _sha256_json(dict(document)), tuple(dict(row) for row in exclusions)
 
 
+def _validated_selection_v2_document(raw: bytes) -> dict[str, Any]:
+    """Validate declared selection syntax, not live refs or session ownership."""
+
+    code = "git_backup_selection_invalid"
+    try:
+        if type(raw) is not bytes or not 2 <= len(raw) <= GIT_BACKUP_MAX_SELECTION_BYTES:
+            raise _fail(code)
+        document = _strict_json(raw)
+        expected = document.get("expected_plan_sha256")
+        if (document.get("schema") != GIT_BACKUP_SELECTION_V2_SCHEMA
+                or type(expected) is not str or _SHA256_RE.fullmatch(expected) is None):
+            raise _fail(code)
+        # The existing codec validates every row and the disjoint partition.
+        # Completeness against the actual Git plan is checked again in prepare.
+        refs: set[str] = set()
+        groups, exclusions = document.get("selected_groups"), document.get("excluded_changes")
+        if type(groups) is list:
+            for group in groups:
+                if type(group) is dict and type(group.get("change_refs")) is list:
+                    refs.update(ref for ref in group["change_refs"] if type(ref) is str)
+        if type(exclusions) is list:
+            refs.update(row["change_ref"] for row in exclusions
+                        if type(row) is dict and type(row.get("change_ref")) is str)
+        _selection_partition(document, expected_plan_sha256=expected,
+                             observed_change_refs=tuple(sorted(refs)))
+        return document
+    except GitBackupWriterError as error:
+        code = error.code
+    except (TypeError, ValueError, UnicodeError, RecursionError):
+        pass
+    # JSON/codec exceptions may retain private bytes even with `from None`.
+    raise _fail(code)
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class _GitBackupSelectionV2:
+    """Private immutable input only; it grants no archive or session authority."""
+
+    raw_json: bytes
+
+    def __post_init__(self) -> None:
+        _validated_selection_v2_document(self.raw_json)
+
+    def __repr__(self) -> str:
+        return "_GitBackupSelectionV2(<private>)"
+
+
 def _change_paths(row: Mapping[str, Any]) -> tuple[str, ...]:
     paths = [row.get("path")]
     if row.get("original_path") is not None:
@@ -630,6 +677,62 @@ def prepare_git_backup(
 ) -> PreparedGitBackup:
     """Prepare one private exact operation without returning paths or prose."""
 
+    return _prepare_git_backup_core(
+        archive_root, expected_plan_sha256=expected_plan_sha256,
+        selection_manifest_path=selection_manifest_path, selection=None,
+        remote_name=remote_name, branch=branch, credential_mode=credential_mode,
+        max_changes=max_changes, max_changed_bytes=max_changed_bytes,
+        progress_hook=progress_hook, work_session_binding=work_session_binding,
+    )
+
+
+def _prepare_git_backup_from_selection(
+    archive_root: Path | str,
+    *,
+    expected_plan_sha256: str,
+    selection: _GitBackupSelectionV2,
+    remote_name: str = "origin",
+    branch: str | None = None,
+    credential_mode: str = "anonymous",
+    max_changes: int = planning.GIT_BACKUP_PLAN_DEFAULT_MAX_CHANGES,
+    max_changed_bytes: int = planning.GIT_BACKUP_PLAN_DEFAULT_MAX_CHANGED_BYTES,
+    progress_hook: Callable[[Mapping[str, Any]], None] | None = None,
+    work_session_binding: WorkSessionBinding | Mapping[str, Any] | None = None,
+) -> PreparedGitBackup:
+    """Replan from typed private bytes without creating a selection file.
+
+    This is preparation only. The execution boundary must independently verify
+    its held archive lock, exact state, and any session authority it requires.
+    """
+
+    if type(selection) is not _GitBackupSelectionV2:
+        raise _fail("git_backup_selection_invalid")
+    # Revalidate and detach before a planner progress hook can run.
+    frozen = _GitBackupSelectionV2(getattr(selection, "raw_json", None))
+    return _prepare_git_backup_core(
+        archive_root, expected_plan_sha256=expected_plan_sha256,
+        selection_manifest_path=None, selection=frozen,
+        remote_name=remote_name, branch=branch, credential_mode=credential_mode,
+        max_changes=max_changes, max_changed_bytes=max_changed_bytes,
+        progress_hook=progress_hook, work_session_binding=work_session_binding,
+    )
+
+
+def _prepare_git_backup_core(
+    archive_root: Path | str,
+    *,
+    expected_plan_sha256: str,
+    selection_manifest_path: Path | str | None,
+    selection: _GitBackupSelectionV2 | None,
+    remote_name: str,
+    branch: str | None,
+    credential_mode: str,
+    max_changes: int,
+    max_changed_bytes: int,
+    progress_hook: Callable[[Mapping[str, Any]], None] | None,
+    work_session_binding: WorkSessionBinding | Mapping[str, Any] | None,
+) -> PreparedGitBackup:
+    in_memory_raw = selection.raw_json if selection is not None else None
     if (
         type(expected_plan_sha256) is not str
         or _SHA256_RE.fullmatch(expected_plan_sha256) is None
@@ -680,7 +783,8 @@ def prepare_git_backup(
     ):
         raise _fail("git_backup_repository_relation_unsafe")
 
-    raw_selection = _read_stable_plain_file(Path(selection_manifest_path))
+    raw_selection = (_read_stable_plain_file(Path(selection_manifest_path))
+                     if in_memory_raw is None else in_memory_raw)
     selection_document = _strict_json(raw_selection)
     private_changes = capture.get("private_changes")
     if not isinstance(private_changes, list) or not private_changes:
