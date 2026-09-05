@@ -154,6 +154,43 @@ and target drift. Synthetic success is not a client result.
   run then passed 48 tests and 45 subtests in 95.37 seconds, with two documented
   platform skips. All four release-readiness hygiene checks and resource
   synchronization passed. These are development-checkpoint results only.
+- Original-context private storage is now implemented with a separate explicit
+  schema while preserving pure payload bytes and APIs. The bundle, operation
+  and registry group passed 49 tests and 50 subtests in 47.06 seconds, with
+  four documented platform skips. Rehashed reviewer substitution still cannot
+  reuse the original authenticated claim; payload hashes are not authority.
+- Independent review tightened registry reads to retain ancestors through
+  enumeration, current/historical generation reads and final identity checks.
+  Windows real rename refusal and handle release were tested. POSIX descriptor
+  replacement cases remain for Linux CI. A root review also included pending
+  entries in the directory scan limit rather than counting only generations.
+- The internal session execution slice now connects lock-before-plan, native
+  review, exact context persistence, authenticated claims, the real runner and
+  independent terminal verification. It explicitly distinguishes a started
+  pre-checkpoint cut, partial checkpoints and succeeded/output-lost completion.
+  Review corrected a misleading inherited checkpoint-validation flag in the
+  pre-checkpoint branch. No chain is claimed to exist before its first record.
+- Common target details now include app/workstream kinds and only already-bound
+  private labels. Native drift is checked before key/claim/payload creation;
+  omitted sensitive previews retain exact target identity. Execution plus
+  preview tests passed 37 tests and 37 subtests in 32.15 seconds. The expanded
+  execution-only group passed thirteen tests in 34.38 seconds, including two
+  valid but ambiguous claims and rehashed reviewer substitution refusal.
+- The first new pre-checkpoint test incorrectly expected the private common-lock
+  directory to be absent. Its assertion was narrowed to absent checkpoint and
+  final-receipt directories; production behavior was not changed to fit it.
+- Genuine child-exit tests are written for three durable boundaries, but their
+  run is deliberately queued behind the active v0.4.19 installed-wheel timing
+  measurement. These source-checkout tests will not be called public CLI,
+  automatic app attachment or installed-wheel session proof.
+- After that timing run ended, all three real `os._exit` child journeys passed
+  in 79.16 seconds: started-before-checkpoint (26.19 seconds), registry-published
+  (26.41 seconds), and succeeded-before-output (26.31 seconds). Every crash child
+  exited with the expected test code and every fresh resume child exited zero.
+  No second native approval, claim or generation was created. Parent-process
+  OS-lock acquisition, original-context/claim authentication, receipt MAC and
+  independent target verification passed. Public task-scoped discovery and
+  installed-wheel session acceptance remain separate requirements.
 
 Pending integration remains explicit: public work-session CLI and MCP routing,
 native production orchestration, durable private plan discovery and automatic

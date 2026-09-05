@@ -9,6 +9,7 @@ dead owner from a clock. No private label or claimant enters public summaries.
 from __future__ import annotations
 
 from copy import deepcopy
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 import hashlib
 import hmac
@@ -122,6 +123,62 @@ def _write_private_pending(path: Path, raw: bytes, *, root: Path) -> None:
                 os.close(descriptor)
             # A replacement is refused before the final generation is exposed.
             durable._assert_named_reservation_directory_identity(path.parent, parent.identity)
+
+
+def _relative_stat(parent, name: str):
+    if os.name == "nt":
+        return os.lstat(parent.path / name)
+    return os.stat(name, dir_fd=parent.descriptor, follow_symlinks=False)
+
+
+def _read_bound_generation(parent, name: str, *, heartbeat) -> bytes:
+    """Read only the named leaf in the directory retained by the caller."""
+    if os.name == "nt":
+        # The complete parent chain is held without FILE_SHARE_DELETE.
+        return exact._read_plain_file(parent.path / name, max_bytes=MAX_GENERATION_BYTES, heartbeat=heartbeat)
+    before = _relative_stat(parent, name)
+    if not exact._safe_regular_stat(before, max_bytes=MAX_GENERATION_BYTES):
+        raise _fail("work_session_path_unsafe")
+    descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent.descriptor)
+    try:
+        opened = os.fstat(descriptor)
+        identity = lambda info: (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+        if (not exact._safe_regular_stat(opened, max_bytes=MAX_GENERATION_BYTES)
+                or identity(before) != identity(opened)):
+            raise _fail("work_session_registry_changed")
+        chunks, remaining = [], opened.st_size + 1
+        while remaining:
+            heartbeat()
+            chunk = os.read(descriptor, min(64 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        raw = b"".join(chunks)
+        after = os.fstat(descriptor)
+        named = _relative_stat(parent, name)
+        if (len(raw) != opened.st_size or identity(before) != identity(after)
+                or identity(after) != identity(named)
+                or not exact._safe_regular_stat(after, max_bytes=MAX_GENERATION_BYTES)
+                or not exact._safe_regular_stat(named, max_bytes=MAX_GENERATION_BYTES)):
+            raise _fail("work_session_registry_changed")
+        return raw
+    finally:
+        os.close(descriptor)
+
+
+def _bound_generation_names(parent) -> tuple[str, ...]:
+    names = []
+    target = parent.path if os.name == "nt" else parent.descriptor
+    with os.scandir(target) as entries:
+        for entry_count, entry in enumerate(entries, 1):
+            if entry_count > MAX_ENTITIES:
+                raise _fail("work_session_registry_invalid")
+            if _GENERATION_NAME.fullmatch(entry.name):
+                names.append(entry.name)
+            elif not re.fullmatch(r"\.pending_[0-9a-f]{32}", entry.name):
+                raise _fail("work_session_path_unsafe")
+    return tuple(sorted(names))
 
 
 def _validate_document(document: Any) -> None:
@@ -395,61 +452,98 @@ class WorkSessionRegistryStore:
     def __repr__(self) -> str:
         return "WorkSessionRegistryStore(<private>)"
 
-    def _observe_names(self) -> tuple[str, ...]:
-        current = self.root
+    @contextmanager
+    def _read_boundary(self):
+        """Keep existing ancestors bound; prove absence only in that parent."""
         try:
-            durable._safe_existing_chain(self.root, directory=True)
-            info = os.lstat(self.root)
-            if (info.st_dev, info.st_ino) != self._root_identity:
-                raise _fail("work_session_path_unsafe")
-            for component in PRIVATE_ROOT:
-                current = current / component
-                try:
-                    info = os.lstat(current)
-                except FileNotFoundError:
-                    return ()
-                if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode) or exact._path_is_reparse(info):
+            with ExitStack() as stack:
+                parent = stack.enter_context(durable._bound_directory_for_move(self.root))
+                if parent.identity != self._root_identity:
                     raise _fail("work_session_path_unsafe")
-            names = []
-            with os.scandir(self.path) as entries:
-                for entry in entries:
-                    if len(names) >= MAX_ENTITIES:
-                        raise _fail("work_session_registry_invalid")
-                    if _GENERATION_NAME.fullmatch(entry.name):
-                        names.append(entry.name)
-                    elif not re.fullmatch(r"\.pending_[0-9a-f]{32}", entry.name):
+                parents = [parent]
+                missing = None
+                for component in PRIVATE_ROOT:
+                    try:
+                        info = _relative_stat(parent, component)
+                    except FileNotFoundError:
+                        missing = component
+                        break
+                    if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode) or exact._path_is_reparse(info):
                         raise _fail("work_session_path_unsafe")
-            return tuple(sorted(names))
+                    child = stack.enter_context(durable._bound_directory_for_move(parent.path / component))
+                    if child.identity != (info.st_dev, info.st_ino):
+                        raise _fail("work_session_registry_changed")
+                    parents.append(child)
+                    parent = child
+                yield None if missing is not None else parent
+                if missing is not None:
+                    try:
+                        _relative_stat(parent, missing)
+                    except FileNotFoundError:
+                        pass
+                    else:
+                        raise _fail("work_session_registry_changed")
+                for retained in parents:
+                    durable._assert_named_reservation_directory_identity(retained.path, retained.identity)
         except (OSError, durable.ProjectUpdateTransactionError):
             raise _fail("work_session_path_unsafe") from None
 
+    def _observe_names(self) -> tuple[str, ...]:
+        with self._read_boundary() as parent:
+            return () if parent is None else _bound_generation_names(parent)
+
     def read(self) -> RegistrySnapshot:
-        before = self._observe_names()
-        if not before:
-            return RegistrySnapshot.empty(self.archive_identity_sha256)
-        # Validate the consecutive names so a missing generation cannot silently
-        # become the new current state. Only the two newest full snapshots need
-        # reading; immutable older generations remain private recovery evidence.
-        if any(name != f"{index:012d}.json" for index, name in enumerate(before, 1)):
-            raise _fail("work_session_registry_invalid")
-        documents = []
-        try:
+        with self._read_boundary() as directory:
+            before = () if directory is None else _bound_generation_names(directory)
+            if not before:
+                if directory is not None and _bound_generation_names(directory):
+                    raise _fail("work_session_registry_changed")
+                return RegistrySnapshot.empty(self.archive_identity_sha256)
+            # Only the two newest full snapshots need reading. Retain the
+            # same directory across enumeration, bytes and final observation.
+            if any(name != f"{index:012d}.json" for index, name in enumerate(before, 1)):
+                raise _fail("work_session_registry_invalid")
+            documents = []
             for name in before[-2:]:
-                raw = exact._read_plain_file(self.path / name, max_bytes=MAX_GENERATION_BYTES, heartbeat=lambda: None)
-                value = json.loads(raw)
-                if _canonical(value) != raw:
-                    raise _fail("work_session_registry_invalid")
-                snapshot = RegistrySnapshot(value)
-                if (snapshot._document["archive_identity_sha256"] != self.archive_identity_sha256
-                        or snapshot.revision != int(name[:12])):
-                    raise _fail("work_session_registry_invalid")
-                documents.append(snapshot)
-        except (OSError, ValueError, TypeError):
-            raise _fail("work_session_registry_invalid") from None
-        parent = documents[-2] if len(documents) == 2 else RegistrySnapshot.empty(self.archive_identity_sha256)
-        if (documents[-1]._document["previous_sha256"] != parent.sha256 or before != self._observe_names()):
-            raise _fail("work_session_registry_changed")
-        return documents[-1]
+                try:
+                    raw = _read_bound_generation(directory, name, heartbeat=lambda: None)
+                    value = json.loads(raw)
+                    if _canonical(value) != raw:
+                        raise _fail("work_session_registry_invalid")
+                    snapshot = RegistrySnapshot(value)
+                    if (snapshot._document["archive_identity_sha256"] != self.archive_identity_sha256
+                            or snapshot.revision != int(name[:12])):
+                        raise _fail("work_session_registry_invalid")
+                    documents.append(snapshot)
+                except (OSError, ValueError, TypeError):
+                    raise _fail("work_session_registry_invalid") from None
+            parent = documents[-2] if len(documents) == 2 else RegistrySnapshot.empty(self.archive_identity_sha256)
+            if (documents[-1]._document["previous_sha256"] != parent.sha256
+                    or before != _bound_generation_names(directory)):
+                raise _fail("work_session_registry_changed")
+            return documents[-1]
+
+    def _read_generation_bytes(self, revision: int, *, heartbeat) -> bytes | None:
+        if type(revision) is not int or not 1 <= revision < 10**12:
+            raise _fail("work_session_registry_invalid")
+        name = f"{revision:012d}.json"
+        with self._read_boundary() as directory:
+            if directory is None:
+                return None
+            before = _bound_generation_names(directory)
+            raw = None
+            if name in before:
+                raw = _read_bound_generation(directory, name, heartbeat=heartbeat)
+            else:
+                try:
+                    _relative_stat(directory, name)
+                except FileNotFoundError:
+                    pass
+                else:
+                    raise _fail("work_session_registry_changed")
+            if before != _bound_generation_names(directory):
+                raise _fail("work_session_registry_changed")
+            return raw
 
     def commit(self, plan: RegistryTransition, *, held_lock: exact.ExactOperationWriterLock,
                verify_human_authority: Callable[[str], bool] | None = None) -> RegistrySnapshot:

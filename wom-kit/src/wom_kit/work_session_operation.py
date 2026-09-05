@@ -154,23 +154,17 @@ class _Verifier:
         # Observe the immutable target, not the latest full registry state.
         # A later unrelated session therefore cannot rewrite old success proof.
         self.store.read()
-        names_before = self.store._observe_names()
-        name = f"{self.prepared.transition.after.revision:012d}.json"
-        path = self.store.path / name
-        if name not in names_before:
-            if os.path.lexists(path):
-                raise _fail()
-            return None
-        raw, _info = exact._read_plain_file_snapshot(
-            path, max_bytes=registry.MAX_GENERATION_BYTES, heartbeat=heartbeat,
+        raw = self.store._read_generation_bytes(
+            self.prepared.transition.after.revision, heartbeat=heartbeat,
         )
+        if raw is None:
+            return None
         try:
             observed = registry.RegistrySnapshot(json.loads(raw))
         except (ValueError, TypeError, UnicodeError):
             raise _fail() from None
         if (observed.revision != self.prepared.transition.after.revision
-                or observed._document["archive_identity_sha256"] != self.store.archive_identity_sha256
-                or names_before != self.store._observe_names()):
+                or observed._document["archive_identity_sha256"] != self.store.archive_identity_sha256):
             raise _fail()
         return raw
 
