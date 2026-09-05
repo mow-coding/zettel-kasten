@@ -35,6 +35,7 @@ from .exact_human_approval import (
     _rehydrate_exact_human_approval_core,
     audit_exact_human_approval_succeeded_terminal_record_read_only,
     exact_human_approval_archive_identity_sha256,
+    exact_human_approval_context_sha256,
 )
 from .exact_human_approval_windows import (
     ExactHumanApprovalContext,
@@ -2029,6 +2030,35 @@ def resume_source_intake_batch_auto(
     }
 
 
+def _source_intake_batch_completion_evidence_view(
+    plan: SourceIntakeBatchExactPlan, *, context: ExactHumanApprovalContext,
+    reference: Mapping[str, Any], execution: str, final: Mapping[str, Any],
+) -> tuple[ExactOperationApprovalAuthority, Mapping[str, Any], bytes]:
+    """Shared exact evidence shape; this pure view does not authenticate a MAC."""
+    authority = ExactOperationApprovalAuthority.from_reference(reference)
+    result = final.get("result") if isinstance(final, Mapping) else None
+    auth = result.get("completion_authentication") if isinstance(result, Mapping) else None
+    evidence = plan.manifest.operation_evidence
+    binding = plan.manifest.work_session_binding
+    if (authority.context_sha256 != exact_human_approval_context_sha256(context)
+            or execution != exact_operation_execution_sha256(plan.manifest, mode="apply", approval_authority=authority)
+            or not isinstance(result, Mapping) or not isinstance(auth, Mapping)
+            or result.get("status") != "completed" or result.get("mode") != "apply"
+            or result.get("manifest_sha256") != plan.manifest.manifest_sha256
+            or result.get("execution_sha256") != execution
+            or result.get("approval_binding_sha256") != authority.binding_sha256
+            or result.get("operation_evidence") != (None if evidence is None else evidence.document())
+            or result.get("work_session_binding_sha256") != (None if binding is None else binding.binding_sha256)
+            or result.get("extension_sha256") != plan.manifest.extension_sha256
+            or result.get("item_count") != len(plan.manifest.items)
+            or result.get("field_count") != sum(len(item.fields) for item in plan.manifest.items)
+            or auth.get("operation") != OPERATION
+            or auth.get("target_binding_sha256") != plan.manifest.target_set_sha256
+            or auth.get("approval_reference") != reference):
+        raise _fail("source_intake_batch_completion_evidence_required")
+    return authority, auth, exact_operation_completion_authentication_payload(result)
+
+
 def _verify_source_intake_batch_completion_with_claim_held(
     plan: SourceIntakeBatchExactPlan,
     *,
@@ -2076,25 +2106,8 @@ def _verify_source_intake_batch_completion_with_claim_held(
             if claim.assert_succeeded_for_context(context) != reference:
                 raise _fail("source_intake_batch_completion_evidence_required")
             final = load_exact_operation_final_receipt_read_only(plan.archive_root, execution)
-            result = final.get("result") if isinstance(final, Mapping) else None
-            auth = result.get("completion_authentication") if isinstance(result, Mapping) else None
-            evidence = plan.manifest.operation_evidence
-            binding = plan.manifest.work_session_binding
-            if (not isinstance(result, Mapping) or not isinstance(auth, Mapping)
-                    or result.get("status") != "completed" or result.get("mode") != "apply"
-                    or result.get("manifest_sha256") != plan.manifest.manifest_sha256
-                    or result.get("execution_sha256") != execution
-                    or result.get("approval_binding_sha256") != authority.binding_sha256
-                    or result.get("operation_evidence") != (None if evidence is None else evidence.document())
-                    or result.get("work_session_binding_sha256") != (None if binding is None else binding.binding_sha256)
-                    or result.get("extension_sha256") != plan.manifest.extension_sha256
-                    or result.get("item_count") != len(plan.manifest.items)
-                    or result.get("field_count") != sum(len(item.fields) for item in plan.manifest.items)
-                    or auth.get("operation") != OPERATION
-                    or auth.get("target_binding_sha256") != plan.manifest.target_set_sha256
-                    or auth.get("approval_reference") != reference):
-                raise _fail("source_intake_batch_completion_evidence_required")
-            payload = exact_operation_completion_authentication_payload(result)
+            _authority_view, auth, payload = _source_intake_batch_completion_evidence_view(
+                plan, context=context, reference=reference, execution=execution, final=final)
             if not claim.exact_terminal_record_matches(
                 reference, context.operation, context.plan_sha256, context.target_binding_sha256,
                 frozenset({"succeeded"}), None, payload, auth.get("terminal_mac"),

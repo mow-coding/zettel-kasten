@@ -1809,6 +1809,80 @@ bump, PR, tag, wheel or client application has occurred.
   must remain excluded. A capture request is not preserved source bytes;
   authenticated metadata backup must not claim completed artifact custody.
 
+### Historical completion reader and Git consumer integration
+
+- The versioned data contract was committed and pushed as `b8e0f3e3`. The
+  development branch then incorporated completed v0.4.19 release evidence from
+  `origin/main` in `daae3db8`; no product tag moved and all unfinished integration
+  files were preserved. Four public readiness checks and 169 resources passed.
+- The shared historical completion reader's eight actual synthetic tests passed
+  in 228.592 seconds, with no skips. Its first positive run had refused the
+  common receipt's canonical trailing newline because a private-context parser
+  was used; it now uses the exact runner's strict common JSON parser while
+  preserving actual raw file bytes. The original failure is not reported as a
+  successful test. All nine existing strict completion tests had passed in
+  that earlier run with the same extracted common evidence helper.
+- Product source hashes: intake helper
+  `BD86B35BCF495DD9B101ABB495A2079446BDEAAB36F93CBFA49CEA7B71733E74`;
+  historical reader
+  `41683DE708D82B207A7043596C956658C39D03ACAF255EF08B638F91BB3608B0`.
+  The tested eight-test file was
+  `D42C3758666A2E6E0781DC47984CF695E0D6CBB7D28E8D405EF78A0DAD52B6FB`.
+  Targeted test-only supplements and joined Git acceptance remain in progress.
+- Existing Git command routing and new pure consumer projection/closed-dispatch
+  tests passed 19/19 in 8.366 seconds. These routing/projection checks do not
+  authenticate an intake or prove a Git push. Independent consumer source review
+  was clear at provenance
+  `54B16A505EE3F2E31870BABCFA90F9730DDB2DCE10BBACA0427B1BE0CFD228A7`
+  and workflow
+  `6445064DF8D137661768B0D357BF954E428691673A0F598F54681BD1F4ED7121`.
+- Original intake metadata and current write authority remain separate facts.
+  A succeeded original may be audited without its source inputs, but neither
+  that audit nor metadata backup grants permission to delete those inputs.
+  Baseline common-receipt discovery, real scoped commits/pushes, original resume
+  and original re-review are still awaiting their joined test outcomes here.
+
+### Historical reader checkpoint, adapter evidence and pending joined gate
+
+- The final four reader supplements passed in 127.869 seconds on the unchanged
+  `BD86B35B...` / `41683DE7...` product sources. Three strengthened existing
+  cases plus one new generation-budget case complete passing evidence for all
+  nine distinct current reader methods; this is not one full final nine-test
+  run. Final test file:
+  `661BC21573088B7FBF978F2C39C2E190200D9490FDF5ECF0712E931C52446D95`.
+  Supplement execution overlapped the isolated joined Git functional cohort;
+  elapsed times are not performance acceptance. Independent shared-reader and
+  helper review was clear without another claimed runtime rerun.
+- The adapter's final targeted eight checks passed in 68.629 seconds (seven
+  data/contract cases and the real A/B intake + stored proof data/key/active-claim
+  case). The separate corrupt-output/context preservation case passed in an
+  earlier cohort before the sole product change: private snapshot inputs now
+  reuse the existing 256 MiB Git writer input ceiling, independently of 16 MiB
+  proof and 32 MiB result limits. This prevents a new intake adapter from
+  shrinking legacy wide-exclusion input support. These are nine unique passing
+  cases, not a single final nine-test run. Adapter source
+  `24098B7C7C63FD7C8EED906FFE1B11879E112A0356C3D8A6F8C7FC37C4959414`;
+  tests `325F98BA1D3924820E8FE014FB33D3B88A317D8C064DE8E865E774A6EBF42EBE`.
+  Earlier adapter failures were test fixtures using the wrong result selector
+  and confusing archive-generation revision with session revision. Neither is
+  counted as an authenticated integration success.
+- The first joined Git cohort failed both tests before their interruption
+  sentinels; a first-only diagnostic rerun showed `cli_arguments_invalid`.
+  The new test helper supplied an unsupported Git `--no-progress` option.
+  It was corrected only in that test, preserving the real observer; all three
+  intended Git modes then passed parser validation before expensive setup.
+  No product parser/guard was relaxed. Actual joined commit/push and original
+  continuation outcomes remain pending, so that consumer integration is not
+  checkpointed as accepted here.
+- Read-only follow-on analysis found that legacy `objet_capture_batch_exact`
+  is not an existing common exact-manifest held transaction: it replans within
+  a key consumer and delegates to legacy blob/manifest/index/receipt writes.
+  Its result explicitly lacks same-claim resume. Keep its old schema gates;
+  widening them alone would not supply session authority or safe continuation.
+  A later concrete typed preparation/backend must bind original intake proof,
+  current ownership and every actual effect while reusing existing publication
+  primitives. No capture code changed during this analysis.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)

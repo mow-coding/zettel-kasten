@@ -311,3 +311,31 @@ private retained payloads. It distinguishes preview readiness from completion
 and read-only domain effects from interrupted writes. Callback-window findings,
 the actual synthetic public journey and final regression results belong in the
 integration minutes; this decision is not a release or client-recovery claim.
+
+## Historical intake completion as downstream evidence
+
+Share one strict completion-evidence expression with the existing intake
+verifier; keep that verifier's own succeeded-context checks unchanged. Expose
+separate private data-image and authenticated-completion types. A hash-matching
+image is not approval. The authenticated historical reader verifies original
+establishment, original succeeded MAC, complete checkpoint/final chain and
+every approved output, without requiring current actor ownership or missing
+caller/source inputs. An active same-archive Git or capture claim can audit the
+old terminal MAC using its existing key context; it does not gain intake write
+authority. The downstream concrete writer still checks its own approval and
+current ownership. Standalone reads use a noncreating provider and refuse
+claim-directory or selected-evidence changes across the provider boundary.
+
+Use retained contexts only as bounded discovery hints for intake Git output
+classification. Preserve the human-decision producer; never infer ownership
+from source-shaped filenames or parsed JSON. Commit only exact whole new
+outputs, and keep other-session/unknown changes excluded with complete coverage.
+Historical v1 Git scope bytes are not upgraded. The new v2 scope records the
+original intake context and exact output membership; original continuation
+reauthenticates that stored set without new inventory or selection. A common
+receipt already in Git may prove remaining new outputs from its original batch.
+
+Count prepared capture requests as outputs, not receipts or preserved source
+files. Keep artifact/source-custody completion false. Joined public source
+tests, installed acceptance, full writer coverage and release are separate
+stages; the integration minutes state which stage was actually exercised.
