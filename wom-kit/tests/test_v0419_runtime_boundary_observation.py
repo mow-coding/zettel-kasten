@@ -124,10 +124,13 @@ class RuntimeBoundaryObservationTests(unittest.TestCase):
                 self.assertNotIn(str(root), json.dumps(parsed))
 
     def test_attribute_changes_keep_only_fixed_bit_names_from_original_comparison(self):
-        for bit, name in (*driver.RUNTIME_ATTRIBUTE_FLAGS, (0x80000000, None)):
+        names = dict(driver.RUNTIME_ATTRIBUTE_FLAGS)
+        for position in range(32):
+            bit, name = 1 << position, names.get(1 << position)
             with self.subTest(flag=name), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 (root / 'SYNTHETIC_PRIVATE_FILE').write_bytes(b'synthetic')
+                before_attributes = runtime._stat_identity(root.lstat())[-1]
                 observer = driver.FirstUpdateObservation()
                 with self.stat_change(root, 'st_file_attributes', xor=bit) as count, observer.runtime_boundaries():
                     if name == 'archive':
@@ -149,9 +152,52 @@ class RuntimeBoundaryObservationTests(unittest.TestCase):
                 self.assertEqual(row['changed_identity_fields'], ['attributes'])
                 self.assertEqual(row['changed_attribute_flags'], [] if name is None else [name])
                 self.assertIs(row['unknown_attribute_bits_changed'], name is None)
+                label = 'bit_' + str(position).zfill(2)
+                self.assertEqual(row['attribute_bits_set'], [] if before_attributes & bit else [label])
+                self.assertEqual(row['attribute_bits_cleared'], [label] if before_attributes & bit else [])
                 self.assertNotIn(str(root), json.dumps(parsed))
                 self.assertNotIn('SYNTHETIC_PRIVATE', json.dumps(parsed))
                 self.assertNotIn('attribute_values', row)
+
+    def test_complete_attribute_positions_validate_directions_and_legacy_compatibility(self):
+        observation = driver.RuntimeBoundaryObservation(runtime)
+        observation._record('directory_identity', 'identity_changed', reason='project_runtime_tree_changed',
+                            operation='before_after_directory_comparison', site='directory_identity', fields=('attributes',),
+                            attribute_change={'changed_attribute_flags': ['hidden'], 'unknown_attribute_bits_changed': True,
+                                              'attribute_bits_set': ['bit_01', 'bit_21'],
+                                              'attribute_bits_cleared': ['bit_31']})
+        observer = driver.FirstUpdateObservation()
+        observer.runtime_observation = observation.snapshot()
+        original = self.envelope(observer)
+        self.assertEqual(checker._parse_runtime_failure_output(json.dumps(original)), original)
+        for key, value in (
+                ('attribute_bits_set', ['SYNTHETIC_PRIVATE']), ('attribute_bits_set', ['bit_32']),
+                ('attribute_bits_set', ['bit_1']), ('attribute_bits_set', ['bit_01', 'bit_01', 'bit_21']),
+                ('attribute_bits_set', ['bit_21', 'bit_01']), ('attribute_bits_set', 'bit_01'),
+                ('attribute_bits_set', [1]), ('attribute_bits_set', ['bit_01', 'bit_21', 'bit_31']),
+                ('attribute_bits_set', []), ('attribute_bits_cleared', None),
+                ('unknown_attribute_bits_changed', False), ('changed_attribute_flags', ['hidden', 'system'])):
+            with self.subTest(key=key, value=value):
+                changed = deepcopy(original)
+                changed['failure_observation']['runtime_observation']['events'][0][key] = value
+                with self.assertRaises(checker.WheelCheckError):
+                    checker._parse_runtime_failure_output(json.dumps(changed))
+        for key in ('attribute_bits_set', 'attribute_bits_cleared', 'changed_attribute_flags', 'unknown_attribute_bits_changed'):
+            changed = deepcopy(original)
+            del changed['failure_observation']['runtime_observation']['events'][0][key]
+            with self.assertRaises(checker.WheelCheckError):
+                checker._parse_runtime_failure_output(json.dumps(changed))
+        empty = deepcopy(original)
+        row = empty['failure_observation']['runtime_observation']['events'][0]
+        row.update(attribute_bits_set=[], attribute_bits_cleared=[], changed_attribute_flags=[],
+                   unknown_attribute_bits_changed=False)
+        with self.assertRaises(checker.WheelCheckError):
+            checker._parse_runtime_failure_output(json.dumps(empty))
+        # Previous fixed-name and field-only payloads remain readable; readers
+        # must not fabricate a bit position or direction from the old boolean.
+        row = original['failure_observation']['runtime_observation']['events'][0]
+        del row['attribute_bits_set'], row['attribute_bits_cleared']
+        self.assertEqual(checker._parse_runtime_failure_output(json.dumps(original)), original)
 
     def test_attribute_extension_rejects_unknown_labels_types_and_inconsistent_rows(self):
         observer = driver.FirstUpdateObservation()

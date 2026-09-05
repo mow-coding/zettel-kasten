@@ -215,6 +215,9 @@ RUNTIME_ATTRIBUTE_FLAGS = (
     (0x80000, "pinned"), (0x100000, "unpinned"),
     (0x400000, "recall_on_data_access"),
 )
+# Complete DWORD positions distinguish undocumented/reserved changes without
+# inventing their meaning or exposing original attribute values or paths.
+RUNTIME_ATTRIBUTE_BIT_NAMES = tuple(f"bit_{position:02d}" for position in range(32))
 RUNTIME_BOUNDARY_TARGETS = (
     ("inspect_runtime", "installed_inspection"),
     ("_real_component_snapshot_observation", "component_chain"),
@@ -238,7 +241,8 @@ def _runtime_boundary_row_valid(row):
     keys = {"boundary", "outcome", "reason_code", "operation", "cause_depth", "errno", "winerror",
             "comparison_site", "changed_identity_fields"}
     attribute_keys = {"changed_attribute_flags", "unknown_attribute_bits_changed"}
-    if type(row) is not dict or set(row) not in (keys, keys | attribute_keys):
+    bit_keys = {"attribute_bits_set", "attribute_bits_cleared"}
+    if type(row) is not dict or set(row) not in (keys, keys | attribute_keys, keys | attribute_keys | bit_keys):
         return False
     boundary, outcome, reason = row["boundary"], row["outcome"], row["reason_code"]
     boundaries = {value for _name, value in RUNTIME_BOUNDARY_TARGETS} | {"directory_identity"}
@@ -258,6 +262,21 @@ def _runtime_boundary_row_valid(row):
     for name in ("errno", "winerror"):
         number = row[name]
         if number is not None and (type(number) is not int or not 0 <= number <= 65535 or outcome != "os_error"):
+            return False
+    if bit_keys <= set(row):
+        set_bits, cleared_bits = row["attribute_bits_set"], row["attribute_bits_cleared"]
+        for values in (set_bits, cleared_bits):
+            if (type(values) is not list
+                    or any(type(value) is not str or value not in RUNTIME_ATTRIBUTE_BIT_NAMES for value in values)
+                    or values != [value for value in RUNTIME_ATTRIBUTE_BIT_NAMES if value in values]):
+                return False
+        if not (set_bits or cleared_bits) or set(set_bits) & set(cleared_bits):
+            return False
+        changed_bits = sum(1 << position for position, name in enumerate(RUNTIME_ATTRIBUTE_BIT_NAMES)
+                           if name in set_bits or name in cleared_bits)
+        known_bits = sum(bit for bit, _name in RUNTIME_ATTRIBUTE_FLAGS)
+        if (row["changed_attribute_flags"] != [name for bit, name in RUNTIME_ATTRIBUTE_FLAGS if changed_bits & bit]
+                or row["unknown_attribute_bits_changed"] != bool(changed_bits & ~known_bits)):
             return False
     if attribute_keys <= set(row):
         flags, unknown = row["changed_attribute_flags"], row["unknown_attribute_bits_changed"]
@@ -404,6 +423,10 @@ class RuntimeBoundaryObservation:
                         attribute_change = {
                             "changed_attribute_flags": [name for bit, name in RUNTIME_ATTRIBUTE_FLAGS if changed_bits & bit],
                             "unknown_attribute_bits_changed": bool(changed_bits & ~known_bits),
+                            "attribute_bits_set": [name for position, name in enumerate(RUNTIME_ATTRIBUTE_BIT_NAMES)
+                                                   if changed_bits & result[-1] & (1 << position)],
+                            "attribute_bits_cleared": [name for position, name in enumerate(RUNTIME_ATTRIBUTE_BIT_NAMES)
+                                                       if changed_bits & previous[1][-1] & (1 << position)],
                         }
                     self._record("directory_identity", "identity_changed", reason="project_runtime_tree_changed",
                                  operation="before_after_directory_comparison", site="directory_identity", fields=fields,

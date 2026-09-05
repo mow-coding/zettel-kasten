@@ -966,3 +966,41 @@ remote-storage attributes in [WinNT attribute definitions](https://learn.microso
 - The new exact candidate must still run every required platform and installed
   gate. No failed or cancelled old result is substituted for final acceptance;
   the draft PR cannot be merged until the final candidate is green.
+
+## Remaining unnamed attribute transition in the corrected candidate
+
+- Candidate `6dabd933` run `33978342273` failed installed acceptance at
+  `repair_fresh_resume` (job `101338940440`). The broker entered, runtime
+  preparation did not enter, and the exact directory predicate observed only
+  `attributes` changing. Its known-flag list was empty and
+  `unknown_attribute_bits_changed` was true. Thus the narrow ARCHIVE correction
+  does not resolve this remaining failure; no release or client recovery is
+  claimed. Source/pins/launcher remained exact in the component observation.
+- Windows shard 4 (job `101338940567`) separately completed 1,205 tests with one
+  failure: the source no-op journey stopped on `project_runtime_tree_changed`
+  before reaching its deliberate post-proof content mutation assertion. This
+  later phase lacked the initial-update observer and cannot yet be assigned the
+  installed failure's exact attribute bit.
+- The fixed known-bit table has no duplicate entries or sum/OR discrepancy.
+  The next diagnostic observes all 32 DWORD bit positions and whether each was
+  set or cleared, using only the original exact before/after predicate values.
+  It adds no filesystem reads, retries, unknown-bit normalization, raw values,
+  names, paths, or provider inference. Strict parent validation cross-checks the
+  bit positions against the known-name/unknown-boolean summary and still reads
+  both earlier envelope forms without inventing missing detail.
+- The original source drift call now also runs inside the same bounded observer
+  and formats its failure projection after observer exit. Its expected failure
+  code, actual runtime verification and mutation remain unchanged.
+- Local Windows CPython 3.12 focused validation passed: 12 diagnostic tests in
+  0.311 seconds, then 47 diagnostic/parent-parser/directory-identity/ARCHIVE
+  tests in 2.605 seconds. These include all 32 positions and reject malformed,
+  overlapping, out-of-order or summary-inconsistent transitions. This is not a
+  new installed acceptance result; the final candidate still needs full CI.
+- Independent review found no blocking issue in the three diagnostic/test
+  changes. Python 3.10 grammar compatibility was checked under the available
+  3.12 interpreter, not misreported as a real 3.10 execution. All four readiness
+  gates and 169-file package-resource synchronization also passed locally.
+- The unfinished v0.4.20 worktree remains separate. Authenticated receipt
+  selection and caller-held Git execution have tested checkpoints; immutable
+  original Git context and automatic original-approval resume are not yet a
+  finished public session-backup workflow. No client project was modified.

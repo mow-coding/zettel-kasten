@@ -228,8 +228,9 @@ class UpdateNoopJourneyTests(unittest.TestCase):
                         module.write_bytes(original_module + b"# post-proof mutation\n")
                     return observation
 
+                drift_observation = _FirstUpdateObservation()
                 try:
-                    with mock.patch.object(
+                    with drift_observation.live_components(), drift_observation.runtime_boundaries(), mock.patch.object(
                         project_runtime, "verify_existing_runtime_for_noop",
                         side_effect=change_after_first_proof,
                     ), mock.patch.object(
@@ -241,7 +242,13 @@ class UpdateNoopJourneyTests(unittest.TestCase):
                     ):
                         drift_code, drift_stdout, drift_stderr = helper.run_cli_split(approved)
                     self.assertNotEqual(drift_code, 0, drift_stdout + drift_stderr)
-                    self.assertIn("project_version_update_state_changed_during_runtime_preparation", drift_stdout + drift_stderr)
+                    try:
+                        drift_result = json.loads(drift_stdout)
+                    except (TypeError, ValueError):
+                        drift_result = None
+                    self.assertIn("project_version_update_state_changed_during_runtime_preparation", drift_stdout + drift_stderr,
+                                  drift_observation.diagnostic(native_observed=False, cli_code=drift_code,
+                                                               cli_result=drift_result))
                     self.assert_no_active_update(fixture)
                 finally:
                     module.write_bytes(original_module)
