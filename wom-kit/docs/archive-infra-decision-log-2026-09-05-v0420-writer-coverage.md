@@ -176,3 +176,23 @@ ownership or full artifact backup. Real document changes remain unknown or
 excluded until an actual producer proof or separately approved responsibility
 assignment supplies the right evidence. No client archive was inspected or
 changed by this dispatch audit.
+
+## Subsequent scoped intake-to-Git source checkpoint
+
+The existing Git and source-intake-batch CLI families now have joined scoped
+execution evidence. Public creation/claim and real scoped intake feed exact
+metadata-output proofs into selective Git commit/push. Tests cover a common
+receipt already committed, other-session and unknown exclusions, retained
+original resume and original Git re-review. Historical human-receipt provenance
+remains a separate producer. A prepared capture request is not captured or
+backed-up source bytes; generic documents and objet custody remain outside
+this producer's claim. The scoped domain routes are CLI-only at this checkpoint,
+not completed MCP parity or two fully completed coverage families.
+
+This does not close the remaining writer denominator. Other exact families,
+native/custom capture and daily operations, local record/index/journal effects,
+responsibility assignment and the comprehensive session-coverage gate remain
+unfinished. In particular, legacy objet capture is not a common exact held
+transaction and must not be opened to scoped intake through schema widening.
+Reuse the existing next exact-manifest families before claiming universal writer
+coverage; retain old approvals and already usable legacy modes meanwhile.

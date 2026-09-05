@@ -9,15 +9,33 @@ authenticated started approval after an interruption.
 
 ## The Short Version
 
-### Unreleased v0.4.20 session route: receipt-only, not all documents
+### Unreleased v0.4.20 session route: authenticated outputs, not all documents
 
 The v0.4.20 development branch extends this same command with explicit app,
-task-route and session selection. It currently selects only whole, newly
-created, authenticated session-completion receipts. Other sessions' receipts,
+task-route and session selection. Its original producer selects whole, newly
+created, authenticated session-completion receipts. The next source integration
+also selects exact outputs of a completed scoped intake: source-intake receipts,
+the prepared capture request and the common completion receipt, when each is
+a whole new Git file. Isolated source-CLI tests have verified actual scoped
+commits/pushes, original resume and original re-review; installed acceptance
+and release remain separate gates. Other sessions' outputs,
 mixed or unknown changes and ordinary document changes remain excluded. An
 `artifact_backup_complete: false` result is intentional: this lane does not yet
 prove authorship or backup of arbitrary zet, objet or work files. Do not use
 this development checkpoint as a completed client-recovery or release claim.
+
+The intake producer verifies retained original inputs, original succeeded
+approval authentication, the original session binding and actual output bytes.
+A common receipt that is already committed can still prove other new outputs
+from that same operation. Filenames, timestamps and lookalike JSON are not proof.
+Missing or invalid evidence stays unverified rather than becoming guessed
+ownership. Original Git resume and re-review use the stored exact proof set,
+not newly discovered candidates. Historical v1 scope bytes remain readable.
+
+`selected_output_count` includes a selected capture request;
+`selected_receipt_count` does not count that request as a receipt. Neither count
+means the referenced original files were captured or backed up. Source bytes,
+objets and generic work documents need their own completed producer/backup path.
 
 The client AI obtains the project launcher and opaque references from its
 retained task context. It computes counts, hashes and the complete selected /

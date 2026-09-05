@@ -1,7 +1,9 @@
-"""Internal, receipt-only provenance for an exact Git selection.
+"""Internal, authenticated whole-output provenance for an exact Git selection.
 
-This first producer proves only the whole canonical *new completion receipt* of
-an authenticated work-session decision. It does not prove the documents that a
+The original producer proves the whole canonical *new completion receipt* of
+an authenticated work-session decision. A separate producer verifies exact
+outputs of a completed scoped source-intake batch, including its capture
+request (not captured object bytes). Neither proves the documents that a
 session discussed, nor authorize Git, establish the current claimant, or claim
 that an archive has been backed up. Public routing and approved writer/resume
 composition remain separate work. No names, paths, times, or caller booleans
@@ -71,7 +73,7 @@ class _ReceiptSelection:
     _raw: bytes
 
     def __repr__(self):
-        return "<private receipt-only Git selection; not approval>"
+        return "<private authenticated-output Git selection; not approval>"
 
     def _private_document(self):
         return json.loads(self._raw)
@@ -81,7 +83,7 @@ class _ReceiptSelection:
         partition = data["selection"]
         selected = sum(len(group["change_refs"]) for group in partition["selected_groups"])
         exclusions = partition["excluded_changes"]
-        return {
+        result = {
             "status": "receipt_selection_classified" if selected else "no_eligible_receipts",
             "selected_receipt_count": selected,
             "excluded_change_count": len(exclusions),
@@ -98,6 +100,30 @@ class _ReceiptSelection:
             "artifact_backup_complete": False,
             "private_values_echoed": False,
         }
+        selected_refs = {ref for group in partition["selected_groups"] for ref in group["change_refs"]}
+        intake = [proof for proof in data["proofs"]
+                  if proof["producer"] == "authenticated_source_intake_batch_output"]
+        intake_summary = data.get("intake_provenance_summary")
+        if intake or intake_summary is not None:
+            selected_intake = [proof for proof in intake if proof["change_ref"] in selected_refs]
+            requests = sum(proof["output_kind"] == "prepared_capture_request" for proof in selected_intake)
+            other_requests = sum(proof["output_kind"] == "prepared_capture_request"
+                                 and proof["change_ref"] not in selected_refs for proof in intake)
+            result.update(
+                status="session_output_selection_classified" if selected else "no_eligible_session_outputs",
+                selected_output_count=selected, selected_receipt_count=selected - requests,
+                selected_intake_output_count=len(selected_intake), receipt_only=not requests,
+                other_session_output_count=result["other_session_receipt_count"],
+                other_session_receipt_count=result["other_session_receipt_count"] - other_requests,
+                source_bytes_backed_up=False, artifact_capture_performed=False,
+            )
+            if intake_summary is not None:
+                result.update(
+                    intake_context_count=intake_summary["context_hint_count"],
+                    authenticated_intake_original_count=intake_summary["authenticated_original_count"],
+                    unverified_intake_context_count=intake_summary["unverified_context_hint_count"],
+                )
+        return result
 
 
 def _observe(store, held, options):
@@ -242,7 +268,18 @@ def _select_receipt_changes_held(
         if _observe(store, held, data["options"]) != snapshot._raw:
             raise WorkSessionGitProvenanceError("work_session_git_snapshot_changed")
         rows = data["capture"]["private_changes"]
-        candidates = sum(_RECEIPT_PATH.fullmatch(row["path"]) is not None for row in rows)
+        from . import work_session_intake_git_provenance as intake_provenance
+        intake_selection = intake_provenance._select_intake_output_changes_held(
+            store.root, held=held, snapshot=snapshot, selected_binding=binding, key_provider=key_provider,
+        )
+        intake_data = intake_selection._private_document()
+        intake_proofs = {proof["change_ref"]: proof for proof in intake_data["proofs"]}
+        if len(intake_proofs) != len(intake_data["proofs"]):
+            raise WorkSessionGitProvenanceError()
+        # Intake outputs are authenticated once per original, not once per
+        # changed output or by falling through the human-decision parser.
+        candidates = sum(_RECEIPT_PATH.fullmatch(row["path"]) is not None
+                         and row["public_observation"]["change_ref"] not in intake_proofs for row in rows)
         if candidates > _MAX_RECEIPT_CANDIDATES:
             raise WorkSessionGitProvenanceError("work_session_git_receipt_limit")
         selected, excluded, proofs, unverified = [], [], [], 0
@@ -250,8 +287,8 @@ def _select_receipt_changes_held(
             store._require_held_lock(held)
             change_ref = row["public_observation"]["change_ref"]
             match = _RECEIPT_PATH.fullmatch(row["path"])
-            proof = None
-            if match is not None and _new_whole_receipt(row):
+            proof = intake_proofs.get(change_ref)
+            if proof is None and match is not None and _new_whole_receipt(row):
                 try:
                     proof = _authenticated_receipt(
                         store, held, row, "sha256:" + match[1], key_provider=key_provider,
@@ -274,12 +311,14 @@ def _select_receipt_changes_held(
             excluded.append({"change_ref": change_ref, "scope": scope,
                              "reason": writer.GIT_BACKUP_EXCLUSION_REASONS[scope]})
         groups, group_rows = [], []
+        has_selected_intake = any(row["public_observation"]["change_ref"] in intake_proofs for row in selected)
 
         def flush_group():
             if group_rows:
                 groups.append({"group_id": "group:session-receipts-" + str(len(groups) + 1).zfill(6),
                                "change_refs": sorted(row["public_observation"]["change_ref"] for row in group_rows),
-                               "commit_subject": "Back up authenticated session receipts"})
+                               "commit_subject": ("Back up authenticated session outputs" if has_selected_intake
+                                                  else "Back up authenticated session receipts")})
                 group_rows.clear()
 
         for row in selected:
@@ -303,9 +342,12 @@ def _select_receipt_changes_held(
                 raise
         if _observe(store, held, data["options"]) != snapshot._raw:
             raise WorkSessionGitProvenanceError("work_session_git_snapshot_changed")
-        return _ReceiptSelection(_canonical({
+        result = {
             "selection": partition, "proofs": proofs,
             "selected_identity_binding": binding.document(),
             "unverified_receipt_candidates": unverified,
-        }))
+        }
+        if intake_data["hint_inventory_state"] == "present":
+            result["intake_provenance_summary"] = intake_selection.public_summary()
+        return _ReceiptSelection(_canonical(result))
     return _safe_failure(select)

@@ -1883,6 +1883,46 @@ bump, PR, tag, wheel or client application has occurred.
   current ownership and every actual effect while reusing existing publication
   primitives. No capture code changed during this analysis.
 
+### Joined intake-output Git acceptance and compatibility checkpoint
+
+- The shared historical reader checkpoint was committed/pushed in `b45f1229`.
+  The remaining Git integration then passed both corrected actual source-CLI
+  journeys on unchanged product sources. The test file is
+  `DF71449C31ECF47591AF203FBE853D0465C46763AF5E503E313F2816B7042177`:
+  first case 182.310 seconds; original re-review case 204.780 seconds, each
+  exit 0 with no skips. They were separate runs, not a single final two-test
+  run; concurrent isolated functional work is not performance evidence.
+- Both tests use actual public app/session creation and claims, actual scoped
+  intakes, actual Git commits and a temporary bare-remote push. Native input,
+  archive key bytes and the existing local-transport/read-only legacy handoff
+  fixture are explicitly synthetic. No actor, producer proof or domain writer
+  is substituted. The installed-project/wheel path is not being claimed here.
+- An already-committed common receipt still identifies the three remaining
+  exact A outputs. Four B outputs are authenticated as other-session; copied
+  source-shaped JSON and ordinary documents stay unknown. Worktree bytes,
+  pre-existing staged entries, ignore behavior, source binaries and B actor
+  state remain unchanged. Independent local/bare-remote refs and blob IDs agree.
+- The first test makes one actual commit, interrupts before its push, and
+  resumes from the same retained context without a second commit, new planner,
+  hint inventory, selection, native approval or claim. Completed replay does
+  not write or resign. The second interrupts before claim publication and
+  explicitly re-reviews exactly the original context/pending actor before the
+  real commit/push. Both interruption sentinels must actually be called once.
+- Existing v1 provenance's full 12-test cohort passed in 239.025 seconds, with
+  no skips and no source changes. Its existing public-command continuation
+  cohort subsequently passed both tests in 228.027 seconds, with no skips and
+  exit 0. All 14 existing regression tests passed on the same frozen sources;
+  the first cohort overlapped other isolated functional tests, not a performance
+  measurement. Four staged public readiness checks and all 169 package resources
+  passed. New projection counts separate capture requests from
+  receipts and keep source custody/artifact completion false. No client data,
+  runtime, credentials, provider state or feedback status was modified.
+- This source integration is ready for its development checkpoint, not for a
+  v0.4.20 release judgment. Installed-wheel acceptance, remaining writer and
+  effect coverage, domain MCP parity, artifact custody and responsibility
+  assignment remain open. No new task command or parallel approval system was
+  added by the intake-output Git integration.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)

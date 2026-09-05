@@ -239,6 +239,10 @@ replay verifies output receipts and the prepared capture request, not absent
 source inputs; it can therefore remain read-only after caller JSON/source
 removal. `original_completion_verified` is not a claim that the source bytes
 were captured, uploaded or backed up. Source intake still reports
-`artifact_capture_performed: false`. The scoped downstream capture and Git
-producer must be connected and verified before advertising an end-to-end
-preservation workflow. Do not delete source files based on intake completion.
+`artifact_capture_performed: false`. The development integration now connects
+these exact metadata outputs to scoped Git backup; isolated source-CLI tests
+verify actual commits/pushes and original continuation. This is not installed
+or release acceptance and does not include the referenced source bytes: scoped capture
+and its independent preservation proof are still separate unfinished work.
+Do not advertise end-to-end source preservation or delete source files based on
+intake completion or metadata backup.
