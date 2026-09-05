@@ -555,3 +555,95 @@ not complete at this checkpoint.
   found no additional blocker. Root also independently passed the fifteen
   installed-failure observation tests in 18.294 seconds. Final installed-wheel
   and supported-platform evidence is still required for this new candidate.
+
+## Candidate import correction exposed a coupled index contract
+
+- Candidate `17ee34d5` fixed the observed long-path native import, but its full
+  CI exposed a separate integration regression: changing the metadata helper's
+  import lines changed its exact source hash. The index authority pins that
+  helper and the generated singleton metadata SQL also embeds its hash. The
+  focused normalization cohort did not cover that downstream contract. It was
+  insufficient acceptance evidence, and this candidate must not be released.
+- Merely refreshing the hash and generated schema is not automatically safe:
+  an existing index retains the old exact SQL CHECK, and the current rebuild
+  validates that DDL before replacing rows. An import-path correction should
+  not silently introduce a new legacy database migration. No pin, schema or
+  migration edit was made while the smaller compatibility option was reviewed.
+- The new complete local installed checker failed its unchanged 1,200-second
+  runtime-child limit during repair continuation. The original update, healthy
+  same-version no-op, source/ref drift refusals, repair preparation and cut
+  validation had passed. The first update took 434.453 seconds and repair
+  preparation took 281.593 seconds; these are observations, not performance
+  acceptance. The final diagnostic says incomplete/failed and cannot be counted
+  as a successful installed journey. Earlier preserved failure fixtures remain
+  separate evidence; the full checker's internal temporary fixture was cleaned
+  by its existing failure cleanup.
+- The corresponding CI installed journey failed during repair continuation,
+  and a Windows source journey independently reported an invalid transaction
+  transition during its first actual update. Neither has yet been attributed
+  to the metadata pin regression. The observer is being extended only with
+  fixed registered transaction-function coordinates to identify the actual
+  refusal; it does not collect state values or raw exception text.
+- Work continues in the existing development worktrees. The integration PR
+  remains a draft, no release/tag or client completion is claimed, and the
+  client runtime, archive, credentials and provider state remain untouched.
+- Independent design review selected a lazy, one-dependency standard finder
+  instead of any legacy-index migration. The normalization helper's exact
+  original bytes and existing generated schema remain unchanged. This revises
+  the earlier import-hook restriction explicitly: only process-local finder
+  registration changes, not the computer PATH or package search locations.
+  Standard Python import owns module locking, initialization and cache cleanup.
+- Review then reproduced a one-shot path-entry finder succeeding with one
+  normal selection but failing when the initial hook caused a second lookup.
+  The hook must return an already selected short/custom specification unchanged;
+  only the exact long Windows native specification may be transformed. This is
+  a compatibility correction, not permission to override custom precedence.
+- The bounded existing actual update/no-op/revalidation source journey passed
+  once in 627.67 seconds. Its seven CLI cases shared one fixture; this duration
+  is not a measurement of first update alone. The CI transition failure was
+  not reproduced, so it remains unconfirmed, not fixed by this local result.
+- Reading the failed installed CI log also showed that repair-worker failure
+  evidence was lost before reaching the parent. The same strict content-free
+  observer is therefore being connected to that one original resume invocation.
+  Only two fixed diagnostic stages are accepted. Unknown or malformed child
+  output remains a generic failure; no retry, deadline extension or success
+  schema change is introduced.
+- The final lazy-hook/metadata cohort passed 51 tests and 33 subtests in
+  21.73 seconds. The separate existing Unicode, credential, index/rebuild and
+  startup cohort passed 179 tests and 125 subtests with two host-dependent
+  skips in 76.05 seconds. A thirteen-case POSIX spec-factory simulation passed;
+  it is not real Linux execution. Windows-literal spec fixtures were corrected
+  because POSIX `spec_from_file_location` otherwise converts that spelling to a
+  POSIX path. Actual Windows native-extension tests remain unmocked.
+- Independent native-import review directly compared the helper with its prior
+  source bytes and confirmed unchanged schema/pins. It found no further
+  release-blocking issue in this bounded correction. The documented limitation
+  is an extra lookup after a missing path specification; later meta-finder
+  fallback is retained rather than replacing the interpreter's path finder.
+- The new repair observation initially reached an old first-update-only reason
+  check and failed two small tests. It now accepts exactly the two registered
+  stage/reason pairs and refuses cross-stage impersonation. The final twenty-two
+  diagnostic tests and 25 subtests passed in 30.22 seconds, including real
+  nonzero-child output forwarding through the strict outer parser. Failure of
+  a harness postcondition after successful CLI return remains a generic failure,
+  not a claim that every possible cause is now captured.
+- Root independently ran the final combined native-import and failure-observer
+  files unchanged: 39 tests and 58 subtests passed in 34.02 seconds. Its separate
+  three actual native/index/cold-version cases had also passed in 20.33 seconds.
+  These overlapping cohorts are not summed as unique test coverage. All four
+  release-readiness gates and the 169-resource synchronization check passed.
+- The canonical checkout remained clean and matched local main, origin/main
+  and the actual remote ref. The only open PR remained the draft integration
+  PR; open secret alerts were zero at this check. That alert count is not a
+  no-leak guarantee. Final full CI and installed public workflow must still
+  pass on the consolidated candidate; no prior success substitutes for them.
+- Independent review of the final repair observer found no additional blocker.
+  It verified original-call forwarding, bounded stage/reason pairing, no raw
+  private values and unchanged writer, cut, timeouts and postconditions. The
+  reviewer did not claim an additional test run or a product recovery success.
+- Execution order was revised for efficiency after this candidate froze: the
+  previous failed run had twelve completed jobs and one Windows shard still
+  running. Its completed evidence is retained, but the remaining old-candidate
+  job is superseded by the consolidated candidate's complete new matrix. That
+  unfinished old lane is not counted as passed or fully audited. No new
+  candidate check is skipped and no prior candidate result waives a release gate.
