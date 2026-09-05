@@ -64,8 +64,8 @@ class V0412FixedCloseSurfaceTruthTests(unittest.TestCase):
                     help_text,
                 )
                 self.assertIn(
-                    "specific exact compound human-approval binding",
-                    help_text,
+                    "operation-specific exact compound human-approval path",
+                    " ".join(help_text.split()),
                 )
 
     def test_runtime_refusal_happens_before_archive_or_source_reads(self) -> None:

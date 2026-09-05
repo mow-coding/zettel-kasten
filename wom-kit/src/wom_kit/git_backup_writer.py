@@ -31,6 +31,7 @@ from . import git_backup_plan as planning
 from .exact_human_approval import (
     _ClaimedExactHumanApproval,
     exact_human_approval_archive_identity_sha256,
+    exact_human_approval_context_sha256,
 )
 from .exact_human_approval_windows import (
     ExactHumanApprovalContext,
@@ -778,6 +779,14 @@ def load_private_git_backup_bundle(
     if not raw.endswith(b"\n"):
         raise _fail("git_backup_manifest_drifted")
     document = _strict_json(raw[:-1])
+    return _decode_private_git_backup_bundle(root, document, manifest_sha256=manifest_sha256)
+
+
+def _decode_private_git_backup_bundle(
+    root: Path, document: Mapping[str, Any], *, manifest_sha256: str,
+) -> PreparedGitBackup:
+    """Reconstruct exact execution facts without trusting convenience views."""
+
     if set(document) != {
         "schema",
         "archive_id",
@@ -922,6 +931,22 @@ def load_private_git_backup_bundle(
             or source.get("changes") != private_changes
         ):
             raise _fail("git_backup_manifest_drifted")
+        source_refs: list[str] = []
+        source_paths: list[str] = []
+        for row in private_changes:
+            public = row.get("public_observation")
+            if not isinstance(public, Mapping) or type(public.get("change_ref")) is not str:
+                raise _fail("git_backup_manifest_drifted")
+            source_refs.append(public["change_ref"])
+            for key in ("path", "original_path"):
+                path_value = row.get(key)
+                if path_value is None and key == "original_path":
+                    continue
+                if type(path_value) is not str or not path_value:
+                    raise _fail("git_backup_manifest_drifted")
+                source_paths.append(path_value)
+        if source_refs != change_refs or sorted(set(source_paths)) != paths:
+            raise _fail("git_backup_manifest_drifted")
         target_identity = _sha256_json(
             {
                 "schema": "wom-kit/git-backup-commit-group-target/v1",
@@ -1027,6 +1052,36 @@ def load_private_git_backup_bundle(
         max_changes=document["max_changes"],
         max_changed_bytes=document["max_changed_bytes"],
     )
+
+
+def _freeze_validated_prepared(prepared: PreparedGitBackup) -> PreparedGitBackup:
+    """Deeply detach execution observations only after all source bindings match.
+
+    The historical bundle decoder already checks source observations, paths,
+    commit subjects, remote facts and the reconstructed manifest. Reuse it in
+    memory before any operation file or Git mutation; a frozen dataclass alone
+    does not freeze the nested dictionaries held by a caller.
+    """
+
+    try:
+        if type(prepared) is not PreparedGitBackup:
+            raise _fail("git_backup_manifest_drifted")
+        raw = _canonical(_bundle_document(prepared))
+        if len(raw) + 1 > GIT_BACKUP_MAX_PRIVATE_BUNDLE_BYTES:
+            raise _fail("git_backup_manifest_drifted")
+        root = archive_services.require_existing_archive_root(prepared.root)
+        frozen = _decode_private_git_backup_bundle(
+            root, _strict_json(raw), manifest_sha256=prepared.manifest.manifest_sha256,
+        )
+        # Includes derived commit-message bytes, which the bundle deliberately
+        # reconstructs rather than retaining as another independent authority.
+        if frozen != prepared:
+            raise _fail("git_backup_manifest_drifted")
+        return frozen
+    except Exception:
+        pass
+    # Do not retain a rejected private value through exception chaining.
+    raise _fail("git_backup_manifest_drifted")
 
 
 def _private_change_projection(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -2191,6 +2246,7 @@ def _git_backup_post_decision_boundary(
     prepared: PreparedGitBackup,
     lock_box: dict[str, ExactOperationWriterLock],
 ):
+    _freeze_validated_prepared(prepared)
     claims_parent = (
         prepared.root
         / "profiles"
@@ -2233,6 +2289,15 @@ def _apply_prepared_with_claim(
     resume: bool,
     progress_hook: Callable[[ExactOperationProgress], None] | None,
 ) -> dict[str, Any]:
+    prepared = _freeze_validated_prepared(prepared)
+    expected_context = _git_backup_approval_context(
+        prepared, reviewer_claim=context.reviewer_claim,
+    )
+    if not hmac.compare_digest(
+        exact_human_approval_context_sha256(context),
+        exact_human_approval_context_sha256(expected_context),
+    ):
+        raise _fail("git_backup_manifest_drifted")
     reference = claim.assert_ready_for_context(context)
     authority = ExactOperationApprovalAuthority.from_reference(reference)
     _persist_private_bundle(prepared, writer_lock=writer_lock)
@@ -2274,6 +2339,21 @@ def _apply_prepared_with_claim(
     }
 
 
+def _git_backup_approval_context(
+    prepared: PreparedGitBackup, *, reviewer_claim: str,
+) -> ExactHumanApprovalContext:
+    binding = exact_operation_manifest_approval_binding(
+        prepared.manifest,
+        operation=ExactHumanApprovalOperation.git_backup,
+        archive_id=prepared.archive_id,
+        warnings=(
+            "git_backup_push_has_no_automatic_revert",
+            "completion_receipt_is_written_after_push",
+        ),
+    )
+    return binding.context(archive_id=prepared.archive_id, reviewer_claim=reviewer_claim)
+
+
 def execute_git_backup(
     prepared: PreparedGitBackup,
     *,
@@ -2285,19 +2365,8 @@ def execute_git_backup(
 ) -> dict[str, Any]:
     """Show one native approval, then re-observe, commit, push, and verify."""
 
-    binding = exact_operation_manifest_approval_binding(
-        prepared.manifest,
-        operation=ExactHumanApprovalOperation.git_backup,
-        archive_id=prepared.archive_id,
-        warnings=(
-            "git_backup_push_has_no_automatic_revert",
-            "completion_receipt_is_written_after_push",
-        ),
-    )
-    context = binding.context(
-        archive_id=prepared.archive_id,
-        reviewer_claim=reviewer_claim,
-    )
+    _freeze_validated_prepared(prepared)
+    context = _git_backup_approval_context(prepared, reviewer_claim=reviewer_claim)
     lock_box: dict[str, ExactOperationWriterLock] = {}
 
     def writer(claim: _ClaimedExactHumanApproval) -> Mapping[str, Any]:
@@ -2350,19 +2419,8 @@ def resume_git_backup(
 ) -> dict[str, Any]:
     """Resume one authenticated started claim and its exact checkpoint only."""
 
-    binding = exact_operation_manifest_approval_binding(
-        prepared.manifest,
-        operation=ExactHumanApprovalOperation.git_backup,
-        archive_id=prepared.archive_id,
-        warnings=(
-            "git_backup_push_has_no_automatic_revert",
-            "completion_receipt_is_written_after_push",
-        ),
-    )
-    context = binding.context(
-        archive_id=prepared.archive_id,
-        reviewer_claim=reviewer_claim,
-    )
+    _freeze_validated_prepared(prepared)
+    context = _git_backup_approval_context(prepared, reviewer_claim=reviewer_claim)
     lock_box: dict[str, ExactOperationWriterLock] = {}
     authority_box: dict[str, ExactOperationApprovalAuthority] = {}
 

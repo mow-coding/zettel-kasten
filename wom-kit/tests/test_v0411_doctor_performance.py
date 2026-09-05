@@ -1577,6 +1577,19 @@ class DoctorReadCacheTests(unittest.TestCase):
     def test_fallback_file_read_is_followed_by_final_directory_barrier(
         self,
     ) -> None:
+        from types import SimpleNamespace
+
+        for observer_kind in ("host", "posix"):
+            observer = (
+                os if observer_kind == "host"
+                else SimpleNamespace(**(vars(os) | {"name": "posix"}))
+            )
+            with self.subTest(observer_kind=observer_kind), mock.patch.object(
+                archive_cli, "os", observer,
+            ):
+                self._assert_fallback_read_then_final_directory_barrier()
+
+    def _assert_fallback_read_then_final_directory_barrier(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "archive"
             path = root / "nested" / "cached.json"
@@ -1600,32 +1613,55 @@ class DoctorReadCacheTests(unittest.TestCase):
             doctor._archive_tree_file_identities.pop(
                 doctor._archive_tree_key(relative or ".")
             )
-            original_lstat = os.lstat
-            target_observations = 0
+            original_lstat = archive_cli.os.lstat
+            original_progress = doctor._progress
+            original_directory_observation = doctor._observe_inventory_directory_generation
+            phase = "initial"
+            file_read_phases: list[str] = []
+            late_parent_observations: list[tuple[str, bool]] = []
+            mutation_count = 0
 
-            def mutate_after_second_file_barrier(
+            def observe_file_read(
                 candidate: object,
             ) -> os.stat_result:
-                nonlocal target_observations
                 observed = original_lstat(candidate)
                 if Path(candidate) == canonical_path:
-                    target_observations += 1
-                    # On Windows native pass 1 does not lstat the child.  Full
-                    # pass 2 observes it first and fallback file pass 1/2 are
-                    # observations 2/3.  Change a different inventoried parent
-                    # after the final file read, where omitting pass 3 misses it.
-                    mutation_observation = 3 if os.name == "nt" else 4
-                    if target_observations == mutation_observation:
-                        (late_parent / "late.json").write_text(
-                            "{}\n",
-                            encoding="utf-8",
-                        )
+                    file_read_phases.append(phase)
                 return observed
+
+            def mutate_after_second_file_barrier(stage, message, current, total):
+                nonlocal phase, mutation_count
+                original_progress(stage, message, current, total)
+                phase = message
+                if (
+                    stage == "doctor-cache-snapshot-revalidation"
+                    and message == "file generation barrier pass 2 done"
+                ):
+                    # Trigger at the real completed fallback barrier, not an
+                    # OS-dependent lstat ordinal. POSIX descriptor-bound SHA
+                    # verification legitimately adds path observations here.
+                    self.assertEqual((current, total), (1, 1))
+                    mutation_count += 1
+                    (late_parent / "late.json").write_text("{}\n", encoding="utf-8")
+
+            def observe_directory(relative, **kwargs):
+                result = original_directory_observation(relative, **kwargs)
+                if relative == "late-parent":
+                    late_parent_observations.append((phase, result is None))
+                return result
 
             with mock.patch.object(
                 archive_cli.os,
                 "lstat",
+                side_effect=observe_file_read,
+            ), mock.patch.object(
+                doctor,
+                "_progress",
                 side_effect=mutate_after_second_file_barrier,
+            ), mock.patch.object(
+                doctor,
+                "_observe_inventory_directory_generation",
+                side_effect=observe_directory,
             ):
                 doctor._finalize_run_file_generation_snapshots()
 
@@ -1634,11 +1670,16 @@ class DoctorReadCacheTests(unittest.TestCase):
                 for item in doctor.diagnostics
                 if item.code == "doctor_cache_snapshot_stale"
             )
-            # The last observation is the target entry in the required full
-            # directory barrier after the file fallback described above.
-            self.assertEqual(
-                target_observations,
-                4 if os.name == "nt" else 5,
+            self.assertEqual(mutation_count, 1)
+            self.assertIn("file generation barrier pass 1", file_read_phases)
+            self.assertIn("file generation barrier pass 2", file_read_phases)
+            self.assertIn(
+                ("directory membership barrier pass 2", False),
+                late_parent_observations,
+            )
+            self.assertIn(
+                ("directory membership barrier pass 3", True),
+                late_parent_observations,
             )
             self.assertEqual(stale.details["changed_file_count"], 0)
             self.assertGreaterEqual(
