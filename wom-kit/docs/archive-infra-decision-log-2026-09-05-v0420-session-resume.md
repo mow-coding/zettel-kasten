@@ -361,3 +361,25 @@ reuses the existing scheduler and cancellation boundary. Its heartbeat may say
 that it is waiting for another observed status; it must not invent processed
 items. Metadata receipt completion is neither source capture nor Git backup
 producer authentication. Those downstream contracts remain separate work.
+
+## Single-record proof shares the historical engine, not batch identity
+
+Extend the same closed historical reader for record and batch originals.
+Select only known family codecs, exact evidence expressions and strict output
+verifiers; never accept caller-supplied modules or authentication callbacks.
+Distinct exact record image/authenticated types prevent a batch consumer from
+silently accepting an unrelated operation. Preserve every original approval,
+scope digest, batch proof byte and v1 Git scope.
+
+The explicit single-record Git producer proves just its original source
+receipt and whole common completion file. Reuse the existing v2 proof shape,
+selective writer and original-resume pipeline. Two fixed context inventories
+remain bounded hints, not authorship or approval; a stored Git continuation
+uses retained producer references rather than rediscovering either directory.
+Unknown, other-session and conflicting authenticated attribution cannot be
+silently committed. Source/capture custody is still outside this proof.
+
+Tests must authenticate actual original record and establishment MACs, refuse
+wrong-family and linked outputs, and execute real selective commit/push with
+interruption and identifier-free original continuation. Source-level evidence,
+installed-wheel acceptance and client execution remain separate milestones.

@@ -8,6 +8,7 @@ metadata, and never re-read the caller request or the original source bodies.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 import os
 import stat
 
@@ -15,12 +16,15 @@ from . import exact_human_approval as approval
 from . import exact_human_approval_workflow as broker
 from . import exact_operation_manifest as exact
 from . import source_intake_batch_exact as intake
+from . import source_intake_record_exact as record
 from . import work_session_bundle as controls
 from . import work_session_establishment as establishment
 from . import work_session_execution as session_execution
 from . import work_session_operation as session_operation
 from . import work_session_registry as registry
 from . import work_session_source_intake_bundle as bundle
+from . import work_session_source_intake_record_bundle as record_bundle
+from . import work_session_source_intake_record_execution as record_execution
 
 
 _ERRORS = frozenset({
@@ -30,6 +34,11 @@ _ERRORS = frozenset({
     "work_session_intake_completion_lock_required",
 })
 _MAX_CLAIM_IMAGE_BYTES = 32 * 1024 * 1024
+
+
+class _IntakeFamily(Enum):
+    BATCH = "source_intake_batch"
+    RECORD = "source_intake_record"
 
 
 class WorkSessionIntakeCompletionError(RuntimeError):
@@ -48,6 +57,11 @@ def _safe_call(call):
         if error.code == "work_session_intake_bundle_lock_required":
             code = "work_session_intake_completion_lock_required"
         elif error.code == "work_session_intake_bundle_missing":
+            code = "work_session_intake_completion_missing"
+    except record_bundle.WorkSessionIntakeRecordBundleError as error:
+        if error.code == "work_session_intake_record_bundle_lock_required":
+            code = "work_session_intake_completion_lock_required"
+        elif error.code == "work_session_intake_record_bundle_missing":
             code = "work_session_intake_completion_missing"
     except broker.ExactHumanApprovalWorkflowError as error:
         if error.code == "exact_human_approval_resume_candidate_missing":
@@ -81,15 +95,24 @@ class _Original:
     store: object
     origin: object
     origin_raw: bytes
+    family: _IntakeFamily = _IntakeFamily.BATCH
 
 
-def _original(root, held, manifest_sha256, context_sha256):
+def _original(root, held, manifest_sha256, context_sha256, *, family=_IntakeFamily.BATCH):
     if not registry._is_digest(manifest_sha256) or not registry._is_digest(context_sha256):
         raise WorkSessionIntakeCompletionError()
-    bound = bundle._load_original_source_intake_context_held(root,
-        manifest_sha256=manifest_sha256, held=held)
-    prepared, context = bundle._decode_context(bound._root, bound._raw, manifest_sha256)
-    plan, scope, _rows = bundle._decode_prepared(prepared._root, prepared._raw)
+    if family is _IntakeFamily.BATCH:
+        bound = bundle._load_original_source_intake_context_held(root,
+            manifest_sha256=manifest_sha256, held=held)
+        prepared, context = bundle._decode_context(bound._root, bound._raw, manifest_sha256)
+        plan, scope, _rows = bundle._decode_prepared(prepared._root, prepared._raw)
+    elif family is _IntakeFamily.RECORD:
+        bound = record_bundle._load_original_source_intake_record_context_held(root,
+            manifest_sha256=manifest_sha256, held=held)
+        prepared, context = record_bundle._decode_context(bound._root, bound._raw, manifest_sha256)
+        plan, scope, _input = record_bundle._decode_prepared(prepared._root, prepared._raw)
+    else:
+        raise WorkSessionIntakeCompletionError()
     if approval.exact_human_approval_context_sha256(context) != context_sha256:
         raise _invalid()
     store, _archive = session_execution._store(plan.archive_root)
@@ -99,21 +122,58 @@ def _original(root, held, manifest_sha256, context_sha256):
     origin = establishment.load_original_establishment(store, selector=selector,
         client_app_ref=binding.client_app_ref, task_route_ref=scope.document()["task_route_ref"],
         work_session_ref=binding.work_session_ref)
-    original = _Original(prepared, context, plan, scope, bound._raw, store, origin, origin_raw)
+    original = _Original(prepared, context, plan, scope, bound._raw, store, origin, origin_raw, family)
     _require_original(original, held)
     return original
 
 
 def _require_original(original, held):
     plan, scope = original.plan, original.scope.document()
-    bundle._held_root(plan.archive_root, held)
-    if (bundle._read_raw(plan.archive_root, plan.manifest.manifest_sha256) != original.raw
+    if original.family is _IntakeFamily.BATCH:
+        bundle._held_root(plan.archive_root, held)
+        raw = bundle._read_raw(plan.archive_root, plan.manifest.manifest_sha256)
+    elif original.family is _IntakeFamily.RECORD:
+        record_bundle._held_root(plan.archive_root, held)
+        raw = record_bundle._read_raw(plan.archive_root, plan.manifest.manifest_sha256)
+    else:
+        raise WorkSessionIntakeCompletionError()
+    if (raw != original.raw
             or controls._read_bundle_raw(original.store, original.origin.context.plan_sha256) != original.origin_raw
             or plan.manifest.operation_evidence.document()["digests"]["session_scope_sha256"] != scope["scope_sha256"]
             or plan.manifest.work_session_binding.document() != scope["work_session_binding"]
-            or intake.approval_context(plan, reviewer_claim=original.context.reviewer_claim, allow_resume=True)
+            or (intake.approval_context(plan, reviewer_claim=original.context.reviewer_claim, allow_resume=True)
+                if original.family is _IntakeFamily.BATCH else
+                record.approval_context(plan, reviewer_claim=original.context.reviewer_claim))
                 != original.context):
         raise WorkSessionIntakeCompletionError("work_session_intake_completion_changed")
+
+
+def _completion_evidence_view(original, *, reference, execution, final):
+    if original.family is _IntakeFamily.BATCH:
+        return intake._source_intake_batch_completion_evidence_view(original.plan, context=original.context,
+            reference=reference, execution=execution, final=final)
+    if original.family is _IntakeFamily.RECORD:
+        return record_execution._source_intake_record_completion_evidence_view(original.plan,
+            context=original.context, reference=reference, execution=execution, final=final)
+    raise WorkSessionIntakeCompletionError()
+
+
+def _output_verifier(original):
+    if original.family is _IntakeFamily.BATCH:
+        return intake._Verifier(original.plan)
+    if original.family is _IntakeFamily.RECORD:
+        return record_execution._Verifier(original.plan)
+    raise WorkSessionIntakeCompletionError()
+
+
+def _verify_own_completion(original, claim, held):
+    if original.family is _IntakeFamily.BATCH:
+        return intake._verify_source_intake_batch_completion_with_claim_held(original.plan,
+            context=original.context, claim=claim, writer_lock=held)
+    if original.family is _IntakeFamily.RECORD:
+        return record_execution._verify_source_intake_record_completion_with_claim_held(original.plan,
+            context=original.context, claim=claim, writer_lock=held)
+    raise WorkSessionIntakeCompletionError()
 
 
 def _final_image(root, execution, held):
@@ -251,17 +311,24 @@ class _SessionSourceIntakeCompletionImage:
             "work_session_binding": self.plan.manifest.work_session_binding.document()}
 
 
+@dataclass(frozen=True, slots=True, repr=False)
+class _SessionSourceIntakeRecordCompletionImage(_SessionSourceIntakeCompletionImage):
+    """Single-record DATA ONLY, not a batch result or authenticated proof."""
+
+    def __repr__(self):
+        return "<private single-intake completion image; unauthenticated data>"
+
+
 def _image(original, execution, held):
     _require_original(original, held)
     plan, context, scope = original.plan, original.context, original.scope.document()
     final, relative, raw, checkpoint, claim_raw = _final_image(plan.archive_root, execution, held)
     reference = final["result"]["completion_authentication"]["approval_reference"]
-    intake._source_intake_batch_completion_evidence_view(plan, context=context,
-        reference=reference, execution=execution, final=final)
+    _completion_evidence_view(original, reference=reference, execution=execution, final=final)
     origin_final, _origin_path, origin_raw, origin_checkpoint, origin_claim = _final_image(
         plan.archive_root, scope["establishment_execution_sha256"], held)
     _origin_evidence(original, origin_final)
-    if (exact.verify_exact_operation(plan.manifest, verifier=intake._Verifier(plan), state="post",
+    if (exact.verify_exact_operation(plan.manifest, verifier=_output_verifier(original), state="post",
             heartbeat=held.verify_held)["all_match"] is not True
             or exact.verify_exact_operation(original.origin.prepared.manifest,
                 verifier=session_operation._Verifier(original.store, original.origin.prepared), state="post",
@@ -276,14 +343,23 @@ def _image(original, execution, held):
         outputs[path] = {"output_kind": kind, "target_kind": target_kind, "field_ref": field_ref,
             "sha256": intake._sha_bytes(value), "size_bytes": len(value), "output_identity_sha256": identity}
         files.append(("output:" + path, value))
-    for item in plan.items:
-        add(item.receipt_relative_path, item.receipt_bytes, "source_intake_receipt",
-            intake.TARGET_KIND, intake.FIELD_REF, item.source_intake_plan_sha256)
-    artifact = plan.prepared_capture_request
-    add(artifact.relative_path, artifact.request_bytes, "prepared_capture_request",
-        intake.CAPTURE_REQUEST_TARGET_KIND, intake.CAPTURE_REQUEST_FIELD_REF, artifact.request_sha256)
+    if original.family is _IntakeFamily.BATCH:
+        for item in plan.items:
+            add(item.receipt_relative_path, item.receipt_bytes, "source_intake_receipt",
+                intake.TARGET_KIND, intake.FIELD_REF, item.source_intake_plan_sha256)
+        artifact = plan.prepared_capture_request
+        add(artifact.relative_path, artifact.request_bytes, "prepared_capture_request",
+            intake.CAPTURE_REQUEST_TARGET_KIND, intake.CAPTURE_REQUEST_FIELD_REF, artifact.request_sha256)
+    elif original.family is _IntakeFamily.RECORD:
+        add(plan.receipt_relative_path, plan.receipt_bytes, "source_intake_receipt",
+            record.TARGET_KIND, record.FIELD_REF, plan.source_intake_plan_sha256)
+    else:
+        raise WorkSessionIntakeCompletionError()
     add(relative, raw, "common_completion_receipt", "exact_operation_final_receipt", "receipt_bytes", execution)
     _require_original(original, held)
+    if original.family is _IntakeFamily.RECORD:
+        return _SessionSourceIntakeRecordCompletionImage(original, execution, tuple(files), raw, origin_raw,
+                                                       bundle._canonical(outputs))
     return _SessionSourceIntakeCompletionImage(original, execution, tuple(files), raw, origin_raw,
                                               bundle._canonical(outputs))
 
@@ -328,6 +404,14 @@ class _VerifiedSessionSourceIntakeCompletion:
         return self._image.approved_output_map()
 
 
+@dataclass(frozen=True, slots=True, repr=False)
+class _VerifiedSessionSourceIntakeRecordCompletion(_VerifiedSessionSourceIntakeCompletion):
+    """Historical single-record proof, never source custody or write authority."""
+
+    def __repr__(self):
+        return "<private authenticated single-intake completion; no current ownership authority>"
+
+
 def _authenticate(image, claim, held):
     original, context, plan = image._original, image.context, image.plan
     if (type(claim) is not approval._ClaimedExactHumanApproval
@@ -337,8 +421,8 @@ def _authenticate(image, claim, held):
     _require_original(original, held)
     final = _final_document(image._final_raw)
     reference = final["result"]["completion_authentication"]["approval_reference"]
-    authority, auth, payload = intake._source_intake_batch_completion_evidence_view(plan,
-        context=context, reference=reference, execution=image.execution_sha256, final=final)
+    authority, auth, payload = _completion_evidence_view(original,
+        reference=reference, execution=image.execution_sha256, final=final)
     origin_auth, origin_payload = _origin_evidence(original, _final_document(image._origin_final_raw))
     for row, expected, value in ((auth, context, payload), (origin_auth, original.origin.context, origin_payload)):
         if not claim.exact_terminal_record_matches(row["approval_reference"], expected.operation,
@@ -356,6 +440,8 @@ def _verified(original, execution, claim, held):
     if observed._files != image._files:
         raise WorkSessionIntakeCompletionError("work_session_intake_completion_changed")
     _authenticate(observed, claim, held)
+    if original.family is _IntakeFamily.RECORD:
+        return _VerifiedSessionSourceIntakeRecordCompletion(image, bundle._canonical(image.proof_document()))
     return _VerifiedSessionSourceIntakeCompletion(image, bundle._canonical(image.proof_document()))
 
 
@@ -380,8 +466,12 @@ def _verify_completed_session_source_intake_with_claim_held(root, *, held, manif
 def _read_completed_session_source_intake_held(root, *, held, manifest_sha256, context_sha256,
                                              key_provider=None):
     """Find only the exact authenticated succeeded original, without creating."""
+    return _safe_call(lambda: _read_completed(_original(root, held, manifest_sha256, context_sha256),
+                                             held, key_provider))
+
+
+def _read_completed(original, held, key_provider):
     def read():
-        original = _original(root, held, manifest_sha256, context_sha256)
         generation = _claim_generation(original, held)
         candidates = []
         def started(_claim):
@@ -389,8 +479,7 @@ def _read_completed_session_source_intake_held(root, *, held, manifest_sha256, c
         def succeeded(claim):
             # Keep the original intake-specific succeeded gate strict. The
             # shared cross-operation verifier below cannot replace this gate.
-            verified = intake._verify_source_intake_batch_completion_with_claim_held(original.plan,
-                context=original.context, claim=claim, writer_lock=held)
+            verified = _verify_own_completion(original, claim, held)
             candidates.append(_verified(original, verified["execution_sha256"], claim, held))
             return True
         broker._discover_exact_human_approved_transaction_resume_core(original.plan.archive_root,
@@ -404,3 +493,24 @@ def _read_completed_session_source_intake_held(root, *, held, manifest_sha256, c
             raise WorkSessionIntakeCompletionError("work_session_intake_completion_changed")
         return result
     return _safe_call(read)
+
+
+def _read_session_source_intake_record_completion_image_held(root, *, held, manifest_sha256,
+                                                           context_sha256, execution_sha256):
+    """Single-record DATA ONLY; no MAC, ownership or source-custody assertion."""
+    return _safe_call(lambda: _image(_original(root, held, manifest_sha256, context_sha256,
+        family=_IntakeFamily.RECORD), execution_sha256, held))
+
+
+def _verify_completed_session_source_intake_record_with_claim_held(root, *, held, manifest_sha256,
+                                                                  context_sha256, execution_sha256, claim):
+    """Audit a succeeded original record with an active same-archive claim key."""
+    return _safe_call(lambda: _verified(_original(root, held, manifest_sha256, context_sha256,
+        family=_IntakeFamily.RECORD), execution_sha256, claim, held))
+
+
+def _read_completed_session_source_intake_record_held(root, *, held, manifest_sha256, context_sha256,
+                                                    key_provider=None):
+    """Discover only a succeeded original record; never create key or approval."""
+    return _safe_call(lambda: _read_completed(_original(root, held, manifest_sha256, context_sha256,
+        family=_IntakeFamily.RECORD), held, key_provider))

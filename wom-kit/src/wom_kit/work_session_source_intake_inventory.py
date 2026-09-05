@@ -19,6 +19,7 @@ from . import exact_operation_manifest as exact
 from . import project_update_transaction as durable
 from . import work_session_bundle as controls
 from . import work_session_source_intake_bundle as bundle
+from . import work_session_source_intake_record_bundle as record_bundle
 
 
 MAX_CONTEXT_DIRECTORY_ENTRIES = 128
@@ -38,6 +39,15 @@ class WorkSessionIntakeInventoryError(RuntimeError):
         super().__init__(self.code)
 
 
+def _context_bundle(family):
+    # Closed, internal directory selection. Never accept a caller path/module.
+    if type(family) is str and family == "batch":
+        return bundle
+    if type(family) is str and family == "record":
+        return record_bundle
+    raise WorkSessionIntakeInventoryError()
+
+
 def _safe_call(call):
     code = "work_session_intake_inventory_unavailable"
     try:
@@ -46,6 +56,9 @@ def _safe_call(call):
         code = error.code
     except bundle.WorkSessionIntakeBundleError as error:
         if error.code == "work_session_intake_bundle_lock_required":
+            code = "work_session_intake_inventory_lock_required"
+    except record_bundle.WorkSessionIntakeRecordBundleError as error:
+        if error.code == "work_session_intake_record_bundle_lock_required":
             code = "work_session_intake_inventory_lock_required"
     except Exception:
         pass
@@ -75,16 +88,18 @@ class _SourceIntakeContextInventory:
     _ancestor_identity: tuple[int, int]
     # Each leaf: name, exact stat identity, raw bytes. No caller JSON parsing.
     _leaves: tuple
+    _family: str = "batch"
 
     def __post_init__(self):
+        codec = _context_bundle(self._family)
         if (not isinstance(self._root, Path) or not self._root.is_absolute()
                 or type(self._state) is not str or self._state not in {"absent", "present"}
                 or type(self._ancestor_depth) is not int
-                or not 0 <= self._ancestor_depth <= len(bundle.PRIVATE_ROOT)
+                or not 0 <= self._ancestor_depth <= len(codec.PRIVATE_ROOT)
                 or type(self._ancestor_identity) is not tuple or len(self._ancestor_identity) != 2
                 or any(type(value) is not int for value in self._ancestor_identity)
                 or type(self._leaves) is not tuple or len(self._leaves) > MAX_CONTEXT_DIRECTORY_ENTRIES
-                or (self._state == "present") != (self._ancestor_depth == len(bundle.PRIVATE_ROOT))
+                or (self._state == "present") != (self._ancestor_depth == len(codec.PRIVATE_ROOT))
                 or self._state == "absent" and self._leaves):
             raise WorkSessionIntakeInventoryError()
         names, byte_count = [], 0
@@ -94,7 +109,7 @@ class _SourceIntakeContextInventory:
                     or type(leaf[1]) is not tuple or len(leaf[1]) != 7
                     or any(type(value) is not int for value in leaf[1])
                     or type(leaf[2]) is not bytes or len(leaf[2]) != leaf[1][2]
-                    or not 0 <= len(leaf[2]) <= bundle.MAX_BUNDLE_BYTES):
+                    or not 0 <= len(leaf[2]) <= codec.MAX_BUNDLE_BYTES):
                 raise WorkSessionIntakeInventoryError()
             names.append(leaf[0])
             byte_count += len(leaf[2])
@@ -150,16 +165,17 @@ def _names(parent):
     return tuple(sorted(names))
 
 
-def _metadata(parent, names):
+def _metadata(parent, names, *, family="batch"):
+    codec = _context_bundle(family)
     observations, total = [], 0
     for name in names:
         info = (os.lstat(parent.path / name) if os.name == "nt" else
                 os.stat(name, dir_fd=parent.descriptor, follow_symlinks=False))
-        if not exact._safe_regular_stat(info, max_bytes=bundle.MAX_BUNDLE_BYTES):
+        if not exact._safe_regular_stat(info, max_bytes=codec.MAX_BUNDLE_BYTES):
             # Size excess is an explicit budget refusal, not unsafe/absent.
             if (stat.S_ISREG(info.st_mode) and not stat.S_ISLNK(info.st_mode)
                     and not exact._path_is_reparse(info) and info.st_nlink == 1
-                    and info.st_size > bundle.MAX_BUNDLE_BYTES):
+                    and info.st_size > codec.MAX_BUNDLE_BYTES):
                 raise WorkSessionIntakeInventoryError("work_session_intake_inventory_limit")
             raise WorkSessionIntakeInventoryError("work_session_intake_inventory_unavailable")
         total += info.st_size
@@ -169,16 +185,17 @@ def _metadata(parent, names):
     return tuple(observations)
 
 
-def _capture(root, held):
-    actual, _archive_id = bundle._held_root(root, held)
+def _capture(root, held, *, family="batch"):
+    codec = _context_bundle(family)
+    actual, _archive_id = codec._held_root(root, held)
     # Reuse the existing no-reparse fixed-directory admission. Locate only its
     # deepest existing ancestor so absence can be observed without mkdir.
-    directory = bundle._directory(actual)
+    directory = codec._directory(actual)
     ancestor, depth = actual, 0
     if directory is not None:
-        ancestor, depth = directory, len(bundle.PRIVATE_ROOT)
+        ancestor, depth = directory, len(codec.PRIVATE_ROOT)
     else:
-        for part in bundle.PRIVATE_ROOT:
+        for part in codec.PRIVATE_ROOT:
             candidate = ancestor / part
             try:
                 info = os.lstat(candidate)
@@ -187,13 +204,13 @@ def _capture(root, held):
             if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode) or exact._path_is_reparse(info):
                 raise WorkSessionIntakeInventoryError("work_session_intake_inventory_unavailable")
             ancestor, depth = candidate, depth + 1
-        if depth == len(bundle.PRIVATE_ROOT):
+        if depth == len(codec.PRIVATE_ROOT):
             raise WorkSessionIntakeInventoryError("work_session_intake_inventory_changed")
     with durable._bound_directory_for_move(ancestor) as parent:
         durable._assert_named_reservation_directory_identity(ancestor, parent.identity)
         held.verify_held()
         if directory is None:
-            missing = ancestor / bundle.PRIVATE_ROOT[depth]
+            missing = ancestor / codec.PRIVATE_ROOT[depth]
             # lstat distinguishes true absence from a dangling link, denied
             # access, unknown topology, or a concurrently published directory.
             for _ in range(2):
@@ -205,13 +222,13 @@ def _capture(root, held):
                     raise WorkSessionIntakeInventoryError("work_session_intake_inventory_changed")
                 durable._assert_named_reservation_directory_identity(ancestor, parent.identity)
                 held.verify_held()
-            bundle._held_root(actual, held)
-            if bundle._directory(actual) is not None:
+            codec._held_root(actual, held)
+            if codec._directory(actual) is not None:
                 raise WorkSessionIntakeInventoryError("work_session_intake_inventory_changed")
-            return _SourceIntakeContextInventory(actual, "absent", depth, parent.identity, ())
+            return _SourceIntakeContextInventory(actual, "absent", depth, parent.identity, (), family)
 
         names = _names(parent)
-        identities = _metadata(parent, names)  # Aggregate budget before body allocation.
+        identities = _metadata(parent, names, family=family)  # Aggregate budget before body allocation.
         bodies = []
         for name, identity in zip(names, identities):
             # Pin each read ceiling to its already budgeted size; a growing
@@ -221,7 +238,7 @@ def _capture(root, held):
                 raise WorkSessionIntakeInventoryError("work_session_intake_inventory_changed")
             bodies.append(value)
         raw = tuple(bodies)
-        if _names(parent) != names or _metadata(parent, names) != identities:
+        if _names(parent) != names or _metadata(parent, names, family=family) != identities:
             raise WorkSessionIntakeInventoryError("work_session_intake_inventory_changed")
         durable._assert_named_reservation_directory_identity(directory, parent.identity)
         held.verify_held()
@@ -232,16 +249,16 @@ def _capture(root, held):
             if _sha(controls._read_control(directory / name, maximum=len(original))) != _sha(original):
                 raise WorkSessionIntakeInventoryError("work_session_intake_inventory_changed")
         held.verify_held()
-        if _names(parent) != names or _metadata(parent, names) != identities:
+        if _names(parent) != names or _metadata(parent, names, family=family) != identities:
             raise WorkSessionIntakeInventoryError("work_session_intake_inventory_changed")
         durable._assert_named_reservation_directory_identity(directory, parent.identity)
         # Recheck every named private ancestor, not merely the deepest inode:
         # a new junction could otherwise route back to that same directory.
-        bundle._held_root(actual, held)
-        if bundle._directory(actual) != directory:
+        codec._held_root(actual, held)
+        if codec._directory(actual) != directory:
             raise WorkSessionIntakeInventoryError("work_session_intake_inventory_changed")
         leaves = tuple(zip(names, identities, raw))
-        return _SourceIntakeContextInventory(actual, "present", depth, parent.identity, leaves)
+        return _SourceIntakeContextInventory(actual, "present", depth, parent.identity, leaves, family)
 
 
 def _capture_source_intake_context_inventory_held(root, *, held):
@@ -249,13 +266,25 @@ def _capture_source_intake_context_inventory_held(root, *, held):
 
 
 def _require_source_intake_context_inventory_unchanged_held(root, *, inventory, held):
+    return _require_inventory_unchanged(root, inventory=inventory, held=held, family="batch")
+
+
+def _capture_source_intake_record_context_inventory_held(root, *, held):
+    return _safe_call(lambda: _capture(root, held, family="record"))
+
+
+def _require_source_intake_record_context_inventory_unchanged_held(root, *, inventory, held):
+    return _require_inventory_unchanged(root, inventory=inventory, held=held, family="record")
+
+
+def _require_inventory_unchanged(root, *, inventory, held, family):
     def require():
-        if type(inventory) is not _SourceIntakeContextInventory:
+        if type(inventory) is not _SourceIntakeContextInventory or inventory._family != family:
             raise WorkSessionIntakeInventoryError()
         # Detach all exact immutable fields before any filesystem callback.
         frozen = _SourceIntakeContextInventory(inventory._root, inventory._state, inventory._ancestor_depth,
-                                              inventory._ancestor_identity, inventory._leaves)
-        observed = _capture(root, held)
+                                              inventory._ancestor_identity, inventory._leaves, inventory._family)
+        observed = _capture(root, held, family=family)
         if observed._generation() != frozen._generation():
             raise WorkSessionIntakeInventoryError("work_session_intake_inventory_changed")
     return _safe_call(require)

@@ -36,7 +36,9 @@ _MAX_FILE_BYTES = 2 * 1024 * 1024 * 1024
 _CHANGE_REF = re.compile(r"change:[0-9]{6}\Z")
 _PRODUCER = "authenticated_work_session_completion_receipt"
 _INTAKE_PRODUCER = "authenticated_source_intake_batch_output"
+_RECORD_PRODUCER = "authenticated_source_intake_record_output"
 _INTAKE_KINDS = frozenset({"source_intake_receipt", "prepared_capture_request", "common_completion_receipt"})
+_RECORD_KINDS = frozenset({"source_intake_receipt", "common_completion_receipt"})
 _KEYS = frozenset({
     "schema", "task_route_ref", "actor_sha256", "registry_preimage_sha256", "claim_ref",
     "work_session_binding", "selection_sha256", "selected_change_count", "excluded_change_count",
@@ -80,9 +82,24 @@ def _scope_budget(value):
     return _MAX_V2_BYTES if type(value) is dict and value.get("schema") == _SCHEMA_V2 else _MAX_BYTES
 
 
+def _intake_output_kinds(producer):
+    """Closed domain families, never an injected producer implementation."""
+    if type(producer) is str:
+        if producer == _INTAKE_PRODUCER:
+            return _INTAKE_KINDS
+        if producer == _RECORD_PRODUCER:
+            return _RECORD_KINDS
+    return None
+
+
 def _proof_output_path(proof):
     """Derive one claimed target spelling; this is not producer authentication."""
-    if proof["producer"] == _PRODUCER or proof["output_kind"] == "common_completion_receipt":
+    if proof["producer"] == _PRODUCER:
+        return "receipts/ops/exact-operations/" + proof["execution_sha256"][7:] + ".json"
+    kinds = _intake_output_kinds(proof["producer"])
+    if kinds is None or type(proof.get("output_kind")) is not str or proof["output_kind"] not in kinds:
+        raise GitBackupSessionScopeError()
+    if proof["output_kind"] == "common_completion_receipt":
         return "receipts/ops/exact-operations/" + proof["execution_sha256"][7:] + ".json"
     # Reuse the domain's path grammar. A path match remains insufficient: the
     # authenticated producer must prove membership in the ORIGINAL manifest.
@@ -122,18 +139,19 @@ def _validate_document(value):
     for proof in proofs:
         if type(proof) is not dict:
             raise GitBackupSessionScopeError()
-        intake = version2 and proof.get("producer") == _INTAKE_PRODUCER
+        kinds = _intake_output_kinds(proof.get("producer"))
+        intake = version2 and kinds is not None
         keys, digests = (_INTAKE_KEYS, _INTAKE_DIGESTS) if intake else (_PROOF_KEYS, _PROOF_DIGESTS)
         if (set(proof) != keys
                 or type(proof["change_ref"]) is not str or not _CHANGE_REF.fullmatch(proof["change_ref"])
-                or proof["producer"] != (_INTAKE_PRODUCER if intake else _PRODUCER)
+                or not intake and proof["producer"] != _PRODUCER
                 or any(not registry._is_digest(proof[name]) for name in digests)
                 or type(proof["whole_file_bytes"]) is not int
                 or not 1 <= proof["whole_file_bytes"] <= _MAX_FILE_BYTES
                 or type(proof["original_work_session_binding"]) is not dict):
             raise GitBackupSessionScopeError()
         if intake:
-            if (type(proof["output_kind"]) is not str or proof["output_kind"] not in _INTAKE_KINDS
+            if (type(proof["output_kind"]) is not str or proof["output_kind"] not in kinds
                     or proof["output_kind"] == "common_completion_receipt"
                     and proof["output_identity_sha256"] != proof["execution_sha256"]):
                 raise GitBackupSessionScopeError()
@@ -191,7 +209,7 @@ class _GitBackupSessionScope:
             if type(work_session_binding) is not WorkSessionBinding or type(producer_proofs) is not list:
                 raise GitBackupSessionScopeError()
             basis = {
-                "schema": (_SCHEMA_V2 if any(type(proof) is dict and proof.get("producer") == _INTAKE_PRODUCER
+                "schema": (_SCHEMA_V2 if any(type(proof) is dict and _intake_output_kinds(proof.get("producer")) is not None
                                              for proof in producer_proofs) else _SCHEMA),
                 "task_route_ref": task_route_ref, "actor_sha256": actor_sha256,
                 "registry_preimage_sha256": registry_preimage_sha256, "claim_ref": claim_ref,

@@ -242,7 +242,8 @@ def _partition_producer_proofs(prepared):
     for proof in prepared.session_scope.document()["producer_proofs"]:
         if proof["producer"] == "authenticated_work_session_completion_receipt":
             human.append(proof)
-        elif proof["producer"] == "authenticated_source_intake_batch_output":
+        elif proof["producer"] in ("authenticated_source_intake_batch_output",
+                                   "authenticated_source_intake_record_output"):
             intake.append(proof)
         else:
             raise WorkSessionGitWorkflowError("work_session_git_original_evidence_invalid")

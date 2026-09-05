@@ -2,8 +2,9 @@
 
 The original producer proves the whole canonical *new completion receipt* of
 an authenticated work-session decision. A separate producer verifies exact
-outputs of a completed scoped source-intake batch, including its capture
-request (not captured object bytes). Neither proves the documents that a
+outputs of completed scoped intake batches and single metadata records. Only
+the batch producer includes a capture request (not captured object bytes).
+Neither proves the documents that a
 session discussed, nor authorize Git, establish the current claimant, or claim
 that an archive has been backed up. Public routing and approved writer/resume
 composition remain separate work. No names, paths, times, or caller booleans
@@ -102,7 +103,8 @@ class _ReceiptSelection:
         }
         selected_refs = {ref for group in partition["selected_groups"] for ref in group["change_refs"]}
         intake = [proof for proof in data["proofs"]
-                  if proof["producer"] == "authenticated_source_intake_batch_output"]
+                  if proof["producer"] in ("authenticated_source_intake_batch_output",
+                                           "authenticated_source_intake_record_output")]
         intake_summary = data.get("intake_provenance_summary")
         if intake or intake_summary is not None:
             selected_intake = [proof for proof in intake if proof["change_ref"] in selected_refs]

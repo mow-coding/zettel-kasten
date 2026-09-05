@@ -27,6 +27,7 @@ _MAX_PROOFS = 8192
 _MAX_PROOF_BYTES = 16 * 1024 * 1024
 _MAX_RESULT_BYTES = 32 * 1024 * 1024
 _PRODUCER = "authenticated_source_intake_batch_output"
+_RECORD_PRODUCER = "authenticated_source_intake_record_output"
 _PROOF_FACTS = frozenset({"manifest_sha256", "context_sha256", "execution_sha256",
     "common_final_receipt_sha256", "common_result_sha256", "approval_binding_sha256",
     "session_scope_sha256", "work_session_binding"})
@@ -67,6 +68,35 @@ def _safe_call(call):
 def _completion():
     from . import work_session_source_intake_completion
     return work_session_source_intake_completion
+
+
+def _domain_bundle(producer):
+    if type(producer) is str and producer == _PRODUCER:
+        return bundle
+    if type(producer) is str and producer == _RECORD_PRODUCER:
+        from . import work_session_source_intake_record_bundle
+        return work_session_source_intake_record_bundle
+    raise WorkSessionIntakeGitProvenanceError()
+
+
+def _reader_api(producer, mode):
+    """Fixed concrete APIs/types; no caller-supplied producer implementation."""
+    reader = _completion()
+    if type(producer) is str and producer == _PRODUCER:
+        if mode == "key":
+            return reader._read_completed_session_source_intake_held, reader._VerifiedSessionSourceIntakeCompletion
+        if mode == "claim":
+            return reader._verify_completed_session_source_intake_with_claim_held, reader._VerifiedSessionSourceIntakeCompletion
+        if mode == "image":
+            return reader._read_session_source_intake_completion_image_held, reader._SessionSourceIntakeCompletionImage
+    elif type(producer) is str and producer == _RECORD_PRODUCER:
+        if mode == "key":
+            return reader._read_completed_session_source_intake_record_held, reader._VerifiedSessionSourceIntakeRecordCompletion
+        if mode == "claim":
+            return reader._verify_completed_session_source_intake_record_with_claim_held, reader._VerifiedSessionSourceIntakeRecordCompletion
+        if mode == "image":
+            return reader._read_session_source_intake_record_completion_image_held, reader._SessionSourceIntakeRecordCompletionImage
+    raise WorkSessionIntakeGitProvenanceError()
 
 
 def _canonical(value, maximum=_MAX_RESULT_BYTES):
@@ -140,7 +170,7 @@ def _snapshot(root, archive_id, snapshot):
     return data["plan_sha256"], rows
 
 
-def _origin(view, expected_type):
+def _origin(view, expected_type, *, producer=_PRODUCER):
     if type(view) is not expected_type:
         raise WorkSessionIntakeGitProvenanceError("work_session_intake_git_proof_unavailable")
     facts = view.proof_document()
@@ -153,20 +183,21 @@ def _origin(view, expected_type):
     detached = {}
     for path, row in outputs.items():
         if (type(path) is not str or type(row) is not dict or set(row) != _MAP_KEYS
-                or type(row["output_kind"]) is not str or row["output_kind"] not in scope_codec._INTAKE_KINDS
+                or type(row["output_kind"]) is not str
+                or row["output_kind"] not in (scope_codec._intake_output_kinds(producer) or ())
                 or type(row["target_kind"]) is not str or type(row["field_ref"]) is not str
                 or not _digest(row["sha256"]) or not _digest(row["output_identity_sha256"])
                 or type(row["size_bytes"]) is not int or not 1 <= row["size_bytes"] <= scope_codec._MAX_FILE_BYTES):
             raise WorkSessionIntakeGitProvenanceError("work_session_intake_git_proof_unavailable")
-        proof = _proof(facts, row, "change:000001")
+        proof = _proof(facts, row, "change:000001", producer=producer)
         if scope_codec._proof_output_path(proof) != path:
             raise WorkSessionIntakeGitProvenanceError("work_session_intake_git_proof_unavailable")
         detached[path] = json.loads(_canonical(row))
     return json.loads(_canonical(facts)), detached, binding
 
 
-def _proof(facts, output, change_ref):
-    return {"change_ref": change_ref, "producer": _PRODUCER, "output_kind": output["output_kind"],
+def _proof(facts, output, change_ref, *, producer=_PRODUCER):
+    return {"change_ref": change_ref, "producer": producer, "output_kind": output["output_kind"],
             "output_identity_sha256": output["output_identity_sha256"],
             "whole_file_sha256": output["sha256"], "whole_file_bytes": output["size_bytes"],
             "manifest_sha256": facts["manifest_sha256"], "context_sha256": facts["context_sha256"],
@@ -229,46 +260,59 @@ def _select_intake_output_changes_held(root, *, held, snapshot, selected_binding
         if binding.archive_identity_sha256 != approval.exact_human_approval_archive_identity_sha256(archive_id):
             raise WorkSessionIntakeGitProvenanceError()
         plan_sha, rows = _snapshot(actual, archive_id, snapshot)
-        hints = inventory_module._capture_source_intake_context_inventory_held(actual, held=held)
-        reader = _completion()
+        # Capture both complete fixed generations before any authentication
+        # callback. Each directory retains its existing independent budget.
+        inventories = (
+            (_PRODUCER, "batch", inventory_module._capture_source_intake_context_inventory_held(actual, held=held),
+             inventory_module._require_source_intake_context_inventory_unchanged_held),
+            (_RECORD_PRODUCER, "record", inventory_module._capture_source_intake_record_context_inventory_held(actual, held=held),
+             inventory_module._require_source_intake_record_context_inventory_unchanged_held),
+        )
         origins, outputs, unverified = {}, {}, 0
-        for hint in hints.hints():
-            held.verify_held()
-            try:
-                _prepared, context = bundle._decode_context(actual, hint.raw, hint.manifest_sha256)
-                context_sha = approval.exact_human_approval_context_sha256(context)
-                view = reader._read_completed_session_source_intake_held(actual, held=held,
-                    manifest_sha256=hint.manifest_sha256, context_sha256=context_sha, key_provider=key_provider)
-                facts, approved, original = _origin(view, reader._VerifiedSessionSourceIntakeCompletion)
-                if (facts["manifest_sha256"] != hint.manifest_sha256 or facts["context_sha256"] != context_sha
-                        or original.archive_identity_sha256 != binding.archive_identity_sha256):
-                    raise WorkSessionIntakeGitProvenanceError()
-            except Exception:
-                # Incomplete/corrupt/unauthenticated evidence does not become
-                # absence or filename ownership. Matching changes stay unknown.
-                unverified += 1
-                continue
-            key = (facts["manifest_sha256"], facts["context_sha256"], facts["execution_sha256"])
-            origins[key] = facts
-            for path, output in approved.items():
-                if path in outputs and outputs[path][0] != key:
-                    raise WorkSessionIntakeGitProvenanceError("work_session_intake_git_proof_ambiguous")
-                outputs[path] = (key, output)
+        for producer, family, hints, _require in inventories:
+            if type(hints) is not inventory_module._SourceIntakeContextInventory or hints._family != family:
+                raise WorkSessionIntakeGitProvenanceError()
+            codec, (read, expected) = _domain_bundle(producer), _reader_api(producer, "key")
+            for hint in hints.hints():
+                held.verify_held()
+                try:
+                    _prepared, context = codec._decode_context(actual, hint.raw, hint.manifest_sha256)
+                    context_sha = approval.exact_human_approval_context_sha256(context)
+                    view = read(actual, held=held, manifest_sha256=hint.manifest_sha256,
+                                context_sha256=context_sha, key_provider=key_provider)
+                    facts, approved, original = _origin(view, expected, producer=producer)
+                    if (facts["manifest_sha256"] != hint.manifest_sha256 or facts["context_sha256"] != context_sha
+                            or original.archive_identity_sha256 != binding.archive_identity_sha256):
+                        raise WorkSessionIntakeGitProvenanceError()
+                except Exception:
+                    # Preserve the original hint contract: unauthenticated or
+                    # incomplete evidence is unverified, never absence/ownership.
+                    unverified += 1
+                    continue
+                key = (producer, facts["manifest_sha256"], facts["context_sha256"], facts["execution_sha256"])
+                origins[key] = facts
+                for path, output in approved.items():
+                    if path in outputs and outputs[path][0] != key:
+                        raise WorkSessionIntakeGitProvenanceError("work_session_intake_git_proof_ambiguous")
+                    outputs[path] = (key, output)
         proofs = []
         for row in rows:
             found = outputs.get(row["path"])
             if found is not None and _matches(row, found[1]):
-                proofs.append(_proof(origins[found[0]], found[1], row["public_observation"]["change_ref"]))
+                proofs.append(_proof(origins[found[0]], found[1], row["public_observation"]["change_ref"],
+                                     producer=found[0][0]))
                 if len(proofs) > _MAX_PROOFS:
                     raise WorkSessionIntakeGitProvenanceError("work_session_intake_git_limit")
         proofs.sort(key=lambda row: row["change_ref"])
         _canonical(proofs, _MAX_PROOF_BYTES)
         partition = _partition(plan_sha, rows, proofs, binding)
-        inventory_module._require_source_intake_context_inventory_unchanged_held(actual, inventory=hints, held=held)
+        for _producer, _family, hints, require in inventories:
+            require(actual, inventory=hints, held=held)
         bundle._held_root(actual, held)
         return _IntakeOutputSelection(_canonical({"schema": "wom-kit/private-intake-git-selection/v1",
             "selection": partition, "proofs": proofs, "selected_identity_binding": binding.document(),
-            "hint_inventory_state": hints.state, "context_hint_count": len(hints.hints()),
+            "hint_inventory_state": "present" if any(row[2].state == "present" for row in inventories) else "absent",
+            "context_hint_count": sum(len(row[2].hints()) for row in inventories),
             "authenticated_original_count": len(origins), "unverified_context_hint_count": unverified}))
     return _safe_call(select)
 
@@ -280,11 +324,12 @@ def _stored(proofs, private_changes):
     rows = {row["public_observation"]["change_ref"]: row for row in _rows(private_changes)}
     grouped, refs, manifests = {}, set(), {}
     for proof in detached:
+        kinds = scope_codec._intake_output_kinds(proof.get("producer")) if type(proof) is dict else None
         if (type(proof) is not dict or set(proof) != scope_codec._INTAKE_KEYS
-                or proof.get("producer") != _PRODUCER or type(proof["change_ref"]) is not str
+                or kinds is None or type(proof["change_ref"]) is not str
                 or scope_codec._CHANGE_REF.fullmatch(proof["change_ref"]) is None
                 or any(not _digest(proof[name]) for name in scope_codec._INTAKE_DIGESTS)
-                or type(proof["output_kind"]) is not str or proof["output_kind"] not in scope_codec._INTAKE_KINDS
+                or type(proof["output_kind"]) is not str or proof["output_kind"] not in kinds
                 or type(proof["whole_file_bytes"]) is not int or not 1 <= proof["whole_file_bytes"] <= scope_codec._MAX_FILE_BYTES
                 or type(proof["original_work_session_binding"]) is not dict
                 or proof["change_ref"] in refs or proof["change_ref"] not in rows):
@@ -292,7 +337,7 @@ def _stored(proofs, private_changes):
         WorkSessionBinding.from_document(proof["original_work_session_binding"])
         if proof["output_kind"] == "common_completion_receipt" and proof["output_identity_sha256"] != proof["execution_sha256"]:
             raise WorkSessionIntakeGitProvenanceError()
-        key = (proof["manifest_sha256"], proof["context_sha256"], proof["execution_sha256"])
+        key = (proof["producer"], proof["manifest_sha256"], proof["context_sha256"], proof["execution_sha256"])
         if proof["manifest_sha256"] in manifests and manifests[proof["manifest_sha256"]] != key:
             raise WorkSessionIntakeGitProvenanceError("work_session_intake_git_proof_ambiguous")
         manifests[proof["manifest_sha256"]] = key
@@ -301,36 +346,32 @@ def _stored(proofs, private_changes):
     return grouped, rows
 
 
-def _verify_stored_group(view, expected_type, proofs, rows, archive_id):
-    facts, outputs, binding = _origin(view, expected_type)
+def _verify_stored_group(view, expected_type, proofs, rows, archive_id, *, producer=_PRODUCER):
+    facts, outputs, binding = _origin(view, expected_type, producer=producer)
     if binding.archive_identity_sha256 != approval.exact_human_approval_archive_identity_sha256(archive_id):
         raise WorkSessionIntakeGitProvenanceError("work_session_intake_git_proof_unavailable")
     for proof in proofs:
         row = rows[proof["change_ref"]]
         output = outputs.get(row["path"])
         if (output is None or not _matches(row, output)
-                or _proof(facts, output, proof["change_ref"]) != proof):
+                or _proof(facts, output, proof["change_ref"], producer=producer) != proof):
             raise WorkSessionIntakeGitProvenanceError("work_session_intake_git_proof_unavailable")
 
 
 def _revalidate(root, held, proofs, private_changes, mode, *, key_provider=None, claim=None):
     grouped, rows = _stored(proofs, private_changes)  # Detach before callbacks.
     actual, archive_id = bundle._held_root(root, held)
-    reader, verified, images = _completion(), [], []
-    for (manifest, context, execution), group in sorted(grouped.items()):
+    verified, images = [], []
+    for (producer, manifest, context, execution), group in sorted(grouped.items()):
+        read, expected = _reader_api(producer, mode)
         arguments = dict(held=held, manifest_sha256=manifest, context_sha256=context)
         if mode == "image":
-            view = reader._read_session_source_intake_completion_image_held(actual,
-                execution_sha256=execution, **arguments)
-            expected = reader._SessionSourceIntakeCompletionImage
+            view = read(actual, execution_sha256=execution, **arguments)
         elif mode == "claim":
-            view = reader._verify_completed_session_source_intake_with_claim_held(actual,
-                execution_sha256=execution, claim=claim, **arguments)
-            expected = reader._VerifiedSessionSourceIntakeCompletion
+            view = read(actual, execution_sha256=execution, claim=claim, **arguments)
         else:
-            view = reader._read_completed_session_source_intake_held(actual, key_provider=key_provider, **arguments)
-            expected = reader._VerifiedSessionSourceIntakeCompletion
-        _verify_stored_group(view, expected, group, rows, archive_id)
+            view = read(actual, key_provider=key_provider, **arguments)
+        _verify_stored_group(view, expected, group, rows, archive_id, producer=producer)
         if not _digest(view.image_sha256):
             raise WorkSessionIntakeGitProvenanceError("work_session_intake_git_proof_unavailable")
         images.append((manifest, context, execution, view.image_sha256))

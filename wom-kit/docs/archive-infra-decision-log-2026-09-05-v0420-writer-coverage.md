@@ -214,3 +214,18 @@ count aliases, preview paths or internal classes as completed writer families.
 Metadata recording still does not prove source capture, cleanup responsibility
 or Git producer ownership. Single-record downstream Git authentication and the
 remaining writer/effect coverage remain explicit follow-up work.
+
+## Subsequent single-record metadata-to-Git checkpoint
+
+The shared historical reader now handles the single record through a closed
+family route and distinct exact data/authenticated result types. Its explicit
+Git producer proves one source receipt and its whole common completion file;
+it does not imply batch capture, generic document ownership or source custody.
+Both fixed private context directories are bounded discovery hints. Original
+Git continuation uses only its stored producer references and original claim.
+
+This extends the existing scoped Git family rather than increasing the number
+of completed writer families. Single-record CLI/MCP parity remains separate
+from Git's currently CLI-only public route. Actual synthetic Git journey and
+regression evidence belongs in the integration minutes; version, installed
+acceptance and client execution are not implied by this source checkpoint.

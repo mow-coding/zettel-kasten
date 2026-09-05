@@ -279,7 +279,15 @@ progress. A heartbeat repeating the last observed state is liveness, not proof
 that additional items completed.
 
 This is development-source integration, not a release or client result. The
-single record is not yet a newly authenticated Git producer; do not assume the
-batch producer accepts it. An interrupted unpublished stage remains preserved,
-not silently adopted or deleted. Unknown destination bytes, symlinks/reparse
-points and unexpected hardlinks block the scoped operation.
+single record has its own authenticated metadata-output Git producer; it does
+not impersonate the batch producer. Its only outputs are the source receipt
+and common completion receipt, never the original input JSON or source bytes.
+A common receipt already committed can still prove its remaining new source
+receipt. Other-session and unverified changes stay excluded. Original Git
+continuation follows the retained producer references without new discovery.
+This is not proof of source capture or permission to remove original files.
+
+An interrupted unpublished stage remains preserved, not silently adopted or
+deleted. Unknown destination bytes, symlinks/reparse points and unexpected
+hardlinks block the scoped operation. The integration minutes distinguish
+synthetic source journeys from installed-wheel and client acceptance.

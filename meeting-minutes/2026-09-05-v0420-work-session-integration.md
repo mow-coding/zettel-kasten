@@ -2103,6 +2103,116 @@ bump, PR, tag, wheel or client application has occurred.
   client repair is claimed. The next bounded slice is single-record historical
   proof into the existing selective Git pipeline, not a new backup engine.
 
+## Single-record historical proof and selective backup integration
+
+- The scoped batch identity correction was committed and pushed as
+  `aff179181916ed9ee39206f81819b55f9f9b4d00`; the remote task branch matched.
+  The unfinished feature worktree is retained, not mistaken for cleanup debt.
+- Continue the existing user workflow: one completed metadata record must be
+  attributable to its original session when a later Git backup runs. A prior
+  completion is historical evidence, not the later writer's current authority.
+  Do not call original resume merely to obtain proof: the actor may correctly
+  have moved on. Do not reuse a batch proof label for a single record.
+- Reuse the shared original-context, establishment, claim-generation, terminal
+  MAC and repeated file-image reader. Closed batch/record dispatch selects the
+  existing domain codec, exact context, strict output verifier and own
+  succeeded-claim gate. Record results have distinct exact data-only and
+  authenticated types. Their output set is one source receipt and its common
+  final receipt; it includes no capture request, source bytes or input JSON.
+- Reuse the complete bounded context inventory with separate fixed batch and
+  record directories. Neither filename nor opaque context hint establishes
+  authorship. Existing limits remain 128 entries and 32 MiB per directory;
+  both directories together are explicitly bounded, not unlimited history.
+  Pending leaves count toward budgets and generation but are never hints.
+  Wrong-family snapshots, links, denied reads and generation changes are
+  rejected rather than interpreted as absence.
+- The Git v2 codec admits only the explicit new single-record producer and
+  its two output kinds. Fresh selection authenticates each original once;
+  original Git resume and re-review follow retained producer references only.
+  Preserve unknown and other-session changes, existing v1/batch v2 bytes,
+  non-force writer, current owner guards and original human approvals.
+- Inventory regression initially had one test-helper error: the old fixture
+  attempted to read the actively locked Windows writer-lock file. Corrected
+  only the new assertion snapshot to exclude that exact held lock, then the
+  combined existing 15/new four tests passed: 18 passed, one existing native
+  file-symlink privilege skip, 2.520 seconds. Real record hardlinks were tested.
+  This is opaque inventory coverage, not completion or backup acceptance.
+- The shared reader and actual joined selective-backup journeys remain under
+  implementation and independent review at this record point. No version,
+  release, client archive, provider, credential or feedback status changed.
+- The single-record historical reader then passed all eight new cases in
+  176.164 seconds, exit 0, no skips. Actual original record and establishment
+  approvals, claims, checkpoint/final files and output bytes were used; only
+  native answers and key bytes are synthetic. Tests distinguish structural
+  data images from terminal-MAC authentication, preserve the strict original
+  succeeded-claim gate, and audit with a different active same-archive claim
+  without a nested key provider. Input/source removal, wrong family, missing/
+  corrupt/started claims, foreign/released locks, hardlinks and provider-entry/
+  exit evidence changes were exercised without repair or new authority.
+- Independent source/test review is clear at shared-reader SHA-256
+  `033ff31f87b371d3b378eed3ccdc5605cfa5c20360c3f063b2f50d5f35b32fa0`
+  and new reader-test SHA-256
+  `7bf6521df1bb226408b20ee0f4ec5b835b435cc8270f64d10ec1a6fa8f3cb51e`.
+  The existing batch historical cohort and actual selective-Git journeys are
+  still pending; this reader result does not substitute for their execution.
+- The existing batch historical reader also passed all nine cases on the
+  new shared-family implementation: 275.442 seconds, exit 0, no skips. This is
+  separate from its earlier 261.027-second run before the family extension.
+- Pure Git contracts passed 27/27 in 1.631 seconds: eight new record contracts,
+  seven existing intake-scope, five consumer-projection and seven provenance
+  data cases. The initial run had one incorrect manual test expectation that
+  omitted the existing `private_values_echoed: false` evidence field. Corrected
+  only that expected field; original scope bytes already matched. These
+  synthetic data contracts are not MAC, ownership or Git execution proof.
+- The first actual joined record/Git run failed both cases before the record
+  writer or Git producer was reached (46.117 seconds). The new fixture passed
+  an archive-relative string to the existing process-relative `local_path`
+  argument. A minimal real planner comparison confirmed the relative argument
+  returned `local_path does not exist.` while the same absolute fixture path
+  succeeded. Corrected only the test input, without changing path semantics,
+  initializing guessed policy, weakening checks or stubbing the planner.
+  Corrected public journey test SHA-256 is
+  `24838885ad87c1fde9e0aac6a0f2ffef415f91bb3a9af314410aa2c177c32429`;
+  its actual two-case rerun is pending at this point.
+- The corrected actual public single-record-to-Git pair passed both cases in
+  361.534 seconds, exit 0, no skips, without product-source changes. Real
+  public app/work creation and claim, exact record and establishment evidence,
+  current ownership, selective commit, local-bare-remote push and remote blob/
+  ref checks execute. Only native answers/key, pre-existing nonmutating
+  handoff prerequisite and isolated local transport are synthetic. The tests
+  inject exceptions at named boundaries; they are not installed-wheel, native
+  power-loss, provider or performance acceptance.
+- One case starts with the common final already committed, discovers only the
+  remaining owned source receipt, interrupts after commit/before push, resumes
+  with app/task only and verifies read-only completed replay after fixture
+  source removal. The other interrupts before claim creation and re-displays
+  the exact original context, then commits both owned metadata outputs. Both
+  forbid new inventory/planning/context replacement during original
+  continuation and preserve the other session, staged/unstaged unknown files,
+  copied-but-unowned receipt and custom ignored data. They do not newly inject
+  owner loss, attest source custody or authorize source deletion.
+- Independent source/contract/public-journey read review is clear. Frozen
+  Git adapter SHA-256 is
+  `d3398554f30d86029c889acaf0fbc5b7dbe0a8053b3034a159b21bb26845856f`;
+  scope codec `279d3c8a5a0672947f0324698c66cb5e9ae55f5f42be8af54e6f3a760b7f99c3`;
+  Git projection `ecb7845a7bd8e87283b6a4764b9ea30cf14f79f399bb2f0216693713018d8be6`;
+  Git workflow `2b3e42327b1942b89b68c594577cac488d300ff1d0ce3442ab91abe0b6279995`.
+  The new pure contract test is
+  `096a85e0b4ae01b919f781c911a5d98bdcf9a605e28f44e15fed6fe18b631da6`.
+  Existing actual batch adapter/public journeys and final public hygiene
+  checks are still pending at this record point.
+- Final existing real batch regressions passed all four cases in 510.520
+  seconds, exit 0, no skips: two actual provenance cases and both public batch
+  intake-to-Git original-resume/re-review journeys. The four public readiness
+  gates passed. Root and independent reviewers checked the frozen source;
+  actual tests ran on Windows Python 3.12, with Python 3.10 grammar as syntax
+  evidence only. Concurrent isolated functional runs are not timing acceptance.
+- Remote recheck still shows public v0.4.19, no open PR and zero open secret
+  alerts (not a no-exposure guarantee). Canonical main and origin/main remain
+  `84d55bd5871e852eef97da6e4b89dcba252d0d8b`; the only worktrees are the
+  canonical checkout and this unfinished feature checkout. This source slice
+  is ready for its development commit, not a v0.4.20 release or client result.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)
