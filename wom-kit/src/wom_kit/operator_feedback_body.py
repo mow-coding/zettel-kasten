@@ -27,6 +27,8 @@ from typing import Any, Mapping
 
 import yaml
 
+from .process_launch import noninteractive_creationflags
+
 
 REQUEST_SCHEMA = "wom-kit/operator-feedback-body-request/v0.1"
 PLAN_SCHEMA = "wom-kit/operator-feedback-body-plan/v0.1"
@@ -425,7 +427,6 @@ def _require_effective_gitignore(root: Path, request_relative: str) -> None:
     if not git_admin_present:
         return
 
-    creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
     try:
         tracked = subprocess.run(
             [
@@ -442,7 +443,7 @@ def _require_effective_gitignore(root: Path, request_relative: str) -> None:
             stderr=subprocess.DEVNULL,
             check=False,
             timeout=5,
-            creationflags=creation_flags,
+            creationflags=noninteractive_creationflags(),
         )
     except (OSError, subprocess.SubprocessError):
         raise _fail("feedback_body_request_not_ignored") from None

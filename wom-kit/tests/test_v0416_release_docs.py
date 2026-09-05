@@ -13,8 +13,8 @@ ROOT = Path(__file__).resolve().parents[2]
 KIT = ROOT / "wom-kit"
 RESOURCE_ROOT = KIT / "src" / "wom_kit" / "_resources"
 RELEASE = KIT / "docs" / "releases" / "v0.4.16.md"
-CURRENT_RELEASE = KIT / "docs" / "releases" / "v0.4.18.md"
-PACKAGED_RELEASE = RESOURCE_ROOT / "release-notes" / "v0.4.18.md"
+CURRENT_RELEASE = KIT / "docs" / "releases" / "v0.4.19.md"
+PACKAGED_RELEASE = RESOURCE_ROOT / "release-notes" / "v0.4.19.md"
 LOCK = KIT / "project-runtime-supply-lock-v0.4.16.json"
 LOCK_SHA256 = "f924a3f714d5913dd2afe870d07e5619172b0e1fcb92f25b18f70a9cd4ad04d8"
 BOOTSTRAP_DOCUMENTS = (
@@ -105,30 +105,30 @@ PROJECT_RECORDS = (
 
 class V0416ReleaseDocsTests(unittest.TestCase):
     def test_current_version_surfaces_are_exact(self) -> None:
-        self.assertEqual(__version__, "0.4.18")
+        self.assertEqual(__version__, "0.4.19")
         for path in (
             KIT / "src" / "wom_kit" / "__init__.py",
             ROOT / "wom_kit" / "__init__.py",
         ):
             with self.subTest(path=path):
                 self.assertIn(
-                    '__version__ = "0.4.18"',
+                    '__version__ = "0.4.19"',
                     path.read_text(encoding="utf-8"),
                 )
         self.assertIn(
-            'version = "0.4.18"',
+            'version = "0.4.19"',
             (KIT / "pyproject.toml").read_text(encoding="utf-8"),
         )
         self.assertIn(
-            'PACKAGE_VERSION = "0.4.18"',
+            'PACKAGE_VERSION = "0.4.19"',
             (KIT / "tests" / "test_wheel_install.py").read_text(encoding="utf-8"),
         )
         citation = (ROOT / "CITATION.cff").read_text(encoding="utf-8")
-        self.assertIn('version: "0.4.18"', citation)
-        self.assertIn('date-released: "2026-09-03"', citation)
+        self.assertIn('version: "0.4.19"', citation)
+        self.assertIn('date-released: "2026-09-05"', citation)
         versioning = (ROOT / "VERSIONING.md").read_text(encoding="utf-8")
-        self.assertIn("Current public baseline:\n\n```text\nv0.4.18", versioning)
-        self.assertIn("Previous public baseline:\n\n```text\nv0.4.17", versioning)
+        self.assertIn("Current public baseline:\n\n```text\nv0.4.19", versioning)
+        self.assertIn("Previous public baseline:\n\n```text\nv0.4.18", versioning)
 
     def test_supply_lock_and_policy_are_exact(self) -> None:
         current = LOCK.read_bytes()
@@ -147,13 +147,13 @@ class V0416ReleaseDocsTests(unittest.TestCase):
         release_names = sorted(
             path.name for path in (RESOURCE_ROOT / "release-notes").glob("v*.md")
         )
-        self.assertEqual(release_names, ["v0.4.18.md"])
+        self.assertEqual(release_names, ["v0.4.19.md"])
         manifest = json.loads(
             (RESOURCE_ROOT / "resource-manifest.json").read_text(encoding="utf-8")
         )
-        self.assertEqual(manifest["version"], "0.4.18")
+        self.assertEqual(manifest["version"], "0.4.19")
         packaged_paths = {row["packaged"] for row in manifest["files"]}
-        self.assertIn("release-notes/v0.4.18.md", packaged_paths)
+        self.assertIn("release-notes/v0.4.19.md", packaged_paths)
         self.assertNotIn("release-notes/v0.4.17.md", packaged_paths)
 
     def test_current_install_guides_use_new_exact_pip_bootstrap(self) -> None:
@@ -166,7 +166,7 @@ class V0416ReleaseDocsTests(unittest.TestCase):
                 )
                 self.assertIn(
                     '$womBootstrapRoot = Join-Path $env:LOCALAPPDATA '
-                    '"WOM\\bootstrap-v0418-$womBootstrapNonce"',
+                    '"WOM\\bootstrap-v0419-$womBootstrapNonce"',
                     document,
                 )
                 self.assertIn("py -3.12 -m venv $womBootstrapRoot", document)
@@ -174,7 +174,7 @@ class V0416ReleaseDocsTests(unittest.TestCase):
                     document,
                     re.escape("& $womBootstrapPython") + r"\s+-m\s+pip\s+install\b",
                 )
-                self.assertIn("wom_kit-0.4.18-py3-none-any.whl", document)
+                self.assertIn("wom_kit-0.4.19-py3-none-any.whl", document)
                 self.assertIn(
                     r'& "$womBootstrapRoot\Scripts\archive.exe" --version',
                     document,

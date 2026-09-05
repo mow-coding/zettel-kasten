@@ -731,38 +731,85 @@ class GitBackupWriterTests(unittest.TestCase):
         )
 
     def test_pre_staged_later_group_is_preserved_by_first_exact_commit(self) -> None:
+        from wom_kit.exact_operation_manifest import ExactOperationManifestError
+
         self.git(self.root, "add", "--", "tracked.txt")
         prepared = self.plan_and_prepare(group_count=2)
         first_finished = False
         original_commit = writer._GitBackupBackend._commit_group
+        original_apply = writer._apply_prepared_with_claim
+        stage = "before_first_group"
+        observed_failure: tuple[str, str] | None = None
+
+        # The CI-only failure is not reproduced locally. Preserve a fixed-code
+        # observation across the generic approval wrapper without changing the
+        # real writer's call, result, exception, or retry behavior.
+        def observe_failure(error: Exception) -> None:
+            nonlocal observed_failure
+            if observed_failure is not None:
+                return
+            code = "unclassified_failure"
+            for error_type in (writer.GitBackupWriterError, ExactOperationManifestError):
+                if type(error) is error_type:
+                    candidate = error.code
+                    if type(candidate) is str and candidate in error_type._CODES:
+                        code = candidate
+                    break
+            observed_failure = (stage, code)
+
+        def observe_apply(*args, **kwargs):
+            try:
+                return original_apply(*args, **kwargs)
+            except Exception as error:
+                observe_failure(error)
+                raise
 
         def observe_between_groups(backend, group):
-            nonlocal first_finished
-            original_commit(backend, group)
+            nonlocal first_finished, stage
+            stage = "first_group_commit" if group.ordinal == 0 else "later_group_commit"
+            try:
+                original_commit(backend, group)
+            except Exception as error:
+                observe_failure(error)
+                raise
             if group.ordinal == 0:
+                stage = "between_groups_assertion"
                 first_finished = True
                 staged = tuple(
                     self.git(self.root, "diff", "--cached", "--name-only")
                     .stdout.splitlines()
                 )
                 self.assertEqual(staged, prepared.groups[1].paths)
+                stage = "after_first_group"
+            else:
+                stage = "after_later_group"
 
         with (
             self.patches()[2],
             self.patches()[3],
+            patch.object(writer, "_apply_prepared_with_claim", new=observe_apply),
             patch.object(
                 writer._GitBackupBackend,
                 "_commit_group",
                 new=observe_between_groups,
             ),
         ):
-            result = writer.execute_git_backup(
-                prepared,
-                selection_manifest_path=self.selection_path,
-                reviewer_claim="person:local-operator",
-                native=_Native(),
-                key_provider=_KeyProvider(),
-            )
+            try:
+                result = writer.execute_git_backup(
+                    prepared,
+                    selection_manifest_path=self.selection_path,
+                    reviewer_claim="person:local-operator",
+                    native=_Native(),
+                    key_provider=_KeyProvider(),
+                )
+            except ExactHumanApprovalWorkflowError:
+                failure_stage, failure_code = observed_failure or (
+                    "outside_observed_apply", "not_observed"
+                )
+                raise AssertionError(
+                    "git_backup_fixture_failure: "
+                    f"stage={failure_stage}; code={failure_code}"
+                ) from None
         self.assertTrue(result["ok"], result)
         self.assertTrue(first_finished)
         self.assertEqual(

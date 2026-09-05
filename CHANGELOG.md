@@ -6,6 +6,34 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.19 - 2026-09-05
+
+- Added four-state runtime observations so an unperformed or unavailable check
+  is not reported as an observed failure while legacy boolean readers remain
+  compatible.
+- Replaced the project updater's opaque post-preparation boolean with
+  privacy-safe field-level revalidation across Git, refs, pins, policy, supply,
+  bootstrap, launcher, runtime payload, and materialization evidence.
+- Corrected directory-size-only false drift and verified healthy same-version
+  runtimes before candidate download/build. No-op closeout uses its own exact
+  abort proof so the following preview is not blocked by unfinished control
+  history; uncertain cleanup never reports a completed no-op.
+- Introduced one `CapabilityAvailability` decision shared by help,
+  capabilities, Doctor suggestions, dry-run interpretation, and CLI dispatch,
+  with fixed-closed approvals rejected as `writer_unavailable` before private
+  work begins.
+- Distinguished audited previously exposed approval paths from unaudited
+  history, and separated valid draft input from actual current-index write
+  readiness. An unavailable observation does not authorize automatic repair.
+- Applied one explicit Windows launch policy to every production subprocess,
+  hiding noninteractive children while preserving the human credential-unlock
+  exception and native approval UI.
+- Reused one filesystem observation in Doctor's archive-boundary projection
+  without weakening descriptor or completion revalidation.
+
+Publishing or installing v0.4.19 changes no client runtime or archive. Client
+repair still requires one reviewed project update and new-process verification.
+
 ## v0.4.18 - 2026-09-03
 
 - Finished the identifier-free recovery of one completed project-update

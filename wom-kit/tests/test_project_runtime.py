@@ -173,6 +173,14 @@ def _write_minimal_wheel(destination: Path, version: str) -> Path:
             "archive = wom_kit.archive_cli:main\n"
         ).encode(),
     }
+    if tuple(int(part) for part in version.split(".")) >= (0, 4, 19):
+        # Synthetic payload only: preserve the real release's module-presence
+        # boundary without claiming this tiny fixture tests startup behavior.
+        files["wom_kit/cli_entry.py"] = (
+            "from wom_kit.archive_cli import main\n"
+            "if __name__ == '__main__':\n"
+            "    raise SystemExit(main())\n"
+        ).encode()
     rows: list[list[str]] = []
     for name, data in files.items():
         digest = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode()
@@ -280,7 +288,7 @@ class ProjectRuntimeTests(unittest.TestCase):
             "wom-kit/project-runtime-supply-lock-v*.json text eol=lf",
             attributes.splitlines(),
         )
-        raw = (KIT_ROOT / "project-runtime-supply-lock-v0.4.18.json").read_bytes()
+        raw = (KIT_ROOT / "project-runtime-supply-lock-v0.4.19.json").read_bytes()
         policy = project_runtime.project_runtime_policy_document(
             (KIT_ROOT / "project-runtime-policy.json").read_bytes()
         )
@@ -288,21 +296,21 @@ class ProjectRuntimeTests(unittest.TestCase):
         assert policy is not None
         self.assertEqual(
             policy["supply_lock"],
-            "wom-kit/project-runtime-supply-lock-v0.4.18.json",
+            "wom-kit/project-runtime-supply-lock-v0.4.19.json",
         )
         self.assertEqual(
             policy["supply_lock_sha256"],
-            "sha256:4be603856000aea49421dd7032b4cabd1ba967a123c17e58e215943fb060186f",
+            "sha256:8714250cab5fd639ef00c99d054f7b33b7a8b45fce63f68702e4138fec83b70e",
         )
         supply = project_runtime.project_runtime_supply_lock(
             raw,
-            expected_target="v0.4.18",
+            expected_target="v0.4.19",
         )
         self.assertIsNotNone(supply)
         assert supply is not None
         self.assertEqual(
             supply.sha256,
-            "4be603856000aea49421dd7032b4cabd1ba967a123c17e58e215943fb060186f",
+            "8714250cab5fd639ef00c99d054f7b33b7a8b45fce63f68702e4138fec83b70e",
         )
         self.assertEqual(
             [(item.distribution, item.version, item.size_bytes, item.sha256) for item in supply.artifacts],
@@ -667,6 +675,159 @@ class ProjectRuntimeTests(unittest.TestCase):
         self.assertIn("project_runtime_interpreter_not_locked", prepared_blockers)
         self.assertTrue(prepared["interpreter_enforced"])
 
+    def test_plan_blocks_unavailable_live_observation_without_claiming_repair(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dependency = _write_dependency_wheel(root)
+            supply = _supply_for_dependency(dependency)
+            bootstrap = project_runtime.BootstrapWheel(
+                version="0.4.3",
+                tag="v0.4.3",
+                url=(
+                    "https://github.com/mow-coding/zettel-kasten/releases/"
+                    "download/v0.4.3/wom_kit-0.4.3-py3-none-any.whl"
+                ),
+                sha256="a" * 64,
+                file_name="wom_kit-0.4.3-py3-none-any.whl",
+            )
+            unavailable = {
+                "status": "invalid",
+                "verified": False,
+                "receipt_candidate_valid": False,
+                "static_receipt_valid": True,
+                "live_payload_aligned": False,
+                "live_payload_state": "unavailable",
+                "live_payload_reason_code": (
+                    "project_runtime_live_payload_unavailable"
+                ),
+            }
+            with (
+                patch.object(
+                    project_runtime,
+                    "inspect_runtime",
+                    return_value=unavailable,
+                ),
+                patch.object(
+                    project_runtime,
+                    "launcher_snapshot",
+                    return_value={"unsafe": False, "already_target": True},
+                ),
+                patch.object(
+                    project_runtime,
+                    "runtime_supply_matches_current_interpreter",
+                    return_value=True,
+                ),
+            ):
+                plan, blockers, warnings = project_runtime.plan_runtime(
+                    root,
+                    "v0.4.3",
+                    policy_state="required",
+                    target_commit="b" * 40,
+                    bootstrap=bootstrap,
+                    bootstrap_summary=bootstrap.public_summary(),
+                    supply=supply,
+                )
+
+        self.assertIn("project_runtime_live_payload_unavailable", blockers)
+        self.assertEqual(plan["inspection_truth"]["state"], "unavailable")
+        self.assertFalse(plan["runtime_creation_required"])
+        self.assertFalse(plan["runtime_repair_required"])
+        self.assertFalse(plan["materialization_required"])
+        self.assertFalse(any("private replacement" in item for item in warnings))
+
+    def test_plan_blocks_unavailable_static_receipt_without_claiming_repair(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dependency = _write_dependency_wheel(root)
+            supply = _supply_for_dependency(dependency)
+            bootstrap = project_runtime.BootstrapWheel(
+                version="0.4.3",
+                tag="v0.4.3",
+                url=(
+                    "https://github.com/mow-coding/zettel-kasten/releases/"
+                    "download/v0.4.3/wom_kit-0.4.3-py3-none-any.whl"
+                ),
+                sha256="a" * 64,
+                file_name="wom_kit-0.4.3-py3-none-any.whl",
+            )
+            unavailable = {
+                "status": "unavailable",
+                "receipt_candidate_valid": False,
+                "static_receipt_valid": False,
+                "static_receipt_state": "unavailable",
+                "static_receipt_reason_code": (
+                    "project_runtime_static_receipt_unavailable"
+                ),
+                "live_payload_state": "not_reached",
+            }
+            with (
+                patch.object(
+                    project_runtime,
+                    "inspect_runtime",
+                    return_value=unavailable,
+                ),
+                patch.object(
+                    project_runtime,
+                    "launcher_snapshot",
+                    return_value={"unsafe": False, "already_target": True},
+                ),
+                patch.object(
+                    project_runtime,
+                    "runtime_supply_matches_current_interpreter",
+                    return_value=True,
+                ),
+            ):
+                plan, blockers, warnings = project_runtime.plan_runtime(
+                    root,
+                    "v0.4.3",
+                    policy_state="required",
+                    target_commit="b" * 40,
+                    bootstrap=bootstrap,
+                    bootstrap_summary=bootstrap.public_summary(),
+                    supply=supply,
+                )
+
+        self.assertIn("project_runtime_static_receipt_unavailable", blockers)
+        self.assertEqual(plan["inspection_truth"]["state"], "unavailable")
+        self.assertFalse(plan["runtime_creation_required"])
+        self.assertFalse(plan["runtime_repair_required"])
+        self.assertFalse(plan["materialization_required"])
+        self.assertFalse(any("private replacement" in item for item in warnings))
+
+    def test_plan_blocks_unavailable_runtime_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with (
+                patch.object(
+                    project_runtime,
+                    "inspect_runtime",
+                    return_value={
+                        "status": "missing",
+                        "receipt_candidate_valid": False,
+                        "static_receipt_valid": False,
+                    },
+                ),
+                patch.object(
+                    project_runtime,
+                    "launcher_snapshot",
+                    return_value={"unsafe": False, "already_target": False},
+                ),
+            ):
+                _plan, blockers, _warnings = project_runtime.plan_runtime(
+                    root,
+                    "v0.4.3",
+                    policy_state="unavailable",
+                    target_commit=None,
+                    bootstrap=None,
+                    bootstrap_summary={"available": False},
+                )
+
+        self.assertIn("project_runtime_policy_unavailable", blockers)
+
     def test_public_bootstrap_provenance_binds_exact_release_wheel_hash(self) -> None:
         digest = "a" * 64
 
@@ -846,7 +1007,7 @@ class ProjectRuntimeTests(unittest.TestCase):
         self.assertTrue(same_version_unbound["blocked"])
         self.assertEqual(
             same_version_unbound["detail_reason_code"],
-            "project_runtime_static_receipt_invalid",
+            "project_runtime_missing",
         )
         self.assertFalse(aligned["blocked"])
         self.assertTrue(
@@ -904,7 +1065,139 @@ class ProjectRuntimeTests(unittest.TestCase):
             guarded["detail_reason_code"],
             "project_runtime_live_payload_mismatch",
         )
+
+    def test_write_guard_preserves_unavailable_live_payload_reason(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"
+            archive = project / "archive"
+            metadata = project / ".zettel-kasten"
+            archive.mkdir(parents=True)
+            metadata.mkdir()
+            (archive / "archive.yml").write_text(
+                "archive_id: archive:test\n",
+                encoding="utf-8",
+            )
+            (metadata / "installed-version.txt").write_text(
+                "v0.4.3\n",
+                encoding="utf-8",
+            )
+            unavailable = {
+                "status": "invalid",
+                "receipt_candidate_valid": False,
+                "static_receipt_valid": True,
+                "live_payload_aligned": False,
+                "live_payload_state": "unavailable",
+                "live_payload_reason_code": (
+                    "project_runtime_live_payload_unavailable"
+                ),
+            }
+            with (
+                patch.object(
+                    project_runtime,
+                    "inspect_runtime",
+                    return_value=unavailable,
+                ),
+                patch.object(
+                    project_runtime,
+                    "current_project_runtime_binding",
+                    return_value={
+                        "bound": False,
+                        "reason_code": "project_runtime_live_payload_unavailable",
+                    },
+                ),
+            ):
+                guarded = project_runtime.project_write_guard(
+                    archive,
+                    running_version="0.4.3",
+                )
+
+        self.assertTrue(guarded["blocked"])
+        self.assertEqual(
+            guarded["reason_code"],
+            "project_runtime_unavailable",
+        )
+        self.assertEqual(guarded["runtime_inspection_state"], "unavailable")
+        self.assertEqual(
+            guarded["detail_reason_code"],
+            "project_runtime_live_payload_unavailable",
+        )
         self.assertFalse(guarded["absolute_paths_echoed"])
+
+    def test_write_guard_blocks_unavailable_archive_root_discovery(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / "project" / "archive"
+            archive.mkdir(parents=True)
+            archive_yml = archive / "archive.yml"
+            archive_yml.write_text("archive_id: archive:test\n", encoding="utf-8")
+            original_lstat = Path.lstat
+
+            def selective_lstat(path: Path):
+                if path == archive_yml:
+                    raise PermissionError("synthetic access denial")
+                return original_lstat(path)
+
+            with patch.object(Path, "lstat", selective_lstat):
+                guarded = project_runtime.project_write_guard(
+                    archive,
+                    running_version="0.4.3",
+                )
+
+        self.assertTrue(guarded["blocked"])
+        self.assertEqual(guarded["reason_code"], "project_runtime_unavailable")
+        self.assertEqual(
+            guarded["detail_reason_code"],
+            "project_root_observation_unavailable",
+        )
+
+    def test_write_guard_blocks_unavailable_update_lock_observation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"
+            archive = project / "archive"
+            metadata = project / ".zettel-kasten"
+            archive.mkdir(parents=True)
+            metadata.mkdir()
+            archive_yml = archive / "archive.yml"
+            archive_yml.write_text("archive_id: archive:test\n", encoding="utf-8")
+            lock_path = project / ".zettel-kasten" / "version-update.lock"
+            original_lstat = Path.lstat
+
+            def selective_lstat(path: Path):
+                if path == lock_path:
+                    raise PermissionError("synthetic access denial")
+                return original_lstat(path)
+
+            with patch.object(Path, "lstat", selective_lstat):
+                guarded = project_runtime.project_write_guard(
+                    archive,
+                    running_version="0.4.3",
+                )
+
+        self.assertTrue(guarded["blocked"])
+        self.assertEqual(guarded["reason_code"], "project_runtime_unavailable")
+        self.assertEqual(
+            guarded["detail_reason_code"],
+            "project_update_lock_observation_unavailable",
+        )
+
+    def test_launcher_snapshot_preserves_access_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"
+            launcher = project / project_runtime.PROJECT_RUNTIME_LAUNCHER_RELATIVE
+            launcher.parent.mkdir(parents=True)
+            launcher.write_bytes(project_runtime.launcher_bytes("0.4.3"))
+            original_lstat = Path.lstat
+
+            def selective_lstat(path: Path):
+                if path == launcher:
+                    raise PermissionError("synthetic access denial")
+                return original_lstat(path)
+
+            with patch.object(Path, "lstat", selective_lstat):
+                snapshot = project_runtime.launcher_snapshot(project, "0.4.3")
+
+        self.assertEqual(snapshot["observation_state"], "unavailable")
+        self.assertFalse(snapshot["already_target"])
+        self.assertFalse(snapshot["unsafe"])
 
     def test_current_project_runtime_binding_requires_canonical_launcher_process(
         self,
@@ -1118,6 +1411,208 @@ class ProjectRuntimeTests(unittest.TestCase):
         self.assertFalse(after["receipt_candidate_valid"])
         self.assertFalse(after["absolute_paths_echoed"])
 
+    def test_runtime_inspection_missing_required_python_is_failed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"
+            _runtime, executable, _module = _write_receipt_bound_runtime(project)
+            executable.unlink()
+
+            inspected = project_runtime.inspect_runtime(project, "0.4.3")
+
+        truth = project_runtime.runtime_inspection_truth(inspected)
+        self.assertEqual(inspected["live_payload_state"], "failed")
+        self.assertEqual(
+            inspected["live_payload_reason_code"],
+            "project_runtime_required_python_missing",
+        )
+        self.assertEqual(truth["state"], "failed")
+
+    def test_runtime_inspection_required_python_access_failure_is_unavailable(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"
+            _runtime, executable, _module = _write_receipt_bound_runtime(project)
+            original_lstat = Path.lstat
+
+            def selective_lstat(path: Path):
+                if path == executable:
+                    raise PermissionError("synthetic access denial")
+                return original_lstat(path)
+
+            with patch.object(Path, "lstat", selective_lstat):
+                inspected = project_runtime.inspect_runtime(project, "0.4.3")
+
+        self.assertEqual(inspected["live_payload_state"], "unavailable")
+        self.assertEqual(
+            inspected["live_payload_reason_code"],
+            "project_runtime_live_payload_unavailable",
+        )
+
+    def test_plan_repairs_confirmed_missing_required_python(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "project"
+            _runtime, executable, _module = _write_receipt_bound_runtime(project)
+            executable.unlink()
+            inspected = project_runtime.inspect_runtime(project, "0.4.3")
+            dependency = _write_dependency_wheel(root)
+            supply = _supply_for_dependency(dependency)
+            bootstrap = project_runtime.BootstrapWheel(
+                version="0.4.3",
+                tag="v0.4.3",
+                url=(
+                    "https://github.com/mow-coding/zettel-kasten/releases/"
+                    "download/v0.4.3/wom_kit-0.4.3-py3-none-any.whl"
+                ),
+                sha256="a" * 64,
+                file_name="wom_kit-0.4.3-py3-none-any.whl",
+            )
+            with (
+                patch.object(
+                    project_runtime,
+                    "inspect_runtime",
+                    return_value=inspected,
+                ),
+                patch.object(
+                    project_runtime,
+                    "launcher_snapshot",
+                    return_value={
+                        "unsafe": False,
+                        "already_target": True,
+                        "observation_state": "passed",
+                    },
+                ),
+                patch.object(
+                    project_runtime,
+                    "runtime_supply_matches_current_interpreter",
+                    return_value=True,
+                ),
+            ):
+                plan, blockers, _warnings = project_runtime.plan_runtime(
+                    project,
+                    "v0.4.3",
+                    policy_state="required",
+                    target_commit="b" * 40,
+                    bootstrap=bootstrap,
+                    bootstrap_summary=bootstrap.public_summary(),
+                    supply=supply,
+                )
+
+        self.assertNotIn("project_runtime_live_payload_unavailable", blockers)
+        self.assertEqual(plan["inspection_truth"]["state"], "failed")
+        self.assertTrue(plan["runtime_repair_required"])
+
+    def test_runtime_inspection_distinguishes_unavailable_from_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"
+            _write_receipt_bound_runtime(project)
+
+            with patch.object(
+                project_runtime,
+                "_runtime_payload_observation",
+                side_effect=project_runtime.ProjectRuntimeError(
+                    "synthetic_observation_unavailable"
+                ),
+            ):
+                unavailable = project_runtime.inspect_runtime(
+                    project,
+                    "0.4.3",
+                )
+
+        self.assertTrue(unavailable["static_receipt_valid"])
+        self.assertFalse(unavailable["live_payload_aligned"])
+        self.assertEqual(unavailable["live_payload_state"], "unavailable")
+        self.assertEqual(
+            unavailable["live_payload_reason_code"],
+            "project_runtime_live_payload_unavailable",
+        )
+        self.assertFalse(unavailable["receipt_candidate_valid"])
+        self.assertFalse(unavailable["absolute_paths_echoed"])
+
+    def test_runtime_inspection_marks_unsafe_tree_as_failed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"
+            _write_receipt_bound_runtime(project)
+
+            with patch.object(
+                project_runtime,
+                "_runtime_payload_observation",
+                side_effect=project_runtime.ProjectRuntimeError(
+                    "project_runtime_tree_unsafe"
+                ),
+            ):
+                unsafe = project_runtime.inspect_runtime(project, "0.4.3")
+
+        self.assertTrue(unsafe["static_receipt_valid"])
+        self.assertFalse(unsafe["live_payload_aligned"])
+        self.assertEqual(unsafe["live_payload_state"], "failed")
+        self.assertEqual(
+            unsafe["live_payload_reason_code"],
+            "project_runtime_tree_unsafe",
+        )
+
+    def test_runtime_inspection_receipt_read_failure_is_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"
+            _write_receipt_bound_runtime(project)
+
+            with patch.object(
+                project_runtime,
+                "_read_limited",
+                return_value=None,
+            ):
+                inspected = project_runtime.inspect_runtime(project, "0.4.3")
+
+        truth = project_runtime.runtime_inspection_truth(inspected)
+        self.assertEqual(inspected["status"], "unavailable")
+        self.assertEqual(inspected["static_receipt_state"], "unavailable")
+        self.assertEqual(truth["state"], "unavailable")
+        self.assertEqual(
+            truth["reason_code"],
+            "project_runtime_static_receipt_unavailable",
+        )
+
+    def test_runtime_inspection_receipt_lstat_failure_is_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"
+            runtime, _executable, _module = _write_receipt_bound_runtime(project)
+            receipt_path = runtime / project_runtime.PROJECT_RUNTIME_RECEIPT_NAME
+            original_lstat = Path.lstat
+
+            def selective_lstat(path: Path):
+                if path == receipt_path:
+                    raise PermissionError("synthetic access denial")
+                return original_lstat(path)
+
+            with patch.object(Path, "lstat", selective_lstat):
+                inspected = project_runtime.inspect_runtime(project, "0.4.3")
+
+        self.assertEqual(inspected["status"], "unavailable")
+        self.assertEqual(inspected["static_receipt_state"], "unavailable")
+        self.assertEqual(
+            project_runtime.runtime_inspection_truth(inspected)["state"],
+            "unavailable",
+        )
+
+    def test_runtime_inspection_marks_live_check_not_reached_for_bad_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"
+            runtime, _executable, _module = _write_receipt_bound_runtime(project)
+            (runtime / project_runtime.PROJECT_RUNTIME_RECEIPT_NAME).write_bytes(
+                b"{invalid-receipt\n"
+            )
+
+            inspected = project_runtime.inspect_runtime(project, "0.4.3")
+
+        self.assertFalse(inspected["static_receipt_valid"])
+        self.assertFalse(inspected["live_payload_aligned"])
+        self.assertEqual(inspected["live_payload_state"], "not_reached")
+        self.assertEqual(
+            inspected["live_payload_reason_code"],
+            "project_runtime_static_receipt_invalid",
+        )
+
     def test_binding_rechecks_payload_after_reused_inspection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp) / "project"
@@ -1178,8 +1673,9 @@ class ProjectRuntimeTests(unittest.TestCase):
         self.assertFalse(binding["receipt_generation_aligned"])
         self.assertEqual(
             binding["reason_code"],
-            "project_runtime_static_receipt_invalid",
+            "project_runtime_receipt_generation_changed",
         )
+        self.assertEqual(binding["receipt_generation_state"], "failed")
 
     def test_runtime_inspection_rejects_symlink_swapped_payload_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

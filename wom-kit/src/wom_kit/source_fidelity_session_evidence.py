@@ -35,6 +35,7 @@ from .exact_human_approval_windows import (
     ExactHumanApprovalOperation,
     exact_human_approval_warning_codes,
 )
+from .process_launch import noninteractive_creationflags
 
 
 PLAN_SCHEMA = "wom-kit/source-fidelity-session-evidence-plan/v0.1"
@@ -311,7 +312,6 @@ def _git_admin_present(root: Path) -> bool:
 def _require_untracked(root: Path, relative: str) -> None:
     if not _git_admin_present(root):
         return
-    creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
     try:
         tracked = subprocess.run(
             ["git", "-C", str(root), "ls-files", "--error-unmatch", "--", relative],
@@ -320,7 +320,7 @@ def _require_untracked(root: Path, relative: str) -> None:
             stderr=subprocess.DEVNULL,
             check=False,
             timeout=5,
-            creationflags=creation_flags,
+            creationflags=noninteractive_creationflags(),
         )
     except (OSError, subprocess.SubprocessError):
         raise _fail("session_evidence_private_boundary_unverified") from None

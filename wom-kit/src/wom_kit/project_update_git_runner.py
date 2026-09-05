@@ -380,7 +380,10 @@ def _validate_local_only_command(
         "head",
     ):
         raise _fail("project_update_git_runner_command_invalid")
-    if subcommand == "tag" and tail != ("--list", "v*"):
+    if subcommand == "tag" and tail not in {
+        ("--list", "v*"),
+        ("--points-at", "head"),
+    }:
         raise _fail("project_update_git_runner_command_invalid")
     if subcommand == "show" and tail != (
         "-s",

@@ -2,11 +2,21 @@
 
 상태: 공개 navigation baseline
 날짜: 2026-05-27
-갱신: 2026-09-01
+갱신: 2026-09-04
 철학 갱신: 2026-07-15
 하네스 호환 경계 갱신: 2026-07-16
 
-현재 v0.4.18 변경점: identifier 없는 `--resume`이 project가 다른 버전으로 넘어간
+현재 v0.4.19 변경점: runtime과 updater 검사는 `passed`, `failed`,
+`not_reached`, `unavailable`을 구분하며 과거 boolean reader도 계속 지원합니다.
+승인된 준비 상태는 하나의 불투명한 boolean이 아니라 개인정보가 없는 필드별
+상태로 다시 검증합니다. help, capabilities, Doctor 제안, dry-run 해석, 실제
+dispatch는 하나의 `CapabilityAvailability` 결정을 사용하고, 고정 차단된 승인은
+비공개 작업 전에 `writer_unavailable`로 멈춥니다. 비대화형 Windows child는 하나의
+no-console 정책을 사용하되 사람의 native 승인과 credential 상호작용은 계속
+보입니다. 공개·설치만으로 client archive나 project runtime은 바뀌지 않으며,
+client가 검토된 update를 별도로 실행하고 새 process에서 검증해야 합니다.
+
+과거 v0.4.18 변경점: identifier 없는 `--resume`이 project가 다른 버전으로 넘어간
 뒤에도 자기 cleanup을 끝내지 못한 완료된 project-update 원본 하나를, archive의
 원래 승인 claim을 cleanup authority로 다시 인증해 마무리합니다. dry-run·approval·
 resume이 그 directory를 같은 방식으로 분류하고, redacted 실패 산출물은 고정된 내부

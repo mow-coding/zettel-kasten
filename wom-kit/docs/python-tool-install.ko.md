@@ -1,6 +1,6 @@
 # WOM-kit Python 도구 설치
 
-상태: v0.4.18 조건부 GitHub wheel 계약; 정확한 pip 부트스트랩과 terminal-original 정리
+상태: v0.4.19 조건부 GitHub wheel 계약; runtime과 capability 사실성
 
 WOM-kit은 명령줄 도구입니다. 일반 앱 프로젝트의 Python 의존성과 섞지 말고
 별도의 격리된 Python 환경에 설치하는 것이 좋습니다.
@@ -31,14 +31,14 @@ wheel을 설치하고 그 환경의 `Scripts\archive.exe`를 정확한 경로로
 실행기는 바뀌지 않습니다. 이 경계는 WOM 명령의 프로젝트 런타임 격리이며,
 Windows 사용자 권한이나 WOM 밖의 프로그램까지 격리한다는 뜻은 아닙니다.
 
-아래 v0.4.18 URL은 조건부 계약이며 공개 자산이 실제로 존재한다는 증거가
+아래 v0.4.19 URL은 조건부 계약이며 공개 자산이 실제로 존재한다는 증거가
 아닙니다. 정확히 일치하는 GitHub Release가 존재하고 검증된 wheel을 자산으로
 나열한 뒤에만 사용하세요. 소스 상태와 릴리스 증거의 구분은
-[v0.4.18 릴리스 노트](releases/v0.4.18.md)를 보세요.
+[v0.4.19 릴리스 노트](releases/v0.4.19.md)를 보세요.
 
-설치된 이전 runtime에는 v0.4.18의 terminal-original 정리, claim-reference cleanup
-authority, 고정된 내부 cause code가 없을 수 있습니다. 저장소 파일만 업데이트해도
-설치된 wheel은 바뀌지 않습니다. 검증된 v0.4.18 자산이 실제로 생긴 뒤 그 정확한
+설치된 이전 runtime에는 v0.4.19의 네 상태 runtime observation, field-level 준비
+재검증, capability parity, Windows no-console child-process 정책이 없을 수 있습니다.
+저장소 파일만 업데이트해도 설치된 wheel은 바뀌지 않습니다. 검증된 v0.4.19 자산이 실제로 생긴 뒤 그 정확한
 wheel을 설치하고 새 프로세스를 시작하세요.
 
 ## 권장 프로젝트 부트스트랩
@@ -50,17 +50,17 @@ wheel을 설치하고 새 프로세스를 시작하세요.
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0418-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0419-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.18/wom_kit-0.4.18-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.19/wom_kit-0.4.19-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-새 프로세스가 정확히 `archive 0.4.18`을 보고하면 그 명시적 부트스트랩으로
+새 프로세스가 정확히 `archive 0.4.19`을 보고하면 그 명시적 부트스트랩으로
 `project-version-update`를 실행합니다. 승인 성공 뒤 프로젝트 런타임을
 검증하고 해당 launcher를 사용합니다.
 
@@ -110,9 +110,9 @@ pin을 손으로 고치지 마세요. [Project Version Update](project-version-u
 다른 외부 가상환경을 사용합니다.
 
 ```powershell
-$womToolRoot = Join-Path $env:LOCALAPPDATA "WOM\tool-v0418"
+$womToolRoot = Join-Path $env:LOCALAPPDATA "WOM\tool-v0419"
 py -3.12 -m venv $womToolRoot
-& "$womToolRoot\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.18/wom_kit-0.4.18-py3-none-any.whl"
+& "$womToolRoot\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.19/wom_kit-0.4.19-py3-none-any.whl"
 & "$womToolRoot\Scripts\archive.exe" --version
 ```
 

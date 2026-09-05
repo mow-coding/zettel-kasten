@@ -54,10 +54,12 @@ from .paths import (
 )
 from .resource_paths import runtime_resource_root
 from .markdown_display import project_wom_safe_markdown
+from .process_launch import noninteractive_creationflags
 from . import (
     command_status,
     project_runtime,
     project_update_git_runner,
+    project_update_legacy_recovery,
     project_update_transaction,
 )
 from .schema_validator import validate_schema
@@ -92,9 +94,12 @@ from .agent_instruction_policy import (
 from .exact_human_approval import (
     CLAIMS_RELATIVE_ROOT,
     _ClaimedExactHumanApproval,
+    _authenticated_claim_routing_core,
+    _read_claim_bytes,
     _authenticated_claim_reference_core,
     ExactHumanApprovalError,
     exact_human_approval_archive_identity_sha256,
+    exact_human_approval_context_sha256,
 )
 from .exact_human_approval_link import write_exact_human_approval_link
 from .exact_human_approval_windows import (
@@ -37412,18 +37417,57 @@ def create_draft_zettel(
                 if item != fidelity_receipt_relative
             ]
 
-    # The AI approval command replays the dry-run with ``approved=True``.
-    # Prove the generated Zet index is current during that replay, before the
-    # native human broker can be opened.  A plain exploratory dry-run remains
-    # read-only and can still explain the draft itself; an idempotent replay
-    # that will not create a Zet also has no index delta to protect.
-    if is_ai_draft and approved and proposed_path in planned_writes:
+    # Input validity and write readiness are different observations. Expose the
+    # same read-only index prerequisite during exploration and approval replay
+    # without rebuilding the index or opening native approval. Existing callers
+    # can still inspect a valid draft; its approval handoff must not say ready
+    # when the generated index would reject that exact write moments later.
+    write_preflight = {
+        "state": "not_reached",
+        "reason_code": "draft_write_not_requested",
+    }
+    write_next_safe_actions: list[str] = []
+    if is_ai_draft and not blockers and proposed_path in planned_writes:
         try:
             index_evidence = require_current_zettel_index(root)
-        except (ArchiveServiceError, OSError, ValueError):
-            index_evidence = {"ok": False}
-        if index_evidence.get("ok") is not True:
-            blockers.append(INDEX_REBUILD_REQUIRED)
+        except (ArchiveServiceError, OSError, ValueError, sqlite3.Error):
+            index_evidence = {
+                "ok": False,
+                "reason_codes": ["archive_index_observation_unavailable"],
+            }
+        if index_evidence.get("ok") is True:
+            write_preflight = {"state": "passed", "reason_code": "archive_index_current"}
+        else:
+            unavailable_index_reasons = {
+                "archive_index_observation_unavailable",
+                "archive_index_schema_unreadable",
+                "archive_index_manifest_unreadable",
+                "archive_index_live_authority_watcher_unavailable",
+                "archive_index_mutation_in_progress",
+            }
+            unavailable = bool(
+                unavailable_index_reasons.intersection(index_evidence.get("reason_codes", []))
+            )
+            write_preflight = {
+                "state": "unavailable" if unavailable else "failed",
+                "reason_code": (
+                    "archive_index_observation_unavailable"
+                    if unavailable else INDEX_REBUILD_REQUIRED
+                ),
+            }
+            write_next_safe_actions = (
+                [
+                    "Restore stable read access and let the active index writer finish before retrying.",
+                    INDEX_REBUILD_NEXT_SAFE_ACTIONS[1],
+                ]
+                if unavailable else list(INDEX_REBUILD_NEXT_SAFE_ACTIONS)
+            )
+        if approved and write_preflight["state"] != "passed":
+            blockers.append(write_preflight["reason_code"])
+    elif is_ai_draft and not blockers:
+        write_preflight = {"state": "passed", "reason_code": "draft_index_delta_not_required"}
+    elif is_ai_draft:
+        write_preflight = {"state": "not_reached", "reason_code": "draft_input_validation_blocked"}
 
     approval_replay = {
         "draft_id": (
@@ -37485,8 +37529,10 @@ def create_draft_zettel(
             [] if blockers else [f"write {item}" for item in planned_writes]
         ),
         "approval_replay": approval_replay,
+        "write_preflight": write_preflight,
+        "next_safe_actions": write_next_safe_actions,
         "approval_handoff": _create_draft_approval_handoff(
-            ready=not blockers,
+            ready=not blockers and is_ai_draft and write_preflight["state"] == "passed",
             approval_replay=approval_replay,
         ),
     }
@@ -87902,6 +87948,9 @@ def safe_keepassxc_database_path_for_write(
 
 
 def _run_keepassxc_cli_add(argv: list[str]) -> int:
+    # This is the deliberate exception to WOM's no-console subprocess policy:
+    # KeePassXC owns a human-visible local database-unlock prompt.  Hiding that
+    # prompt would turn a required human decision into an apparent hang.
     completed = subprocess.run(argv, check=False)
     return int(completed.returncode)
 
@@ -104272,19 +104321,62 @@ def _wom_kit_git_probe_budget(
             _WOM_KIT_GIT_PROBE_BUDGET_LOCAL.state = prior
 
 
-def wom_kit_real_path_kind(root: Path, path: Path) -> str:
+def wom_kit_path_components_observation(
+    root: Path,
+    path: Path,
+) -> dict[str, str]:
+    """Observe a path chain without turning access failure into absence."""
+
     try:
-        path.relative_to(root)
+        lexical_relative = path.relative_to(root)
+    except ValueError:
+        return {"state": "failed", "kind": "unsafe"}
+    current = root
+    for part in (None, *lexical_relative.parts):
+        if part is not None:
+            current = current / part
+        try:
+            component_stat = os.lstat(current)
+        except FileNotFoundError:
+            return {"state": "passed", "kind": "missing"}
+        except OSError:
+            return {"state": "unavailable", "kind": "unknown"}
+        reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        if stat.S_ISLNK(component_stat.st_mode) or (
+            reparse_flag
+            and getattr(component_stat, "st_file_attributes", 0)
+            & reparse_flag
+        ):
+            return {"state": "failed", "kind": "unsafe"}
+    return {"state": "passed", "kind": "real"}
+
+
+def wom_kit_real_path_kind_observation(
+    root: Path,
+    path: Path,
+) -> dict[str, str]:
+    components = wom_kit_path_components_observation(root, path)
+    if components["state"] != "passed" or components["kind"] != "real":
+        return components
+    try:
         path_stat = os.lstat(path)
-    except (OSError, ValueError):
-        return "missing"
-    if not wom_kit_path_components_are_real(root, path):
-        return "unsafe"
+    except FileNotFoundError:
+        return {"state": "passed", "kind": "missing"}
+    except OSError:
+        return {"state": "unavailable", "kind": "unknown"}
     if stat.S_ISREG(path_stat.st_mode):
-        return "file"
+        return {"state": "passed", "kind": "file"}
     if stat.S_ISDIR(path_stat.st_mode):
-        return "directory"
-    return "unsafe"
+        return {"state": "passed", "kind": "directory"}
+    return {"state": "failed", "kind": "unsafe"}
+
+
+def wom_kit_real_path_kind(root: Path, path: Path) -> str:
+    observation = wom_kit_real_path_kind_observation(root, path)
+    kind = observation["kind"]
+    # Preserve the legacy scalar contract for older callers. Four-state
+    # integrity paths consume the detailed observation above.
+    return kind if kind != "unknown" else "missing"
 
 
 def _wom_kit_read_bounded_real_bytes(
@@ -104293,13 +104385,54 @@ def _wom_kit_read_bounded_real_bytes(
     *,
     max_bytes: int,
 ) -> bytes | None:
-    if max_bytes < 0 or wom_kit_real_path_kind(root, path) != "file":
-        return None
+    observation = _wom_kit_read_bounded_real_bytes_observation(
+        root,
+        path,
+        max_bytes=max_bytes,
+    )
+    value = observation.get("bytes")
+    return value if isinstance(value, bytes) else None
+
+
+def _wom_kit_read_bounded_real_bytes_observation(
+    root: Path,
+    path: Path,
+    *,
+    max_bytes: int,
+) -> dict[str, Any]:
+    """Read stable real bytes while preserving invalid vs unavailable truth."""
+
+    if max_bytes < 0:
+        return {
+            "state": "failed",
+            "reason_code": "bounded_bytes_size_policy_invalid",
+            "bytes": None,
+        }
+    path_observation = wom_kit_real_path_kind_observation(root, path)
+    if path_observation["state"] == "unavailable":
+        return {
+            "state": "unavailable",
+            "reason_code": "bounded_bytes_observation_unavailable",
+            "bytes": None,
+        }
+    if (
+        path_observation["state"] != "passed"
+        or path_observation["kind"] != "file"
+    ):
+        return {
+            "state": "failed",
+            "reason_code": "bounded_bytes_path_invalid",
+            "bytes": None,
+        }
     descriptor: int | None = None
     try:
         before = os.lstat(path)
         if before.st_size < 0 or before.st_size > max_bytes:
-            return None
+            return {
+                "state": "failed",
+                "reason_code": "bounded_bytes_size_policy_exceeded",
+                "bytes": None,
+            }
         flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
@@ -104311,7 +104444,11 @@ def _wom_kit_read_bounded_real_bytes(
             or (before.st_ino and opened.st_ino and before.st_ino != opened.st_ino)
             or (before.st_dev and opened.st_dev and before.st_dev != opened.st_dev)
         ):
-            return None
+            return {
+                "state": "unavailable",
+                "reason_code": "bounded_bytes_changed_during_read",
+                "bytes": None,
+            }
         chunks: list[bytes] = []
         total = 0
         while total <= max_bytes:
@@ -104326,13 +104463,28 @@ def _wom_kit_read_bounded_real_bytes(
             or after.st_size != opened.st_size
             or after.st_mtime_ns != opened.st_mtime_ns
         ):
-            return None
-        return b"".join(chunks)
+            return {
+                "state": "unavailable",
+                "reason_code": "bounded_bytes_changed_during_read",
+                "bytes": None,
+            }
+        return {
+            "state": "passed",
+            "reason_code": "verified",
+            "bytes": b"".join(chunks),
+        }
     except (OSError, OverflowError):
-        return None
+        return {
+            "state": "unavailable",
+            "reason_code": "bounded_bytes_observation_unavailable",
+            "bytes": None,
+        }
     finally:
         if descriptor is not None:
-            os.close(descriptor)
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
 
 
 def _wom_kit_read_bounded_real_text(
@@ -104350,6 +104502,72 @@ def _wom_kit_read_bounded_real_text(
         return None
 
 
+def _wom_kit_read_bounded_real_text_observation(
+    root: Path,
+    path: Path,
+    *,
+    max_bytes: int,
+) -> dict[str, Any]:
+    """Read small trusted metadata without collapsing content errors into I/O."""
+
+    if max_bytes < 0:
+        return {
+            "state": "failed",
+            "reason_code": "bounded_text_size_policy_invalid",
+            "text": None,
+        }
+    path_observation = wom_kit_real_path_kind_observation(root, path)
+    if path_observation["state"] == "unavailable":
+        return {
+            "state": "unavailable",
+            "reason_code": "bounded_text_observation_unavailable",
+            "text": None,
+        }
+    if (
+        path_observation["state"] != "passed"
+        or path_observation["kind"] != "file"
+    ):
+        return {
+            "state": "failed",
+            "reason_code": "bounded_text_path_invalid",
+            "text": None,
+        }
+    try:
+        file_size = int(os.lstat(path).st_size)
+    except OSError:
+        return {
+            "state": "unavailable",
+            "reason_code": "bounded_text_observation_unavailable",
+            "text": None,
+        }
+    if file_size < 0 or file_size > max_bytes:
+        return {
+            "state": "failed",
+            "reason_code": "bounded_text_too_large",
+            "text": None,
+        }
+    value = _wom_kit_read_bounded_real_bytes(
+        root,
+        path,
+        max_bytes=max_bytes,
+    )
+    if value is None:
+        return {
+            "state": "unavailable",
+            "reason_code": "bounded_text_observation_unavailable",
+            "text": None,
+        }
+    try:
+        text = value.decode("utf-8")
+    except UnicodeError:
+        return {
+            "state": "failed",
+            "reason_code": "bounded_text_encoding_invalid",
+            "text": None,
+        }
+    return {"state": "passed", "reason_code": "verified", "text": text}
+
+
 def read_wom_kit_pyproject_version() -> str | None:
     service_path = Path(__file__).resolve()
     pyproject_path = service_path.parents[2] / "pyproject.toml"
@@ -104362,13 +104580,32 @@ def read_wom_kit_pyproject_version() -> str | None:
 
 
 def wom_kit_version_pin_search_roots(root: Path) -> list[tuple[str, Path]]:
+    return list(wom_kit_version_pin_search_roots_observation(root)["roots"])
+
+
+def wom_kit_version_pin_search_roots_observation(
+    root: Path,
+) -> dict[str, Any]:
     roots = [("inspection_root", root)]
-    if (
-        wom_kit_real_path_kind(root, root / "archive.yml") == "file"
-        and root.parent != root
-    ):
+    archive_config_observation = wom_kit_real_path_kind_observation(
+        root,
+        root / "archive.yml",
+    )
+    if archive_config_observation["state"] == "unavailable":
+        return {
+            "state": "unavailable",
+            "reason_code": "project_root_observation_unavailable",
+            "roots": roots,
+        }
+    if archive_config_observation["kind"] == "file" and root.parent != root:
         roots.append(("parent_of_archive", root.parent))
-    return roots
+    elif archive_config_observation["kind"] == "unsafe":
+        return {
+            "state": "failed",
+            "reason_code": "project_archive_root_binding_unsafe",
+            "roots": roots,
+        }
+    return {"state": "passed", "reason_code": "verified", "roots": roots}
 
 
 def wom_kit_version_pin_location(root_label: str, candidate: str) -> str:
@@ -104389,14 +104626,56 @@ def wom_kit_project_source_mirror_location(root_label: str) -> str:
 
 
 def git_output_lines(cwd: Path, args: list[str]) -> list[str]:
-    ok, output = _wom_kit_project_update_git_legacy_read_only(
-        cwd,
-        args,
-        timeout_seconds=5,
-    )
-    if not ok:
-        return []
-    return [line.strip() for line in output.splitlines() if line.strip()]
+    return list(git_output_lines_observation(cwd, args)["lines"])
+
+
+def git_output_lines_observation(cwd: Path, args: list[str]) -> dict[str, Any]:
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner | None = None
+    try:
+        runner = (
+            project_update_git_runner.TrustedProjectUpdateGitRunner
+            .resolve_preapproval()
+        )
+        runner.close_transport_boundary()
+        available, return_code, output = (
+            _wom_kit_project_update_git_observation(
+                cwd,
+                args,
+                timeout_seconds=5,
+                runner=runner,
+            )
+        )
+    except BaseException:
+        return {
+            "state": "unavailable",
+            "reason_code": "project_source_git_observation_unavailable",
+            "lines": [],
+        }
+    finally:
+        if runner is not None:
+            try:
+                runner.close()
+            except BaseException:
+                pass
+    if not available:
+        return {
+            "state": "unavailable",
+            "reason_code": "project_source_git_observation_unavailable",
+            "lines": [],
+        }
+    if return_code != 0:
+        return {
+            "state": "failed",
+            "reason_code": "project_source_git_observation_invalid",
+            "lines": [],
+        }
+    return {
+        "state": "passed",
+        "reason_code": "verified",
+        "lines": [
+            line.strip() for line in output.splitlines() if line.strip()
+        ],
+    }
 
 
 def latest_semver_tag(labels: Iterable[str]) -> str | None:
@@ -104433,28 +104712,77 @@ def wom_kit_project_source_mirror_info(
         "head_tag": None,
         "latest_fetched_tag": None,
         "mirror_behind_latest_fetched_tag": None,
+        "observation_state": "not_reached",
+        "observation_reason_code": "not_inspected",
     }
     if inspection_root is None:
         return summary
-    inspection_kind = wom_kit_real_path_kind(inspection_root, inspection_root)
+    inspection_observation = wom_kit_real_path_kind_observation(
+        inspection_root,
+        inspection_root,
+    )
+    inspection_kind = inspection_observation["kind"]
+    if inspection_observation["state"] == "unavailable":
+        summary["status"] = "unavailable"
+        summary["observation_state"] = "unavailable"
+        summary["observation_reason_code"] = "inspection_root_unavailable"
+        warnings.append(
+            "WOM-kit could not safely inspect the project path; retry the read-only check after resolving the temporary filesystem or access failure."
+        )
+        return summary
     if inspection_kind == "missing":
         summary["status"] = "inspection_root_missing"
+        summary["observation_state"] = "failed"
+        summary["observation_reason_code"] = "inspection_root_missing"
         return summary
     if inspection_kind != "directory":
         summary["status"] = "unsafe_path"
+        summary["observation_state"] = "failed"
+        summary["observation_reason_code"] = "inspection_root_unsafe"
         warnings.append(
             "WOM-kit version inspection refused an unsafe project path before reading version metadata."
         )
         return summary
 
+    search_roots_observation = wom_kit_version_pin_search_roots_observation(
+        inspection_root
+    )
+    if search_roots_observation["state"] == "unavailable":
+        summary["status"] = "unavailable"
+        summary["observation_state"] = "unavailable"
+        summary["observation_reason_code"] = str(
+            search_roots_observation["reason_code"]
+        )
+        return summary
+    if search_roots_observation["state"] == "failed":
+        summary["status"] = "unsafe_path"
+        summary["observation_state"] = "failed"
+        summary["observation_reason_code"] = str(
+            search_roots_observation["reason_code"]
+        )
+        return summary
     mirror_path: Path | None = None
-    for root_label, search_root in wom_kit_project_source_mirror_search_roots(inspection_root):
+    search_root: Path = inspection_root
+    for root_label, search_root in search_roots_observation["roots"]:
         logical_location = wom_kit_project_source_mirror_location(root_label)
         summary["checked_locations"].append(logical_location)
         candidate_path = search_root / ".zettel-kasten" / "source"
-        candidate_kind = wom_kit_real_path_kind(search_root, candidate_path)
+        candidate_observation = wom_kit_real_path_kind_observation(
+            search_root,
+            candidate_path,
+        )
+        if candidate_observation["state"] == "unavailable":
+            summary["status"] = "unavailable"
+            summary["observation_state"] = "unavailable"
+            summary["observation_reason_code"] = "project_source_mirror_unavailable"
+            return summary
+        candidate_kind = candidate_observation["kind"]
         if candidate_kind == "unsafe":
             summary["status"] = "unsafe_path"
+            summary["observation_state"] = "failed"
+            summary["observation_reason_code"] = (
+                "project_source_mirror_path_unsafe"
+            )
             warnings.append(
                 "WOM-kit project source mirror path is unsafe; no source metadata was read."
             )
@@ -104466,6 +104794,8 @@ def wom_kit_project_source_mirror_info(
             break
     if mirror_path is None:
         summary["status"] = "missing"
+        summary["observation_state"] = "failed"
+        summary["observation_reason_code"] = "project_source_mirror_missing"
         return summary
 
     source_version: str | None = None
@@ -104473,47 +104803,89 @@ def wom_kit_project_source_mirror_info(
         mirror_path / "wom-kit" / "src" / "wom_kit" / "__init__.py",
         mirror_path / "wom_kit" / "__init__.py",
     ):
-        source_init_kind = wom_kit_real_path_kind(mirror_path, source_init_path)
+        source_init_observation = wom_kit_real_path_kind_observation(
+            mirror_path,
+            source_init_path,
+        )
+        if source_init_observation["state"] == "unavailable":
+            summary["status"] = "unavailable"
+            summary["observation_state"] = "unavailable"
+            summary["observation_reason_code"] = "project_source_metadata_unavailable"
+            return summary
+        source_init_kind = source_init_observation["kind"]
         if source_init_kind == "unsafe":
             summary["status"] = "unsafe_path"
+            summary["observation_state"] = "failed"
+            summary["observation_reason_code"] = (
+                "project_source_init_path_unsafe"
+            )
             warnings.append(
                 "WOM-kit source version metadata path is unsafe; no source metadata was read."
             )
             return summary
         if source_init_kind == "file":
-            source_init_text = _wom_kit_read_bounded_real_text(
+            source_init_read = _wom_kit_read_bounded_real_text_observation(
                 mirror_path,
                 source_init_path,
                 max_bytes=WOM_KIT_VERSION_METADATA_MAX_BYTES,
             )
-            if source_init_text is None:
-                summary["status"] = "metadata_unreadable"
-                warnings.append("WOM-kit source version metadata is unreadable or too large.")
+            if source_init_read["state"] == "unavailable":
+                summary["status"] = "unavailable"
+                summary["observation_state"] = "unavailable"
+                summary["observation_reason_code"] = "project_source_metadata_unavailable"
+                warnings.append("WOM-kit source version metadata could not be observed safely.")
                 return summary
+            if source_init_read["state"] != "passed":
+                summary["status"] = "metadata_invalid"
+                summary["observation_state"] = "failed"
+                summary["observation_reason_code"] = "project_source_metadata_invalid"
+                warnings.append("WOM-kit source version metadata is invalid or too large.")
+                return summary
+            source_init_text = str(source_init_read["text"])
             source_version = read_version_from_init_text(source_init_text)
             if source_version is not None:
                 break
     pyproject_path = mirror_path / "wom-kit" / "pyproject.toml"
-    pyproject_kind = wom_kit_real_path_kind(mirror_path, pyproject_path)
+    pyproject_observation = wom_kit_real_path_kind_observation(
+        mirror_path,
+        pyproject_path,
+    )
+    if pyproject_observation["state"] == "unavailable":
+        summary["status"] = "unavailable"
+        summary["observation_state"] = "unavailable"
+        summary["observation_reason_code"] = "project_source_metadata_unavailable"
+        return summary
+    pyproject_kind = pyproject_observation["kind"]
     if pyproject_kind == "unsafe":
         summary["status"] = "unsafe_path"
+        summary["observation_state"] = "failed"
+        summary["observation_reason_code"] = (
+            "project_source_pyproject_path_unsafe"
+        )
         warnings.append(
             "WOM-kit pyproject version metadata path is unsafe; no source metadata was read."
         )
         return summary
-    pyproject_text = (
-        _wom_kit_read_bounded_real_text(
+    pyproject_text = None
+    if pyproject_kind == "file":
+        pyproject_read = _wom_kit_read_bounded_real_text_observation(
             mirror_path,
             pyproject_path,
             max_bytes=WOM_KIT_VERSION_METADATA_MAX_BYTES,
         )
-        if pyproject_kind == "file"
-        else None
-    )
-    if pyproject_kind == "file" and pyproject_text is None:
-        summary["status"] = "metadata_unreadable"
-        warnings.append("WOM-kit pyproject version metadata is unreadable or too large.")
-        return summary
+        if pyproject_read["state"] == "unavailable":
+            summary["status"] = "unavailable"
+            summary["observation_state"] = "unavailable"
+            summary["observation_reason_code"] = "project_source_metadata_unavailable"
+            warnings.append("WOM-kit pyproject version metadata could not be observed safely.")
+            return summary
+        if pyproject_read["state"] != "passed":
+            summary["status"] = "metadata_invalid"
+            summary["observation_state"] = "failed"
+            summary["observation_reason_code"] = "project_source_metadata_invalid"
+            warnings.append("WOM-kit pyproject version metadata is invalid or too large.")
+            return summary
+        pyproject_text = str(pyproject_read["text"])
     pyproject_version = (
         read_pyproject_version_text(pyproject_text)
         if pyproject_text is not None
@@ -104521,23 +104893,45 @@ def wom_kit_project_source_mirror_info(
     )
     pin_path = mirror_path / "installed-version.txt"
     installed_pin: str | None = None
-    pin_kind = wom_kit_real_path_kind(mirror_path, pin_path)
+    pin_observation = wom_kit_real_path_kind_observation(
+        mirror_path,
+        pin_path,
+    )
+    if pin_observation["state"] == "unavailable":
+        summary["status"] = "unavailable"
+        summary["observation_state"] = "unavailable"
+        summary["observation_reason_code"] = "project_source_pin_unavailable"
+        return summary
+    pin_kind = pin_observation["kind"]
     if pin_kind == "unsafe":
         summary["status"] = "unsafe_path"
+        summary["observation_state"] = "failed"
+        summary["observation_reason_code"] = (
+            "project_source_pin_path_unsafe"
+        )
         warnings.append(
             "WOM-kit source mirror pin path is unsafe; no pin content was read."
         )
         return summary
     if pin_kind == "file":
-        pin_text = _wom_kit_read_bounded_real_text(
+        pin_read = _wom_kit_read_bounded_real_text_observation(
             mirror_path,
             pin_path,
             max_bytes=WOM_KIT_VERSION_PIN_MAX_BYTES,
         )
-        if pin_text is None:
-            summary["status"] = "metadata_unreadable"
-            warnings.append("WOM-kit source mirror pin is unreadable or too large.")
+        if pin_read["state"] == "unavailable":
+            summary["status"] = "unavailable"
+            summary["observation_state"] = "unavailable"
+            summary["observation_reason_code"] = "project_source_pin_unavailable"
+            warnings.append("WOM-kit source mirror pin could not be observed safely.")
             return summary
+        if pin_read["state"] != "passed":
+            summary["status"] = "metadata_invalid"
+            summary["observation_state"] = "failed"
+            summary["observation_reason_code"] = "project_source_pin_invalid"
+            warnings.append("WOM-kit source mirror pin is invalid or too large.")
+            return summary
+        pin_text = str(pin_read["text"])
         installed_pin = pin_text.strip().lstrip("\ufeff").strip()
     normalized_source = stable_version_value(source_version)
     normalized_pyproject = stable_version_value(pyproject_version)
@@ -104558,6 +104952,8 @@ def wom_kit_project_source_mirror_info(
     )
     if invalid_metadata:
         summary["status"] = "metadata_invalid"
+        summary["observation_state"] = "failed"
+        summary["observation_reason_code"] = "project_source_metadata_invalid"
         warnings.append(
             "WOM-kit project source mirror version metadata is not an exact stable version label."
         )
@@ -104565,6 +104961,8 @@ def wom_kit_project_source_mirror_info(
 
     if normalized_source is None and normalized_pyproject is None:
         summary["status"] = "metadata_only"
+        summary["observation_state"] = "failed"
+        summary["observation_reason_code"] = "project_source_metadata_missing"
         return summary
 
     if normalized_source is not None and normalized_pyproject is not None:
@@ -104589,21 +104987,62 @@ def wom_kit_project_source_mirror_info(
     # A `.git` file can redirect Git into a linked worktree or an unrelated
     # repository.  Do not even read tag metadata until the mirror has proven
     # that its conventional real `.git` directory stays inside this project.
-    if wom_kit_project_update_git_metadata_is_local_real_legacy_read_only(
+    git_metadata_evidence = (
+        wom_kit_project_update_git_metadata_evidence_legacy_read_only(
         search_root,
         mirror_path,
-    ):
-        head_tags = git_output_lines(
+        )
+    )
+    if git_metadata_evidence["state"] == "unavailable":
+        summary["status"] = "unavailable"
+        summary["observation_state"] = "unavailable"
+        summary["observation_reason_code"] = str(
+            git_metadata_evidence["reason_code"]
+        )
+        return summary
+    if git_metadata_evidence["state"] == "failed":
+        summary["status"] = "unsafe_path"
+        summary["observation_state"] = "failed"
+        summary["observation_reason_code"] = str(
+            git_metadata_evidence["reason_code"]
+        )
+        return summary
+    if git_metadata_evidence["state"] == "passed":
+        head_tags_observation = git_output_lines_observation(
             mirror_path,
-            ["describe", "--tags", "--exact-match", "HEAD"],
+            ["tag", "--points-at", "HEAD"],
+        )
+        fetched_tags_observation = git_output_lines_observation(
+            mirror_path,
+            ["tag", "--list", "v*"],
         )
         if (
-            head_tags
-            and WOM_KIT_PROJECT_UPDATE_TAG_RE.fullmatch(head_tags[0])
+            head_tags_observation["state"] == "unavailable"
+            or fetched_tags_observation["state"] == "unavailable"
         ):
-            summary["head_tag"] = head_tags[0]
+            summary["status"] = "unavailable"
+            summary["observation_state"] = "unavailable"
+            summary["observation_reason_code"] = (
+                "project_source_git_observation_unavailable"
+            )
+            return summary
+        if (
+            head_tags_observation["state"] == "failed"
+            or fetched_tags_observation["state"] == "failed"
+        ):
+            summary["status"] = "metadata_invalid"
+            summary["observation_state"] = "failed"
+            summary["observation_reason_code"] = (
+                "project_source_git_observation_invalid"
+            )
+            warnings.append(
+                "WOM-kit project source Git metadata returned an invalid result."
+            )
+            return summary
+        head_tags = head_tags_observation["lines"]
+        summary["head_tag"] = latest_semver_tag(head_tags)
         summary["latest_fetched_tag"] = latest_semver_tag(
-            git_output_lines(mirror_path, ["tag", "--list", "v*"])
+            fetched_tags_observation["lines"]
         )
     latest_key = version_sort_key(str(summary["latest_fetched_tag"] or ""))
     source_key = version_sort_key(normalized_source)
@@ -104613,7 +105052,90 @@ def wom_kit_project_source_mirror_info(
         if behind:
             warnings.append("WOM-kit project source mirror is behind its latest fetched tag.")
 
+    if summary["observation_state"] == "not_reached":
+        summary["observation_state"] = "passed"
+        summary["observation_reason_code"] = "verified"
     return summary
+
+
+WOM_KIT_RUNTIME_INTEGRITY_CHECK_FIELDS = (
+    "mirror_real_directory_inside_project",
+    "project_pin_path_components_real",
+    "wrapper_path_components_real",
+    "git_worktree_root_exact",
+    "git_metadata_local_real",
+    "worktree_clean_except_untracked_installed_version",
+    "installed_version_pin_untracked",
+    "wrapper_tracked_at_head",
+    "tracked_python_source_set_complete",
+    "tracked_python_index_flags_safe",
+    "tracked_python_index_matches_head",
+    "tracked_python_path_components_real",
+    "tracked_python_worktree_bytes_match_head",
+    "runtime_source_root_top_level_isolated",
+    "runtime_source_tree_path_components_real",
+    "runtime_python_filesystem_source_set_exact",
+    "runtime_python_bytecode_absent",
+    "runtime_python_extension_modules_absent",
+    "runtime_python_filesystem_closed_world",
+    "tracked_python_sources_verified",
+    "all_tracked_index_flags_safe",
+    "runtime_resource_manifest_verified",
+    "runtime_resource_index_matches_head",
+    "runtime_resource_path_components_real",
+    "runtime_resource_worktree_bytes_match_head",
+    "runtime_resources_verified",
+    "origin_configured",
+    "origin_config_key_present",
+    "head_commit_available",
+    "source_tag_available_locally",
+    "source_tag_annotated",
+    "source_tag_at_head",
+    "tag_source_versions_match",
+    "origin_main_available_locally",
+    "source_tag_reachable_from_origin_main",
+)
+
+
+def _wom_kit_runtime_integrity_record_check(
+    evidence: dict[str, Any],
+    field_name: str,
+    value: bool,
+    *,
+    state: str | None = None,
+    reason_code: str | None = None,
+) -> None:
+    """Record an evaluated integrity check without exposing its private input.
+
+    Legacy boolean fields remain available for older readers.  The adjacent
+    state map prevents a false default from being misread as an observed
+    failure when an earlier prerequisite stopped the inspection.
+    """
+
+    if field_name not in WOM_KIT_RUNTIME_INTEGRITY_CHECK_FIELDS:
+        raise ValueError("unknown_runtime_integrity_check")
+    resolved_state = state or ("passed" if value else "failed")
+    if resolved_state not in {
+        "passed",
+        "failed",
+        "not_reached",
+        "unavailable",
+    }:
+        raise ValueError("invalid_runtime_integrity_check_state")
+    evidence[field_name] = bool(value)
+    evidence["checks"][field_name] = {
+        "state": resolved_state,
+        "reason_code": reason_code
+        or (
+            "verified"
+            if resolved_state == "passed"
+            else "not_reached"
+            if resolved_state == "not_reached"
+            else "unavailable"
+            if resolved_state == "unavailable"
+            else "verification_failed"
+        ),
+    }
 
 
 def wom_kit_runtime_integrity_evidence(
@@ -104621,7 +105143,7 @@ def wom_kit_runtime_integrity_evidence(
     checked: bool = False,
     reason_code: str = "not_checked",
 ) -> dict[str, Any]:
-    return {
+    evidence = {
         "checked": checked,
         "verified": False,
         "reason_code": reason_code,
@@ -104671,32 +105193,22 @@ def wom_kit_runtime_integrity_evidence(
         "origin_remote_contacted": False,
         "network_used": False,
     }
+    evidence["checks"] = {
+        field_name: {
+            "state": "not_reached",
+            "reason_code": "verification_not_reached",
+        }
+        for field_name in WOM_KIT_RUNTIME_INTEGRITY_CHECK_FIELDS
+    }
+    return evidence
 
 
 def wom_kit_path_components_are_real(root: Path, path: Path) -> bool:
-    try:
-        lexical_relative = path.relative_to(root)
-    except ValueError:
-        return False
-    current = root
-    components = [root]
-    for part in lexical_relative.parts:
-        current = current / part
-        components.append(current)
-    for component in components:
-        try:
-            component_stat = os.lstat(component)
-        except OSError:
-            return False
-        if stat.S_ISLNK(component_stat.st_mode):
-            return False
-        reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
-        if (
-            reparse_flag
-            and getattr(component_stat, "st_file_attributes", 0) & reparse_flag
-        ):
-            return False
-    return True
+    observation = wom_kit_path_components_observation(root, path)
+    return bool(
+        observation["state"] == "passed"
+        and observation["kind"] == "real"
+    )
 
 
 WOM_KIT_RUNTIME_WRAPPER_GIT_PATH = "wom-kit/cli/archive.py"
@@ -104731,7 +105243,23 @@ def wom_kit_runtime_head_python_entries(
     ref: str = "HEAD",
     runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> dict[str, tuple[str, str]] | None:
-    tree_ok, tree_text = _wom_kit_project_update_git(
+    observation = wom_kit_runtime_head_python_entries_observation(
+        mirror_path,
+        ref=ref,
+        runner=runner,
+    )
+    entries = observation.get("entries")
+    return dict(entries) if isinstance(entries, Mapping) else None
+
+
+def wom_kit_runtime_head_python_entries_observation(
+    mirror_path: Path,
+    *,
+    ref: str = "HEAD",
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
+) -> dict[str, Any]:
+    tree_available, tree_return_code, tree_text = (
+        _wom_kit_project_update_git_observation(
         mirror_path,
         [
             "ls-tree",
@@ -104743,9 +105271,20 @@ def wom_kit_runtime_head_python_entries(
             WOM_KIT_RUNTIME_PACKAGE_GIT_PREFIX.rstrip("/"),
         ],
         runner=runner,
+        )
     )
-    if not tree_ok:
-        return None
+    if not tree_available:
+        return {
+            "state": "unavailable",
+            "reason_code": "project_tracked_python_source_set_unavailable",
+            "entries": None,
+        }
+    if tree_return_code != 0:
+        return {
+            "state": "failed",
+            "reason_code": "project_tracked_python_source_set_invalid",
+            "entries": None,
+        }
 
     head_entries: dict[str, tuple[str, str]] = {}
     for record in tree_text.split("\0"):
@@ -104755,7 +105294,11 @@ def wom_kit_runtime_head_python_entries(
             metadata, relative_path = record.split("\t", 1)
             mode, object_type, object_id = metadata.split(" ", 2)
         except ValueError:
-            return None
+            return {
+                "state": "failed",
+                "reason_code": "project_tracked_python_source_set_invalid",
+                "entries": None,
+            }
         is_runtime_python = (
             relative_path == WOM_KIT_RUNTIME_WRAPPER_GIT_PATH
             or (
@@ -104774,9 +105317,13 @@ def wom_kit_runtime_head_python_entries(
             or not re.fullmatch(r"[0-9a-fA-F]{40,64}", object_id)
             or relative_path in head_entries
         ):
-            return None
+            return {
+                "state": "failed",
+                "reason_code": "project_tracked_python_source_set_invalid",
+                "entries": None,
+            }
         head_entries[relative_path] = (mode, object_id.lower())
-    return head_entries
+    return {"state": "passed", "reason_code": "verified", "entries": head_entries}
 
 
 def wom_kit_runtime_source_tree_inventory(
@@ -104801,10 +105348,16 @@ def wom_kit_runtime_source_tree_inventory(
         for relative_path in tracked_paths
         if relative_path.startswith(WOM_KIT_RUNTIME_PACKAGE_GIT_PREFIX)
     }
+    source_root_observation = wom_kit_real_path_kind_observation(
+        project_root,
+        source_root,
+    )
+    if source_root_observation["state"] == "unavailable":
+        return result
     if (
-        not source_root.is_dir()
+        source_root_observation["state"] != "passed"
+        or source_root_observation["kind"] != "directory"
         or not is_path_within_root(source_root, mirror_path)
-        or not wom_kit_path_components_are_real(project_root, source_root)
     ):
         result["reason_code"] = "project_runtime_source_tree_path_unsafe"
         return result
@@ -104830,6 +105383,9 @@ def wom_kit_runtime_source_tree_inventory(
                         entry_count
                         > WOM_KIT_RUNTIME_MAX_SOURCE_TREE_ENTRIES
                     ):
+                        result["reason_code"] = (
+                            "project_runtime_source_tree_entry_limit_exceeded"
+                        )
                         return result
                     entry_path = Path(entry.path)
                     entry_stat = entry.stat(follow_symlinks=False)
@@ -104917,8 +105473,24 @@ def wom_kit_runtime_tracked_python_integrity(
     *,
     runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> dict[str, Any]:
+    check_fields = (
+        "wrapper_tracked_at_head",
+        "tracked_python_source_set_complete",
+        "tracked_python_index_flags_safe",
+        "tracked_python_index_matches_head",
+        "tracked_python_path_components_real",
+        "runtime_source_root_top_level_isolated",
+        "runtime_source_tree_path_components_real",
+        "runtime_python_filesystem_source_set_exact",
+        "runtime_python_bytecode_absent",
+        "runtime_python_extension_modules_absent",
+        "runtime_python_filesystem_closed_world",
+        "tracked_python_worktree_bytes_match_head",
+        "tracked_python_sources_verified",
+    )
     result: dict[str, Any] = {
         "reason_code": "project_tracked_python_source_set_unavailable",
+        "wrapper_tracked_at_head": False,
         "tracked_python_source_count": 0,
         "tracked_python_source_set_complete": False,
         "tracked_python_index_flags_safe": False,
@@ -104934,25 +105506,103 @@ def wom_kit_runtime_tracked_python_integrity(
         "runtime_python_extension_modules_absent": False,
         "runtime_python_filesystem_closed_world": False,
         "tracked_python_sources_verified": False,
+        "checks": {
+            field_name: {
+                "state": "not_reached",
+                "reason_code": "verification_not_reached",
+            }
+            for field_name in check_fields
+        },
     }
-    head_entries = wom_kit_runtime_head_python_entries(
+
+    def record(
+        field_name: str,
+        value: bool,
+        *,
+        state: str | None = None,
+        reason_code: str = "verified",
+    ) -> None:
+        _wom_kit_runtime_integrity_record_check(
+            result,
+            field_name,
+            value,
+            state=state,
+            reason_code=reason_code,
+        )
+
+    def stop(
+        field_name: str,
+        *,
+        state: str,
+        reason_code: str,
+    ) -> dict[str, Any]:
+        record(
+            field_name,
+            False,
+            state=state,
+            reason_code=reason_code,
+        )
+        record(
+            "tracked_python_sources_verified",
+            False,
+            state=state,
+            reason_code=reason_code,
+        )
+        result["reason_code"] = reason_code
+        return result
+
+    head_entries_observation = wom_kit_runtime_head_python_entries_observation(
         mirror_path,
         runner=runner,
     )
+    head_entries = head_entries_observation.get("entries")
     if head_entries is None:
-        return result
+        observation_state = str(head_entries_observation["state"])
+        observation_reason = str(head_entries_observation["reason_code"])
+        record(
+            "wrapper_tracked_at_head",
+            False,
+            state=observation_state,
+            reason_code=observation_reason,
+        )
+        return stop(
+            "tracked_python_source_set_complete",
+            state=observation_state,
+            reason_code=observation_reason,
+        )
 
     tracked_paths = set(head_entries)
+    wrapper_tracked = WOM_KIT_RUNTIME_WRAPPER_GIT_PATH in tracked_paths
+    record(
+        "wrapper_tracked_at_head",
+        wrapper_tracked,
+        reason_code=(
+            "verified" if wrapper_tracked else "project_wrapper_not_tracked"
+        ),
+    )
     result["tracked_python_source_count"] = len(tracked_paths)
     source_set_complete = bool(
         WOM_KIT_RUNTIME_REQUIRED_PYTHON_PATHS.issubset(tracked_paths)
         and 0 < len(tracked_paths) <= WOM_KIT_RUNTIME_MAX_TRACKED_PYTHON_SOURCES
     )
-    result["tracked_python_source_set_complete"] = source_set_complete
+    record(
+        "tracked_python_source_set_complete",
+        source_set_complete,
+        reason_code=(
+            "verified"
+            if source_set_complete
+            else "project_tracked_python_source_set_incomplete"
+        ),
+    )
     if not source_set_complete:
-        return result
+        return stop(
+            "tracked_python_source_set_complete",
+            state="failed",
+            reason_code="project_tracked_python_source_set_incomplete",
+        )
 
-    flags_ok, flags_text = _wom_kit_project_update_git(
+    flags_available, flags_return_code, flags_text = (
+        _wom_kit_project_update_git_observation(
         mirror_path,
         [
             "ls-files",
@@ -104963,19 +105613,32 @@ def wom_kit_runtime_tracked_python_integrity(
             WOM_KIT_RUNTIME_PACKAGE_GIT_PREFIX.rstrip("/"),
         ],
         runner=runner,
+        )
     )
-    if not flags_ok:
-        result["reason_code"] = "project_tracked_python_index_flags_unavailable"
-        return result
+    if not flags_available:
+        return stop(
+            "tracked_python_index_flags_safe",
+            state="unavailable",
+            reason_code="project_tracked_python_index_flags_unavailable",
+        )
+    if flags_return_code != 0:
+        return stop(
+            "tracked_python_index_flags_safe",
+            state="failed",
+            reason_code="project_tracked_python_index_flags_invalid",
+        )
     flag_entries: dict[str, str] = {}
-    for record in flags_text.split("\0"):
-        if not record:
+    for flag_record in flags_text.split("\0"):
+        if not flag_record:
             continue
-        if len(record) < 3 or record[1] != " ":
-            result["reason_code"] = "project_tracked_python_index_flags_unavailable"
-            return result
-        tag = record[0]
-        relative_path = record[2:]
+        if len(flag_record) < 3 or flag_record[1] != " ":
+            return stop(
+                "tracked_python_index_flags_safe",
+                state="failed",
+                reason_code="project_tracked_python_index_flags_invalid",
+            )
+        tag = flag_record[0]
+        relative_path = flag_record[2:]
         is_runtime_python = (
             relative_path == WOM_KIT_RUNTIME_WRAPPER_GIT_PATH
             or (
@@ -104985,19 +105648,37 @@ def wom_kit_runtime_tracked_python_integrity(
         )
         if is_runtime_python:
             if relative_path in flag_entries:
-                result["reason_code"] = "project_tracked_python_index_flags_unavailable"
-                return result
+                return stop(
+                    "tracked_python_index_flags_safe",
+                    state="failed",
+                    reason_code="project_tracked_python_index_flags_invalid",
+                )
             flag_entries[relative_path] = tag
     if set(flag_entries) != tracked_paths:
-        result["reason_code"] = "project_tracked_python_index_flags_unavailable"
-        return result
+        return stop(
+            "tracked_python_index_flags_safe",
+            state="failed",
+            reason_code="project_tracked_python_index_flags_invalid",
+        )
     flags_safe = all(tag == "H" for tag in flag_entries.values())
-    result["tracked_python_index_flags_safe"] = flags_safe
+    record(
+        "tracked_python_index_flags_safe",
+        flags_safe,
+        reason_code=(
+            "verified"
+            if flags_safe
+            else "project_tracked_python_index_flags_unsafe"
+        ),
+    )
     if not flags_safe:
-        result["reason_code"] = "project_tracked_python_index_flags_unsafe"
-        return result
+        return stop(
+            "tracked_python_index_flags_safe",
+            state="failed",
+            reason_code="project_tracked_python_index_flags_unsafe",
+        )
 
-    index_ok, index_text = _wom_kit_project_update_git(
+    index_available, index_return_code, index_text = (
+        _wom_kit_project_update_git_observation(
         mirror_path,
         [
             "ls-files",
@@ -105008,20 +105689,33 @@ def wom_kit_runtime_tracked_python_integrity(
             WOM_KIT_RUNTIME_PACKAGE_GIT_PREFIX.rstrip("/"),
         ],
         runner=runner,
+        )
     )
-    if not index_ok:
-        result["reason_code"] = "project_tracked_python_index_unavailable"
-        return result
+    if not index_available:
+        return stop(
+            "tracked_python_index_matches_head",
+            state="unavailable",
+            reason_code="project_tracked_python_index_unavailable",
+        )
+    if index_return_code != 0:
+        return stop(
+            "tracked_python_index_matches_head",
+            state="failed",
+            reason_code="project_tracked_python_index_invalid",
+        )
     index_entries: dict[str, tuple[str, str]] = {}
-    for record in index_text.split("\0"):
-        if not record:
+    for index_record in index_text.split("\0"):
+        if not index_record:
             continue
         try:
-            metadata, relative_path = record.split("\t", 1)
+            metadata, relative_path = index_record.split("\t", 1)
             mode, object_id, stage = metadata.split(" ", 2)
         except ValueError:
-            result["reason_code"] = "project_tracked_python_index_unavailable"
-            return result
+            return stop(
+                "tracked_python_index_matches_head",
+                state="failed",
+                reason_code="project_tracked_python_index_invalid",
+            )
         is_runtime_python = (
             relative_path == WOM_KIT_RUNTIME_WRAPPER_GIT_PATH
             or (
@@ -105036,28 +105730,55 @@ def wom_kit_runtime_tracked_python_integrity(
             or not re.fullmatch(r"[0-9a-fA-F]{40,64}", object_id)
             or relative_path in index_entries
         ):
-            result["reason_code"] = "project_tracked_python_index_unavailable"
-            return result
+            return stop(
+                "tracked_python_index_matches_head",
+                state="failed",
+                reason_code="project_tracked_python_index_invalid",
+            )
         index_entries[relative_path] = (mode, object_id.lower())
     index_matches_head = (
         set(index_entries) == tracked_paths
         and all(index_entries[path] == head_entries[path] for path in tracked_paths)
     )
-    result["tracked_python_index_matches_head"] = index_matches_head
+    record(
+        "tracked_python_index_matches_head",
+        index_matches_head,
+        reason_code=(
+            "verified"
+            if index_matches_head
+            else "project_tracked_python_index_mismatch"
+        ),
+    )
     if not index_matches_head:
-        result["reason_code"] = "project_tracked_python_index_mismatch"
-        return result
+        return stop(
+            "tracked_python_index_matches_head",
+            state="failed",
+            reason_code="project_tracked_python_index_mismatch",
+        )
 
     for relative_path in sorted(tracked_paths):
         path = mirror_path.joinpath(*PurePosixPath(relative_path).parts)
+        path_observation = wom_kit_real_path_kind_observation(
+            project_root,
+            path,
+        )
+        if path_observation["state"] == "unavailable":
+            return stop(
+                "tracked_python_path_components_real",
+                state="unavailable",
+                reason_code="project_tracked_python_path_unavailable",
+            )
         if (
-            not path.is_file()
+            path_observation["state"] != "passed"
+            or path_observation["kind"] != "file"
             or not is_path_within_root(path, mirror_path)
-            or not wom_kit_path_components_are_real(project_root, path)
         ):
-            result["reason_code"] = "project_tracked_python_path_unsafe"
-            return result
-    result["tracked_python_path_components_real"] = True
+            return stop(
+                "tracked_python_path_components_real",
+                state="failed",
+                reason_code="project_tracked_python_path_unsafe",
+            )
+    record("tracked_python_path_components_real", True)
 
     inventory = wom_kit_runtime_source_tree_inventory(
         project_root,
@@ -105076,29 +105797,76 @@ def wom_kit_runtime_tracked_python_integrity(
     )
     for field_name in inventory_fields:
         result[field_name] = inventory[field_name]
+    inventory_reason = str(inventory["reason_code"])
+    if inventory_reason == "project_runtime_python_inventory_unavailable":
+        return stop(
+            "runtime_source_tree_path_components_real",
+            state="unavailable",
+            reason_code=inventory_reason,
+        )
+    if inventory_reason == "project_runtime_source_tree_path_unsafe":
+        return stop(
+            "runtime_source_tree_path_components_real",
+            state="failed",
+            reason_code=inventory_reason,
+        )
+    for field_name in (
+        "runtime_source_root_top_level_isolated",
+        "runtime_source_tree_path_components_real",
+        "runtime_python_filesystem_source_set_exact",
+        "runtime_python_bytecode_absent",
+        "runtime_python_extension_modules_absent",
+        "runtime_python_filesystem_closed_world",
+    ):
+        field_value = bool(inventory[field_name])
+        record(
+            field_name,
+            field_value,
+            reason_code=("verified" if field_value else inventory_reason),
+        )
     if not inventory["runtime_python_filesystem_closed_world"]:
-        result["reason_code"] = inventory["reason_code"]
+        record(
+            "tracked_python_sources_verified",
+            False,
+            state="failed",
+            reason_code=inventory_reason,
+        )
+        result["reason_code"] = inventory_reason
         return result
 
     total_source_bytes = 0
     for relative_path in sorted(tracked_paths):
         path = mirror_path.joinpath(*PurePosixPath(relative_path).parts)
-        raw_bytes = _wom_kit_read_bounded_real_bytes(
+        raw_observation = _wom_kit_read_bounded_real_bytes_observation(
             project_root,
             path,
             max_bytes=WOM_KIT_RUNTIME_MAX_PYTHON_SOURCE_BYTES,
         )
+        raw_bytes = raw_observation.get("bytes")
         if raw_bytes is None:
-            result["reason_code"] = "project_tracked_python_bytes_unavailable"
-            return result
+            return stop(
+                "tracked_python_worktree_bytes_match_head",
+                state=str(raw_observation["state"]),
+                reason_code=(
+                    "project_tracked_python_bytes_unavailable"
+                    if raw_observation["state"] == "unavailable"
+                    else "project_tracked_python_bytes_invalid"
+                ),
+            )
         total_source_bytes += len(raw_bytes)
         if total_source_bytes > WOM_KIT_RUNTIME_MAX_TOTAL_PYTHON_SOURCE_BYTES:
-            result["reason_code"] = "project_tracked_python_bytes_unavailable"
-            return result
+            return stop(
+                "tracked_python_worktree_bytes_match_head",
+                state="failed",
+                reason_code="project_tracked_python_bytes_policy_exceeded",
+            )
         expected_object_id = head_entries[relative_path][1]
         if len(expected_object_id) not in {40, 64}:
-            result["reason_code"] = "project_tracked_python_bytes_unavailable"
-            return result
+            return stop(
+                "tracked_python_worktree_bytes_match_head",
+                state="failed",
+                reason_code="project_tracked_python_object_id_invalid",
+            )
         object_hasher = (
             hashlib.sha1()
             if len(expected_object_id) == 40
@@ -105110,10 +105878,16 @@ def wom_kit_runtime_tracked_python_integrity(
             object_hasher.hexdigest(),
             expected_object_id,
         ):
-            result["reason_code"] = "project_tracked_python_bytes_mismatch"
-            return result
-    result["tracked_python_worktree_bytes_match_head"] = True
-    result["tracked_python_sources_verified"] = True
+            return stop(
+                "tracked_python_worktree_bytes_match_head",
+                state="failed",
+                reason_code="project_tracked_python_bytes_mismatch",
+            )
+    record("tracked_python_worktree_bytes_match_head", True)
+    record("tracked_python_sources_verified", True)
+    result["_wrapper_blob_oid"] = head_entries[
+        WOM_KIT_RUNTIME_WRAPPER_GIT_PATH
+    ][1]
     result["reason_code"] = "verified"
     return result
 
@@ -105135,29 +105909,85 @@ def wom_kit_runtime_all_tracked_index_flags(
     *,
     runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> tuple[bool, int]:
-    flags_ok, flags_text = _wom_kit_project_update_git(
+    evidence = wom_kit_runtime_all_tracked_index_flags_evidence(
+        mirror_path,
+        runner=runner,
+    )
+    return bool(evidence["safe"]), int(evidence["entry_count"])
+
+
+def wom_kit_runtime_all_tracked_index_flags_evidence(
+    mirror_path: Path,
+    *,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
+) -> dict[str, Any]:
+    """Inspect all tracked-index flags without collapsing probe failure.
+
+    The historical tuple helper remains available above.  New four-state
+    callers consume this content-free observation so a timed-out Git probe is
+    never reported as an observed unsafe flag.
+    """
+
+    flags_available, flags_return_code, flags_text = (
+        _wom_kit_project_update_git_observation(
         mirror_path,
         ["ls-files", "-v", "-z"],
         runner=runner,
+        )
     )
-    if not flags_ok:
-        return False, 0
+    if not flags_available:
+        return {
+            "safe": False,
+            "entry_count": 0,
+            "state": "unavailable",
+            "reason_code": "project_tracked_index_flags_unavailable",
+        }
+    if flags_return_code != 0:
+        return {
+            "safe": False,
+            "entry_count": 0,
+            "state": "failed",
+            "reason_code": "project_tracked_index_flags_invalid",
+        }
     count = 0
     for record in flags_text.split("\0"):
         if not record:
             continue
         if len(record) < 3 or record[0] != "H" or record[1] != " ":
-            return False, count
+            return {
+                "safe": False,
+                "entry_count": count,
+                "state": "failed",
+                "reason_code": "project_tracked_index_flags_unsafe",
+            }
         relative_path = PurePosixPath(record[2:])
         if (
             relative_path.is_absolute()
             or any(part in {"", ".", ".."} for part in relative_path.parts)
         ):
-            return False, count
+            return {
+                "safe": False,
+                "entry_count": count,
+                "state": "failed",
+                "reason_code": "project_tracked_index_flags_unsafe",
+            }
         count += 1
         if count > WOM_KIT_RUNTIME_MAX_SOURCE_TREE_ENTRIES * 4:
-            return False, count
-    return count > 0, count
+            return {
+                "safe": False,
+                "entry_count": count,
+                "state": "failed",
+                "reason_code": "project_tracked_index_flags_unsafe",
+            }
+    safe = count > 0
+    return {
+        "safe": safe,
+        "entry_count": count,
+        "state": "passed" if safe else "failed",
+        "reason_code": (
+            "verified" if safe else "project_tracked_index_flags_unsafe"
+        ),
+    }
 
 
 def wom_kit_runtime_git_blob_at_ref(
@@ -105168,50 +105998,136 @@ def wom_kit_runtime_git_blob_at_ref(
     max_bytes: int,
     runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> tuple[str, bytes] | None:
-    tree_ok, tree_text = _wom_kit_project_update_git(
+    observation = wom_kit_runtime_git_blob_at_ref_observation(
+        mirror_path,
+        ref,
+        relative_path,
+        max_bytes=max_bytes,
+        runner=runner,
+    )
+    blob = observation.get("blob")
+    return blob if isinstance(blob, tuple) else None
+
+
+def wom_kit_runtime_git_blob_at_ref_observation(
+    mirror_path: Path,
+    ref: str,
+    relative_path: str,
+    *,
+    max_bytes: int,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
+) -> dict[str, Any]:
+    """Return a content-free four-state observation plus a verified blob."""
+
+    tree_available, tree_return_code, tree_text = (
+        _wom_kit_project_update_git_observation(
         mirror_path,
         ["ls-tree", "-z", ref, "--", relative_path],
         max_output_bytes=16 * 1024,
         runner=runner,
+        )
     )
-    if not tree_ok:
-        return None
+    if not tree_available:
+        return {
+            "state": "unavailable",
+            "reason_code": "project_runtime_resource_manifest_unavailable",
+            "blob": None,
+        }
+    if tree_return_code != 0:
+        return {
+            "state": "failed",
+            "reason_code": "project_runtime_resource_manifest_invalid",
+            "blob": None,
+        }
     records = [record for record in tree_text.split("\0") if record]
+    if not records:
+        return {
+            "state": "failed",
+            "reason_code": "project_runtime_resource_manifest_missing",
+            "blob": None,
+        }
     if len(records) != 1:
-        return None
+        return {
+            "state": "failed",
+            "reason_code": "project_runtime_resource_manifest_invalid",
+            "blob": None,
+        }
     try:
         metadata, actual_path = records[0].split("\t", 1)
         mode, object_type, object_id = metadata.split(" ", 2)
     except ValueError:
-        return None
+        return {
+            "state": "failed",
+            "reason_code": "project_runtime_resource_manifest_invalid",
+            "blob": None,
+        }
     if (
         actual_path != relative_path
         or mode not in {"100644", "100755"}
         or object_type != "blob"
         or not re.fullmatch(r"[0-9a-fA-F]{40,64}", object_id)
     ):
-        return None
-    size_ok, size_text = _wom_kit_project_update_git(
+        return {
+            "state": "failed",
+            "reason_code": "project_runtime_resource_manifest_invalid",
+            "blob": None,
+        }
+    size_available, size_return_code, size_text = (
+        _wom_kit_project_update_git_observation(
         mirror_path,
         ["cat-file", "-s", object_id],
         max_output_bytes=256,
         runner=runner,
+        )
     )
+    if not size_available:
+        return {
+            "state": "unavailable",
+            "reason_code": "project_runtime_resource_manifest_unavailable",
+            "blob": None,
+        }
+    if size_return_code != 0:
+        return {
+            "state": "failed",
+            "reason_code": "project_runtime_resource_manifest_invalid",
+            "blob": None,
+        }
     try:
-        blob_size = int(size_text) if size_ok else -1
+        blob_size = int(size_text)
     except ValueError:
-        return None
+        return {
+            "state": "failed",
+            "reason_code": "project_runtime_resource_manifest_invalid",
+            "blob": None,
+        }
     if blob_size < 0 or blob_size > max_bytes:
-        return None
-    blob = _wom_kit_project_update_git_blob(
+        return {
+            "state": "failed",
+            "reason_code": "project_runtime_resource_manifest_invalid",
+            "blob": None,
+        }
+    blob_observation = _wom_kit_project_update_git_blob_observation(
         mirror_path,
         object_id,
         blob_size,
         runner=runner,
     )
+    blob = blob_observation.get("blob")
     if blob is None:
-        return None
-    return object_id.lower(), blob
+        return {
+            "state": str(blob_observation["state"]),
+            "reason_code": (
+                "project_runtime_resource_manifest_unavailable"
+                if blob_observation["state"] == "unavailable"
+                else "project_runtime_resource_manifest_invalid"
+            ),
+            "blob": None,
+        }
+    return {
+        "state": "passed",
+        "reason_code": "verified",
+        "blob": (object_id.lower(), blob),
+    }
 
 
 def wom_kit_runtime_resource_integrity(
@@ -105221,6 +106137,14 @@ def wom_kit_runtime_resource_integrity(
     ref: str = "HEAD",
     runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> dict[str, Any]:
+    check_fields = (
+        "all_tracked_index_flags_safe",
+        "runtime_resource_manifest_verified",
+        "runtime_resource_index_matches_head",
+        "runtime_resource_path_components_real",
+        "runtime_resource_worktree_bytes_match_head",
+        "runtime_resources_verified",
+    )
     result: dict[str, Any] = {
         "reason_code": "project_runtime_resource_manifest_unavailable",
         "all_tracked_index_entry_count": 0,
@@ -105231,31 +106155,94 @@ def wom_kit_runtime_resource_integrity(
         "runtime_resource_path_components_real": False,
         "runtime_resource_worktree_bytes_match_head": False,
         "runtime_resources_verified": False,
+        "checks": {
+            field_name: {
+                "state": "not_reached",
+                "reason_code": "verification_not_reached",
+            }
+            for field_name in check_fields
+        },
     }
-    flags_safe, tracked_count = wom_kit_runtime_all_tracked_index_flags(
+
+    def record(
+        field_name: str,
+        value: bool,
+        *,
+        state: str | None = None,
+        reason_code: str = "verified",
+    ) -> None:
+        _wom_kit_runtime_integrity_record_check(
+            result,
+            field_name,
+            value,
+            state=state,
+            reason_code=reason_code,
+        )
+
+    def stop(
+        field_name: str,
+        *,
+        state: str,
+        reason_code: str,
+    ) -> dict[str, Any]:
+        record(
+            field_name,
+            False,
+            state=state,
+            reason_code=reason_code,
+        )
+        record(
+            "runtime_resources_verified",
+            False,
+            state=state,
+            reason_code=reason_code,
+        )
+        result["reason_code"] = reason_code
+        return result
+
+    flags_evidence = wom_kit_runtime_all_tracked_index_flags_evidence(
         mirror_path,
         runner=runner,
     )
+    flags_safe = bool(flags_evidence["safe"])
+    tracked_count = int(flags_evidence["entry_count"])
     result["all_tracked_index_entry_count"] = tracked_count
-    result["all_tracked_index_flags_safe"] = flags_safe
+    record(
+        "all_tracked_index_flags_safe",
+        flags_safe,
+        state=str(flags_evidence["state"]),
+        reason_code=str(flags_evidence["reason_code"]),
+    )
     if not flags_safe:
-        result["reason_code"] = "project_tracked_index_flags_unsafe"
-        return result
+        return stop(
+            "all_tracked_index_flags_safe",
+            state=str(flags_evidence["state"]),
+            reason_code=str(flags_evidence["reason_code"]),
+        )
 
-    manifest_blob = wom_kit_runtime_git_blob_at_ref(
+    manifest_observation = wom_kit_runtime_git_blob_at_ref_observation(
         mirror_path,
         ref,
         WOM_KIT_RUNTIME_RESOURCE_MANIFEST_GIT_PATH,
         max_bytes=2 * 1024 * 1024,
         runner=runner,
     )
+    manifest_blob = manifest_observation.get("blob")
     if manifest_blob is None:
-        return result
+        return stop(
+            "runtime_resource_manifest_verified",
+            state=str(manifest_observation["state"]),
+            reason_code=str(manifest_observation["reason_code"]),
+        )
     manifest_object_id, manifest_bytes = manifest_blob
     try:
         manifest = json.loads(manifest_bytes.decode("utf-8"))
     except (UnicodeError, json.JSONDecodeError):
-        return result
+        return stop(
+            "runtime_resource_manifest_verified",
+            state="failed",
+            reason_code="project_runtime_resource_manifest_invalid",
+        )
     files = manifest.get("files") if isinstance(manifest, dict) else None
     if (
         not isinstance(manifest, dict)
@@ -105264,7 +106251,11 @@ def wom_kit_runtime_resource_integrity(
         or manifest.get("file_count") != len(files)
         or not 0 < len(files) <= WOM_KIT_RUNTIME_MAX_SOURCE_TREE_ENTRIES
     ):
-        return result
+        return stop(
+            "runtime_resource_manifest_verified",
+            state="failed",
+            reason_code="project_runtime_resource_manifest_invalid",
+        )
 
     expected_specs: dict[str, tuple[int, str]] = {
         WOM_KIT_RUNTIME_RESOURCE_MANIFEST_GIT_PATH: (
@@ -105278,7 +106269,11 @@ def wom_kit_runtime_resource_integrity(
     total_bytes = len(manifest_bytes)
     for item in files:
         if not isinstance(item, dict):
-            return result
+            return stop(
+                "runtime_resource_manifest_verified",
+                state="failed",
+                reason_code="project_runtime_resource_manifest_invalid",
+            )
         source = item.get("source")
         packaged = item.get("packaged")
         expected_size = item.get("bytes")
@@ -105295,7 +106290,11 @@ def wom_kit_runtime_resource_integrity(
             or source in seen_sources
             or packaged in seen_packaged
         ):
-            return result
+            return stop(
+                "runtime_resource_manifest_verified",
+                state="failed",
+                reason_code="project_runtime_resource_manifest_invalid",
+            )
         source_pure = PurePosixPath(source)
         packaged_pure = PurePosixPath(packaged)
         if (
@@ -105304,12 +106303,20 @@ def wom_kit_runtime_resource_integrity(
             or any(part in {"", ".", ".."} for part in source_pure.parts)
             or any(part in {"", ".", ".."} for part in packaged_pure.parts)
         ):
-            return result
+            return stop(
+                "runtime_resource_manifest_verified",
+                state="failed",
+                reason_code="project_runtime_resource_manifest_invalid",
+            )
         source_prefix = WOM_KIT_RUNTIME_RESOURCE_SOURCE_PREFIXES.get(
             source_pure.parts[0]
         )
         if source_prefix is None:
-            return result
+            return stop(
+                "runtime_resource_manifest_verified",
+                state="failed",
+                reason_code="project_runtime_resource_manifest_invalid",
+            )
         source_path = source_prefix + "/".join(source_pure.parts[1:])
         packaged_path = (
             WOM_KIT_RUNTIME_PACKAGED_RESOURCE_PREFIX + packaged_pure.as_posix()
@@ -105323,9 +106330,14 @@ def wom_kit_runtime_resource_integrity(
         seen_packaged.add(packaged)
         total_bytes += expected_size * 2
         if total_bytes > WOM_KIT_RUNTIME_MAX_TOTAL_PYTHON_SOURCE_BYTES:
-            return result
+            return stop(
+                "runtime_resource_manifest_verified",
+                state="failed",
+                reason_code="project_runtime_resource_manifest_invalid",
+            )
 
-    tree_ok, tree_text = _wom_kit_project_update_git(
+    tree_available, tree_return_code, tree_text = (
+        _wom_kit_project_update_git_observation(
         mirror_path,
         [
             "ls-tree",
@@ -105335,36 +106347,60 @@ def wom_kit_runtime_resource_integrity(
             *sorted(expected_specs),
         ],
         runner=runner,
+        )
     )
-    if not tree_ok:
-        return result
+    if not tree_available:
+        return stop(
+            "runtime_resource_manifest_verified",
+            state="unavailable",
+            reason_code="project_runtime_resource_manifest_unavailable",
+        )
+    if tree_return_code != 0:
+        return stop(
+            "runtime_resource_manifest_verified",
+            state="failed",
+            reason_code="project_runtime_resource_manifest_invalid",
+        )
     tree_entries: dict[str, tuple[str, str]] = {}
-    for record in tree_text.split("\0"):
-        if not record:
+    for tree_record in tree_text.split("\0"):
+        if not tree_record:
             continue
         try:
-            metadata, relative_path = record.split("\t", 1)
+            metadata, relative_path = tree_record.split("\t", 1)
             mode, object_type, object_id = metadata.split(" ", 2)
         except ValueError:
-            return result
+            return stop(
+                "runtime_resource_manifest_verified",
+                state="failed",
+                reason_code="project_runtime_resource_manifest_invalid",
+            )
         if (
             mode not in {"100644", "100755"}
             or object_type != "blob"
             or not re.fullmatch(r"[0-9a-fA-F]{40,64}", object_id)
             or relative_path in tree_entries
         ):
-            return result
+            return stop(
+                "runtime_resource_manifest_verified",
+                state="failed",
+                reason_code="project_runtime_resource_manifest_invalid",
+            )
         tree_entries[relative_path] = (mode, object_id.lower())
     if (
         set(tree_entries) != set(expected_specs)
         or tree_entries[WOM_KIT_RUNTIME_RESOURCE_MANIFEST_GIT_PATH][1]
         != manifest_object_id
     ):
-        return result
+        return stop(
+            "runtime_resource_manifest_verified",
+            state="failed",
+            reason_code="project_runtime_resource_manifest_invalid",
+        )
 
     result["runtime_resource_entry_count"] = len(expected_specs)
-    result["runtime_resource_manifest_verified"] = True
-    index_ok, index_text = _wom_kit_project_update_git(
+    record("runtime_resource_manifest_verified", True)
+    index_available, index_return_code, index_text = (
+        _wom_kit_project_update_git_observation(
         mirror_path,
         [
             "ls-files",
@@ -105374,28 +106410,44 @@ def wom_kit_runtime_resource_integrity(
             *sorted(expected_specs),
         ],
         runner=runner,
+        )
     )
-    if not index_ok:
-        result["reason_code"] = "project_runtime_resource_index_unavailable"
-        return result
+    if not index_available:
+        return stop(
+            "runtime_resource_index_matches_head",
+            state="unavailable",
+            reason_code="project_runtime_resource_index_unavailable",
+        )
+    if index_return_code != 0:
+        return stop(
+            "runtime_resource_index_matches_head",
+            state="failed",
+            reason_code="project_runtime_resource_index_invalid",
+        )
     index_entries: dict[str, tuple[str, str]] = {}
-    for record in index_text.split("\0"):
-        if not record:
+    for index_record in index_text.split("\0"):
+        if not index_record:
             continue
         try:
-            metadata, relative_path = record.split("\t", 1)
+            metadata, relative_path = index_record.split("\t", 1)
             mode, object_id, stage = metadata.split(" ", 2)
         except ValueError:
-            result["reason_code"] = "project_runtime_resource_index_unavailable"
-            return result
+            return stop(
+                "runtime_resource_index_matches_head",
+                state="failed",
+                reason_code="project_runtime_resource_index_invalid",
+            )
         if (
             stage != "0"
             or mode not in {"100644", "100755"}
             or not re.fullmatch(r"[0-9a-fA-F]{40,64}", object_id)
             or relative_path in index_entries
         ):
-            result["reason_code"] = "project_runtime_resource_index_unavailable"
-            return result
+            return stop(
+                "runtime_resource_index_matches_head",
+                state="failed",
+                reason_code="project_runtime_resource_index_mismatch",
+            )
         index_entries[relative_path] = (mode, object_id.lower())
     if (
         set(index_entries) != set(expected_specs)
@@ -105404,22 +106456,42 @@ def wom_kit_runtime_resource_integrity(
             for path in expected_specs
         )
     ):
-        result["reason_code"] = "project_runtime_resource_index_mismatch"
-        return result
-    result["runtime_resource_index_matches_head"] = True
+        return stop(
+            "runtime_resource_index_matches_head",
+            state="failed",
+            reason_code="project_runtime_resource_index_mismatch",
+        )
+    record("runtime_resource_index_matches_head", True)
 
-    actual_values: dict[str, bytes] = {}
-    for relative_path, (expected_size, expected_digest) in sorted(
-        expected_specs.items()
-    ):
+    ordered_specs = sorted(expected_specs.items())
+    for relative_path, (_expected_size, _expected_digest) in ordered_specs:
         path = mirror_path.joinpath(*PurePosixPath(relative_path).parts)
+        path_observation = wom_kit_real_path_kind_observation(
+            project_root,
+            path,
+        )
+        if path_observation["state"] == "unavailable":
+            return stop(
+                "runtime_resource_path_components_real",
+                state="unavailable",
+                reason_code="project_runtime_resource_path_unavailable",
+            )
         if (
             not is_path_within_root(path, mirror_path)
-            or wom_kit_real_path_kind(project_root, path) != "file"
+            or path_observation["state"] != "passed"
+            or path_observation["kind"] != "file"
         ):
-            result["reason_code"] = "project_runtime_resource_path_unsafe"
-            return result
-        actual_bytes = _wom_kit_read_bounded_real_bytes(
+            return stop(
+                "runtime_resource_path_components_real",
+                state="failed",
+                reason_code="project_runtime_resource_path_unsafe",
+            )
+    record("runtime_resource_path_components_real", True)
+
+    actual_values: dict[str, bytes] = {}
+    for relative_path, (expected_size, expected_digest) in ordered_specs:
+        path = mirror_path.joinpath(*PurePosixPath(relative_path).parts)
+        actual_observation = _wom_kit_read_bounded_real_bytes_observation(
             project_root,
             path,
             max_bytes=(
@@ -105428,13 +106500,26 @@ def wom_kit_runtime_resource_integrity(
                 else WOM_KIT_RUNTIME_MAX_PYTHON_SOURCE_BYTES
             ),
         )
+        actual_bytes = actual_observation.get("bytes")
+        if actual_bytes is None:
+            return stop(
+                "runtime_resource_worktree_bytes_match_head",
+                state=str(actual_observation["state"]),
+                reason_code=(
+                    "project_runtime_resource_bytes_unavailable"
+                    if actual_observation["state"] == "unavailable"
+                    else "project_runtime_resource_bytes_invalid"
+                ),
+            )
         if (
-            actual_bytes is None
-            or len(actual_bytes) != expected_size
+            len(actual_bytes) != expected_size
             or hashlib.sha256(actual_bytes).hexdigest() != expected_digest
         ):
-            result["reason_code"] = "project_runtime_resource_bytes_mismatch"
-            return result
+            return stop(
+                "runtime_resource_worktree_bytes_match_head",
+                state="failed",
+                reason_code="project_runtime_resource_bytes_mismatch",
+            )
         object_id = tree_entries[relative_path][1]
         object_hasher = (
             hashlib.sha1()
@@ -105446,19 +106531,27 @@ def wom_kit_runtime_resource_integrity(
         )
         object_hasher.update(actual_bytes)
         if object_hasher.hexdigest() != object_id:
-            result["reason_code"] = "project_runtime_resource_bytes_mismatch"
-            return result
+            return stop(
+                "runtime_resource_worktree_bytes_match_head",
+                state="failed",
+                reason_code="project_runtime_resource_bytes_mismatch",
+            )
         actual_values[relative_path] = actual_bytes
     if actual_values[WOM_KIT_RUNTIME_RESOURCE_MANIFEST_GIT_PATH] != manifest_bytes:
-        result["reason_code"] = "project_runtime_resource_bytes_mismatch"
-        return result
+        return stop(
+            "runtime_resource_worktree_bytes_match_head",
+            state="failed",
+            reason_code="project_runtime_resource_bytes_mismatch",
+        )
     for source_path, packaged_path, _, _ in resource_pairs:
         if actual_values[source_path] != actual_values[packaged_path]:
-            result["reason_code"] = "project_runtime_resource_bytes_mismatch"
-            return result
-    result["runtime_resource_path_components_real"] = True
-    result["runtime_resource_worktree_bytes_match_head"] = True
-    result["runtime_resources_verified"] = True
+            return stop(
+                "runtime_resource_worktree_bytes_match_head",
+                state="failed",
+                reason_code="project_runtime_resource_bytes_mismatch",
+            )
+    record("runtime_resource_worktree_bytes_match_head", True)
+    record("runtime_resources_verified", True)
     result["reason_code"] = "verified"
     return result
 
@@ -105476,72 +106569,190 @@ def _wom_kit_runtime_mirror_integrity_with_runner(
         checked=True,
         reason_code="verification_incomplete",
     )
-    evidence["mirror_real_directory_inside_project"] = bool(
-        mirror_path.is_dir()
-        and not mirror_path.is_symlink()
-        and is_path_within_root(mirror_path, project_root)
-        and wom_kit_path_components_are_real(project_root, mirror_path)
+    mirror_observation = wom_kit_real_path_kind_observation(
+        project_root,
+        mirror_path,
+    )
+    mirror_is_real = bool(
+        mirror_observation["state"] == "passed"
+        and mirror_observation["kind"] == "directory"
+    )
+    _wom_kit_runtime_integrity_record_check(
+        evidence,
+        "mirror_real_directory_inside_project",
+        mirror_is_real,
+        state=(
+            "unavailable"
+            if mirror_observation["state"] == "unavailable"
+            else None
+        ),
+        reason_code=(
+            "verified"
+            if mirror_is_real
+            else "project_mirror_observation_unavailable"
+            if mirror_observation["state"] == "unavailable"
+            else "project_mirror_not_real_inside_project"
+        ),
     )
     if not evidence["mirror_real_directory_inside_project"]:
-        evidence["reason_code"] = "project_mirror_not_real_inside_project"
+        evidence["reason_code"] = evidence["checks"][
+            "mirror_real_directory_inside_project"
+        ]["reason_code"]
         return evidence
 
-    evidence["project_pin_path_components_real"] = bool(
-        project_pin_path is not None
-        and project_pin_path.is_file()
-        and is_path_within_root(project_pin_path, project_root)
-        and wom_kit_path_components_are_real(project_root, project_pin_path)
+    pin_observation = (
+        wom_kit_real_path_kind_observation(project_root, project_pin_path)
+        if project_pin_path is not None
+        else {"state": "passed", "kind": "missing"}
+    )
+    project_pin_is_real = bool(
+        pin_observation["state"] == "passed"
+        and pin_observation["kind"] == "file"
+    )
+    _wom_kit_runtime_integrity_record_check(
+        evidence,
+        "project_pin_path_components_real",
+        project_pin_is_real,
+        state=(
+            "unavailable"
+            if pin_observation["state"] == "unavailable"
+            else None
+        ),
+        reason_code=(
+            "verified"
+            if project_pin_is_real
+            else "project_pin_observation_unavailable"
+            if pin_observation["state"] == "unavailable"
+            else "project_pin_path_unsafe"
+        ),
     )
     if not evidence["project_pin_path_components_real"]:
-        evidence["reason_code"] = "project_pin_path_unsafe"
+        evidence["reason_code"] = evidence["checks"][
+            "project_pin_path_components_real"
+        ]["reason_code"]
         return evidence
 
-    evidence["wrapper_path_components_real"] = bool(
-        wrapper_path.is_file()
-        and is_path_within_root(wrapper_path, mirror_path)
-        and wom_kit_path_components_are_real(project_root, wrapper_path)
+    wrapper_observation = wom_kit_real_path_kind_observation(
+        project_root,
+        wrapper_path,
+    )
+    try:
+        wrapper_path.relative_to(mirror_path)
+        wrapper_inside_mirror = True
+    except ValueError:
+        wrapper_inside_mirror = False
+    wrapper_is_real = bool(
+        wrapper_inside_mirror
+        and wrapper_observation["state"] == "passed"
+        and wrapper_observation["kind"] == "file"
+    )
+    _wom_kit_runtime_integrity_record_check(
+        evidence,
+        "wrapper_path_components_real",
+        wrapper_is_real,
+        state=(
+            "unavailable"
+            if wrapper_observation["state"] == "unavailable"
+            else None
+        ),
+        reason_code=(
+            "verified"
+            if wrapper_is_real
+            else "project_wrapper_observation_unavailable"
+            if wrapper_observation["state"] == "unavailable"
+            else "project_wrapper_path_unsafe"
+        ),
     )
     if not evidence["wrapper_path_components_real"]:
-        evidence["reason_code"] = "project_wrapper_path_unsafe"
+        evidence["reason_code"] = evidence["checks"][
+            "wrapper_path_components_real"
+        ]["reason_code"]
         return evidence
 
-    inside_ok, inside_text = _wom_kit_project_update_git(
+    inside_available, inside_return_code, inside_text = (
+        _wom_kit_project_update_git_observation(
         mirror_path,
         ["rev-parse", "--is-inside-work-tree"],
         runner=runner,
+        )
     )
-    top_ok, top_text = _wom_kit_project_update_git(
+    top_available, top_return_code, top_text = (
+        _wom_kit_project_update_git_observation(
         mirror_path,
         ["rev-parse", "--show-toplevel"],
         runner=runner,
-    )
-    try:
-        exact_top = top_ok and Path(top_text).resolve() == mirror_path.resolve()
-    except (OSError, RuntimeError, ValueError):
-        exact_top = False
-    evidence["git_worktree_root_exact"] = bool(
-        inside_ok and inside_text == "true" and exact_top
-    )
-    if not evidence["git_worktree_root_exact"]:
-        evidence["reason_code"] = "project_git_worktree_root_unverified"
-        return evidence
-
-    evidence["git_metadata_local_real"] = (
-        wom_kit_project_update_git_metadata_is_local_real(
-            project_root,
-            mirror_path,
-            runner=runner,
         )
     )
+    top_resolution_unavailable = False
+    try:
+        exact_top = bool(
+            top_available
+            and top_return_code == 0
+            and Path(top_text).resolve() == mirror_path.resolve()
+        )
+    except OSError:
+        exact_top = False
+        top_resolution_unavailable = True
+    except (RuntimeError, ValueError):
+        exact_top = False
+    git_worktree_root_exact = bool(
+        inside_available
+        and inside_return_code == 0
+        and inside_text == "true"
+        and exact_top
+    )
+    git_root_unavailable = bool(
+        not inside_available or not top_available or top_resolution_unavailable
+    )
+    _wom_kit_runtime_integrity_record_check(
+        evidence,
+        "git_worktree_root_exact",
+        git_worktree_root_exact,
+        state="unavailable" if git_root_unavailable else None,
+        reason_code=(
+            "verified"
+            if git_worktree_root_exact
+            else "project_git_worktree_root_unavailable"
+            if git_root_unavailable
+            else "project_git_worktree_root_unverified"
+        ),
+    )
+    if not evidence["git_worktree_root_exact"]:
+        evidence["reason_code"] = evidence["checks"][
+            "git_worktree_root_exact"
+        ]["reason_code"]
+        return evidence
+
+    git_metadata_evidence = wom_kit_project_update_git_metadata_evidence(
+        project_root,
+        mirror_path,
+        runner=runner,
+    )
+    git_metadata_local_real = git_metadata_evidence["state"] == "passed"
+    _wom_kit_runtime_integrity_record_check(
+        evidence,
+        "git_metadata_local_real",
+        git_metadata_local_real,
+        state=str(git_metadata_evidence["state"]),
+        reason_code=str(git_metadata_evidence["reason_code"]),
+    )
     if not evidence["git_metadata_local_real"]:
-        evidence["reason_code"] = "project_git_metadata_not_local_real"
+        evidence["reason_code"] = str(git_metadata_evidence["reason_code"])
         return evidence
 
     runtime_snapshot = _wom_kit_project_update_git_snapshot(
         mirror_path,
         runner=runner,
     )
-    evidence["worktree_clean_except_untracked_installed_version"] = bool(
+    runtime_snapshot_observation = (
+        {"state": "passed", "reason_code": "verified", "snapshot": runtime_snapshot}
+        if runtime_snapshot is not None
+        else _wom_kit_project_update_git_snapshot_observation(
+            mirror_path,
+            runner=runner,
+        )
+    )
+    worktree_clean = bool(
         runtime_snapshot is not None
         and runtime_snapshot.get("index_matches_head") is True
         and runtime_snapshot.get("flags_safe") is True
@@ -105549,24 +106760,76 @@ def _wom_kit_runtime_mirror_integrity_with_runner(
         and runtime_snapshot.get("untracked_paths")
         in ([], ["installed-version.txt"])
     )
+    _wom_kit_runtime_integrity_record_check(
+        evidence,
+        "worktree_clean_except_untracked_installed_version",
+        worktree_clean,
+        state=(
+            str(runtime_snapshot_observation["state"])
+            if runtime_snapshot is None
+            else None
+        ),
+        reason_code=(
+            "verified"
+            if worktree_clean
+            else str(runtime_snapshot_observation["reason_code"])
+            if runtime_snapshot is None
+            else "project_git_worktree_dirty"
+        ),
+    )
     if runtime_snapshot is None:
-        evidence["reason_code"] = "project_git_snapshot_unavailable"
+        evidence["reason_code"] = str(
+            runtime_snapshot_observation["reason_code"]
+        )
         return evidence
     if not evidence["worktree_clean_except_untracked_installed_version"]:
         evidence["reason_code"] = "project_git_worktree_dirty"
         return evidence
 
-    pin_tracked, _ = _wom_kit_project_update_git(
+    pin_probe_available, pin_probe_return_code, pin_probe_text = (
+        _wom_kit_project_update_git_observation(
         mirror_path,
-        ["ls-files", "--error-unmatch", "--", "installed-version.txt"],
+        ["ls-files", "-z", "--", "installed-version.txt"],
         runner=runner,
+        )
     )
-    evidence["installed_version_pin_untracked"] = not pin_tracked
-    if pin_tracked:
-        evidence["reason_code"] = "project_source_pin_tracked"
+    pin_records = [item for item in pin_probe_text.split("\0") if item]
+    pin_probe_valid = bool(
+        pin_probe_available
+        and pin_probe_return_code == 0
+        and pin_records in ([], ["installed-version.txt"])
+    )
+    pin_tracked = pin_records == ["installed-version.txt"]
+    pin_probe_state = (
+        "unavailable"
+        if not pin_probe_available
+        else "passed"
+        if pin_probe_valid and not pin_tracked
+        else "failed"
+    )
+    _wom_kit_runtime_integrity_record_check(
+        evidence,
+        "installed_version_pin_untracked",
+        pin_probe_valid and not pin_tracked,
+        state=pin_probe_state,
+        reason_code=(
+            "verified"
+            if pin_probe_valid and not pin_tracked
+            else "project_source_pin_tracked"
+            if pin_probe_valid and pin_tracked
+            else "project_source_pin_tracking_invalid"
+            if pin_probe_available
+            else "project_source_pin_tracking_unavailable"
+        ),
+    )
+    if not evidence["installed_version_pin_untracked"]:
+        evidence["reason_code"] = evidence["checks"][
+            "installed_version_pin_untracked"
+        ]["reason_code"]
         return evidence
 
-    origin_ok, origin_key_text = _wom_kit_project_update_git(
+    origin_available, origin_return_code, origin_key_text = (
+        _wom_kit_project_update_git_observation(
         mirror_path,
         [
             "config",
@@ -105577,34 +106840,104 @@ def _wom_kit_runtime_mirror_integrity_with_runner(
             r"^remote\.origin\.url$",
         ],
         runner=runner,
+        )
     )
     origin_key_lines = [
         line.strip().lower()
         for line in origin_key_text.splitlines()
         if line.strip()
     ]
-    evidence["origin_config_key_present"] = bool(
-        origin_ok
+    origin_config_key_present = bool(
+        origin_available
+        and origin_return_code == 0
         and origin_key_lines == ["remote.origin.url"]
     )
-    evidence["origin_configured"] = evidence["origin_config_key_present"]
+    origin_probe_complete = bool(
+        origin_available and origin_return_code in {0, 1}
+    )
+    origin_probe_state = (
+        "unavailable"
+        if not origin_available
+        else "passed"
+        if origin_probe_complete and origin_config_key_present
+        else "failed"
+    )
+    _wom_kit_runtime_integrity_record_check(
+        evidence,
+        "origin_config_key_present",
+        origin_config_key_present,
+        state=origin_probe_state,
+        reason_code=(
+            "verified"
+            if origin_config_key_present
+            else "project_origin_not_configured"
+            if origin_probe_complete
+            else "project_origin_configuration_invalid"
+            if origin_available
+            else "project_origin_configuration_unavailable"
+        ),
+    )
+    _wom_kit_runtime_integrity_record_check(
+        evidence,
+        "origin_configured",
+        origin_config_key_present,
+        state=origin_probe_state,
+        reason_code=(
+            "verified"
+            if origin_config_key_present
+            else "project_origin_not_configured"
+            if origin_probe_complete
+            else "project_origin_configuration_invalid"
+            if origin_available
+            else "project_origin_configuration_unavailable"
+        ),
+    )
     if not evidence["origin_configured"]:
-        evidence["reason_code"] = "project_origin_not_configured"
+        evidence["reason_code"] = evidence["checks"]["origin_configured"][
+            "reason_code"
+        ]
         return evidence
 
-    head_ok, head_text = _wom_kit_project_update_git(
+    head_available, head_return_code, head_text = (
+        _wom_kit_project_update_git_observation(
         mirror_path,
         ["rev-parse", "--verify", "HEAD"],
         runner=runner,
+        )
     )
     head_commit = (
         head_text.lower()
-        if head_ok and re.fullmatch(r"[0-9a-fA-F]{40,64}", head_text)
+        if (
+            head_available
+            and head_return_code == 0
+            and re.fullmatch(r"[0-9a-fA-F]{40,64}", head_text)
+        )
         else None
     )
-    evidence["head_commit_available"] = head_commit is not None
+    head_state = (
+        "unavailable"
+        if not head_available
+        else "passed"
+        if head_commit is not None
+        else "failed"
+    )
+    _wom_kit_runtime_integrity_record_check(
+        evidence,
+        "head_commit_available",
+        head_commit is not None,
+        state=head_state,
+        reason_code=(
+            "verified"
+            if head_commit is not None
+            else "project_head_unavailable"
+            if not head_available
+            else "project_head_invalid"
+        ),
+    )
     if head_commit is None:
-        evidence["reason_code"] = "project_head_unavailable"
+        evidence["reason_code"] = evidence["checks"][
+            "head_commit_available"
+        ]["reason_code"]
         return evidence
 
     tracked_python_evidence = wom_kit_runtime_tracked_python_integrity(
@@ -105613,6 +106946,7 @@ def _wom_kit_runtime_mirror_integrity_with_runner(
         runner=runner,
     )
     tracked_python_fields = (
+        "wrapper_tracked_at_head",
         "tracked_python_source_count",
         "tracked_python_source_set_complete",
         "tracked_python_index_flags_safe",
@@ -105630,10 +106964,18 @@ def _wom_kit_runtime_mirror_integrity_with_runner(
         "tracked_python_sources_verified",
     )
     for field_name in tracked_python_fields:
-        evidence[field_name] = tracked_python_evidence[field_name]
-    evidence["wrapper_tracked_at_head"] = bool(
-        tracked_python_evidence["tracked_python_source_set_complete"]
-    )
+        field_value = tracked_python_evidence[field_name]
+        if field_name in WOM_KIT_RUNTIME_INTEGRITY_CHECK_FIELDS:
+            child_check = tracked_python_evidence["checks"][field_name]
+            _wom_kit_runtime_integrity_record_check(
+                evidence,
+                field_name,
+                bool(field_value),
+                state=str(child_check["state"]),
+                reason_code=str(child_check["reason_code"]),
+            )
+        else:
+            evidence[field_name] = field_value
     if not tracked_python_evidence["tracked_python_sources_verified"]:
         evidence["reason_code"] = tracked_python_evidence["reason_code"]
         return evidence
@@ -105655,7 +106997,18 @@ def _wom_kit_runtime_mirror_integrity_with_runner(
         "runtime_resources_verified",
     )
     for field_name in resource_fields:
-        evidence[field_name] = resource_evidence[field_name]
+        field_value = resource_evidence[field_name]
+        if field_name in WOM_KIT_RUNTIME_INTEGRITY_CHECK_FIELDS:
+            child_check = resource_evidence["checks"][field_name]
+            _wom_kit_runtime_integrity_record_check(
+                evidence,
+                field_name,
+                bool(field_value),
+                state=str(child_check["state"]),
+                reason_code=str(child_check["reason_code"]),
+            )
+        else:
+            evidence[field_name] = field_value
     if not resource_evidence["runtime_resources_verified"]:
         evidence["reason_code"] = resource_evidence["reason_code"]
         return evidence
@@ -105674,68 +107027,184 @@ def _wom_kit_runtime_mirror_integrity_with_runner(
         expected_source_tag,
         runner=runner,
     )
-    evidence["source_tag_available_locally"] = bool(
-        tag_evidence.get("tag_available_locally")
+    tag_observation_unavailable = (
+        tag_evidence.get("observation_state") == "unavailable"
+    )
+    tag_observation_reason = str(
+        tag_evidence.get("observation_reason_code")
+        or "project_target_evidence_unavailable"
+    )
+    source_tag_available = bool(tag_evidence.get("tag_available_locally"))
+    _wom_kit_runtime_integrity_record_check(
+        evidence,
+        "source_tag_available_locally",
+        source_tag_available,
+        state=(
+            "unavailable"
+            if tag_observation_unavailable and not source_tag_available
+            else None
+        ),
+        reason_code=(
+            "verified"
+            if source_tag_available
+            else tag_observation_reason
+            if tag_observation_unavailable
+            else "project_source_tag_missing"
+        ),
     )
     if not evidence["source_tag_available_locally"]:
-        evidence["reason_code"] = "project_source_tag_missing"
+        evidence["reason_code"] = evidence["checks"][
+            "source_tag_available_locally"
+        ]["reason_code"]
         return evidence
 
-    evidence["source_tag_annotated"] = bool(
-        tag_evidence.get("annotated_tag_verified")
+    source_tag_annotated = bool(tag_evidence.get("annotated_tag_verified"))
+    _wom_kit_runtime_integrity_record_check(
+        evidence,
+        "source_tag_annotated",
+        source_tag_annotated,
+        state=(
+            "unavailable"
+            if tag_observation_unavailable and not source_tag_annotated
+            else None
+        ),
+        reason_code=(
+            "verified"
+            if source_tag_annotated
+            else tag_observation_reason
+            if tag_observation_unavailable
+            else "project_source_tag_not_annotated"
+        ),
     )
     if not evidence["source_tag_annotated"]:
-        evidence["reason_code"] = "project_source_tag_not_annotated"
+        evidence["reason_code"] = evidence["checks"][
+            "source_tag_annotated"
+        ]["reason_code"]
         return evidence
 
     tag_commit = tag_evidence.get("target_commit")
     if not isinstance(tag_commit, str):
-        evidence["reason_code"] = "project_source_tag_commit_unavailable"
+        commit_reason = (
+            tag_observation_reason
+            if tag_observation_unavailable
+            else "project_source_tag_commit_unavailable"
+        )
+        _wom_kit_runtime_integrity_record_check(
+            evidence,
+            "source_tag_at_head",
+            False,
+            state=("unavailable" if tag_observation_unavailable else None),
+            reason_code=commit_reason,
+        )
+        evidence["reason_code"] = commit_reason
         return evidence
-    evidence["source_tag_at_head"] = tag_commit.lower() == head_commit
+    source_tag_at_head = tag_commit.lower() == head_commit
+    _wom_kit_runtime_integrity_record_check(
+        evidence,
+        "source_tag_at_head",
+        source_tag_at_head,
+        reason_code=(
+            "verified"
+            if source_tag_at_head
+            else "project_source_tag_not_at_head"
+        ),
+    )
     if not evidence["source_tag_at_head"]:
         evidence["reason_code"] = "project_source_tag_not_at_head"
         return evidence
 
-    evidence["tag_source_versions_match"] = bool(
+    tag_source_versions_match = bool(
         tag_evidence.get("all_source_versions_match_target")
     )
+    _wom_kit_runtime_integrity_record_check(
+        evidence,
+        "tag_source_versions_match",
+        tag_source_versions_match,
+        state=(
+            "unavailable"
+            if tag_observation_unavailable and not tag_source_versions_match
+            else None
+        ),
+        reason_code=(
+            "verified"
+            if tag_source_versions_match
+            else tag_observation_reason
+            if tag_observation_unavailable
+            else "project_tag_source_versions_mismatch"
+        ),
+    )
     if not evidence["tag_source_versions_match"]:
-        evidence["reason_code"] = "project_tag_source_versions_mismatch"
+        evidence["reason_code"] = evidence["checks"][
+            "tag_source_versions_match"
+        ]["reason_code"]
         return evidence
 
-    evidence["origin_main_available_locally"] = bool(
+    origin_main_available = bool(
         tag_evidence.get("origin_main_available_locally")
     )
+    _wom_kit_runtime_integrity_record_check(
+        evidence,
+        "origin_main_available_locally",
+        origin_main_available,
+        state=(
+            "unavailable"
+            if tag_observation_unavailable and not origin_main_available
+            else None
+        ),
+        reason_code=(
+            "verified"
+            if origin_main_available
+            else tag_observation_reason
+            if tag_observation_unavailable
+            else "project_origin_main_unavailable"
+        ),
+    )
     if not evidence["origin_main_available_locally"]:
-        evidence["reason_code"] = "project_origin_main_unavailable"
+        evidence["reason_code"] = evidence["checks"][
+            "origin_main_available_locally"
+        ]["reason_code"]
         return evidence
 
-    evidence["source_tag_reachable_from_origin_main"] = bool(
+    source_tag_reachable = bool(
         tag_evidence.get("target_reachable_from_origin_main")
     )
+    _wom_kit_runtime_integrity_record_check(
+        evidence,
+        "source_tag_reachable_from_origin_main",
+        source_tag_reachable,
+        state=(
+            "unavailable"
+            if tag_observation_unavailable and not source_tag_reachable
+            else None
+        ),
+        reason_code=(
+            "verified"
+            if source_tag_reachable
+            else tag_observation_reason
+            if tag_observation_unavailable
+            else "project_source_tag_not_reachable_from_origin_main"
+        ),
+    )
     if not evidence["source_tag_reachable_from_origin_main"]:
-        evidence["reason_code"] = (
-            "project_source_tag_not_reachable_from_origin_main"
-        )
+        evidence["reason_code"] = evidence["checks"][
+            "source_tag_reachable_from_origin_main"
+        ]["reason_code"]
         return evidence
 
-    runtime_entries = wom_kit_runtime_head_python_entries(
-        mirror_path,
-        ref=head_commit,
-        runner=runner,
-    )
-    wrapper_entry = (
-        runtime_entries.get(WOM_KIT_RUNTIME_WRAPPER_GIT_PATH)
-        if runtime_entries is not None
-        else None
-    )
-    if wrapper_entry is None:
+    wrapper_oid = tracked_python_evidence.get("_wrapper_blob_oid")
+    if not isinstance(wrapper_oid, str):
+        _wom_kit_runtime_integrity_record_check(
+            evidence,
+            "wrapper_tracked_at_head",
+            False,
+            state="unavailable",
+            reason_code="project_wrapper_blob_unavailable",
+        )
         evidence["reason_code"] = "project_wrapper_blob_unavailable"
         return evidence
     evidence["_verified_head_commit"] = head_commit
     evidence["_verified_source_tag"] = expected_source_tag
-    evidence["_verified_wrapper_blob_oid"] = wrapper_entry[1]
+    evidence["_verified_wrapper_blob_oid"] = wrapper_oid
     evidence["verified"] = True
     evidence["reason_code"] = "verified"
     return evidence
@@ -105751,13 +107220,14 @@ def wom_kit_runtime_mirror_integrity(
 ) -> dict[str, Any]:
     """Historical read-only runtime probe with an explicit sealed runner."""
 
-    runner = (
-        project_update_git_runner.TrustedProjectUpdateGitRunner
-        .resolve_preapproval()
-    )
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner | None = None
     try:
+        runner = (
+            project_update_git_runner.TrustedProjectUpdateGitRunner
+            .resolve_preapproval()
+        )
         runner.close_transport_boundary()
-        result = _wom_kit_runtime_mirror_integrity_with_runner(
+        return _wom_kit_runtime_mirror_integrity_with_runner(
             project_root,
             mirror_path,
             project_pin_path,
@@ -105766,14 +107236,24 @@ def wom_kit_runtime_mirror_integrity(
             runner=runner,
         )
     except BaseException:
-        try:
-            runner.close()
-        except BaseException:
-            pass
-        raise
-    else:
-        runner.close()
-        return result
+        evidence = wom_kit_runtime_integrity_evidence(
+            checked=True,
+            reason_code="project_git_runner_observation_unavailable",
+        )
+        _wom_kit_runtime_integrity_record_check(
+            evidence,
+            "git_worktree_root_exact",
+            False,
+            state="unavailable",
+            reason_code="project_git_runner_observation_unavailable",
+        )
+        return evidence
+    finally:
+        if runner is not None:
+            try:
+                runner.close()
+            except BaseException:
+                pass
 
 
 WOM_KIT_PROJECT_BRIDGE_BOOTSTRAP = r'''
@@ -105818,6 +107298,11 @@ def git(root, args, cap=4194304):
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             env=clean_env(),
+            creationflags=(
+                getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+                if os.name == "nt"
+                else 0
+            ),
         )
     except BaseException:
         return None
@@ -106217,15 +107702,54 @@ def wom_kit_runtime_alignment(
     mirror_path: Path | None = None
     mirror_logical_path: str | None = None
     mirror_project_root: Path | None = None
+    alignment_observation_unavailable = False
+    alignment_observation_failed = False
+    alignment_failure_reason = "project_archive_root_binding_unsafe"
+    inspection_observation = (
+        wom_kit_real_path_kind_observation(inspection_root, inspection_root)
+        if inspection_root is not None
+        else {"state": "not_reached", "kind": "missing"}
+    )
+    if inspection_observation["state"] == "unavailable":
+        alignment_observation_unavailable = True
+    elif inspection_observation["state"] == "failed":
+        alignment_observation_failed = True
+        alignment_failure_reason = "inspection_root_unsafe"
     if (
         inspection_root is not None
-        and wom_kit_real_path_kind(inspection_root, inspection_root) == "directory"
+        and inspection_observation["state"] == "passed"
+        and inspection_observation["kind"] == "directory"
     ):
-        for root_label, search_root in wom_kit_project_source_mirror_search_roots(
+        search_roots_observation = wom_kit_version_pin_search_roots_observation(
             inspection_root
+        )
+        if search_roots_observation["state"] == "unavailable":
+            alignment_observation_unavailable = True
+        elif search_roots_observation["state"] == "failed":
+            alignment_observation_failed = True
+            alignment_failure_reason = str(
+                search_roots_observation["reason_code"]
+            )
+        for root_label, search_root in (
+            search_roots_observation["roots"]
+            if search_roots_observation["state"] == "passed"
+            else []
         ):
             candidate_path = search_root / ".zettel-kasten" / "source"
-            if wom_kit_real_path_kind(search_root, candidate_path) == "directory":
+            candidate_observation = wom_kit_real_path_kind_observation(
+                search_root,
+                candidate_path,
+            )
+            if candidate_observation["state"] == "unavailable":
+                alignment_observation_unavailable = True
+                break
+            if candidate_observation["state"] == "failed":
+                alignment_observation_failed = True
+                alignment_failure_reason = (
+                    "project_source_mirror_path_unsafe"
+                )
+                break
+            if candidate_observation["kind"] == "directory":
                 mirror_path = candidate_path
                 mirror_logical_path = wom_kit_project_source_mirror_location(root_label)
                 mirror_project_root = search_root
@@ -106235,11 +107759,26 @@ def wom_kit_runtime_alignment(
     project_pin_logical_path = project_pin.get("path")
     if (
         inspection_root is not None
-        and wom_kit_real_path_kind(inspection_root, inspection_root) == "directory"
+        and inspection_observation["state"] == "passed"
+        and inspection_observation["kind"] == "directory"
+        and not alignment_observation_unavailable
+        and not alignment_observation_failed
         and isinstance(project_pin_logical_path, str)
     ):
-        for root_label, search_root in wom_kit_version_pin_search_roots(
+        pin_roots_observation = wom_kit_version_pin_search_roots_observation(
             inspection_root
+        )
+        if pin_roots_observation["state"] == "unavailable":
+            alignment_observation_unavailable = True
+        elif pin_roots_observation["state"] == "failed":
+            alignment_observation_failed = True
+            alignment_failure_reason = str(
+                pin_roots_observation["reason_code"]
+            )
+        for root_label, search_root in (
+            pin_roots_observation["roots"]
+            if pin_roots_observation["state"] == "passed"
+            else []
         ):
             for candidate in WOM_KIT_VERSION_PIN_CANDIDATES:
                 if (
@@ -106261,10 +107800,18 @@ def wom_kit_runtime_alignment(
         if mirror_logical_path is not None
         else None
     )
+    wrapper_observation = (
+        wom_kit_real_path_kind_observation(mirror_project_root, wrapper_path)
+        if wrapper_path is not None and mirror_project_root is not None
+        else {"state": "not_reached", "kind": "missing"}
+    )
+    if wrapper_observation["state"] == "unavailable":
+        alignment_observation_unavailable = True
     wrapper_verified = bool(
         wrapper_path is not None
         and mirror_project_root is not None
-        and wom_kit_real_path_kind(mirror_project_root, wrapper_path) == "file"
+        and wrapper_observation["state"] == "passed"
+        and wrapper_observation["kind"] == "file"
         and mirror_path is not None
         and is_path_within_root(wrapper_path, mirror_path)
     )
@@ -106274,18 +107821,32 @@ def wom_kit_runtime_alignment(
         integrity["reason_code"] = "not_inspected"
         status = "not_inspected"
         reason_code = "inspection_root_not_provided"
-    elif not inspection_root.exists():
+    elif alignment_observation_unavailable:
+        integrity["reason_code"] = "project_source_observation_unavailable"
+        status = "project_source_observation_unavailable"
+        reason_code = "project_source_observation_unavailable"
+    elif alignment_observation_failed:
+        integrity["reason_code"] = alignment_failure_reason
+        status = "project_source_update_required"
+        reason_code = alignment_failure_reason
+    elif inspection_observation["kind"] == "missing":
         integrity["reason_code"] = "inspection_root_missing"
         status = "project_source_update_required"
         reason_code = "inspection_root_missing"
     elif project_source_mirror.get("status") == "unsafe_path":
-        integrity["reason_code"] = "project_source_metadata_path_unsafe"
+        integrity["reason_code"] = str(
+            project_source_mirror.get("observation_reason_code")
+            or "project_source_metadata_path_unsafe"
+        )
         status = "project_source_update_required"
-        reason_code = "project_source_metadata_path_unsafe"
-    elif project_source_mirror.get("status") == "metadata_unreadable":
-        integrity["reason_code"] = "project_source_metadata_unreadable"
-        status = "project_source_update_required"
-        reason_code = "project_source_metadata_unreadable"
+        reason_code = str(integrity["reason_code"])
+    elif project_source_mirror.get("status") == "unavailable":
+        integrity["reason_code"] = str(
+            project_source_mirror.get("observation_reason_code")
+            or "project_source_observation_unavailable"
+        )
+        status = "project_source_observation_unavailable"
+        reason_code = str(integrity["reason_code"])
     elif project_source_mirror.get("status") == "missing":
         integrity["reason_code"] = "project_source_mirror_missing"
         status = "project_source_update_required"
@@ -106306,10 +107867,10 @@ def wom_kit_runtime_alignment(
         integrity["reason_code"] = "project_pin_path_unsafe"
         status = "project_source_update_required"
         reason_code = "project_pin_path_unsafe"
-    elif project_pin.get("status") == "unreadable":
-        integrity["reason_code"] = "project_pin_unreadable"
-        status = "project_source_update_required"
-        reason_code = "project_pin_unreadable"
+    elif project_pin.get("status") == "unavailable":
+        integrity["reason_code"] = "project_pin_observation_unavailable"
+        status = "project_source_observation_unavailable"
+        reason_code = "project_pin_observation_unavailable"
     elif normalized_pin is None or pin_version_key is None:
         integrity["reason_code"] = "project_pin_missing_or_invalid"
         status = "project_source_update_required"
@@ -106329,8 +107890,21 @@ def wom_kit_runtime_alignment(
             wrapper_path,
             source_version=source_version if isinstance(source_version, str) else None,
         )
-        status = "project_source_update_required"
-        reason_code = "project_wrapper_missing_or_outside_mirror"
+        unavailable_integrity = any(
+            detail.get("state") == "unavailable"
+            for detail in integrity.get("checks", {}).values()
+            if isinstance(detail, Mapping)
+        )
+        status = (
+            "project_source_observation_unavailable"
+            if unavailable_integrity
+            else "project_source_update_required"
+        )
+        reason_code = str(
+            integrity["reason_code"]
+            if unavailable_integrity
+            else "project_wrapper_missing_or_outside_mirror"
+        )
     else:
         assert mirror_project_root is not None
         assert mirror_path is not None
@@ -106343,7 +107917,16 @@ def wom_kit_runtime_alignment(
             source_version=source_version if isinstance(source_version, str) else None,
         )
         if not integrity["verified"]:
-            status = "project_source_update_required"
+            unavailable_integrity = any(
+                detail.get("state") == "unavailable"
+                for detail in integrity.get("checks", {}).values()
+                if isinstance(detail, Mapping)
+            )
+            status = (
+                "project_source_observation_unavailable"
+                if unavailable_integrity
+                else "project_source_update_required"
+            )
             reason_code = str(integrity["reason_code"])
         elif normalized_running == normalized_source:
             status = "aligned"
@@ -106456,6 +108039,11 @@ def wom_kit_runtime_alignment(
         next_safe_actions = [
             first_action,
             "Treat the bridge as one selected-project version invocation only; it is not a general write-command router and does not replace archive on PATH, change the Python environment, infer installer provenance, restart this process, or modify the runtime Skill installation.",
+        ]
+    elif status == "project_source_observation_unavailable":
+        next_safe_actions = [
+            "Retry the read-only version inspection after resolving the temporary filesystem, Git, or access failure; do not infer that an update or repair is required.",
+            "Do not run a project writer until the same generation can be inspected completely.",
         ]
     else:
         next_safe_actions = [
@@ -106708,29 +108296,82 @@ def wom_kit_version_info(
         "installed_version": None,
         "matches_package_version": None,
         "checked_locations": [],
+        "observation_state": "not_reached",
+        "observation_reason_code": "not_checked",
     }
     root: Path | None = None
     if inspection_root is not None:
         root = Path(os.path.abspath(str(Path(inspection_root).expanduser())))
         pin_summary["checked"] = True
-        root_kind = wom_kit_real_path_kind(root, root)
-        if root_kind == "missing":
+        root_observation = wom_kit_real_path_kind_observation(root, root)
+        root_kind = root_observation["kind"]
+        if root_observation["state"] == "unavailable":
+            pin_summary["status"] = "unavailable"
+            pin_summary["observation_state"] = "unavailable"
+            pin_summary["observation_reason_code"] = (
+                "inspection_root_unavailable"
+            )
+            warnings.append(
+                "Version inspection root could not be safely observed; retry the read-only check."
+            )
+        elif root_kind == "missing":
             pin_summary["status"] = "inspection_root_missing"
+            pin_summary["observation_state"] = "failed"
+            pin_summary["observation_reason_code"] = "inspection_root_missing"
             warnings.append("Version inspection root does not exist.")
         elif root_kind != "directory":
             pin_summary["status"] = "unsafe_path"
+            pin_summary["observation_state"] = "failed"
+            pin_summary["observation_reason_code"] = "inspection_root_unsafe"
             warnings.append(
                 "Version inspection root is unsafe; no installed-version pin content was read."
             )
         else:
-            for root_label, search_root in wom_kit_version_pin_search_roots(root):
+            pin_roots_observation = wom_kit_version_pin_search_roots_observation(
+                root
+            )
+            if pin_roots_observation["state"] == "unavailable":
+                pin_summary["status"] = "unavailable"
+                pin_summary["observation_state"] = "unavailable"
+                pin_summary["observation_reason_code"] = str(
+                    pin_roots_observation["reason_code"]
+                )
+            elif pin_roots_observation["state"] == "failed":
+                pin_summary["status"] = "unsafe_path"
+                pin_summary["observation_state"] = "failed"
+                pin_summary["observation_reason_code"] = str(
+                    pin_roots_observation["reason_code"]
+                )
+                warnings.append(
+                    "Version inspection refused an unsafe archive-to-project root binding before searching for installed-version pins."
+                )
+            for root_label, search_root in pin_roots_observation["roots"]:
+                if pin_summary["status"] in {"unavailable", "unsafe_path"}:
+                    break
                 for candidate in WOM_KIT_VERSION_PIN_CANDIDATES:
                     logical_location = wom_kit_version_pin_location(root_label, candidate)
                     pin_summary["checked_locations"].append(logical_location)
                     candidate_path = search_root / candidate
-                    candidate_kind = wom_kit_real_path_kind(search_root, candidate_path)
+                    candidate_observation = wom_kit_real_path_kind_observation(
+                        search_root,
+                        candidate_path,
+                    )
+                    if candidate_observation["state"] == "unavailable":
+                        pin_summary["status"] = "unavailable"
+                        pin_summary["observation_state"] = "unavailable"
+                        pin_summary["observation_reason_code"] = (
+                            "project_pin_observation_unavailable"
+                        )
+                        pin_summary["path"] = logical_location
+                        pin_summary["pin_root"] = root_label
+                        break
+                    candidate_kind = candidate_observation["kind"]
                     if candidate_kind == "unsafe":
                         pin_summary["status"] = "unsafe_path"
+                        pin_summary["observation_state"] = "failed"
+                        pin_summary["observation_reason_code"] = (
+                            "project_pin_path_unsafe"
+                        )
                         pin_summary["path"] = logical_location
                         pin_summary["pin_root"] = root_label
                         warnings.append(
@@ -106738,33 +108379,55 @@ def wom_kit_version_info(
                         )
                         break
                     if candidate_kind == "file":
-                        installed_version = _wom_kit_read_bounded_real_text(
+                        pin_read = _wom_kit_read_bounded_real_text_observation(
                             search_root,
                             candidate_path,
                             max_bytes=WOM_KIT_VERSION_PIN_MAX_BYTES,
                         )
-                        if installed_version is None:
+                        if pin_read["state"] == "unavailable":
                             installed_version = None
-                            pin_summary["status"] = "unreadable"
+                            pin_summary["status"] = "unavailable"
+                            pin_summary["observation_state"] = "unavailable"
+                            pin_summary["observation_reason_code"] = (
+                                "project_pin_observation_unavailable"
+                            )
                             pin_summary["path"] = logical_location
                             pin_summary["pin_root"] = root_label
                             warnings.append(
-                                "WOM-kit installed-version pin could not be read or exceeded the size limit."
+                                "WOM-kit installed-version pin could not be observed safely."
+                            )
+                        elif pin_read["state"] != "passed":
+                            installed_version = None
+                            pin_summary["status"] = "invalid"
+                            pin_summary["observation_state"] = "failed"
+                            pin_summary["observation_reason_code"] = (
+                                "project_pin_invalid"
+                            )
+                            pin_summary["path"] = logical_location
+                            pin_summary["pin_root"] = root_label
+                            warnings.append(
+                                "WOM-kit installed-version pin is invalid or exceeds the size limit."
                             )
                         else:
                             installed_version = stable_version_value(
-                                installed_version,
+                                str(pin_read["text"]),
                                 include_prefix=True,
                             )
                             pin_summary["path"] = logical_location
                             pin_summary["pin_root"] = root_label
                             if installed_version is None:
                                 pin_summary["status"] = "invalid"
+                                pin_summary["observation_state"] = "failed"
+                                pin_summary["observation_reason_code"] = (
+                                    "project_pin_invalid"
+                                )
                                 warnings.append(
                                     "WOM-kit installed-version pin is not an exact stable version label."
                                 )
                             else:
                                 pin_summary["status"] = "present"
+                                pin_summary["observation_state"] = "passed"
+                                pin_summary["observation_reason_code"] = "verified"
                                 pin_summary["installed_version"] = installed_version
                                 pin_summary["matches_package_version"] = (
                                     normalize_version_label(
@@ -106786,6 +108449,8 @@ def wom_kit_version_info(
                     break
             else:
                 pin_summary["status"] = "missing"
+                pin_summary["observation_state"] = "failed"
+                pin_summary["observation_reason_code"] = "project_pin_missing"
     progress("project-pin", "done")
 
     progress("project-runtime", "start")
@@ -106843,30 +108508,76 @@ def wom_kit_version_info(
                 running_archive_cli_module_path=running_module_path,
                 runtime_inspection=installed_runtime,
             )
+            runtime_inspection_truth = (
+                project_runtime.runtime_inspection_truth(installed_runtime)
+            )
             project_runtime_summary["installed"] = installed_runtime
+            project_runtime_summary["inspection_truth"] = (
+                runtime_inspection_truth
+            )
             project_runtime_summary["current_process"] = current_process
             project_runtime_summary["launcher_aligned"] = launcher_aligned
+            runtime_observation_unavailable = bool(
+                runtime_inspection_truth["state"] == "unavailable"
+                or launcher_state.get("observation_state") == "unavailable"
+                or current_process.get("observation_state") == "unavailable"
+            )
+            runtime_observation_failed = bool(
+                runtime_inspection_truth["state"] == "failed"
+                or launcher_state.get("observation_state") == "failed"
+                or (
+                    launcher_state.get("observation_state") == "passed"
+                    and not launcher_aligned
+                )
+                or current_process.get("observation_state") == "failed"
+                or pinned_version != normalized_package
+            )
             project_runtime_summary["status"] = (
                 "aligned"
-                if installed_runtime.get("receipt_candidate_valid")
+                if runtime_inspection_truth["state"] == "passed"
                 and launcher_aligned
                 and current_process.get("bound")
                 and pinned_version == normalized_package
+                else "runtime_mismatch"
+                if runtime_observation_failed
+                else "runtime_unavailable"
+                if runtime_observation_unavailable
                 else "runtime_mismatch"
             )
             if project_runtime_summary["status"] == "aligned":
                 project_runtime_summary["detail_reason_code"] = (
                     "current_project_runtime_bound"
                 )
-            elif not installed_runtime.get("receipt_candidate_valid"):
+            elif runtime_inspection_truth["state"] == "failed":
                 project_runtime_summary["detail_reason_code"] = (
-                    "project_runtime_static_receipt_invalid"
+                    runtime_inspection_truth["reason_code"]
                 )
-            elif not launcher_aligned:
+            elif launcher_state.get("observation_state") == "failed" or (
+                launcher_state.get("observation_state") == "passed"
+                and not launcher_aligned
+            ):
                 project_runtime_summary["detail_reason_code"] = (
-                    "project_runtime_launcher_mismatch"
+                    launcher_state.get("observation_reason_code")
+                    or "project_runtime_launcher_mismatch"
                 )
-            elif not current_process.get("bound"):
+            elif current_process.get("observation_state") == "failed":
+                project_runtime_summary["detail_reason_code"] = (
+                    current_process.get("reason_code")
+                )
+            elif pinned_version != normalized_package:
+                project_runtime_summary["detail_reason_code"] = (
+                    "project_runtime_version_mismatch"
+                )
+            elif runtime_inspection_truth["state"] == "unavailable":
+                project_runtime_summary["detail_reason_code"] = (
+                    runtime_inspection_truth["reason_code"]
+                )
+            elif launcher_state.get("observation_state") == "unavailable":
+                project_runtime_summary["detail_reason_code"] = (
+                    launcher_state.get("observation_reason_code")
+                    or "project_runtime_launcher_observation_unavailable"
+                )
+            elif current_process.get("observation_state") == "unavailable":
                 project_runtime_summary["detail_reason_code"] = (
                     current_process.get("reason_code")
                 )
@@ -106876,7 +108587,12 @@ def wom_kit_version_info(
                 )
             if project_runtime_summary["status"] != "aligned":
                 warnings.append(
-                    "The project-local WOM runtime is missing, invalid, or differs from the active project pin; use the exact project launcher after a verified project-version-update."
+                    (
+                        "The project-local WOM runtime could not be safely inspected; retry the read-only check after resolving the temporary filesystem or access failure, and do not infer that repair is required."
+                        if project_runtime_summary["status"]
+                        == "runtime_unavailable"
+                        else "The project-local WOM runtime is missing, invalid, or differs from the active project pin; use the exact project launcher after a verified project-version-update."
+                    )
                 )
         else:
             project_runtime_summary["status"] = "not_required_for_pinned_release"
@@ -106933,12 +108649,41 @@ def wom_kit_version_info(
         consistency_state = "package_version_only"
     if pin_summary["matches_package_version"] is False:
         consistency_state = "project_pin_mismatch"
+    if pin_summary.get("status") == "unavailable":
+        consistency_state = "project_pin_unavailable"
+    if source_mirror.get("status") == "unavailable":
+        consistency_state = "project_source_observation_unavailable"
     if source_mirror.get("source_matches_running_version") is False:
         consistency_state = "project_source_mirror_mismatch"
     if source_mirror.get("mirror_behind_latest_fetched_tag") is True:
         consistency_state = "project_source_mirror_behind_latest_fetched_tag"
     if project_runtime_summary.get("status") == "runtime_mismatch":
         consistency_state = "project_runtime_mismatch"
+    elif project_runtime_summary.get("status") == "runtime_unavailable":
+        consistency_state = "project_runtime_unavailable"
+    alignment_status = runtime_alignment.get("status")
+    alignment_reason = str(runtime_alignment.get("reason_code") or "")
+    # The alignment projection has already evaluated unsafe/missing/invalid
+    # pin and source evidence.  Those contradictions must outrank a merely
+    # matching checkout version or a downstream runtime symptom.
+    if alignment_status == "project_source_observation_unavailable":
+        consistency_state = "project_source_observation_unavailable"
+    elif alignment_status == "project_source_update_required":
+        consistency_state = (
+            "project_source_mirror_behind_latest_fetched_tag"
+            if source_mirror.get("mirror_behind_latest_fetched_tag") is True
+            else "project_pin_mismatch"
+            if alignment_reason.startswith("project_pin_")
+            else "project_source_mirror_mismatch"
+        )
+    if (
+        runtime_alignment.get("status")
+        == "project_source_observation_unavailable"
+        or consistency_state == "project_source_observation_unavailable"
+    ):
+        warnings.append(
+            "WOM-kit project source observation is unavailable; retry the read-only inspection before treating the source or runtime as aligned."
+        )
 
     path_shadow_diagnostic["provenance_comparison"] = {
         "selected_launcher_is_running_launcher": path_shadow_diagnostic.get(
@@ -108526,6 +110271,7 @@ def runtime_context(
 
 
 WOM_KIT_PROJECT_UPDATE_MAX_GIT_OUTPUT_BYTES = 4 * 1024 * 1024
+WOM_KIT_PROJECT_UPDATE_GIT_OUTPUT_INVALID_RETURN_CODE = -2
 WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_FILES = 20_000
 WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_FILE_BYTES = 64 * 1024 * 1024
 WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_TOTAL_BYTES = 512 * 1024 * 1024
@@ -108628,7 +110374,39 @@ class _WomKitProjectUpdateDirectoryGuard:
         return os.path.normcase(os.path.abspath(str(path)))
 
     def is_held(self, path: Path) -> bool:
-        return self._validate_held(path)
+        """Preserve the historical scalar contract for existing callers."""
+
+        return self.held_observation(path)["state"] == "passed"
+
+    def retained_windows_handle(self, path: Path) -> int | None:
+        """Borrow the exact active Windows directory handle read-only.
+
+        The guard remains the sole owner.  Callers may use the returned value
+        only while their existing ``hold`` lifetime is active and must never
+        close or retain it.  Revalidation happens before every borrow; an
+        absent, stale, unsafe, or unavailable binding returns ``None`` rather
+        than exposing an unrelated raw handle.
+        """
+
+        if os.name != "nt":
+            return None
+        if self.held_observation(path)["state"] != "passed":
+            return None
+        handle = self._handles.get(self._key(path))
+        if not isinstance(handle, int):
+            return None
+        return handle
+
+    def held_observation(self, path: Path) -> dict[str, str]:
+        """Re-prove one held directory without exposing its path or identity.
+
+        A confirmed missing/replaced/unsafe directory is ``failed``.  An OS
+        error that prevents lstat/fstat/GetFileInformation from completing is
+        ``unavailable``.  Approval revalidation must not invent filesystem
+        drift from the latter.
+        """
+
+        return self._validate_held_observation(path)
 
     def _close_handle(self, handle: int) -> None:
         if os.name == "nt":
@@ -108661,31 +110439,60 @@ class _WomKitProjectUpdateDirectoryGuard:
         self,
         handle: int,
     ) -> tuple[int, tuple[int, int]] | None:
-        info = self._info_type()
-        if not self._kernel32.GetFileInformationByHandle(
-            handle,
-            ctypes.byref(info),
-        ):
-            return None
-        file_index = (info.file_index_high << 32) | info.file_index_low
-        return (
-            int(info.attributes),
-            (int(info.volume_serial), int(file_index)),
-        )
+        observation = self._windows_handle_information_observation(handle)
+        value = observation.get("value")
+        return value if isinstance(value, tuple) else None
 
-    def _open_windows_directory(
+    def _windows_handle_information_observation(
+        self,
+        handle: int,
+    ) -> dict[str, Any]:
+        try:
+            info = self._info_type()
+            succeeded = self._kernel32.GetFileInformationByHandle(
+                handle,
+                ctypes.byref(info),
+            )
+        except (OSError, TypeError, ValueError):
+            succeeded = False
+        if not succeeded:
+            return {
+                "state": "unavailable",
+                "reason_code": (
+                    "project_update_directory_guard_handle_observation_unavailable"
+                ),
+            }
+        file_index = (info.file_index_high << 32) | info.file_index_low
+        return {
+            "state": "passed",
+            "reason_code": "verified",
+            "value": (
+                int(info.attributes),
+                (int(info.volume_serial), int(file_index)),
+            ),
+        }
+
+    def _open_windows_directory_observation(
         self,
         path: Path,
-    ) -> tuple[int, tuple[int, int]] | None:
-        handle = self._kernel32.CreateFileW(
-            str(path),
-            0x0001 | 0x0080,  # FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES
-            0x00000001 | 0x00000002,  # share read/write, never delete
-            None,
-            3,  # OPEN_EXISTING
-            0x02000000 | 0x00200000,  # BACKUP_SEMANTICS | OPEN_REPARSE_POINT
-            None,
-        )
+    ) -> dict[str, Any]:
+        try:
+            handle = self._kernel32.CreateFileW(
+                str(path),
+                0x0001 | 0x0080,  # FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES
+                0x00000001 | 0x00000002,  # share read/write, never delete
+                None,
+                3,  # OPEN_EXISTING
+                0x02000000 | 0x00200000,  # BACKUP_SEMANTICS | OPEN_REPARSE_POINT
+                None,
+            )
+        except (OSError, TypeError, ValueError):
+            return {
+                "state": "unavailable",
+                "reason_code": (
+                    "project_update_directory_guard_path_observation_unavailable"
+                ),
+            }
         invalid_handle = ctypes.c_void_p(-1).value
         handle_value = (
             handle
@@ -108693,47 +110500,125 @@ class _WomKitProjectUpdateDirectoryGuard:
             else getattr(handle, "value", None)
         )
         if handle_value in {None, invalid_handle}:
-            return None
-        opened = self._windows_handle_information(int(handle_value))
-        if opened is None:
-            self._close_handle(int(handle_value))
-            return None
-        attributes, identity = opened
+            error_code = ctypes.get_last_error()
+            if error_code in {2, 3}:  # file/path not found after prior lstat
+                return {
+                    "state": "failed",
+                    "reason_code": "project_update_directory_guard_path_changed",
+                }
+            return {
+                "state": "unavailable",
+                "reason_code": (
+                    "project_update_directory_guard_path_observation_unavailable"
+                ),
+            }
+        opened = self._windows_handle_information_observation(
+            int(handle_value)
+        )
+        if opened["state"] != "passed":
+            try:
+                self._close_handle(int(handle_value))
+            except OSError:
+                pass
+            return {
+                "state": "unavailable",
+                "reason_code": str(opened["reason_code"]),
+            }
+        attributes, identity = opened["value"]
         if (
             attributes & 0x00000400  # FILE_ATTRIBUTE_REPARSE_POINT
             or not attributes & 0x00000010  # FILE_ATTRIBUTE_DIRECTORY
         ):
-            self._close_handle(int(handle_value))
+            try:
+                self._close_handle(int(handle_value))
+            except OSError:
+                return {
+                    "state": "unavailable",
+                    "reason_code": (
+                        "project_update_directory_guard_handle_close_unavailable"
+                    ),
+                }
+            return {
+                "state": "failed",
+                "reason_code": "project_update_directory_guard_path_changed",
+            }
+        return {
+            "state": "passed",
+            "reason_code": "verified",
+            "handle": int(handle_value),
+            "identity": identity,
+        }
+
+    def _open_windows_directory(
+        self,
+        path: Path,
+    ) -> tuple[int, tuple[int, int]] | None:
+        observation = self._open_windows_directory_observation(path)
+        if observation["state"] != "passed":
             return None
-        return int(handle_value), identity
+        return int(observation["handle"]), observation["identity"]
 
     def _validate_held(self, path: Path) -> bool:
+        return self._validate_held_observation(path)["state"] == "passed"
+
+    def _validate_held_observation(self, path: Path) -> dict[str, str]:
         key = self._key(path)
         handle = self._handles.get(key)
         identity = self._identities.get(key)
         if handle is None or identity is None:
             self._drop(key)
-            return False
+            return {
+                "state": "failed",
+                "reason_code": "project_update_directory_guard_not_held",
+            }
+        path_observation = wom_kit_real_path_kind_observation(
+            self.project_root,
+            path,
+        )
+        if path_observation["state"] == "unavailable":
+            self._drop(key)
+            return {
+                "state": "unavailable",
+                "reason_code": (
+                    "project_update_directory_guard_path_observation_unavailable"
+                ),
+            }
         if (
-            wom_kit_real_path_kind(self.project_root, path) != "directory"
-            or not wom_kit_path_components_are_real(
-                self.project_root,
-                path,
-            )
+            path_observation["state"] != "passed"
+            or path_observation["kind"] != "directory"
         ):
             self._drop(key)
-            return False
+            return {
+                "state": "failed",
+                "reason_code": "project_update_directory_guard_path_changed",
+            }
         try:
             path_stat = os.lstat(path)
+        except FileNotFoundError:
+            self._drop(key)
+            return {
+                "state": "failed",
+                "reason_code": "project_update_directory_guard_path_changed",
+            }
         except OSError:
             self._drop(key)
-            return False
+            return {
+                "state": "unavailable",
+                "reason_code": (
+                    "project_update_directory_guard_path_observation_unavailable"
+                ),
+            }
         if os.name != "nt":
             try:
                 opened = os.fstat(handle)
             except OSError:
                 self._drop(key)
-                return False
+                return {
+                    "state": "unavailable",
+                    "reason_code": (
+                        "project_update_directory_guard_handle_observation_unavailable"
+                    ),
+                }
             current_identity = (int(opened.st_dev), int(opened.st_ino))
             path_identity = (int(path_stat.st_dev), int(path_stat.st_ino))
             if (
@@ -108743,19 +110628,44 @@ class _WomKitProjectUpdateDirectoryGuard:
                 or path_identity != identity
             ):
                 self._drop(key)
-                return False
-            return True
+                return {
+                    "state": "failed",
+                    "reason_code": "project_update_directory_guard_path_changed",
+                }
+            return {"state": "passed", "reason_code": "verified"}
 
-        held_information = self._windows_handle_information(handle)
-        verification = self._open_windows_directory(path)
-        if held_information is None or verification is None:
-            if verification is not None:
-                self._close_handle(verification[0])
+        held_observation = self._windows_handle_information_observation(handle)
+        verification = self._open_windows_directory_observation(path)
+        if held_observation["state"] != "passed":
+            if verification["state"] == "passed":
+                try:
+                    self._close_handle(int(verification["handle"]))
+                except OSError:
+                    pass
             self._drop(key)
-            return False
-        held_attributes, held_identity = held_information
-        verification_handle, verification_identity = verification
-        self._close_handle(verification_handle)
+            return {
+                "state": "unavailable",
+                "reason_code": str(held_observation["reason_code"]),
+            }
+        if verification["state"] != "passed":
+            self._drop(key)
+            return {
+                "state": str(verification["state"]),
+                "reason_code": str(verification["reason_code"]),
+            }
+        held_attributes, held_identity = held_observation["value"]
+        verification_handle = int(verification["handle"])
+        verification_identity = verification["identity"]
+        try:
+            self._close_handle(verification_handle)
+        except OSError:
+            self._drop(key)
+            return {
+                "state": "unavailable",
+                "reason_code": (
+                    "project_update_directory_guard_handle_close_unavailable"
+                ),
+            }
         if (
             held_attributes & 0x00000400
             or not held_attributes & 0x00000010
@@ -108768,8 +110678,11 @@ class _WomKitProjectUpdateDirectoryGuard:
             )
         ):
             self._drop(key)
-            return False
-        return True
+            return {
+                "state": "failed",
+                "reason_code": "project_update_directory_guard_path_changed",
+            }
+        return {"state": "passed", "reason_code": "verified"}
 
     def hold(self, path: Path) -> bool:
         key = self._key(path)
@@ -109007,6 +110920,7 @@ def _wom_kit_project_update_run_capped(
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             env=environment,
+            creationflags=noninteractive_creationflags(),
         )
     except (OSError, ValueError):
         return None
@@ -109152,7 +111066,7 @@ def _wom_kit_project_update_run_capped(
     return return_code, output
 
 
-def _wom_kit_project_update_git(
+def _wom_kit_project_update_git_observation(
     mirror_path: Path,
     args: list[str],
     *,
@@ -109163,7 +111077,9 @@ def _wom_kit_project_update_git(
     extra_environment: dict[str, str] | None = None,
     runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
     transport: bool = False,
-) -> tuple[bool, str]:
+) -> tuple[bool, int | None, str]:
+    """Run one bounded Git command and preserve availability vs exit status."""
+
     if allow_transport_environment is not transport:
         raise project_update_git_runner.ProjectUpdateGitRunnerError(
             "project_update_git_runner_phase_invalid"
@@ -109177,7 +111093,7 @@ def _wom_kit_project_update_git(
             probe_budget["git_calls_skipped"] = int(
                 probe_budget["git_calls_skipped"]
             ) + 1
-            return False, ""
+            return False, None, ""
         effective_timeout_seconds = min(
             effective_timeout_seconds,
             max(0.05, remaining_seconds),
@@ -109208,18 +111124,53 @@ def _wom_kit_project_update_git(
             and time.monotonic() >= float(probe_budget["deadline"])
         ):
             probe_budget["exhausted"] = True
-        return False, ""
+        return False, None, ""
     return_code, stdout = completed
-    if return_code != 0:
-        return False, ""
     try:
         decoded_stdout = stdout.decode("utf-8")
     except UnicodeError:
-        return False, ""
+        # The child completed, so this is deterministic invalid output rather
+        # than an unavailable process observation.  A reserved non-zero code
+        # lets all detailed consumers preserve that distinction without ever
+        # exposing the invalid bytes.
+        return True, WOM_KIT_PROJECT_UPDATE_GIT_OUTPUT_INVALID_RETURN_CODE, ""
     # Preserve path/config payload whitespace.  In particular, NUL-delimited
     # Git filenames may legally begin with a space; only Git's record-ending
     # CR/LF is removed for scalar commands.
-    return True, decoded_stdout.rstrip("\r\n")
+    return True, return_code, decoded_stdout.rstrip("\r\n")
+
+
+def _wom_kit_project_update_git(
+    mirror_path: Path,
+    args: list[str],
+    *,
+    timeout_seconds: float = 10,
+    input_text: str | None = None,
+    max_output_bytes: int = WOM_KIT_PROJECT_UPDATE_MAX_GIT_OUTPUT_BYTES,
+    allow_transport_environment: bool = False,
+    extra_environment: dict[str, str] | None = None,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
+    transport: bool = False,
+    _observation_sink: dict[str, Any] | None = None,
+) -> tuple[bool, str]:
+    available, return_code, output = _wom_kit_project_update_git_observation(
+        mirror_path,
+        args,
+        timeout_seconds=timeout_seconds,
+        input_text=input_text,
+        max_output_bytes=max_output_bytes,
+        allow_transport_environment=allow_transport_environment,
+        extra_environment=extra_environment,
+        runner=runner,
+        transport=transport,
+    )
+    if _observation_sink is not None:
+        _observation_sink.update(
+            {"available": available, "return_code": return_code}
+        )
+    if not available or return_code != 0:
+        return False, ""
+    return True, output
 
 
 def _wom_kit_project_update_git_legacy_read_only(
@@ -109266,6 +111217,20 @@ def wom_kit_project_update_git_metadata_is_local_real(
     *,
     runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> bool:
+    evidence = wom_kit_project_update_git_metadata_evidence(
+        project_root,
+        mirror_path,
+        runner=runner,
+    )
+    return evidence["state"] == "passed"
+
+
+def wom_kit_project_update_git_metadata_evidence(
+    project_root: Path,
+    mirror_path: Path,
+    *,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
+) -> dict[str, str]:
     """Require a conventional, project-contained, non-reparse Git metadata tree.
 
     A linked worktree stores a text pointer at ``.git`` and a junction can make
@@ -109276,28 +111241,39 @@ def wom_kit_project_update_git_metadata_is_local_real(
     links.
     """
 
-    expected_git_dir = mirror_path / ".git"
-    if (
-        not is_path_within_root(mirror_path, project_root)
-        or wom_kit_real_path_kind(project_root, expected_git_dir) != "directory"
-        or not wom_kit_path_components_are_real(project_root, expected_git_dir)
-    ):
-        return False
+    def outcome(state: str, reason_code: str) -> dict[str, str]:
+        return {"state": state, "reason_code": reason_code}
 
-    git_dir_ok, git_dir_text = _wom_kit_project_update_git(
+    expected_git_dir = mirror_path / ".git"
+    git_dir_observation = wom_kit_real_path_kind_observation(
+        project_root,
+        expected_git_dir,
+    )
+    if git_dir_observation["state"] == "unavailable":
+        return outcome("unavailable", "project_git_metadata_unavailable")
+    if git_dir_observation["kind"] != "directory":
+        return outcome("failed", "project_git_metadata_not_local_real")
+
+    git_dir_available, git_dir_return_code, git_dir_text = (
+        _wom_kit_project_update_git_observation(
         mirror_path,
         ["rev-parse", "--absolute-git-dir"],
         max_output_bytes=64 * 1024,
         runner=runner,
+        )
     )
-    common_dir_ok, common_dir_text = _wom_kit_project_update_git(
+    common_dir_available, common_dir_return_code, common_dir_text = (
+        _wom_kit_project_update_git_observation(
         mirror_path,
         ["rev-parse", "--git-common-dir"],
         max_output_bytes=64 * 1024,
         runner=runner,
+        )
     )
-    if not git_dir_ok or not common_dir_ok:
-        return False
+    if not git_dir_available or not common_dir_available:
+        return outcome("unavailable", "project_git_metadata_unavailable")
+    if git_dir_return_code != 0 or common_dir_return_code != 0:
+        return outcome("failed", "project_git_metadata_not_local_real")
 
     def normalized_reported_path(value: str) -> Path | None:
         try:
@@ -109311,6 +111287,7 @@ def wom_kit_project_update_git_metadata_is_local_real(
     reported_git_dir = normalized_reported_path(git_dir_text)
     reported_common_dir = normalized_reported_path(common_dir_text)
     expected_normalized = Path(os.path.abspath(str(expected_git_dir)))
+    resolution_unavailable = False
     try:
         reported_paths_match = bool(
             reported_git_dir is not None
@@ -109322,40 +111299,53 @@ def wom_kit_project_update_git_metadata_is_local_real(
         )
     except (OSError, RuntimeError, ValueError):
         reported_paths_match = False
+        resolution_unavailable = True
     if not reported_paths_match:
-        return False
+        return outcome(
+            "unavailable" if resolution_unavailable else "failed",
+            (
+                "project_git_metadata_unavailable"
+                if resolution_unavailable
+                else "project_git_metadata_not_local_real"
+            ),
+        )
 
     for ancestry_or_storage_overlay in (
         expected_git_dir / "objects" / "info" / "alternates",
         expected_git_dir / "info" / "grafts",
         expected_git_dir / "refs" / "replace",
     ):
-        if (
-            wom_kit_real_path_kind(
-                project_root,
-                ancestry_or_storage_overlay,
-            )
-            != "missing"
-        ):
-            return False
+        overlay_observation = wom_kit_real_path_kind_observation(
+            project_root,
+            ancestry_or_storage_overlay,
+        )
+        if overlay_observation["state"] == "unavailable":
+            return outcome("unavailable", "project_git_metadata_unavailable")
+        if overlay_observation["kind"] != "missing":
+            return outcome("failed", "project_git_metadata_not_local_real")
     packed_refs = expected_git_dir / "packed-refs"
-    packed_refs_kind = wom_kit_real_path_kind(
+    packed_refs_observation = wom_kit_real_path_kind_observation(
         project_root,
         packed_refs,
     )
+    if packed_refs_observation["state"] == "unavailable":
+        return outcome("unavailable", "project_git_metadata_unavailable")
+    packed_refs_kind = packed_refs_observation["kind"]
     if packed_refs_kind == "file":
-        packed_refs_bytes = _wom_kit_read_bounded_real_bytes(
+        packed_refs_read = _wom_kit_read_bounded_real_bytes_observation(
             project_root,
             packed_refs,
             max_bytes=4 * 1024 * 1024,
         )
-        if (
-            packed_refs_bytes is None
-            or b"refs/replace/" in packed_refs_bytes
-        ):
-            return False
+        packed_refs_bytes = packed_refs_read.get("bytes")
+        if packed_refs_read["state"] == "unavailable":
+            return outcome("unavailable", "project_git_metadata_unavailable")
+        if packed_refs_bytes is None:
+            return outcome("failed", "project_git_metadata_not_local_real")
+        if b"refs/replace/" in packed_refs_bytes:
+            return outcome("failed", "project_git_metadata_not_local_real")
     elif packed_refs_kind != "missing":
-        return False
+        return outcome("failed", "project_git_metadata_not_local_real")
 
     reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
     stack = [expected_git_dir]
@@ -109370,7 +111360,10 @@ def wom_kit_project_update_git_metadata_is_local_real(
                         seen
                         > WOM_KIT_PROJECT_UPDATE_MAX_GIT_METADATA_ENTRIES
                     ):
-                        return False
+                        return outcome(
+                            "failed",
+                            "project_git_metadata_not_local_real",
+                        )
                     entry_stat = entry.stat(follow_symlinks=False)
                     if (
                         stat.S_ISLNK(entry_stat.st_mode)
@@ -109384,14 +111377,20 @@ def wom_kit_project_update_git_metadata_is_local_real(
                             & reparse_flag
                         )
                     ):
-                        return False
+                        return outcome(
+                            "failed",
+                            "project_git_metadata_not_local_real",
+                        )
                     if stat.S_ISDIR(entry_stat.st_mode):
                         stack.append(Path(entry.path))
                     elif not stat.S_ISREG(entry_stat.st_mode):
-                        return False
+                        return outcome(
+                            "failed",
+                            "project_git_metadata_not_local_real",
+                        )
     except OSError:
-        return False
-    return True
+        return outcome("unavailable", "project_git_metadata_unavailable")
+    return outcome("passed", "verified")
 
 
 def wom_kit_project_update_git_metadata_is_local_real_legacy_read_only(
@@ -109400,26 +111399,44 @@ def wom_kit_project_update_git_metadata_is_local_real_legacy_read_only(
 ) -> bool:
     """Explicit sealed runner for historical metadata-only diagnostics."""
 
-    runner = (
-        project_update_git_runner.TrustedProjectUpdateGitRunner
-        .resolve_preapproval()
+    return (
+        wom_kit_project_update_git_metadata_evidence_legacy_read_only(
+            project_root,
+            mirror_path,
+        )["state"]
+        == "passed"
     )
+
+
+def wom_kit_project_update_git_metadata_evidence_legacy_read_only(
+    project_root: Path,
+    mirror_path: Path,
+) -> dict[str, str]:
+    """Return four-state metadata evidence through a sealed local runner."""
+
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner | None = None
     try:
+        runner = (
+            project_update_git_runner.TrustedProjectUpdateGitRunner
+            .resolve_preapproval()
+        )
         runner.close_transport_boundary()
-        result = wom_kit_project_update_git_metadata_is_local_real(
+        return wom_kit_project_update_git_metadata_evidence(
             project_root,
             mirror_path,
             runner=runner,
         )
     except BaseException:
-        try:
-            runner.close()
-        except BaseException:
-            pass
-        raise
-    else:
-        runner.close()
-        return result
+        return {
+            "state": "unavailable",
+            "reason_code": "project_git_metadata_unavailable",
+        }
+    finally:
+        if runner is not None:
+            try:
+                runner.close()
+            except BaseException:
+                pass
 
 
 def _wom_kit_project_update_git_blob(
@@ -109429,6 +111446,23 @@ def _wom_kit_project_update_git_blob(
     *,
     runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> bytes | None:
+    observation = _wom_kit_project_update_git_blob_observation(
+        mirror_path,
+        object_spec,
+        expected_size,
+        runner=runner,
+    )
+    blob = observation.get("blob")
+    return blob if isinstance(blob, bytes) else None
+
+
+def _wom_kit_project_update_git_blob_observation(
+    mirror_path: Path,
+    object_spec: str,
+    expected_size: int,
+    *,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
+) -> dict[str, Any]:
     if (
         expected_size < 0
         or expected_size > WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_FILE_BYTES
@@ -109437,7 +111471,11 @@ def _wom_kit_project_update_git_blob(
         or "\n" in object_spec
         or "\r" in object_spec
     ):
-        return None
+        return {
+            "state": "failed",
+            "reason_code": "project_git_blob_request_invalid",
+            "blob": None,
+        }
     completed = _wom_kit_project_update_run_capped(
         wom_kit_project_update_git_command(
             mirror_path,
@@ -109449,11 +111487,19 @@ def _wom_kit_project_update_git_blob(
         max_output_bytes=expected_size,
     )
     if completed is None:
-        return None
+        return {
+            "state": "unavailable",
+            "reason_code": "project_git_blob_observation_unavailable",
+            "blob": None,
+        }
     return_code, stdout = completed
     if return_code != 0 or len(stdout) != expected_size:
-        return None
-    return stdout
+        return {
+            "state": "failed",
+            "reason_code": "project_git_blob_invalid",
+            "blob": None,
+        }
+    return {"state": "passed", "reason_code": "verified", "blob": stdout}
 
 
 WOM_KIT_PROJECT_UPDATE_BATCH_TIMEOUT_SECONDS = 180
@@ -109490,6 +111536,7 @@ def _wom_kit_project_update_run_batch_capped(
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             env=environment,
+            creationflags=noninteractive_creationflags(),
         )
     except (OSError, ValueError):
         return None
@@ -109748,6 +111795,7 @@ def wom_kit_project_update_git_config_trust_digest(
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             env=environment,
+            creationflags=noninteractive_creationflags(),
         )
         if config_process.stdout is None:
             raise OSError("git_config_stdout_unavailable")
@@ -109761,6 +111809,7 @@ def wom_kit_project_update_git_config_trust_digest(
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             env=environment,
+            creationflags=noninteractive_creationflags(),
         )
         config_process.stdout.close()
         digest_stdout, _ = digest_process.communicate(timeout=15)
@@ -110481,21 +112530,53 @@ def wom_kit_project_update_branch_points_to_commit(
     *,
     runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> bool:
+    return (
+        wom_kit_project_update_branch_observation(
+            mirror_path,
+            branch_name,
+            expected_commit,
+            runner=runner,
+        )["state"]
+        == "passed"
+    )
+
+
+def wom_kit_project_update_branch_observation(
+    mirror_path: Path,
+    branch_name: str,
+    expected_commit: str,
+    *,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
+) -> dict[str, str]:
     if (
         not isinstance(branch_name, str)
         or not branch_name
         or not re.fullmatch(r"[0-9a-fA-F]{40,64}", expected_commit)
     ):
-        return False
-    branch_ok, checked_branch = _wom_kit_project_update_git(
+        return {
+            "state": "failed",
+            "reason_code": "project_source_branch_binding_invalid",
+        }
+    branch_available, branch_return_code, checked_branch = (
+        _wom_kit_project_update_git_observation(
         mirror_path,
         ["check-ref-format", "--branch", branch_name],
         max_output_bytes=4096,
         runner=runner,
+        )
     )
-    if not branch_ok or checked_branch != branch_name:
-        return False
-    ref_ok, ref_commit = _wom_kit_project_update_git(
+    if not branch_available:
+        return {
+            "state": "unavailable",
+            "reason_code": "project_source_branch_observation_unavailable",
+        }
+    if branch_return_code != 0 or checked_branch != branch_name:
+        return {
+            "state": "failed",
+            "reason_code": "project_source_branch_binding_invalid",
+        }
+    ref_available, ref_return_code, ref_commit = (
+        _wom_kit_project_update_git_observation(
         mirror_path,
         [
             "show-ref",
@@ -110505,12 +112586,29 @@ def wom_kit_project_update_branch_points_to_commit(
         ],
         max_output_bytes=256,
         runner=runner,
+        )
     )
-    return bool(
-        ref_ok
+    if not ref_available:
+        return {
+            "state": "unavailable",
+            "reason_code": "project_source_branch_observation_unavailable",
+        }
+    if ref_return_code not in {0, 1}:
+        return {
+            "state": "failed",
+            "reason_code": "project_source_branch_binding_invalid",
+        }
+    matches = bool(
+        ref_return_code == 0
         and re.fullmatch(r"[0-9a-fA-F]{40,64}", ref_commit)
         and ref_commit.lower() == expected_commit.lower()
     )
+    return {
+        "state": "passed" if matches else "failed",
+        "reason_code": (
+            "verified" if matches else "project_source_branch_changed"
+        ),
+    }
 
 
 def wom_kit_project_update_symbolic_head_state(
@@ -110519,6 +112617,22 @@ def wom_kit_project_update_symbolic_head_state(
     runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> tuple[str, str | None]:
     """Return an exact branch, detached HEAD, or an unreadable unsafe state."""
+
+    observation = wom_kit_project_update_symbolic_head_observation(
+        mirror_path,
+        runner=runner,
+    )
+    if observation["state"] != "passed":
+        return "invalid", None
+    return str(observation["head_state"]), observation.get("branch")
+
+
+def wom_kit_project_update_symbolic_head_observation(
+    mirror_path: Path,
+    *,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
+) -> dict[str, Any]:
+    """Observe symbolic HEAD without treating malformed output as I/O loss."""
 
     completed = _wom_kit_project_update_run_capped(
         wom_kit_project_update_git_command(
@@ -110531,38 +112645,89 @@ def wom_kit_project_update_symbolic_head_state(
         max_output_bytes=4096,
     )
     if completed is None:
-        return "invalid", None
+        return {
+            "state": "unavailable",
+            "reason_code": "project_symbolic_head_unavailable",
+            "head_state": None,
+            "branch": None,
+        }
     return_code, stdout = completed
     if return_code == 1:
-        return ("detached", None) if stdout == b"" else ("invalid", None)
+        if stdout == b"":
+            return {
+                "state": "passed",
+                "reason_code": "verified",
+                "head_state": "detached",
+                "branch": None,
+            }
+        return {
+            "state": "failed",
+            "reason_code": "project_symbolic_head_invalid",
+            "head_state": None,
+            "branch": None,
+        }
     if return_code != 0:
-        return "invalid", None
+        return {
+            "state": "failed",
+            "reason_code": "project_symbolic_head_invalid",
+            "head_state": None,
+            "branch": None,
+        }
     try:
         text = stdout.decode("utf-8")
     except UnicodeError:
-        return "invalid", None
+        return {
+            "state": "failed",
+            "reason_code": "project_symbolic_head_invalid",
+            "head_state": None,
+            "branch": None,
+        }
     full_ref = text.removesuffix("\r\n").removesuffix("\n")
     if (
         text not in {full_ref, full_ref + "\n", full_ref + "\r\n"}
         or any(character in full_ref for character in "\0\r\n")
         or not full_ref.startswith("refs/heads/")
     ):
-        return "invalid", None
+        return {
+            "state": "failed",
+            "reason_code": "project_symbolic_head_invalid",
+            "head_state": None,
+            "branch": None,
+        }
     branch_name = full_ref.removeprefix("refs/heads/")
-    branch_ok, checked_branch = _wom_kit_project_update_git(
+    branch_available, branch_return_code, checked_branch = (
+        _wom_kit_project_update_git_observation(
         mirror_path,
         ["check-ref-format", "--branch", branch_name],
         max_output_bytes=4096,
         runner=runner,
+        )
     )
+    if not branch_available:
+        return {
+            "state": "unavailable",
+            "reason_code": "project_symbolic_head_unavailable",
+            "head_state": None,
+            "branch": None,
+        }
     if (
         not branch_name
-        or not branch_ok
+        or branch_return_code != 0
         or checked_branch != branch_name
         or full_ref != f"refs/heads/{branch_name}"
     ):
-        return "invalid", None
-    return "branch", branch_name
+        return {
+            "state": "failed",
+            "reason_code": "project_symbolic_head_invalid",
+            "head_state": None,
+            "branch": None,
+        }
+    return {
+        "state": "passed",
+        "reason_code": "verified",
+        "head_state": "branch",
+        "branch": branch_name,
+    }
 
 
 def _wom_kit_project_update_unlink_tracked_file(
@@ -110880,14 +113045,37 @@ def wom_kit_project_update_materialization_plan(
 ) -> dict[str, Any]:
     """Bounded, structured, read-only commit materialization preflight."""
 
-    plan, _, _ = _wom_kit_project_update_materialization_plan_details(
+    plan, _, _, conflicts, _authority = (
+        _wom_kit_project_update_materialization_plan_details_internal(
         mirror_path,
         target_commit,
         attach_branch=attach_branch,
         runner=runner,
+        )
+    )
+    unavailable_reason_codes = {
+        "target_tree_unavailable_or_unsafe",
+        "current_tree_unavailable_or_unsafe",
+        "worktree_scan_failed",
+        "tracked_path_unreadable",
+    }
+    observation_unavailable = bool(
+        not plan.get("conflict_count_complete")
+        or any(
+            reason_code in unavailable_reason_codes
+            for _internal_ref, reason_code in conflicts
+        )
     )
     return {
         "state": "ready" if plan["safe"] else "blocked",
+        "observation_state": (
+            "unavailable" if observation_unavailable else "passed"
+        ),
+        "observation_reason_code": (
+            "project_materialization_preflight_unavailable"
+            if observation_unavailable
+            else "verified"
+        ),
         "evaluated": True,
         "required": True,
         "no_write": True,
@@ -111240,6 +113428,16 @@ def _wom_kit_project_update_materialize_runtime_sources(
 
 
 def wom_kit_project_update_source_versions(mirror_path: Path) -> dict[str, str | None]:
+    return dict(
+        wom_kit_project_update_source_versions_observation(mirror_path)[
+            "versions"
+        ]
+    )
+
+
+def wom_kit_project_update_source_versions_observation(
+    mirror_path: Path,
+) -> dict[str, Any]:
     specs = {
         "package": (
             mirror_path / "wom-kit" / "src" / "wom_kit" / "__init__.py",
@@ -111254,17 +113452,60 @@ def wom_kit_project_update_source_versions(mirror_path: Path) -> dict[str, str |
             read_version_from_init_text,
         ),
     }
-    versions: dict[str, str | None] = {}
+    versions: dict[str, str | None] = {
+        label: None for label in specs
+    }
     for label, (path, parser) in specs.items():
-        text = _wom_kit_read_bounded_real_text(
+        path_observation = wom_kit_real_path_kind_observation(
+            mirror_path,
+            path,
+        )
+        if path_observation["state"] == "unavailable":
+            return {
+                "state": "unavailable",
+                "reason_code": "project_source_version_metadata_unavailable",
+                "versions": versions,
+            }
+        if (
+            path_observation["state"] != "passed"
+            or path_observation["kind"] != "file"
+        ):
+            return {
+                "state": "failed",
+                "reason_code": "project_source_version_metadata_missing_or_unsafe",
+                "versions": versions,
+            }
+        text_observation = _wom_kit_read_bounded_real_text_observation(
             mirror_path,
             path,
             max_bytes=WOM_KIT_VERSION_METADATA_MAX_BYTES,
         )
-        versions[label] = stable_version_value(
-            parser(text) if text is not None else None
-        )
-    return versions
+        if text_observation["state"] == "unavailable":
+            return {
+                "state": "unavailable",
+                "reason_code": "project_source_version_metadata_unavailable",
+                "versions": versions,
+            }
+        if text_observation["state"] != "passed":
+            return {
+                "state": "failed",
+                "reason_code": "project_source_version_metadata_invalid",
+                "versions": versions,
+            }
+        text = str(text_observation["text"])
+        version = stable_version_value(parser(text))
+        if version is None:
+            return {
+                "state": "failed",
+                "reason_code": "project_source_version_metadata_invalid",
+                "versions": versions,
+            }
+        versions[label] = version
+    return {
+        "state": "passed",
+        "reason_code": "verified",
+        "versions": versions,
+    }
 
 
 def wom_kit_project_update_target_evidence(
@@ -111274,11 +113515,14 @@ def wom_kit_project_update_target_evidence(
     runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> dict[str, Any]:
     tag_ref = f"refs/tags/{target_tag}"
-    tag_available, _ = _wom_kit_project_update_git(
+    tag_probe_available, tag_return_code, _ = (
+        _wom_kit_project_update_git_observation(
         mirror_path,
         ["show-ref", "--verify", "--quiet", tag_ref],
         runner=runner,
+        )
     )
+    tag_available = bool(tag_probe_available and tag_return_code == 0)
     evidence: dict[str, Any] = {
         "tag_available_locally": tag_available,
         "annotated_tag_verified": False,
@@ -111291,22 +113535,56 @@ def wom_kit_project_update_target_evidence(
             "root_shim": None,
         },
         "all_source_versions_match_target": False,
+        "observation_state": "unavailable",
+        "observation_reason_code": "project_target_evidence_unavailable",
     }
+    if not tag_probe_available:
+        return evidence
+    if tag_return_code not in {0, 1}:
+        evidence["observation_state"] = "failed"
+        evidence["observation_reason_code"] = "project_target_tag_probe_failed"
+        return evidence
     if not tag_available:
+        evidence["observation_state"] = "failed"
+        evidence["observation_reason_code"] = "project_target_tag_missing"
         return evidence
 
-    type_ok, tag_type = _wom_kit_project_update_git(
+    type_available, type_return_code, tag_type = (
+        _wom_kit_project_update_git_observation(
         mirror_path,
         ["cat-file", "-t", tag_ref],
         runner=runner,
+        )
     )
-    evidence["annotated_tag_verified"] = type_ok and tag_type == "tag"
-    commit_ok, target_commit = _wom_kit_project_update_git(
+    if not type_available:
+        return evidence
+    if type_return_code != 0:
+        evidence["observation_state"] = "failed"
+        evidence["observation_reason_code"] = "project_target_tag_object_invalid"
+        return evidence
+    evidence["annotated_tag_verified"] = tag_type == "tag"
+    if not evidence["annotated_tag_verified"]:
+        evidence["observation_state"] = "failed"
+        evidence["observation_reason_code"] = "project_target_tag_not_annotated"
+        return evidence
+    commit_available, commit_return_code, target_commit = (
+        _wom_kit_project_update_git_observation(
         mirror_path,
         ["rev-parse", "--verify", f"{tag_ref}^{{commit}}"],
         runner=runner,
+        )
     )
-    if not commit_ok or not re.fullmatch(r"[0-9a-fA-F]{40,64}", target_commit):
+    if not commit_available:
+        return evidence
+    if commit_return_code != 0:
+        evidence["observation_state"] = "failed"
+        evidence["observation_reason_code"] = "project_target_commit_unresolvable"
+        return evidence
+    if not re.fullmatch(r"[0-9a-fA-F]{40,64}", target_commit):
+        evidence["observation_state"] = "failed"
+        evidence["observation_reason_code"] = (
+            "project_target_commit_identifier_invalid"
+        )
         return evidence
     target_commit = target_commit.lower()
     evidence["target_commit"] = target_commit
@@ -111319,53 +113597,121 @@ def wom_kit_project_update_target_evidence(
     source_versions: dict[str, str | None] = {}
     for label, (relative_path, parser) in blob_specs.items():
         object_spec = f"{target_commit}:{relative_path}"
-        size_ok, size_text = _wom_kit_project_update_git(
+        size_available, size_return_code, size_text = (
+            _wom_kit_project_update_git_observation(
             mirror_path,
             ["cat-file", "-s", object_spec],
             max_output_bytes=256,
             runner=runner,
+            )
         )
+        if not size_available:
+            return evidence
+        if size_return_code != 0:
+            evidence["observation_state"] = "failed"
+            evidence["observation_reason_code"] = (
+                "project_target_source_metadata_missing"
+            )
+            return evidence
         try:
-            blob_size = int(size_text) if size_ok else -1
+            blob_size = int(size_text)
         except ValueError:
             blob_size = -1
-        blob = (
-            _wom_kit_project_update_git_blob(
-                mirror_path,
-                object_spec,
-                blob_size,
-                runner=runner,
+        if not 0 <= blob_size <= WOM_KIT_VERSION_METADATA_MAX_BYTES:
+            evidence["observation_state"] = "failed"
+            evidence["observation_reason_code"] = (
+                "project_target_source_metadata_invalid"
             )
-            if 0 <= blob_size <= WOM_KIT_VERSION_METADATA_MAX_BYTES
-            else None
+            return evidence
+        blob_observation = _wom_kit_project_update_git_blob_observation(
+            mirror_path,
+            object_spec,
+            blob_size,
+            runner=runner,
         )
+        if blob_observation["state"] == "unavailable":
+            return evidence
+        if blob_observation["state"] != "passed":
+            evidence["observation_state"] = "failed"
+            evidence["observation_reason_code"] = (
+                "project_target_source_metadata_invalid"
+            )
+            return evidence
+        blob = blob_observation["blob"]
         try:
             blob_text = blob.decode("utf-8") if blob is not None else None
         except UnicodeError:
             blob_text = None
-        source_versions[label] = stable_version_value(
-            parser(blob_text) if blob_text is not None else None
-        )
+        if blob_text is None:
+            evidence["observation_state"] = "failed"
+            evidence["observation_reason_code"] = (
+                "project_target_source_metadata_invalid"
+            )
+            return evidence
+        source_version = stable_version_value(parser(blob_text))
+        if source_version is None:
+            evidence["observation_state"] = "failed"
+            evidence["observation_reason_code"] = (
+                "project_target_source_metadata_invalid"
+            )
+            return evidence
+        source_versions[label] = source_version
     evidence["source_versions"] = source_versions
     target_version = normalize_version_label(target_tag)
     evidence["all_source_versions_match_target"] = bool(
         target_version
         and all(value == target_version for value in source_versions.values())
     )
+    if not evidence["all_source_versions_match_target"]:
+        evidence["observation_state"] = "failed"
+        evidence["observation_reason_code"] = (
+            "project_target_source_versions_mismatch"
+        )
+        return evidence
 
-    main_ok, _ = _wom_kit_project_update_git(
+    main_available, main_return_code, _ = (
+        _wom_kit_project_update_git_observation(
         mirror_path,
         ["show-ref", "--verify", "--quiet", "refs/remotes/origin/main"],
         runner=runner,
+        )
     )
+    if not main_available:
+        return evidence
+    if main_return_code not in {0, 1}:
+        evidence["observation_state"] = "failed"
+        evidence["observation_reason_code"] = "project_origin_main_probe_failed"
+        return evidence
+    main_ok = main_return_code == 0
     evidence["origin_main_available_locally"] = main_ok
-    if main_ok:
-        ancestor_ok, _ = _wom_kit_project_update_git(
+    if not main_ok:
+        evidence["observation_state"] = "failed"
+        evidence["observation_reason_code"] = "project_origin_main_missing"
+        return evidence
+    ancestor_available, ancestor_return_code, _ = (
+        _wom_kit_project_update_git_observation(
             mirror_path,
             ["merge-base", "--is-ancestor", target_commit, "refs/remotes/origin/main"],
             runner=runner,
         )
-        evidence["target_reachable_from_origin_main"] = ancestor_ok
+    )
+    if not ancestor_available:
+        return evidence
+    if ancestor_return_code not in {0, 1}:
+        evidence["observation_state"] = "failed"
+        evidence["observation_reason_code"] = (
+            "project_target_ancestry_probe_failed"
+        )
+        return evidence
+    evidence["target_reachable_from_origin_main"] = ancestor_return_code == 0
+    if not evidence["target_reachable_from_origin_main"]:
+        evidence["observation_state"] = "failed"
+        evidence["observation_reason_code"] = (
+            "project_target_not_reachable_from_origin_main"
+        )
+        return evidence
+    evidence["observation_state"] = "passed"
+    evidence["observation_reason_code"] = "verified"
     return evidence
 
 
@@ -111375,48 +113721,146 @@ def wom_kit_project_update_target_ref_snapshot(
     *,
     runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> dict[str, str] | None:
+    observation = wom_kit_project_update_target_ref_snapshot_observation(
+        mirror_path,
+        target_tag,
+        runner=runner,
+    )
+    snapshot = observation.get("snapshot")
+    return dict(snapshot) if isinstance(snapshot, Mapping) else None
+
+
+def wom_kit_project_update_target_ref_snapshot_observation(
+    mirror_path: Path,
+    target_tag: str,
+    *,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
+) -> dict[str, Any]:
     tag_ref = f"refs/tags/{target_tag}"
-    tag_ok, tag_object = _wom_kit_project_update_git(
-        mirror_path,
-        ["rev-parse", "--verify", tag_ref],
-        max_output_bytes=256,
-        runner=runner,
-    )
-    tag_type_ok, tag_type = _wom_kit_project_update_git(
-        mirror_path,
-        ["cat-file", "-t", tag_ref],
-        max_output_bytes=256,
-        runner=runner,
-    )
-    commit_ok, target_commit = _wom_kit_project_update_git(
-        mirror_path,
-        ["rev-parse", "--verify", f"{tag_ref}^{{commit}}"],
-        max_output_bytes=256,
-        runner=runner,
-    )
-    main_ok, origin_main = _wom_kit_project_update_git(
-        mirror_path,
-        ["rev-parse", "--verify", "refs/remotes/origin/main"],
-        max_output_bytes=256,
-        runner=runner,
-    )
+    observations = [
+        _wom_kit_project_update_git_observation(
+            mirror_path,
+            args,
+            max_output_bytes=256,
+            runner=runner,
+        )
+        for args in (
+            ["rev-parse", "--verify", tag_ref],
+            ["cat-file", "-t", tag_ref],
+            ["rev-parse", "--verify", f"{tag_ref}^{{commit}}"],
+            ["rev-parse", "--verify", "refs/remotes/origin/main"],
+        )
+    ]
+    if any(not available for available, _return_code, _text in observations):
+        return {
+            "state": "unavailable",
+            "reason_code": "project_target_refs_observation_unavailable",
+            "snapshot": None,
+        }
+    if any(
+        return_code not in {0, 1}
+        for _available, return_code, _text in observations
+    ):
+        return {
+            "state": "failed",
+            "reason_code": "project_target_refs_invalid",
+            "snapshot": None,
+        }
+    if any(return_code == 1 for _available, return_code, _text in observations):
+        return {
+            "state": "failed",
+            "reason_code": "project_target_refs_missing",
+            "snapshot": None,
+        }
+    tag_object = observations[0][2]
+    tag_type = observations[1][2]
+    target_commit = observations[2][2]
+    origin_main = observations[3][2]
     values = (tag_object, target_commit, origin_main)
     if (
-        not tag_ok
-        or not tag_type_ok
-        or tag_type != "tag"
-        or not commit_ok
-        or not main_ok
+        tag_type != "tag"
         or any(
             not re.fullmatch(r"[0-9a-fA-F]{40,64}", value)
             for value in values
         )
     ):
-        return None
+        return {
+            "state": "failed",
+            "reason_code": "project_target_refs_invalid",
+            "snapshot": None,
+        }
     return {
-        "tag_object": tag_object.lower(),
-        "target_commit": target_commit.lower(),
-        "origin_main": origin_main.lower(),
+        "state": "passed",
+        "reason_code": "verified",
+        "snapshot": {
+            "tag_object": tag_object.lower(),
+            "target_commit": target_commit.lower(),
+            "origin_main": origin_main.lower(),
+        },
+    }
+
+
+def _wom_kit_project_update_pre_fetch_ref_snapshot_observation(
+    mirror_path: Path,
+    target_tag: str,
+    *,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
+) -> dict[str, Any]:
+    """Observe the complete local ref namespace before transport mutates it.
+
+    The requested release tag is allowed to be absent at this boundary: that
+    is the normal reason for the following fetch.  Availability, malformed
+    output, duplicate ref names, and an unbounded namespace remain distinct
+    fail-closed observations.
+    """
+
+    available, return_code, text = _wom_kit_project_update_git_observation(
+        mirror_path,
+        ["show-ref", "--head"],
+        max_output_bytes=4 * 1024 * 1024,
+        runner=runner,
+    )
+    if not available:
+        return {
+            "state": "unavailable",
+            "reason_code": "project_ref_namespace_observation_unavailable",
+            "snapshot": None,
+        }
+    if return_code not in {0, 1}:
+        return {
+            "state": "failed",
+            "reason_code": "project_ref_namespace_invalid",
+            "snapshot": None,
+        }
+    refs: dict[str, str] = {}
+    if text:
+        for line in text.splitlines():
+            match = re.fullmatch(
+                r"([0-9a-fA-F]{40,64}) ([^\x00-\x20~^:?*\\]+)",
+                line,
+            )
+            if match is None or match.group(2) in refs:
+                return {
+                    "state": "failed",
+                    "reason_code": "project_ref_namespace_invalid",
+                    "snapshot": None,
+                }
+            refs[match.group(2)] = match.group(1).lower()
+    if return_code == 1 and refs:
+        return {
+            "state": "failed",
+            "reason_code": "project_ref_namespace_invalid",
+            "snapshot": None,
+        }
+    target_ref = f"refs/tags/{target_tag}"
+    return {
+        "state": "passed",
+        "reason_code": "verified",
+        "snapshot": {
+            "refs": {name: refs[name] for name in sorted(refs)},
+            "requested_target_present": target_ref in refs,
+            "requested_target_ref": target_ref,
+        },
     }
 
 
@@ -111505,7 +113949,14 @@ def _wom_kit_project_update_remove_exclusive_receipt_if_owned(
     created_identity: tuple[int, int] | None,
 ) -> bool:
     if created_identity is None:
-        return wom_kit_real_path_kind(project_root, candidate) == "missing"
+        observation = wom_kit_real_path_kind_observation(
+            project_root,
+            candidate,
+        )
+        return bool(
+            observation["state"] == "passed"
+            and observation["kind"] == "missing"
+        )
     try:
         current = os.lstat(candidate)
     except FileNotFoundError:
@@ -111530,7 +113981,14 @@ def _wom_kit_project_update_remove_exclusive_receipt_if_owned(
         candidate.unlink()
     except OSError:
         return False
-    return wom_kit_real_path_kind(project_root, candidate) == "missing"
+    observation = wom_kit_real_path_kind_observation(
+        project_root,
+        candidate,
+    )
+    return bool(
+        observation["state"] == "passed"
+        and observation["kind"] == "missing"
+    )
 
 
 def _wom_kit_project_update_acquire_lock_exclusive(
@@ -111698,34 +114156,333 @@ def wom_kit_project_update_owned_lock_present(
     *,
     expected_lock_bytes: bytes = WOM_KIT_PROJECT_UPDATE_LOCK_BYTES,
 ) -> bool:
-    if (
-        identity is None
-        or not expected_lock_bytes
-        or _wom_kit_read_bounded_real_bytes(
+    """Preserve the historical scalar contract for existing callers."""
+
+    return (
+        wom_kit_project_update_owned_lock_observation(
             project_root,
             lock_path,
-            max_bytes=len(expected_lock_bytes),
-        )
-        != expected_lock_bytes
-    ):
-        return False
-    try:
-        lock_stat = os.lstat(lock_path)
-    except OSError:
-        return False
-    return bool(
-        stat.S_ISREG(lock_stat.st_mode)
-        and (
-            not identity[0]
-            or not lock_stat.st_dev
-            or identity[0] == lock_stat.st_dev
-        )
-        and (
-            not identity[1]
-            or not lock_stat.st_ino
-            or identity[1] == lock_stat.st_ino
-        )
+            identity,
+            expected_lock_bytes=expected_lock_bytes,
+        )["state"]
+        == "passed"
     )
+
+
+def wom_kit_project_update_owned_lock_observation(
+    project_root: Path,
+    lock_path: Path,
+    identity: tuple[int, int] | None,
+    *,
+    expected_lock_bytes: bytes = WOM_KIT_PROJECT_UPDATE_LOCK_BYTES,
+) -> dict[str, str]:
+    """Re-prove the private update lock with privacy-safe four-state truth."""
+
+    if (
+        not isinstance(identity, tuple)
+        or len(identity) != 2
+        or not all(type(value) is int for value in identity)
+        or type(expected_lock_bytes) is not bytes
+        or not expected_lock_bytes
+    ):
+        return {
+            "state": "failed",
+            "reason_code": "project_update_owned_lock_binding_changed",
+        }
+    path_observation = wom_kit_real_path_kind_observation(
+        project_root,
+        lock_path,
+    )
+    if path_observation["state"] == "unavailable":
+        return {
+            "state": "unavailable",
+            "reason_code": "project_update_owned_lock_observation_unavailable",
+        }
+    if (
+        path_observation["state"] != "passed"
+        or path_observation["kind"] != "file"
+    ):
+        return {
+            "state": "failed",
+            "reason_code": "project_update_owned_lock_changed",
+        }
+    try:
+        before = os.lstat(lock_path)
+    except FileNotFoundError:
+        return {
+            "state": "failed",
+            "reason_code": "project_update_owned_lock_changed",
+        }
+    except OSError:
+        return {
+            "state": "unavailable",
+            "reason_code": "project_update_owned_lock_observation_unavailable",
+        }
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or before.st_size != len(expected_lock_bytes)
+        or (identity[0] and before.st_dev and identity[0] != before.st_dev)
+        or (identity[1] and before.st_ino and identity[1] != before.st_ino)
+    ):
+        return {
+            "state": "failed",
+            "reason_code": "project_update_owned_lock_changed",
+        }
+    descriptor: int | None = None
+    try:
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        descriptor = os.open(lock_path, flags)
+    except FileNotFoundError:
+        return {
+            "state": "failed",
+            "reason_code": "project_update_owned_lock_changed",
+        }
+    except OSError:
+        return {
+            "state": "unavailable",
+            "reason_code": "project_update_owned_lock_observation_unavailable",
+        }
+
+    result: dict[str, str]
+    try:
+        try:
+            opened = os.fstat(descriptor)
+        except OSError:
+            result = {
+                "state": "unavailable",
+                "reason_code": (
+                    "project_update_owned_lock_observation_unavailable"
+                ),
+            }
+        else:
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or opened.st_size != len(expected_lock_bytes)
+                or (
+                    before.st_dev
+                    and opened.st_dev
+                    and before.st_dev != opened.st_dev
+                )
+                or (
+                    before.st_ino
+                    and opened.st_ino
+                    and before.st_ino != opened.st_ino
+                )
+                or (
+                    identity[0]
+                    and opened.st_dev
+                    and identity[0] != opened.st_dev
+                )
+                or (
+                    identity[1]
+                    and opened.st_ino
+                    and identity[1] != opened.st_ino
+                )
+            ):
+                result = {
+                    "state": "failed",
+                    "reason_code": "project_update_owned_lock_changed",
+                }
+            else:
+                chunks: list[bytes] = []
+                total = 0
+                read_unavailable = False
+                while total < len(expected_lock_bytes):
+                    try:
+                        chunk = os.read(
+                            descriptor,
+                            len(expected_lock_bytes) - total,
+                        )
+                    except OSError:
+                        read_unavailable = True
+                        break
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    total += len(chunk)
+                if read_unavailable:
+                    result = {
+                        "state": "unavailable",
+                        "reason_code": (
+                            "project_update_owned_lock_observation_unavailable"
+                        ),
+                    }
+                elif total != len(expected_lock_bytes):
+                    result = {
+                        "state": "failed",
+                        "reason_code": "project_update_owned_lock_changed",
+                    }
+                else:
+                    try:
+                        after = os.fstat(descriptor)
+                        path_after = os.lstat(lock_path)
+                    except FileNotFoundError:
+                        result = {
+                            "state": "failed",
+                            "reason_code": "project_update_owned_lock_changed",
+                        }
+                    except OSError:
+                        result = {
+                            "state": "unavailable",
+                            "reason_code": (
+                                "project_update_owned_lock_observation_unavailable"
+                            ),
+                        }
+                    else:
+                        stable = bool(
+                            stat.S_ISREG(after.st_mode)
+                            and stat.S_ISREG(path_after.st_mode)
+                            and after.st_size == opened.st_size
+                            and after.st_mtime_ns == opened.st_mtime_ns
+                            and path_after.st_size == opened.st_size
+                            and (
+                                not opened.st_dev
+                                or not after.st_dev
+                                or opened.st_dev == after.st_dev
+                            )
+                            and (
+                                not opened.st_ino
+                                or not after.st_ino
+                                or opened.st_ino == after.st_ino
+                            )
+                            and (
+                                not opened.st_dev
+                                or not path_after.st_dev
+                                or opened.st_dev == path_after.st_dev
+                            )
+                            and (
+                                not opened.st_ino
+                                or not path_after.st_ino
+                                or opened.st_ino == path_after.st_ino
+                            )
+                        )
+                        matches = hmac.compare_digest(
+                            b"".join(chunks),
+                            expected_lock_bytes,
+                        )
+                        result = {
+                            "state": (
+                                "passed" if stable and matches else "failed"
+                            ),
+                            "reason_code": (
+                                "verified"
+                                if stable and matches
+                                else "project_update_owned_lock_changed"
+                            ),
+                        }
+    finally:
+        try:
+            os.close(descriptor)
+        except OSError:
+            result = {
+                "state": "unavailable",
+                "reason_code": (
+                    "project_update_owned_lock_observation_unavailable"
+                ),
+            }
+    return result
+
+
+def _wom_kit_project_update_lock_after_failure_observation(
+    project_root: Path,
+    lock_path: Path,
+    identity: tuple[int, int] | None,
+    *,
+    expected_lock_bytes: bytes,
+) -> dict[str, str]:
+    """Describe rollback lock truth without returning its path or bytes."""
+
+    path_observation = wom_kit_real_path_kind_observation(
+        project_root,
+        lock_path,
+    )
+    if path_observation["state"] == "unavailable":
+        return {
+            "state": "unavailable",
+            "kind": "unknown",
+            "reason_code": "project_update_lock_observation_unavailable",
+        }
+    if (
+        path_observation["state"] == "passed"
+        and path_observation["kind"] == "missing"
+    ):
+        return {
+            "state": "failed",
+            "kind": "missing",
+            "reason_code": "project_update_lock_missing",
+        }
+    ownership = wom_kit_project_update_owned_lock_observation(
+        project_root,
+        lock_path,
+        identity,
+        expected_lock_bytes=expected_lock_bytes,
+    )
+    if ownership["state"] == "passed":
+        return {
+            "state": "passed",
+            "kind": "owned",
+            "reason_code": "verified",
+        }
+    if ownership["state"] == "unavailable":
+        return {
+            "state": "unavailable",
+            "kind": "unknown",
+            "reason_code": "project_update_lock_observation_unavailable",
+        }
+    return {
+        "state": "failed",
+        "kind": "changed",
+        "reason_code": "project_update_lock_changed",
+    }
+
+
+def _wom_kit_project_update_reconcile_lock_after_acquire_failure(
+    project_root: Path,
+    lock_path: Path,
+    identity: tuple[int, int] | None,
+    *,
+    expected_lock_bytes: bytes,
+    release_owned: bool,
+) -> dict[str, Any]:
+    """Return tri-state cleanup truth for an interrupted lock acquisition."""
+
+    observation = _wom_kit_project_update_lock_after_failure_observation(
+        project_root,
+        lock_path,
+        identity,
+        expected_lock_bytes=expected_lock_bytes,
+    )
+    release_attempted = False
+    if release_owned and observation["kind"] == "owned":
+        release_attempted = True
+        _wom_kit_project_update_release_owned_lock(
+            project_root,
+            lock_path,
+            identity,
+        )
+        observation = _wom_kit_project_update_lock_after_failure_observation(
+            project_root,
+            lock_path,
+            identity,
+            expected_lock_bytes=expected_lock_bytes,
+        )
+    lock_removed: bool | None = (
+        True
+        if observation["kind"] == "missing"
+        else None
+        if observation["state"] == "unavailable"
+        else False
+    )
+    return {
+        "lock_removed": lock_removed,
+        "preserve_lock": lock_removed is not True,
+        "release_attempted": release_attempted,
+        "observation_state": observation["state"],
+        "observation_reason_code": observation["reason_code"],
+        "private_values_echoed": False,
+    }
 
 
 def _wom_kit_project_update_write_receipt_exclusive(
@@ -111909,44 +114666,75 @@ def _wom_kit_project_update_git_snapshot(
     *,
     runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> dict[str, Any] | None:
-    head_ok, head = _wom_kit_project_update_git(
+    observation = _wom_kit_project_update_git_snapshot_observation(
         mirror_path,
-        ["rev-parse", "--verify", "HEAD"],
         runner=runner,
     )
-    symbolic_head_state, branch = (
-        wom_kit_project_update_symbolic_head_state(
+    snapshot = observation.get("snapshot")
+    return dict(snapshot) if isinstance(snapshot, Mapping) else None
+
+
+def _wom_kit_project_update_git_snapshot_observation(
+    mirror_path: Path,
+    *,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
+) -> dict[str, Any]:
+    def outcome(
+        state: str,
+        reason_code: str,
+        snapshot: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return {"state": state, "reason_code": reason_code, "snapshot": snapshot}
+
+    def probe(
+        arguments: list[str],
+        *,
+        max_output_bytes: int = WOM_KIT_PROJECT_UPDATE_MAX_GIT_OUTPUT_BYTES,
+    ) -> tuple[bool, int | None, str]:
+        # Keep the long-standing scalar call seam so predecessor and fault
+        # injection tests can still corrupt exact Git output.  Production fills
+        # the private sink with the authoritative availability/exit status.
+        sink: dict[str, Any] = {}
+        ok, output = _wom_kit_project_update_git(
             mirror_path,
+            arguments,
+            max_output_bytes=max_output_bytes,
             runner=runner,
+            _observation_sink=sink,
         )
+        if sink:
+            return (
+                bool(sink.get("available")),
+                sink.get("return_code"),
+                output,
+            )
+        return ok, 0 if ok else None, output
+
+    head_available, head_return_code, head = probe(
+        ["rev-parse", "--verify", "HEAD"]
     )
-    tree_ok, tree_value = _wom_kit_project_update_git(
+    symbolic_head_observation = wom_kit_project_update_symbolic_head_observation(
         mirror_path,
-        ["ls-tree", "-r", "-z", "HEAD"],
         runner=runner,
     )
-    index_ok, index_value = _wom_kit_project_update_git(
-        mirror_path,
-        ["ls-files", "--stage", "-z"],
-        runner=runner,
+    symbolic_head_state = symbolic_head_observation.get("head_state")
+    branch = symbolic_head_observation.get("branch")
+    tree_available, tree_return_code, tree_value = probe(
+        ["ls-tree", "-r", "-z", "HEAD"]
     )
-    flags_ok, flags_value = _wom_kit_project_update_git(
-        mirror_path,
-        ["ls-files", "-v", "-z"],
-        runner=runner,
+    index_available, index_return_code, index_value = probe(
+        ["ls-files", "--stage", "-z"]
     )
-    eol_ok, eol_value = _wom_kit_project_update_git(
-        mirror_path,
-        ["ls-files", "--eol", "-z"],
-        runner=runner,
+    flags_available, flags_return_code, flags_value = probe(
+        ["ls-files", "-v", "-z"]
     )
-    untracked_ok, untracked_value = _wom_kit_project_update_git(
-        mirror_path,
-        ["ls-files", "--others", "--exclude-standard", "-z"],
-        runner=runner,
+    eol_available, eol_return_code, eol_value = probe(
+        ["ls-files", "--eol", "-z"]
     )
-    autocrlf_ok, autocrlf_value = _wom_kit_project_update_git(
-        mirror_path,
+    untracked_available, untracked_return_code, untracked_value = probe(
+        ["ls-files", "--others", "--exclude-standard", "-z"]
+    )
+    autocrlf_available, autocrlf_return_code, autocrlf_value = probe(
         [
             "config",
             "--type=bool",
@@ -111954,22 +114742,33 @@ def _wom_kit_project_update_git_snapshot(
             "core.autocrlf",
         ],
         max_output_bytes=64,
-        runner=runner,
     )
     local_autocrlf_true = bool(
-        autocrlf_ok and autocrlf_value.strip().casefold() == "true"
+        autocrlf_available
+        and autocrlf_return_code == 0
+        and autocrlf_value.strip().casefold() == "true"
     )
+    required_observations = (
+        (head_available, head_return_code),
+        (tree_available, tree_return_code),
+        (index_available, index_return_code),
+        (flags_available, flags_return_code),
+        (eol_available, eol_return_code),
+        (untracked_available, untracked_return_code),
+    )
+    if any(not available for available, _ in required_observations):
+        return outcome("unavailable", "project_git_snapshot_unavailable")
+    if symbolic_head_observation["state"] == "unavailable":
+        return outcome("unavailable", "project_git_snapshot_unavailable")
     if (
-        not head_ok
+        any(return_code != 0 for _, return_code in required_observations)
         or not re.fullmatch(r"[0-9a-fA-F]{40,64}", head)
-        or symbolic_head_state == "invalid"
-        or not tree_ok
-        or not index_ok
-        or not flags_ok
-        or not eol_ok
-        or not untracked_ok
+        or symbolic_head_observation["state"] != "passed"
+        or not autocrlf_available
     ):
-        return None
+        return outcome("failed", "project_git_snapshot_invalid")
+    if autocrlf_return_code not in {0, 1}:
+        return outcome("failed", "project_git_snapshot_invalid")
 
     def nul_records(value: str) -> list[str] | None:
         if value == "":
@@ -111993,14 +114792,14 @@ def _wom_kit_project_update_git_snapshot(
         or eol_records is None
         or untracked_records is None
     ):
-        return None
+        return outcome("failed", "project_git_snapshot_invalid")
     tree_entries: dict[str, tuple[str, str]] = {}
     for record in tree_records:
         try:
             metadata, relative_path = record.split("\t", 1)
             mode, object_type, object_id = metadata.split(" ", 2)
         except ValueError:
-            return None
+            return outcome("failed", "project_git_snapshot_invalid")
         pure_path = PurePosixPath(relative_path)
         if (
             pure_path.is_absolute()
@@ -112011,10 +114810,10 @@ def _wom_kit_project_update_git_snapshot(
             or relative_path in tree_entries
             or len(tree_entries) >= WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_FILES
         ):
-            return None
+            return outcome("failed", "project_git_snapshot_invalid")
         tree_entries[relative_path] = (mode, object_id.lower())
     if not wom_kit_project_update_safe_worktree_paths(tree_entries):
-        return None
+        return outcome("failed", "project_git_snapshot_unsafe")
 
     index_entries: dict[str, tuple[str, str]] = {}
     for record in index_records:
@@ -112022,23 +114821,23 @@ def _wom_kit_project_update_git_snapshot(
             metadata, relative_path = record.split("\t", 1)
             mode, object_id, stage = metadata.split(" ", 2)
         except ValueError:
-            return None
+            return outcome("failed", "project_git_snapshot_invalid")
         if (
             stage != "0"
             or mode not in {"100644", "100755"}
             or not re.fullmatch(r"[0-9a-fA-F]{40,64}", object_id)
             or relative_path in index_entries
         ):
-            return None
+            return outcome("failed", "project_git_snapshot_invalid")
         index_entries[relative_path] = (mode, object_id.lower())
 
     flag_entries: dict[str, str] = {}
     for record in flag_records:
         if len(record) < 3 or record[1] != " ":
-            return None
+            return outcome("failed", "project_git_snapshot_invalid")
         relative_path = record[2:]
         if relative_path in flag_entries:
-            return None
+            return outcome("failed", "project_git_snapshot_invalid")
         flag_entries[relative_path] = record[0]
     flags_safe = bool(
         set(flag_entries) == set(tree_entries)
@@ -112049,7 +114848,7 @@ def _wom_kit_project_update_git_snapshot(
         try:
             metadata, relative_path = record.split("\t", 1)
         except ValueError:
-            return None
+            return outcome("failed", "project_git_snapshot_invalid")
         matched_eol = re.fullmatch(
             r"i/(\S+)[ ]+w/(\S+)[ ]+attr/([\x20-\x7e]*)",
             metadata,
@@ -112062,14 +114861,14 @@ def _wom_kit_project_update_git_snapshot(
             not in {"-text", "none", "lf", "crlf", "mixed"}
             or relative_path in eol_entries
         ):
-            return None
+            return outcome("failed", "project_git_snapshot_invalid")
         eol_entries[relative_path] = (
             matched_eol.group(1),
             matched_eol.group(2),
             matched_eol.group(3).strip(),
         )
     if set(eol_entries) != set(tree_entries):
-        return None
+        return outcome("failed", "project_git_snapshot_invalid")
     index_matches_head = index_entries == tree_entries
 
     worktree_hasher = hashlib.sha256()
@@ -112079,30 +114878,45 @@ def _wom_kit_project_update_git_snapshot(
     total_bytes = 0
     for relative_path, (_, object_id) in sorted(tree_entries.items()):
         path = mirror_path.joinpath(*PurePosixPath(relative_path).parts)
+        path_observation = wom_kit_real_path_kind_observation(
+            mirror_path,
+            path,
+        )
+        if path_observation["state"] == "unavailable":
+            return outcome("unavailable", "project_git_snapshot_unavailable")
         if (
-            wom_kit_real_path_kind(mirror_path, path) != "file"
+            path_observation["state"] != "passed"
+            or path_observation["kind"] != "file"
             or not wom_kit_path_components_are_real(mirror_path, path)
         ):
-            return None
+            return outcome("failed", "project_git_snapshot_unsafe")
         try:
             path_size = os.lstat(path).st_size
         except OSError:
-            return None
+            return outcome("unavailable", "project_git_snapshot_unavailable")
         if (
             path_size < 0
             or path_size > WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_FILE_BYTES
         ):
-            return None
+            return outcome("failed", "project_git_snapshot_size_policy_exceeded")
         total_bytes += path_size
         if total_bytes > WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_TOTAL_BYTES:
-            return None
-        raw_bytes = _wom_kit_read_bounded_real_bytes(
+            return outcome("failed", "project_git_snapshot_size_policy_exceeded")
+        raw_observation = _wom_kit_read_bounded_real_bytes_observation(
             mirror_path,
             path,
             max_bytes=WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_FILE_BYTES,
         )
+        raw_bytes = raw_observation.get("bytes")
         if raw_bytes is None:
-            return None
+            return outcome(
+                str(raw_observation["state"]),
+                (
+                    "project_git_snapshot_unavailable"
+                    if raw_observation["state"] == "unavailable"
+                    else "project_git_snapshot_invalid"
+                ),
+            )
 
         def matches_object(value: bytes) -> bool:
             object_hasher = (
@@ -112142,7 +114956,10 @@ def _wom_kit_project_update_git_snapshot(
                     eol_override_total_bytes
                     > WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_TOTAL_BYTES
                 ):
-                    return None
+                    return outcome(
+                        "failed",
+                        "project_git_snapshot_size_policy_exceeded",
+                    )
                 eol_overrides[relative_path] = {
                     "raw_bytes": raw_bytes,
                     "head_bytes_sha256": hashlib.sha256(
@@ -112156,7 +114973,7 @@ def _wom_kit_project_update_git_snapshot(
         worktree_hasher.update(hashlib.sha256(raw_bytes).digest())
 
     untracked_paths = sorted(untracked_records)
-    return {
+    snapshot = {
         "head": head.lower(),
         "branch": branch if symbolic_head_state == "branch" else None,
         "index_sha256": hashlib.sha256(
@@ -112176,6 +114993,7 @@ def _wom_kit_project_update_git_snapshot(
         "untracked_paths": untracked_paths,
         "eol_overrides": eol_overrides,
     }
+    return outcome("passed", "verified", snapshot)
 
 
 def wom_kit_project_update_snapshot_is_clean(
@@ -112274,21 +115092,62 @@ def wom_kit_project_update_pin_matches_snapshot(
     project_root: Path,
     spec: dict[str, Any],
 ) -> bool:
+    return (
+        wom_kit_project_update_pin_snapshot_observation(
+            project_root,
+            spec,
+        )["state"]
+        == "passed"
+    )
+
+
+def wom_kit_project_update_pin_snapshot_observation(
+    project_root: Path,
+    spec: dict[str, Any],
+) -> dict[str, str]:
     path = spec["path"]
-    kind = wom_kit_real_path_kind(project_root, path)
+    path_observation = wom_kit_real_path_kind_observation(
+        project_root,
+        path,
+    )
+    if path_observation["state"] == "unavailable":
+        return {
+            "state": "unavailable",
+            "reason_code": "project_version_pin_observation_unavailable",
+        }
+    kind = path_observation["kind"]
     if spec.get("existed"):
         if kind != "file":
-            return False
+            return {
+                "state": "failed",
+                "reason_code": "project_version_pin_changed",
+            }
         current = _wom_kit_read_bounded_real_bytes(
             project_root,
             path,
             max_bytes=WOM_KIT_VERSION_PIN_MAX_BYTES,
         )
-        return current == spec.get("previous_bytes")
-    return kind == "missing" and wom_kit_existing_path_components_are_real(
-        project_root,
-        path,
-    )
+        if current is None:
+            return {
+                "state": "unavailable",
+                "reason_code": "project_version_pin_observation_unavailable",
+            }
+        return {
+            "state": (
+                "passed" if current == spec.get("previous_bytes") else "failed"
+            ),
+            "reason_code": (
+                "verified"
+                if current == spec.get("previous_bytes")
+                else "project_version_pin_changed"
+            ),
+        }
+    return {
+        "state": "passed" if kind == "missing" else "failed",
+        "reason_code": (
+            "verified" if kind == "missing" else "project_version_pin_changed"
+        ),
+    }
 
 
 def wom_kit_project_update_all_pins_match_snapshot(
@@ -112299,6 +115158,27 @@ def wom_kit_project_update_all_pins_match_snapshot(
         wom_kit_project_update_pin_matches_snapshot(project_root, spec)
         for spec in pin_specs
     )
+
+
+def wom_kit_project_update_all_pins_snapshot_observation(
+    project_root: Path,
+    pin_specs: list[dict[str, Any]],
+) -> dict[str, str]:
+    observations = [
+        wom_kit_project_update_pin_snapshot_observation(project_root, spec)
+        for spec in pin_specs
+    ]
+    if any(item["state"] == "unavailable" for item in observations):
+        return {
+            "state": "unavailable",
+            "reason_code": "project_version_pin_observation_unavailable",
+        }
+    if any(item["state"] != "passed" for item in observations):
+        return {
+            "state": "failed",
+            "reason_code": "project_version_pin_changed",
+        }
+    return {"state": "passed", "reason_code": "verified"}
 
 
 WOM_KIT_PROJECT_UPDATE_MATERIALIZATION_BLOCKER = (
@@ -112315,6 +115195,280 @@ WOM_KIT_PROJECT_UPDATE_SOURCE_DRIFT_BLOCKER = (
 WOM_KIT_PROJECT_UPDATE_SOURCE_DRIFT_BLOCKER_CODE = (
     "project_version_update_source_changed_before_materialization"
 )
+
+WOM_KIT_PROJECT_UPDATE_RUNTIME_PREPARATION_CHECKS = (
+    "git_snapshot",
+    "git_config_trust",
+    "git_metadata",
+    "version_pins",
+    "target_refs",
+    "target_evidence",
+    "runtime_policy",
+    "runtime_supply",
+    "runtime_bootstrap",
+    "runtime_plan",
+    "launcher",
+    "materialization_preflight",
+    "prepared_runtime_payload",
+    "source_branch",
+)
+WOM_KIT_PROJECT_UPDATE_EXPECTED_TRANSACTION_CHANGES = (
+    "durable_reservation",
+    "version_update_lock",
+    "prepared_runtime_candidate_private_path",
+    "progress_observations",
+)
+
+
+def wom_kit_project_update_runtime_preparation_revalidation(
+    observed: Mapping[str, tuple[str, str]] | None = None,
+) -> dict[str, Any]:
+    """Return a privacy-safe, field-level runtime preparation comparison.
+
+    The compared values are intentionally never returned.  A check that could
+    not run is different from a check that ran and observed drift, and fields
+    excluded because they are expected transaction effects are named
+    separately instead of being compared accidentally.
+    """
+
+    supplied = dict(observed or {})
+    if any(
+        name not in WOM_KIT_PROJECT_UPDATE_RUNTIME_PREPARATION_CHECKS
+        for name in supplied
+    ):
+        raise ValueError("unknown_runtime_preparation_revalidation_check")
+    checks: dict[str, dict[str, str]] = {}
+    for name in WOM_KIT_PROJECT_UPDATE_RUNTIME_PREPARATION_CHECKS:
+        state, reason_code = supplied.get(
+            name,
+            ("not_reached", "runtime_preparation_not_reached"),
+        )
+        if state not in {
+            "passed",
+            "failed",
+            "not_reached",
+            "unavailable",
+        }:
+            raise ValueError("invalid_runtime_preparation_revalidation_state")
+        checks[name] = {
+            "state": state,
+            "reason_code": reason_code,
+        }
+    states = {item["state"] for item in checks.values()}
+    overall_state = (
+        "failed"
+        if "failed" in states
+        else "unavailable"
+        if "unavailable" in states
+        else "not_reached"
+        if "not_reached" in states
+        else "passed"
+    )
+    return {
+        "schema": (
+            "wom-kit/project-version-update-runtime-preparation-"
+            "revalidation/v0.1"
+        ),
+        "state": overall_state,
+        "checks": checks,
+        "changed_dimensions": [
+            name
+            for name, detail in checks.items()
+            if detail["state"] == "failed"
+        ],
+        "unavailable_dimensions": [
+            name
+            for name, detail in checks.items()
+            if detail["state"] == "unavailable"
+        ],
+        "expected_transaction_changes_excluded": list(
+            WOM_KIT_PROJECT_UPDATE_EXPECTED_TRANSACTION_CHANGES
+        ),
+        "compared_values_echoed": False,
+        "private_values_echoed": False,
+    }
+
+
+def _wom_kit_project_update_preparation_check(
+    name: str,
+    matches: bool,
+    *,
+    available: bool = True,
+    reason_code: str | None = None,
+) -> tuple[str, str]:
+    """Project one comparison without returning either compared value."""
+
+    if not available:
+        return (
+            "unavailable",
+            reason_code or f"runtime_preparation_{name}_unavailable",
+        )
+    return (
+        "passed" if matches else "failed",
+        reason_code
+        or (
+            f"runtime_preparation_{name}_verified"
+            if matches
+            else f"runtime_preparation_{name}_changed"
+        ),
+    )
+
+
+def _wom_kit_project_update_observed_preparation_check(
+    name: str,
+    observation_state: str,
+    observation_reason_code: str,
+    matches: bool,
+) -> tuple[str, str]:
+    """Preserve an observer's four-state result through a CAS comparison."""
+
+    if observation_state == "unavailable":
+        return (
+            "unavailable",
+            observation_reason_code
+            or f"runtime_preparation_{name}_unavailable",
+        )
+    if observation_state == "not_reached":
+        return (
+            "not_reached",
+            observation_reason_code
+            or f"runtime_preparation_{name}_not_reached",
+        )
+    if observation_state == "failed":
+        return (
+            "failed",
+            observation_reason_code
+            or f"runtime_preparation_{name}_changed",
+        )
+    return _wom_kit_project_update_preparation_check(name, matches)
+
+
+def _wom_kit_project_update_runtime_plan_observation_state(
+    blockers: Iterable[str],
+    *,
+    prerequisite_states: Iterable[str] = (),
+) -> tuple[str, str]:
+    blocker_values = [str(blocker) for blocker in blockers]
+    prerequisites = {str(state) for state in prerequisite_states}
+    if "failed" in prerequisites:
+        return "failed", "runtime_preparation_runtime_plan_blocked"
+    if "unavailable" in prerequisites or any(
+        "unavailable" in blocker for blocker in blocker_values
+    ):
+        return "unavailable", "runtime_preparation_runtime_plan_unavailable"
+    if "not_reached" in prerequisites:
+        return "not_reached", "runtime_preparation_runtime_plan_not_reached"
+    if blocker_values:
+        return "failed", "runtime_preparation_runtime_plan_blocked"
+    return "passed", "verified"
+
+
+def _wom_kit_project_update_runtime_plan_prerequisite_states(
+    *,
+    policy_state: str,
+    supply_state: str,
+    bootstrap_available: bool,
+    launcher_state: str,
+) -> tuple[str, str, str, str]:
+    """Return only prerequisites whose failure makes the plan unusable.
+
+    The runtime inventory itself is deliberately not an input.  A confirmed
+    missing or damaged runtime is an actionable installation/repair plan, not
+    a failed planning prerequisite; equality of that observation is checked
+    separately as part of the complete runtime-plan projection.
+    """
+
+    allowed = {"passed", "failed", "not_reached", "unavailable"}
+    if (
+        type(policy_state) is not str
+        or policy_state not in allowed
+        or type(supply_state) is not str
+        or supply_state not in allowed
+        or type(bootstrap_available) is not bool
+        or type(launcher_state) is not str
+        or launcher_state not in allowed
+    ):
+        raise ValueError("invalid_runtime_preparation_prerequisite_state")
+    return (
+        policy_state,
+        supply_state,
+        "passed" if bootstrap_available else "unavailable",
+        launcher_state,
+    )
+
+
+def _wom_kit_project_update_revalidation_failure_code(
+    revalidation: Mapping[str, Any],
+) -> str | None:
+    state = revalidation.get("state")
+    if state == "passed":
+        return None
+    if state in {"unavailable", "not_reached"}:
+        return "project_version_update_approved_snapshot_unavailable"
+    return "project_version_update_approved_snapshot_changed"
+
+
+def _wom_kit_project_update_approved_lock_failure_code(
+    observations: Iterable[Mapping[str, Any]],
+) -> str | None:
+    """Map privacy-safe lock observations to the approval failure contract."""
+
+    states = [
+        str(observation.get("state", "unavailable"))
+        for observation in observations
+    ]
+    if any(state == "failed" for state in states):
+        return "project_version_update_approved_snapshot_changed"
+    if any(state != "passed" for state in states) or not states:
+        return "project_version_update_approved_snapshot_unavailable"
+    return None
+
+
+def _wom_kit_project_update_policy_observation(
+    policy: Mapping[str, Any],
+) -> tuple[str, str]:
+    """Read current four-state policy truth while accepting older projections."""
+
+    explicit_state = str(policy.get("observation_state") or "")
+    explicit_reason = str(policy.get("observation_reason_code") or "")
+    if explicit_state in {"passed", "failed", "not_reached", "unavailable"}:
+        return explicit_state, explicit_reason or "project_runtime_policy_unavailable"
+    policy_state = str(policy.get("state") or "")
+    if policy_state in {"required", "not_required"}:
+        return "passed", "verified_legacy_policy_projection"
+    if policy_state == "invalid":
+        return "failed", "project_runtime_policy_invalid"
+    if policy_state == "deferred":
+        return "not_reached", "project_runtime_policy_not_reached"
+    return "unavailable", "project_runtime_policy_unavailable"
+
+
+def _wom_kit_project_update_runtime_supply_revalidation_observation(
+    mirror_path: Path,
+    target_commit: str | None,
+    target_version: str | None,
+    policy: Mapping[str, Any],
+    *,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
+) -> tuple[str, str, project_runtime.RuntimeSupplyLock | None]:
+    """Preserve legacy scalar test/readers without losing live four-state truth."""
+
+    supply = wom_kit_project_update_runtime_supply(
+        mirror_path,
+        target_commit,
+        target_version,
+        policy,
+        runner=runner,
+    )
+    if supply is not None:
+        return "passed", "verified", supply
+    return wom_kit_project_update_runtime_supply_observation(
+        mirror_path,
+        target_commit,
+        target_version,
+        policy,
+        runner=runner,
+    )
 
 
 def wom_kit_project_update_blocker_codes(
@@ -112343,6 +115497,8 @@ def wom_kit_project_update_materialization_preflight_state(
     )
     return {
         "state": state,
+        "observation_state": "not_reached",
+        "observation_reason_code": "materialization_preflight_not_reached",
         "evaluated": False,
         "required": None,
         "safe": None,
@@ -112391,6 +115547,43 @@ def wom_kit_project_update_materialization_preflight(
             runtime_source_before["tracked_python_sources_verified"]
             and runtime_resources_before["runtime_resources_verified"]
         )
+        source_integrity_states = {
+            str(
+                runtime_source_before["checks"][
+                    "tracked_python_sources_verified"
+                ]["state"]
+            ),
+            str(
+                runtime_resources_before["checks"][
+                    "runtime_resources_verified"
+                ]["state"]
+            ),
+        }
+        if "unavailable" in source_integrity_states:
+            projection = wom_kit_project_update_conflict_projection(
+                [
+                    (
+                        "\0runtime-source-integrity",
+                        "runtime_source_integrity_unavailable",
+                    )
+                ],
+                complete=True,
+                authority=[("target-commit", target_commit)],
+            )
+            return {
+                "state": "blocked",
+                "observation_state": "unavailable",
+                "observation_reason_code": (
+                    "project_runtime_source_integrity_unavailable"
+                ),
+                "evaluated": True,
+                "required": None,
+                "checkout_required": checkout_required,
+                "target_runtime_source_integrity_verified": False,
+                "no_write": True,
+                "bounded": True,
+                **projection,
+            }
     required = bool(
         checkout_required
         or not target_runtime_source_integrity_verified
@@ -112410,6 +115603,8 @@ def wom_kit_project_update_materialization_preflight(
         )
         return {
             "state": "not_required",
+            "observation_state": "passed",
+            "observation_reason_code": "verified",
             "evaluated": True,
             "required": False,
             "checkout_required": checkout_required,
@@ -115547,41 +118742,111 @@ def wom_kit_project_update_runtime_policy(
         "source_path": "wom-kit/project-runtime-policy.json",
         "supply_lock_path": None,
         "supply_lock_sha256": None,
+        "observation_state": (
+            "not_reached" if target_commit is None else "unavailable"
+        ),
+        "observation_reason_code": (
+            "project_runtime_policy_not_reached"
+            if target_commit is None
+            else "project_runtime_policy_unavailable"
+        ),
     }
     if target_commit is None:
         return result
     if re.fullmatch(r"[0-9a-f]{40,64}", target_commit) is None:
         result["state"] = "invalid"
+        result["observation_state"] = "failed"
+        result["observation_reason_code"] = (
+            "project_runtime_policy_target_invalid"
+        )
         return result
-    git_object = f"{target_commit}:wom-kit/project-runtime-policy.json"
-    object_ok, object_id = _wom_kit_project_update_git(
+    policy_path = "wom-kit/project-runtime-policy.json"
+    tree_available, tree_return_code, tree_text = (
+        _wom_kit_project_update_git_observation(
         mirror_path,
-        ["rev-parse", "--verify", git_object],
+        ["ls-tree", "-z", target_commit, "--", policy_path],
         runner=runner,
+        )
     )
-    if not object_ok:
+    if not tree_available:
+        result["state"] = "unavailable"
         return result
-    if re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", object_id) is None:
+    if tree_return_code != 0:
         result["state"] = "invalid"
+        result["observation_state"] = "failed"
+        result["observation_reason_code"] = "project_runtime_policy_invalid"
         return result
-    size_ok, size_text = _wom_kit_project_update_git(
+    records = [record for record in tree_text.split("\0") if record]
+    if not records:
+        result["state"] = "not_required"
+        result["observation_state"] = "passed"
+        result["observation_reason_code"] = (
+            "project_runtime_policy_confirmed_absent"
+        )
+        return result
+    try:
+        metadata, actual_path = records[0].split("\t", 1)
+        mode, object_type, object_id = metadata.split(" ", 2)
+    except (IndexError, ValueError):
+        result["state"] = "invalid"
+        result["observation_state"] = "failed"
+        result["observation_reason_code"] = "project_runtime_policy_invalid"
+        return result
+    if (
+        len(records) != 1
+        or actual_path != policy_path
+        or mode not in {"100644", "100755"}
+        or object_type != "blob"
+        or re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", object_id) is None
+    ):
+        result["state"] = "invalid"
+        result["observation_state"] = "failed"
+        result["observation_reason_code"] = "project_runtime_policy_invalid"
+        return result
+    size_available, size_return_code, size_text = (
+        _wom_kit_project_update_git_observation(
         mirror_path,
         ["cat-file", "-s", object_id],
         runner=runner,
+        )
     )
+    if not size_available:
+        result["state"] = "unavailable"
+        return result
+    if size_return_code != 0:
+        result["state"] = "invalid"
+        result["observation_state"] = "failed"
+        result["observation_reason_code"] = "project_runtime_policy_invalid"
+        return result
     try:
-        expected_size = int(size_text) if size_ok else -1
+        expected_size = int(size_text)
     except ValueError:
         expected_size = -1
-    raw = _wom_kit_project_update_git_blob(
+    if expected_size < 0:
+        result["state"] = "invalid"
+        result["observation_state"] = "failed"
+        result["observation_reason_code"] = "project_runtime_policy_invalid"
+        return result
+    blob_observation = _wom_kit_project_update_git_blob_observation(
         mirror_path,
         object_id,
         expected_size,
         runner=runner,
     )
+    raw = blob_observation.get("blob")
+    if blob_observation["state"] == "unavailable":
+        result["state"] = "unavailable"
+        return result
+    if not isinstance(raw, bytes):
+        result["state"] = "invalid"
+        result["observation_state"] = "failed"
+        result["observation_reason_code"] = "project_runtime_policy_invalid"
+        return result
     document = project_runtime.project_runtime_policy_document(raw)
     if document is None:
         result["state"] = "invalid"
+        result["observation_state"] = "failed"
+        result["observation_reason_code"] = "project_runtime_policy_invalid"
         return result
     result.update(
         {
@@ -115593,6 +118858,8 @@ def wom_kit_project_update_runtime_policy(
             "supply_lock_sha256": document.get(
                 "supply_lock_sha256"
             ),
+            "observation_state": "passed",
+            "observation_reason_code": "verified",
         }
     )
     return result
@@ -115606,15 +118873,49 @@ def wom_kit_project_update_runtime_supply(
     *,
     runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> project_runtime.RuntimeSupplyLock | None:
+    _state, _reason_code, supply = (
+        wom_kit_project_update_runtime_supply_observation(
+            mirror_path,
+            target_commit,
+            target_version,
+            policy,
+            runner=runner,
+        )
+    )
+    return supply
+
+
+def wom_kit_project_update_runtime_supply_observation(
+    mirror_path: Path,
+    target_commit: str | None,
+    target_version: str | None,
+    policy: Mapping[str, Any],
+    *,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
+) -> tuple[str, str, project_runtime.RuntimeSupplyLock | None]:
     """Read and verify the exact supply lock named by the target policy."""
 
+    if policy.get("state") != "required":
+        policy_observation = str(policy.get("observation_state") or "")
+        return (
+            (
+                "unavailable"
+                if policy_observation == "unavailable"
+                else "not_reached"
+            ),
+            (
+                "project_runtime_supply_unavailable"
+                if policy_observation == "unavailable"
+                else "project_runtime_supply_not_required"
+            ),
+            None,
+        )
     if (
-        policy.get("state") != "required"
-        or type(target_commit) is not str
+        type(target_commit) is not str
         or re.fullmatch(r"[0-9a-f]{40,64}", target_commit) is None
         or type(target_version) is not str
     ):
-        return None
+        return "failed", "project_runtime_supply_binding_invalid", None
     relative = policy.get("supply_lock_path")
     declared_sha256 = policy.get("supply_lock_sha256")
     if (
@@ -115625,46 +118926,70 @@ def wom_kit_project_update_runtime_supply(
         or re.fullmatch(r"sha256:[0-9a-f]{64}", declared_sha256)
         is None
     ):
-        return None
-    git_object = f"{target_commit}:{relative}"
-    object_ok, object_id = _wom_kit_project_update_git(
+        return "failed", "project_runtime_supply_binding_invalid", None
+    tree_available, tree_return_code, tree_text = (
+        _wom_kit_project_update_git_observation(
         mirror_path,
-        ["rev-parse", "--verify", git_object],
+        ["ls-tree", "-z", target_commit, "--", relative],
         runner=runner,
+        )
     )
+    if not tree_available:
+        return "unavailable", "project_runtime_supply_unavailable", None
+    if tree_return_code != 0:
+        return "failed", "project_runtime_supply_invalid", None
+    records = [record for record in tree_text.split("\0") if record]
+    try:
+        metadata, actual_path = records[0].split("\t", 1)
+        mode, object_type, object_id = metadata.split(" ", 2)
+    except (IndexError, ValueError):
+        return "failed", "project_runtime_supply_invalid", None
     if (
-        not object_ok
+        len(records) != 1
+        or actual_path != relative
+        or mode not in {"100644", "100755"}
+        or object_type != "blob"
         or re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", object_id)
         is None
     ):
-        return None
-    size_ok, size_text = _wom_kit_project_update_git(
+        return "failed", "project_runtime_supply_invalid", None
+    size_available, size_return_code, size_text = (
+        _wom_kit_project_update_git_observation(
         mirror_path,
         ["cat-file", "-s", object_id],
         runner=runner,
+        )
     )
+    if not size_available:
+        return "unavailable", "project_runtime_supply_unavailable", None
+    if size_return_code != 0:
+        return "failed", "project_runtime_supply_invalid", None
     try:
-        expected_size = int(size_text) if size_ok else -1
+        expected_size = int(size_text)
     except ValueError:
         expected_size = -1
     if not 0 < expected_size <= 256 * 1024:
-        return None
-    raw = _wom_kit_project_update_git_blob(
+        return "failed", "project_runtime_supply_invalid", None
+    blob_observation = _wom_kit_project_update_git_blob_observation(
         mirror_path,
         object_id,
         expected_size,
         runner=runner,
     )
-    if (
-        raw is None
-        or "sha256:" + hashlib.sha256(raw).hexdigest()
-        != declared_sha256
-    ):
-        return None
-    return project_runtime.project_runtime_supply_lock(
+    raw = blob_observation.get("blob")
+    if blob_observation["state"] == "unavailable":
+        return "unavailable", "project_runtime_supply_unavailable", None
+    if not isinstance(raw, bytes):
+        return "failed", "project_runtime_supply_invalid", None
+    if "sha256:" + hashlib.sha256(raw).hexdigest() != declared_sha256:
+        return "failed", "project_runtime_supply_digest_mismatch", None
+    supply = project_runtime.project_runtime_supply_lock(
         raw,
         expected_target=target_version,
     )
+    if supply is None:
+        return "failed", "project_runtime_supply_invalid", None
+    return "passed", "verified", supply
 
 
 def wom_kit_project_version_update(
@@ -116291,7 +119616,57 @@ def _project_update_claim_publication_boundary(
     with _project_update_fresh_terminal_absence_boundary(
         state.project_root
     ):
+        legacy_control = getattr(
+            state, "legacy_prewrite_recovery_control", None
+        )
+        if (
+            legacy_control is not None
+            and not _project_update_legacy_recovery_preapproval_state_exact(
+                state
+            )
+        ):
+            raise ArchiveServiceError(
+                "project_version_update_legacy_recovery_state_changed"
+            )
         with state.transaction.append_guard_nonblocking():
+            if legacy_control is not None:
+                control = legacy_control
+                paths = control.get("paths")
+                old_lock_bytes = control.get("old_lock_bytes")
+                old_tree_sha256 = control.get("old_transaction_tree_sha256")
+                fresh_inventory = control.get("fresh_transaction_inventory")
+                if (
+                    not isinstance(
+                        paths,
+                        project_update_legacy_recovery.RecoveryPaths,
+                    )
+                    or type(old_lock_bytes) is not bytes
+                    or type(old_tree_sha256) is not str
+                    or not isinstance(fresh_inventory, Mapping)
+                    or not hmac.compare_digest(
+                        project_update_legacy_recovery._read_regular(
+                            state.transaction._lock_path
+                        ),
+                        old_lock_bytes,
+                    )
+                    or project_update_legacy_recovery.directory_tree_sha256(
+                        paths.old_transaction_vault
+                    )
+                    != old_tree_sha256
+                ):
+                    raise ArchiveServiceError(
+                        "project_version_update_legacy_recovery_state_changed"
+                    )
+                if not project_update_legacy_recovery.directory_tree_matches_inventory(
+                    state.transaction.transaction_root,
+                    fresh_inventory,
+                    retained_guard_logical="append.guard",
+                ):
+                    raise ArchiveServiceError(
+                        "project_version_update_legacy_recovery_state_changed"
+                    )
+                yield
+                return
             live = _project_update_live_component_sha256(state)
             state.transaction.validate_claim_publication_boundary_guard_held(
                 expected_lock_bytes=state.expected_lock_bytes,
@@ -116610,6 +119985,36 @@ def _project_update_terminal_cleanup_namespace_classification_read_only(
             directory=True,
         )
         before = os.lstat(transaction_root)
+        runtime_cleanup_inventory = (
+            project_runtime.runtime_candidate_cleanup_sidecar_inventory(
+                project_root
+            )
+        )
+        if (
+            not isinstance(runtime_cleanup_inventory, Mapping)
+            or runtime_cleanup_inventory.get("state") != "passed"
+            or runtime_cleanup_inventory.get("unattributed_sidecar_count") != 0
+            or any(
+                runtime_cleanup_inventory.get(key)
+                for key in (
+                    "orphaned_transaction_refs",
+                    "review_required_transaction_refs",
+                    "unavailable_transaction_refs",
+                )
+            )
+        ):
+            return None
+        recoverable_runtime_cleanup_refs = set(
+            runtime_cleanup_inventory.get("recoverable_transaction_refs", ())
+        )
+        if any(
+            type(item) is not str
+            or project_update_transaction.TRANSACTION_REF_RE.fullmatch(item)
+            is None
+            for item in recoverable_runtime_cleanup_refs
+        ):
+            return None
+        observed_runtime_cleanup_refs: set[str] = set()
         expected_reservation_ref = (
             allowed_reservation.transaction_ref
             if allowed_reservation is not None
@@ -116675,6 +120080,16 @@ def _project_update_terminal_cleanup_namespace_classification_read_only(
                 )
                 proof_match = re.fullmatch(
                     r"\.cleanup-proof_(update_[0-9a-f]{32})\.json",
+                    name,
+                )
+                runtime_cleanup_match = re.fullmatch(
+                    re.escape(
+                        project_runtime.PROJECT_RUNTIME_CLEANUP_CAPSULE_PREFIX
+                    )
+                    + r"(update_[0-9a-f]{32})"
+                    + re.escape(
+                        project_runtime.PROJECT_RUNTIME_CLEANUP_CAPSULE_SUFFIX
+                    ),
                     name,
                 )
                 if original_match is not None:
@@ -116830,6 +120245,19 @@ def _project_update_terminal_cleanup_namespace_classification_read_only(
                         return None
                     tombstone_refs.add(tombstone_ref)
                     continue
+                if runtime_cleanup_match is not None:
+                    runtime_cleanup_ref = runtime_cleanup_match.group(1)
+                    if (
+                        allowed_reservation is not None
+                        or expected_resume_ref != runtime_cleanup_ref
+                        or runtime_cleanup_ref
+                        not in recoverable_runtime_cleanup_refs
+                        or runtime_cleanup_ref in observed_runtime_cleanup_refs
+                        or not entry.is_file(follow_symlinks=False)
+                    ):
+                        return None
+                    observed_runtime_cleanup_refs.add(runtime_cleanup_ref)
+                    continue
                 if proof_match is None:
                     return None
                 transaction_ref = proof_match.group(1)
@@ -116884,6 +120312,15 @@ def _project_update_terminal_cleanup_namespace_classification_read_only(
             allowed_reservation is None
             and expected_resume_ref is not None
             and not resumable_transaction_seen
+        ):
+            return None
+        if (
+            observed_runtime_cleanup_refs
+            != recoverable_runtime_cleanup_refs
+            or runtime_cleanup_inventory
+            != project_runtime.runtime_candidate_cleanup_sidecar_inventory(
+                project_root
+            )
         ):
             return None
         after = os.lstat(transaction_root)
@@ -117656,6 +121093,46 @@ def _project_update_terminal_handoff_state_read_only(
         return None
     value, raw = observed
     state = value.get("state")
+    if state == "terminal_ready_unapproved":
+        payload = value.get("payload")
+        authentication = value.get("authentication")
+        if (
+            value.get("schema")
+            != _PROJECT_UPDATE_CANCELLATION_TERMINAL_HANDOFF_SCHEMA
+            or set(value)
+            != {"authentication", "payload", "schema", "state"}
+            or not isinstance(payload, Mapping)
+            or payload.get("schema")
+            != _PROJECT_UPDATE_CANCELLATION_TERMINAL_PAYLOAD_SCHEMA
+            or payload.get("outcome") != "unapproved_restored"
+            or not isinstance(authentication, Mapping)
+            or set(authentication) != {"algorithm", "mac"}
+            or authentication.get("algorithm") != "hmac-sha256"
+            or re.fullmatch(
+                r"hmac-sha256:[0-9a-f]{64}",
+                str(authentication.get("mac") or ""),
+            )
+            is None
+        ):
+            raise ArchiveServiceError(
+                "project_version_update_terminal_handoff_invalid"
+            )
+        if _observation_out is not None:
+            _observation_out.append(
+                _ProjectUpdateTerminalHandoffObservation(
+                    state="terminal_ready_unapproved",
+                    raw_sha256=(
+                        project_update_transaction.sha256_bytes(raw)
+                    ),
+                    pending_record_sha256=(
+                        project_update_transaction.sha256_document(
+                            dict(payload)
+                        )
+                    ),
+                    transaction_ref=None,
+                )
+            )
+        return "terminal_ready_unapproved"
     expected_keys = (
         {"schema", "state", "pending"}
         if state == "claim_succeeded_pre_unlock"
@@ -117763,17 +121240,25 @@ def _project_update_terminal_execution_lease(
                 raise ArchiveServiceError(
                     "project_version_update_terminal_execution_boundary_unknown"
                 )
-            cleanup_result = (
-                _project_update_terminal_cleanup_unknown_gate_read_only(
-                    state.inspection_root,
-                    operator_resume_identifiers_supplied=False,
-                    archive_identity_metadata_read=True,
+            if getattr(state, "legacy_prewrite_recovery_control", None) is not None:
+                if not _project_update_legacy_recovery_execution_state_exact(
+                    state
+                ):
+                    raise ArchiveServiceError(
+                        "project_version_update_terminal_execution_boundary_unknown"
+                    )
+            else:
+                cleanup_result = (
+                    _project_update_terminal_cleanup_unknown_gate_read_only(
+                        state.inspection_root,
+                        operator_resume_identifiers_supplied=False,
+                        archive_identity_metadata_read=True,
+                    )
                 )
-            )
-            if cleanup_result is not None:
-                raise ArchiveServiceError(
-                    "project_version_update_terminal_execution_boundary_unknown"
-                )
+                if cleanup_result is not None:
+                    raise ArchiveServiceError(
+                        "project_version_update_terminal_execution_boundary_unknown"
+                    )
             execution_token = (
                 _PROJECT_UPDATE_TERMINAL_EXECUTION_LEASE.set(
                     (id(state), state.transaction.transaction_ref)
@@ -117794,6 +121279,280 @@ def _project_update_terminal_execution_lease(
         raise ArchiveServiceError(
             "project_version_update_terminal_execution_boundary_unknown"
         ) from None
+
+
+def _project_update_legacy_recovery_preapproval_state_exact(
+    state: _ProjectVersionUpdateDurableApprovalState,
+) -> bool:
+    """Verify the only intentional terminal-cleanup exception.
+
+    A legacy recovery deliberately has two control trees while its fresh
+    composite approval is pending: the immutable predecessor is in the
+    authenticated vault and the current-schema transaction is sealed at its
+    canonical ref.  The ordinary cleanup gate quite correctly classifies that
+    shape as nonterminal residue, so this narrow branch binds every component
+    before the approval executor may publish a fresh claim.
+    """
+
+    control = getattr(state, "legacy_prewrite_recovery_control", None)
+    if not isinstance(control, dict):
+        return False
+    paths = control.get("paths")
+    old_ref = control.get("old_transaction_ref")
+    old_tree_sha256 = control.get("old_transaction_tree_sha256")
+    old_lock_bytes = control.get("old_lock_bytes")
+    fresh_inventory = control.get("fresh_transaction_inventory")
+    fresh_inventory_document_sha256 = control.get(
+        "fresh_transaction_inventory_document_sha256"
+    )
+    intent_sha256 = control.get("intent_sha256")
+    journal_head_sha256 = control.get("journal_head_sha256")
+    locator_sha256 = control.get("locator_sha256")
+    with_store = control.get("with_store")
+    progress_callback = control.get("progress_callback")
+    lock_handoff_state = control.get("lock_handoff_state")
+    if (
+        not isinstance(paths, project_update_legacy_recovery.RecoveryPaths)
+        or type(old_ref) is not str
+        or project_update_transaction.TRANSACTION_REF_RE.fullmatch(old_ref)
+        is None
+        or type(old_tree_sha256) is not str
+        or type(old_lock_bytes) is not bytes
+        or not isinstance(fresh_inventory, Mapping)
+        or type(fresh_inventory_document_sha256) is not str
+        or type(intent_sha256) is not str
+        or type(journal_head_sha256) is not str
+        or type(locator_sha256) is not str
+        or not callable(with_store)
+        or (progress_callback is not None and not callable(progress_callback))
+    ):
+        return False
+
+    def report(count: int, byte_count: int) -> None:
+        if progress_callback is not None:
+            try:
+                progress_callback(
+                    "project-recovery-inventory",
+                    "running",
+                    count,
+                    byte_count,
+                )
+            except Exception:
+                pass
+
+    old_canonical = paths.project_root.joinpath(
+        *PurePosixPath(
+            project_update_legacy_recovery.TRANSACTION_ROOT_LOGICAL
+        ).parts,
+        old_ref,
+    )
+    try:
+        if os.path.lexists(old_canonical):
+            return False
+        if not hmac.compare_digest(
+            project_update_legacy_recovery._read_regular(
+                state.transaction._lock_path
+            ),
+            old_lock_bytes,
+        ):
+            return False
+        if not hmac.compare_digest(
+            project_update_legacy_recovery.directory_tree_sha256(
+                paths.old_transaction_vault,
+                progress_callback=report,
+            ),
+            old_tree_sha256,
+        ):
+            return False
+        if not hmac.compare_digest(
+            project_update_legacy_recovery.directory_tree_sha256(
+                state.transaction.transaction_root,
+                progress_callback=report,
+            ),
+            project_update_legacy_recovery.sha256_document(
+                fresh_inventory
+            ),
+        ):
+            return False
+        locator_raw = project_update_legacy_recovery._read_regular(
+            paths.locator_path
+        )
+        if not hmac.compare_digest(
+            project_update_legacy_recovery.sha256_bytes(locator_raw),
+            locator_sha256,
+        ):
+            return False
+        locator = with_store(lambda store: store.read_locator())
+        return bool(
+            isinstance(locator, Mapping)
+            and locator.get("state") == "fresh_plan_sealed"
+            and locator.get("intent_sha256") == intent_sha256
+            and locator.get("journal_head_sha256")
+            == journal_head_sha256
+        )
+    except BaseException:
+        return False
+
+
+def _project_update_legacy_recovery_execution_state_exact(
+    state: _ProjectVersionUpdateDurableApprovalState,
+) -> bool:
+    """Bind the exact recovery shape appropriate to the fresh tx phase.
+
+    Claim publication deliberately continues to use the narrower preapproval
+    predicate above.  The terminal execution lease, however, remains held
+    while the fresh lock is installed, components are written, the lock is
+    released, and the completed transaction is terminalized.  Requiring the
+    old-lock/preapproval shape throughout that lifetime makes every legitimate
+    post-activation resume fail closed.  This phase-aware predicate accepts
+    only those exact, authenticated shapes and still requires the immutable
+    predecessor vault at every stage.
+    """
+
+    control = getattr(state, "legacy_prewrite_recovery_control", None)
+    if not isinstance(control, dict):
+        return False
+    paths = control.get("paths")
+    old_ref = control.get("old_transaction_ref")
+    old_tree_sha256 = control.get("old_transaction_tree_sha256")
+    old_lock_bytes = control.get("old_lock_bytes")
+    fresh_inventory = control.get("fresh_transaction_inventory")
+    intent_sha256 = control.get("intent_sha256")
+    with_store = control.get("with_store")
+    progress_callback = control.get("progress_callback")
+    lock_handoff_state = control.get("lock_handoff_state")
+    if (
+        not isinstance(paths, project_update_legacy_recovery.RecoveryPaths)
+        or type(old_ref) is not str
+        or project_update_transaction.TRANSACTION_REF_RE.fullmatch(old_ref)
+        is None
+        or type(old_tree_sha256) is not str
+        or type(old_lock_bytes) is not bytes
+        or not isinstance(fresh_inventory, Mapping)
+        or type(intent_sha256) is not str
+        or not callable(with_store)
+        or (progress_callback is not None and not callable(progress_callback))
+    ):
+        return False
+
+    def report(count: int, byte_count: int) -> None:
+        if progress_callback is not None:
+            try:
+                progress_callback(
+                    "project-recovery-inventory",
+                    "running",
+                    count,
+                    byte_count,
+                )
+            except Exception:
+                pass
+
+    old_canonical = paths.project_root.joinpath(
+        *PurePosixPath(
+            project_update_legacy_recovery.TRANSACTION_ROOT_LOGICAL
+        ).parts,
+        old_ref,
+    )
+    lock_path = state.transaction._lock_path
+    public_old_backup = lock_path.parent / (
+        ".legacy-recovery-"
+        + paths.recovery_ref.removeprefix("recovery_")
+        + ".old-lock"
+    )
+    vaulted_old_backup = paths.recovery_root / "old-lock-backup"
+    try:
+        if os.path.lexists(old_canonical):
+            return False
+        if not hmac.compare_digest(
+            project_update_legacy_recovery.directory_tree_sha256(
+                paths.old_transaction_vault,
+                progress_callback=report,
+            ),
+            old_tree_sha256,
+        ):
+            return False
+        locator = with_store(lambda store: store.read_locator())
+        if (
+            not isinstance(locator, Mapping)
+            or locator.get("intent_sha256") != intent_sha256
+        ):
+            return False
+
+        # A legacy fresh transaction is intentionally sealed before it owns
+        # the public lock.  Until the atomic handoff, it therefore has no
+        # reservation/sealed-lock backlink and the ordinary ``inspect()``
+        # contract must reject it.  Prove that one special preapproval shape
+        # from the authenticated recovery inventory instead.  Once any fresh
+        # checkpoint exists, the regular transaction verifier below is again
+        # the single source of truth.
+        journal_path = state.transaction.transaction_root / "checkpoints.jsonl"
+        if lock_handoff_state in {None, "old", "backup_linked"} and not (
+            os.path.lexists(journal_path)
+        ):
+            return bool(
+                locator.get("state") == "fresh_plan_sealed"
+                and (
+                    lock_handoff_state == "backup_linked"
+                    or lock_handoff_state in {None, "old"}
+                    and os.path.lexists(lock_path)
+                    and hmac.compare_digest(
+                        project_update_legacy_recovery._read_regular(
+                            lock_path
+                        ),
+                        old_lock_bytes,
+                    )
+                )
+                and project_update_legacy_recovery.directory_tree_matches_inventory(
+                    state.transaction.transaction_root,
+                    fresh_inventory,
+                    retained_guard_logical="append.guard",
+                )
+            )
+
+        inspection = state.transaction.inspect()
+        if inspection.journal.state != "exact":
+            return False
+        checkpoints = tuple(inspection.journal.verified_prefix)
+        if not checkpoints:
+            return False
+
+        if checkpoints[0].phase != "lock_backlinked":
+            return False
+        head_phase = checkpoints[-1].phase
+        if head_phase in {"lock_released", "completed"}:
+            if os.path.lexists(lock_path):
+                return False
+        elif (
+            not os.path.lexists(lock_path)
+            or not hmac.compare_digest(
+                project_update_legacy_recovery._read_regular(lock_path),
+                state.expected_lock_bytes,
+            )
+        ):
+            return False
+
+        exact_backup_count = 0
+        for backup_path in (public_old_backup, vaulted_old_backup):
+            if not os.path.lexists(backup_path):
+                continue
+            if not hmac.compare_digest(
+                project_update_legacy_recovery._read_regular(backup_path),
+                old_lock_bytes,
+            ):
+                return False
+            exact_backup_count += 1
+        if exact_backup_count != 1:
+            return False
+        return locator.get("state") in {
+            "fresh_plan_sealed",
+            "fresh_lock_backlinked",
+            "fresh_transaction_completed",
+            "terminal_completed",
+        }
+    except project_update_legacy_recovery.LegacyProjectUpdateRecoveryError as failure:
+        raise ArchiveServiceError(failure.code) from None
+    except BaseException:
+        return False
 
 
 def _project_update_terminal_handoff_attachments(
@@ -117966,7 +121725,11 @@ def _project_update_terminal_postimage_matches(
                 maximum=maximum,
             )
             if (
-                observed is _PROJECT_UPDATE_UNSAFE_LIVE_COMPONENT
+                observed
+                in {
+                    _PROJECT_UPDATE_UNSAFE_LIVE_COMPONENT,
+                    _PROJECT_UPDATE_UNAVAILABLE_LIVE_COMPONENT,
+                }
                 or _project_update_raw_component_sha256(observed)
                 != component["post_sha256"]
             ):
@@ -118032,12 +121795,19 @@ def _project_update_replay_ready_terminal_handoff(
         _ProjectUpdateTerminalHandoffObservation | None
     ) = None,
     _terminal_control_lease_held: bool = False,
+    _legacy_recovery_terminalizer: (
+        Callable[[_ClaimedExactHumanApproval], None] | None
+    ) = None,
 ) -> dict[str, Any] | None:
     project_root = _project_update_resume_project_root_read_only(
         inspection_root
     )
     if (
         type(_terminal_control_lease_held) is not bool
+        or (
+            _legacy_recovery_terminalizer is not None
+            and not callable(_legacy_recovery_terminalizer)
+        )
         or _expected_handoff_observation is None
         or _expected_handoff_observation.state != "terminal_ready"
     ):
@@ -118059,6 +121829,9 @@ def _project_update_replay_ready_terminal_handoff(
                         _expected_handoff_observation
                     ),
                     _terminal_control_lease_held=True,
+                    _legacy_recovery_terminalizer=(
+                        _legacy_recovery_terminalizer
+                    ),
                 )
         except ArchiveServiceError:
             raise
@@ -118227,6 +122000,8 @@ def _project_update_replay_ready_terminal_handoff(
             raise ArchiveServiceError(
                 "project_version_update_terminal_handoff_invalid"
             )
+        if _legacy_recovery_terminalizer is not None:
+            _legacy_recovery_terminalizer(_claim)
 
     approval_executor(
         copy.deepcopy(preview),
@@ -118236,6 +122011,11 @@ def _project_update_replay_ready_terminal_handoff(
         succeeded_guard,
         str(pending_payload["reviewer"]),
         candidate_missing_handler=None,
+        **(
+            {"resume_existing_composite": True}
+            if _legacy_recovery_terminalizer is not None
+            else {}
+        ),
     )
     if verified is not True:
         raise ArchiveServiceError(
@@ -118480,6 +122260,175 @@ def _project_update_reauthenticate_consumed_terminal_delivery(
             "project_version_update_terminal_handoff_invalid"
         )
     return delivery_capability
+
+
+def _project_update_reauthenticate_cancellation_terminal_delivery(
+    inspection_root: Path | str,
+    *,
+    capsule_bytes: bytes,
+    expected_handoff_sha256: str,
+    expected_result: Mapping[str, Any],
+    key_provider: Any,
+    expected_approval_root: Path,
+    expected_archive_id: str,
+    _terminal_control_lease_held: bool = False,
+) -> str:
+    """Re-authenticate one retired cancellation capsule after process restart."""
+
+    if (
+        type(_terminal_control_lease_held) is not bool
+        or not isinstance(capsule_bytes, bytes)
+        or not capsule_bytes
+        or not _project_update_is_legacy_unapproved_terminal_result(
+            expected_result
+        )
+        or re.fullmatch(
+            r"sha256:[0-9a-f]{64}", str(expected_handoff_sha256 or "")
+        )
+        is None
+        or not hmac.compare_digest(
+            project_update_transaction.sha256_bytes(capsule_bytes),
+            expected_handoff_sha256,
+        )
+        or not callable(getattr(key_provider, "use_key", None))
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        )
+    project_root = _project_update_resume_project_root_read_only(inspection_root)
+    if not _terminal_control_lease_held:
+        try:
+            with _project_update_terminal_control_boundary(project_root):
+                return _project_update_reauthenticate_cancellation_terminal_delivery(
+                    inspection_root,
+                    capsule_bytes=capsule_bytes,
+                    expected_handoff_sha256=expected_handoff_sha256,
+                    expected_result=expected_result,
+                    key_provider=key_provider,
+                    expected_approval_root=expected_approval_root,
+                    expected_archive_id=expected_archive_id,
+                    _terminal_control_lease_held=True,
+                )
+        except ArchiveServiceError:
+            raise
+        except BaseException:
+            raise ArchiveServiceError(
+                "project_version_update_terminal_handoff_invalid"
+            ) from None
+    if _PROJECT_UPDATE_TERMINAL_CONTROL_LEASE.get() is None:
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        )
+    try:
+        document = project_update_transaction._parse_document(
+            capsule_bytes,
+            code="project_update_transaction_invalid",
+        )
+        if (
+            type(document) is not dict
+            or _project_update_canonical_bytes(document) != capsule_bytes
+        ):
+            raise ArchiveServiceError(
+                "project_version_update_terminal_handoff_invalid"
+            )
+        payload = document.get("payload")
+        recovery_ref = (
+            payload.get("recovery_ref") if isinstance(payload, Mapping) else None
+        )
+        if (
+            type(recovery_ref) is not str
+            or re.fullmatch(r"recovery_[0-9a-f]{32}", recovery_ref) is None
+        ):
+            raise ArchiveServiceError(
+                "project_version_update_terminal_handoff_invalid"
+            )
+        resolved = project_update_legacy_recovery.resolve_terminal_recovery(
+            project_root,
+            expected_approval_root,
+            recovery_ref,
+            key_provider,
+            create_if_missing=False,
+        )
+        expected_archive_identity_sha256 = (
+            exact_human_approval_archive_identity_sha256(expected_archive_id)
+        )
+        if (
+            resolved.outcome != "unapproved_restored"
+            or resolved.archive_identity_sha256
+            != expected_archive_identity_sha256
+            or resolved.recovery_ref != recovery_ref
+        ):
+            raise ArchiveServiceError(
+                "project_version_update_terminal_handoff_invalid"
+            )
+
+        def authenticate(key: memoryview) -> str:
+            verified_result, capability = (
+                _project_update_verify_cancellation_terminal_document(
+                    document,
+                    expected_archive_identity_sha256=(
+                        expected_archive_identity_sha256
+                    ),
+                    key=key,
+                )
+            )
+            verified_payload = document.get("payload")
+            if (
+                not _project_update_is_legacy_unapproved_terminal_result(
+                    verified_result
+                )
+                or not hmac.compare_digest(
+                    project_update_transaction.canonical_json_bytes(
+                        dict(verified_result)
+                    ),
+                    project_update_transaction.canonical_json_bytes(
+                        dict(expected_result)
+                    ),
+                )
+                or not isinstance(verified_payload, Mapping)
+                or verified_payload.get("intent_sha256")
+                != resolved.intent_sha256
+                or verified_payload.get("terminal_receipt_sha256")
+                != resolved.terminal_receipt_document_sha256
+                or verified_payload.get(
+                    "cancellation_result_document_sha256"
+                )
+                != resolved.cancellation_result_document_sha256
+                or verified_payload.get("result_payload_sha256")
+                != resolved.cancellation_result_sha256
+            ):
+                raise ArchiveServiceError(
+                    "project_version_update_terminal_handoff_invalid"
+                )
+            return capability
+
+        capability = key_provider.use_key(
+            expected_approval_root,
+            authenticate,
+            create_if_missing=False,
+        )
+        if type(capability) is not str:
+            raise ArchiveServiceError(
+                "project_version_update_terminal_handoff_invalid"
+            )
+        _project_update_register_terminal_delivery_capability(
+            expected_handoff_sha256,
+            capability,
+        )
+        return capability
+    except ArchiveServiceError:
+        raise
+    except (
+        project_update_legacy_recovery.LegacyProjectUpdateRecoveryError,
+        project_update_transaction.ProjectUpdateTransactionError,
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        ) from None
+    except BaseException:
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        ) from None
 
 
 def _project_update_resume_authenticated_terminal_cleanup(
@@ -119000,11 +122949,17 @@ def _project_update_acknowledge_terminal_result_delivery(
     """Move one exact ready handoff to durable display-pending state."""
 
     terminal = result.get("terminal_finalization")
+    cancellation_result = (
+        _project_update_is_legacy_unapproved_terminal_result(result)
+    )
     if (
         not isinstance(terminal, Mapping)
         or terminal.get("durable_terminal_handoff_ready") is not True
-        or terminal.get("transaction_cleanup_completed") is not True
-        or result.get("ok") is not True
+        or not (
+            cancellation_result
+            or terminal.get("transaction_cleanup_completed") is True
+            and result.get("ok") is True
+        )
         or type(output_relative) is not str
         or not output_relative.startswith(
             _PROJECT_UPDATE_OUTPUT_LOGICAL_PREFIX
@@ -119057,9 +123012,11 @@ def _project_update_acknowledge_terminal_result_delivery(
         or cli_execution.get("status") != "completed"
         or cli_execution.get("command") != "project-version-update"
         or cli_execution.get("result_available") is not True
-        or cli_execution.get("exit_code") != 0
+        or cli_execution.get("exit_code")
+        != (1 if cancellation_result else 0)
         or cli_execution.get("run_id") != run_id
-        or output_document.get("ok") is not True
+        or output_document.get("ok")
+        is not (False if cancellation_result else True)
         or output_document.get("status") != result.get("status")
     ):
         return False
@@ -119078,7 +123035,15 @@ def _project_update_acknowledge_terminal_result_delivery(
         project_root
     )
     observed = _project_update_read_terminal_document(project_root, handoff)
-    if observed is None or observed[0].get("state") != "terminal_ready":
+    expected_handoff_state = (
+        "terminal_ready_unapproved"
+        if cancellation_result
+        else "terminal_ready"
+    )
+    if (
+        observed is None
+        or observed[0].get("state") != expected_handoff_state
+    ):
         return False
     handoff_sha256 = project_update_transaction.sha256_bytes(observed[1])
     pending = observed[0].get("pending")
@@ -119091,12 +123056,23 @@ def _project_update_acknowledge_terminal_result_delivery(
         capability = _PROJECT_UPDATE_TERMINAL_DELIVERY_CAPABILITIES.get(
             handoff_sha256
         )
+    cancellation_payload = observed[0].get("payload")
+    capability_sha256 = (
+        _project_update_terminal_document_capability_sha256(observed[0])
+    )
     if (
-        type(ready_payload) is not dict
-        or type(pending) is not dict
-        or not _project_update_terminal_result_matches_pending(
-            result,
-            pending,
+        not (
+            cancellation_result
+            and isinstance(cancellation_payload, Mapping)
+            and cancellation_payload.get("result_payload_sha256")
+            == result_payload_sha256
+            or not cancellation_result
+            and type(ready_payload) is dict
+            and type(pending) is dict
+            and _project_update_terminal_result_matches_pending(
+                result,
+                pending,
+            )
         )
         or type(capability) is not str
         or re.fullmatch(r"hmac-sha256:[0-9a-f]{64}", capability) is None
@@ -119104,9 +123080,7 @@ def _project_update_acknowledge_terminal_result_delivery(
             project_update_transaction.sha256_bytes(
                 capability.encode("ascii")
             ),
-            str(
-                ready_payload.get("delivery_capability_sha256") or ""
-            ),
+            str(capability_sha256 or ""),
         )
         or type(operation) is not dict
         or operation.get("operation_ref") != operation_ref
@@ -119156,17 +123130,15 @@ def _project_update_acknowledge_terminal_result_delivery(
                     project_update_transaction.sha256_bytes(current[1]),
                     handoff_sha256,
                 )
-                or current[0].get("state") != "terminal_ready"
+                or current[0].get("state") != expected_handoff_state
                 or not hmac.compare_digest(
                     project_update_transaction.sha256_bytes(
                         capability.encode("ascii")
                     ),
                     str(
-                        (
-                            current[0].get("ready", {}).get("payload", {})
-                            if type(current[0].get("ready")) is dict
-                            else {}
-                        ).get("delivery_capability_sha256")
+                        _project_update_terminal_document_capability_sha256(
+                            current[0]
+                        )
                         or ""
                     ),
                 )
@@ -119282,24 +123254,18 @@ def _project_update_finalize_terminal_result_display(
                     )
                 ):
                     return False
-                existing_ready = existing[0].get("ready")
-                existing_ready_payload = (
-                    existing_ready.get("payload")
-                    if type(existing_ready) is dict
-                    else None
+                existing_capability_sha256 = (
+                    _project_update_terminal_document_capability_sha256(
+                        existing[0]
+                    )
                 )
                 if (
-                    type(existing_ready_payload) is not dict
+                    existing_capability_sha256 is None
                     or not hmac.compare_digest(
                         project_update_transaction.sha256_bytes(
                             delivery_capability.encode("ascii")
                         ),
-                        str(
-                            existing_ready_payload.get(
-                                "delivery_capability_sha256"
-                            )
-                            or ""
-                        ),
+                        existing_capability_sha256,
                     )
                 ):
                     return False
@@ -119319,22 +123285,18 @@ def _project_update_finalize_terminal_result_display(
                 )
             ):
                 return False
-            ready = observed[0].get("ready")
-            ready_payload = (
-                ready.get("payload") if type(ready) is dict else None
+            observed_capability_sha256 = (
+                _project_update_terminal_document_capability_sha256(
+                    observed[0]
+                )
             )
             if (
-                type(ready_payload) is not dict
+                observed_capability_sha256 is None
                 or not hmac.compare_digest(
                     project_update_transaction.sha256_bytes(
                         delivery_capability.encode("ascii")
                     ),
-                    str(
-                        ready_payload.get(
-                            "delivery_capability_sha256"
-                        )
-                        or ""
-                    ),
+                    observed_capability_sha256,
                 )
             ):
                 return False
@@ -119402,6 +123364,25 @@ def _project_update_terminal_cleanup_unknown_preflight_read_only(
         raise ArchiveServiceError(
             "project_version_update_resume_locator_changed"
         )
+    project_root = _project_update_resume_project_root_read_only(
+        inspection_root
+    )
+
+    legacy_locator_presence = (
+        project_update_legacy_recovery.active_locator_presence_read_only(
+            project_root
+        )
+    )
+    if legacy_locator_presence == "present_unverified":
+        # Content remains unread here.  The caller proceeds only far enough to
+        # enter the existing archive-key and terminal-control boundaries,
+        # where the locator, intent, and checkpoint chain are authenticated
+        # before any transaction or domain writer can be selected.
+        if approval_identifier_supplied:
+            raise ArchiveServiceError(
+                "exact_human_approval_resume_claim_invalid"
+            )
+        return None
     result = _project_update_terminal_cleanup_unknown_gate_read_only(
         inspection_root,
         operator_resume_identifiers_supplied=(
@@ -119419,6 +123400,1872 @@ def _project_update_terminal_cleanup_unknown_preflight_read_only(
     return result
 
 
+_PROJECT_UPDATE_LEGACY_RECOVERY_LOCATOR_TAIL = {
+    "intent_sealed": None,
+    "legacy_eligible": "legacy_eligibility_verified",
+    "old_transaction_staged": "old_transaction_staged",
+    "fresh_transaction_allocated": "fresh_transaction_allocated",
+    "fresh_reservation_bound": "fresh_reservation_bound",
+    "fresh_plan_sealed": "fresh_plan_sealed",
+    "fresh_lock_backlinked": "fresh_lock_backlinked",
+    "cancelled_fresh_staged": "cancelled_fresh_staged",
+    "cancelled_fresh_cleaned": "cancelled_fresh_cleaned",
+    "unapproved_restored": "unapproved_restored",
+    "fresh_transaction_completed": "fresh_transaction_completed",
+    # The terminal tail is outcome-dependent and is selected only after the
+    # authenticated terminal receipt has been verified.
+    "terminal_completed": None,
+}
+
+
+_PROJECT_UPDATE_LEGACY_RECOVERY_BRANCH_BY_LOCATOR = {
+    "intent_sealed": "bootstrap",
+    "legacy_eligible": "bootstrap",
+    "old_transaction_staged": "reserve",
+    "fresh_transaction_allocated": "reserve",
+    "fresh_reservation_bound": "prepare_plan",
+    "fresh_plan_sealed": "approval_or_claim_resume",
+    "fresh_lock_backlinked": "writer_resume",
+    "cancelled_fresh_staged": "cancellation",
+    "cancelled_fresh_cleaned": "cancellation",
+    "unapproved_restored": "cancellation",
+    "fresh_transaction_completed": "terminal",
+    "terminal_completed": "terminal",
+}
+
+
+def _project_update_legacy_recovery_branch(
+    locator_state: str,
+    *,
+    terminal_outcome: str | None,
+) -> str:
+    """Classify one authenticated recovery tail before opening artifacts.
+
+    This table is intentionally content-free.  In particular, callers must
+    not open the fresh transaction tree until the returned branch requires
+    it: cancellation and terminal recovery remain valid after that tree has
+    been moved to its exact vault or removed.
+    """
+
+    branch = _PROJECT_UPDATE_LEGACY_RECOVERY_BRANCH_BY_LOCATOR.get(
+        locator_state
+    )
+    if branch is None:
+        raise ArchiveServiceError(
+            "project_version_update_legacy_recovery_state_ambiguous"
+        )
+    if locator_state == "terminal_completed":
+        if terminal_outcome not in {"success", "unapproved_restored"}:
+            raise ArchiveServiceError(
+                "project_version_update_legacy_recovery_state_ambiguous"
+            )
+    elif locator_state == "fresh_transaction_completed":
+        if terminal_outcome != "success":
+            raise ArchiveServiceError(
+                "project_version_update_legacy_recovery_state_ambiguous"
+            )
+    elif locator_state == "unapproved_restored":
+        if terminal_outcome not in {None, "unapproved_restored"}:
+            raise ArchiveServiceError(
+                "project_version_update_legacy_recovery_state_ambiguous"
+            )
+    elif terminal_outcome is not None:
+        # A terminal receipt is authority only at the documented terminal
+        # phases.  An authenticated but out-of-order receipt is preserved and
+        # blocked instead of being used to infer a transition.
+        raise ArchiveServiceError(
+            "project_version_update_legacy_recovery_state_ambiguous"
+        )
+    return branch
+
+
+def _project_update_legacy_unapproved_restored_result() -> dict[str, Any]:
+    """Return the one content-free replay for a proven claimless restore."""
+
+    return project_update_legacy_recovery.cancellation_result_document()
+
+
+def _project_update_is_exact_native_approval_denial(
+    failure: BaseException,
+) -> bool:
+    """Admit cancellation authority only from the exact native broker type."""
+
+    try:
+        from .exact_human_approval_workflow import (
+            ExactHumanApprovalWorkflowError,
+        )
+
+        return bool(
+            type(failure) is ExactHumanApprovalWorkflowError
+            and getattr(failure, "code", None)
+            == "exact_human_approval_cancelled"
+        )
+    except BaseException:
+        return False
+
+
+def _project_update_is_legacy_unapproved_terminal_result(
+    result: Mapping[str, Any],
+) -> bool:
+    """Recognize only the fixed, content-free cancellation projection."""
+
+    if not isinstance(result, Mapping):
+        return False
+    expected = _project_update_legacy_unapproved_restored_result()
+    try:
+        return hmac.compare_digest(
+            project_update_transaction.canonical_json_bytes(dict(result)),
+            project_update_transaction.canonical_json_bytes(expected),
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+def _project_update_legacy_old_lock_bytes(
+    resolved: project_update_legacy_recovery.ResolvedActiveRecovery,
+) -> bytes:
+    """Reconstruct predecessor lock bytes from its sole exact transaction tree."""
+
+    try:
+        expected_tree = str(
+            resolved.intent.get("old_transaction_sha256") or ""
+        )
+        old_ref = str(resolved.intent.get("old_transaction_ref") or "")
+        old_canonical = resolved.paths.project_root.joinpath(
+            *PurePosixPath(
+                project_update_transaction.TRANSACTION_ROOT_LOGICAL
+            ).parts,
+            old_ref,
+        )
+        candidates = tuple(
+            path
+            for path in (resolved.paths.old_transaction_vault, old_canonical)
+            if os.path.lexists(path)
+        )
+        if (
+            len(candidates) != 1
+            or re.fullmatch(r"update_[0-9a-f]{32}", old_ref) is None
+            or
+            project_update_legacy_recovery.directory_tree_sha256(
+                candidates[0]
+            )
+            != expected_tree
+        ):
+            raise ArchiveServiceError(
+                "project_version_update_legacy_recovery_state_changed"
+            )
+        marker_raw = project_update_legacy_recovery._read_regular(
+            candidates[0] / "marker.json"
+        )
+        marker = json.loads(marker_raw.decode("utf-8"))
+        reservation = (
+            project_update_transaction.ProjectUpdateReservation.from_document(
+                marker
+            )
+        )
+        old_lock_bytes = project_update_transaction.lock_document_bytes(
+            project_update_transaction.build_lock_document(reservation)
+        )
+        if project_update_transaction.sha256_bytes(
+            old_lock_bytes
+        ) != resolved.intent.get("old_lock_sha256"):
+            raise ArchiveServiceError(
+                "project_version_update_legacy_recovery_state_changed"
+            )
+        return old_lock_bytes
+    except ArchiveServiceError:
+        raise
+    except BaseException:
+        raise ArchiveServiceError(
+            "project_version_update_legacy_recovery_state_ambiguous"
+        ) from None
+
+
+def _project_update_resume_legacy_cancellation(
+    *,
+    resolved: project_update_legacy_recovery.ResolvedActiveRecovery,
+    with_store: Callable[[Callable[[Any], Any]], Any],
+    expected_approval_root: Path,
+    expected_archive_id: str,
+    key_provider: Any,
+) -> dict[str, Any]:
+    """Advance only the authenticated cancellation prefix to one terminal result."""
+
+    plan = resolved.cancellation_plan
+    inventory = resolved.fresh_transaction_inventory
+    prospective = resolved.prospective_plan
+    result = resolved.cancellation_result
+    fresh_ref = resolved.fresh_transaction_ref
+    if (
+        not isinstance(plan, Mapping)
+        or not isinstance(inventory, Mapping)
+        or not isinstance(prospective, Mapping)
+        or not _project_update_is_legacy_unapproved_terminal_result(result or {})
+        or type(fresh_ref) is not str
+        or type(resolved.cancellation_plan_document_sha256) is not str
+        or type(resolved.cancellation_result_document_sha256) is not str
+        or type(resolved.cancellation_result_sha256) is not str
+        or type(resolved.fresh_transaction_inventory_document_sha256) is not str
+        or type(resolved.fresh_transaction_inventory_sha256) is not str
+        or plan.get("fresh_transaction_ref") != fresh_ref
+        or plan.get("intent_sha256") != resolved.intent_sha256
+        or plan.get("prospective_plan_document_sha256")
+        != resolved.prospective_plan_document_sha256
+        or _PROJECT_UPDATE_TERMINAL_CONTROL_LEASE.get() is None
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_legacy_recovery_state_ambiguous"
+        )
+    phases = [str(item.get("phase") or "") for item in resolved.checkpoints]
+    control: dict[str, Any] = {
+        "with_store": with_store,
+        "intent_sha256": resolved.intent_sha256,
+        "journal_head_sha256": resolved.journal_head_sha256,
+        "locator_sha256": resolved.locator_sha256,
+        "recovery_phase": str(resolved.locator.get("state") or ""),
+    }
+
+    stage_document = resolved.cancellation_stage_evidence
+    stage_document_sha256 = resolved.cancellation_stage_evidence_document_sha256
+    if stage_document is None:
+        stage_state = (
+            project_update_legacy_recovery.stage_cancelled_fresh_transaction(
+                resolved.paths,
+                fresh_transaction_ref=fresh_ref,
+                fresh_transaction_inventory=inventory,
+            )
+        )
+        stage_document = (
+            project_update_legacy_recovery.cancellation_stage_evidence_document(
+                recovery_ref=resolved.paths.recovery_ref,
+                intent_sha256=resolved.intent_sha256,
+                fresh_transaction_ref=fresh_ref,
+                cancellation_plan_document_sha256=(
+                    resolved.cancellation_plan_document_sha256
+                ),
+                claim_absence_evidence_sha256=str(
+                    plan.get("claim_absence_evidence_sha256") or ""
+                ),
+                fresh_transaction_inventory_sha256=(
+                    resolved.fresh_transaction_inventory_sha256
+                ),
+                fresh_transaction_inventory_document_sha256=(
+                    resolved.fresh_transaction_inventory_document_sha256
+                ),
+                stage_state=stage_state,
+            )
+        )
+        stage_document_sha256 = with_store(
+            lambda store: store.write_cancellation_stage_evidence(
+                stage_document
+            )
+        )
+    if type(stage_document_sha256) is not str:
+        raise ArchiveServiceError(
+            "project_version_update_legacy_recovery_state_ambiguous"
+        )
+    if not phases or phases[-1] == "fresh_plan_sealed":
+        _project_update_legacy_recovery_checkpoint_control(
+            control,
+            phase="cancelled_fresh_staged",
+            evidence_sha256=stage_document_sha256,
+            locator_state="cancelled_fresh_staged",
+        )
+        phases.append("cancelled_fresh_staged")
+    elif phases[-1] not in {
+        "cancelled_fresh_staged",
+        "cancelled_fresh_cleaned",
+        "unapproved_restored",
+    }:
+        raise ArchiveServiceError(
+            "project_version_update_legacy_recovery_state_ambiguous"
+        )
+
+    cleanup_document = resolved.cancellation_cleanup_evidence
+    cleanup_document_sha256 = (
+        resolved.cancellation_cleanup_evidence_document_sha256
+    )
+    if cleanup_document is None:
+        cleanup_state = (
+            project_update_legacy_recovery.delete_cancelled_fresh_transaction(
+                resolved.paths,
+                fresh_transaction_inventory=inventory,
+            )
+        )
+        cleanup_document = (
+            project_update_legacy_recovery.cancellation_cleanup_evidence_document(
+                recovery_ref=resolved.paths.recovery_ref,
+                intent_sha256=resolved.intent_sha256,
+                fresh_transaction_ref=fresh_ref,
+                cancellation_plan_document_sha256=(
+                    resolved.cancellation_plan_document_sha256
+                ),
+                cancellation_stage_evidence_document_sha256=(
+                    stage_document_sha256
+                ),
+                fresh_transaction_inventory_sha256=(
+                    resolved.fresh_transaction_inventory_sha256
+                ),
+                fresh_transaction_inventory_document_sha256=(
+                    resolved.fresh_transaction_inventory_document_sha256
+                ),
+                cleanup_state=cleanup_state,
+            )
+        )
+        cleanup_document_sha256 = with_store(
+            lambda store: store.write_cancellation_cleanup_evidence(
+                cleanup_document
+            )
+        )
+    if type(cleanup_document_sha256) is not str:
+        raise ArchiveServiceError(
+            "project_version_update_legacy_recovery_state_ambiguous"
+        )
+    if phases[-1] == "cancelled_fresh_staged":
+        _project_update_legacy_recovery_checkpoint_control(
+            control,
+            phase="cancelled_fresh_cleaned",
+            evidence_sha256=cleanup_document_sha256,
+            locator_state="cancelled_fresh_cleaned",
+        )
+        phases.append("cancelled_fresh_cleaned")
+    elif phases[-1] not in {"cancelled_fresh_cleaned", "unapproved_restored"}:
+        raise ArchiveServiceError(
+            "project_version_update_legacy_recovery_state_ambiguous"
+        )
+
+    old_lock_bytes = _project_update_legacy_old_lock_bytes(resolved)
+    restore_document = resolved.cancellation_restore_evidence
+    restore_document_sha256 = (
+        resolved.cancellation_restore_evidence_document_sha256
+    )
+    if restore_document is None:
+        restore_state = project_update_legacy_recovery.restore_old_transaction(
+            resolved.paths,
+            old_transaction_ref=str(resolved.intent["old_transaction_ref"]),
+            expected_tree_sha256=str(
+                resolved.intent["old_transaction_sha256"]
+            ),
+        )
+        lock_path = resolved.paths.project_root.joinpath(
+            *PurePosixPath(project_update_legacy_recovery.LOCK_LOGICAL).parts
+        )
+        if not hmac.compare_digest(
+            project_update_legacy_recovery._read_regular(lock_path),
+            old_lock_bytes,
+        ):
+            raise ArchiveServiceError(
+                "project_version_update_legacy_recovery_state_changed"
+            )
+        restore_document = (
+            project_update_legacy_recovery.cancellation_restore_evidence_document(
+                recovery_ref=resolved.paths.recovery_ref,
+                intent_sha256=resolved.intent_sha256,
+                fresh_transaction_ref=fresh_ref,
+                cancellation_plan_document_sha256=(
+                    resolved.cancellation_plan_document_sha256
+                ),
+                cancellation_cleanup_evidence_document_sha256=(
+                    cleanup_document_sha256
+                ),
+                old_transaction_ref=str(resolved.intent["old_transaction_ref"]),
+                old_transaction_sha256=str(
+                    resolved.intent["old_transaction_sha256"]
+                ),
+                old_lock_sha256=str(resolved.intent["old_lock_sha256"]),
+                restore_state=restore_state,
+            )
+        )
+        restore_document_sha256 = with_store(
+            lambda store: store.write_cancellation_restore_evidence(
+                restore_document
+            )
+        )
+    if type(restore_document_sha256) is not str:
+        raise ArchiveServiceError(
+            "project_version_update_legacy_recovery_state_ambiguous"
+        )
+    if phases[-1] == "cancelled_fresh_cleaned":
+        _project_update_legacy_recovery_checkpoint_control(
+            control,
+            phase="unapproved_restored",
+            evidence_sha256=restore_document_sha256,
+            locator_state="unapproved_restored",
+        )
+        phases.append("unapproved_restored")
+    elif phases[-1] != "unapproved_restored":
+        raise ArchiveServiceError(
+            "project_version_update_legacy_recovery_state_ambiguous"
+        )
+
+    receipt = resolved.terminal_receipt
+    receipt_sha256 = resolved.terminal_receipt_document_sha256
+    if receipt is None:
+        journal_head_sha256 = control.get("journal_head_sha256")
+        if type(journal_head_sha256) is not str:
+            raise ArchiveServiceError(
+                "project_version_update_legacy_recovery_state_ambiguous"
+            )
+        receipt = project_update_legacy_recovery.terminal_receipt_document(
+            recovery_ref=resolved.paths.recovery_ref,
+            outcome="unapproved_restored",
+            intent_sha256=resolved.intent_sha256,
+            journal_head_sha256=journal_head_sha256,
+            fresh_transaction_ref=fresh_ref,
+            old_transaction_inventory_sha256=str(
+                resolved.intent["old_transaction_sha256"]
+            ),
+            claim_absence_evidence_sha256=str(
+                plan["claim_absence_evidence_sha256"]
+            ),
+            cancelled_fresh_staging_sha256=(
+                project_update_legacy_recovery.sha256_document(stage_document)
+            ),
+            cancelled_fresh_transaction_inventory_sha256=(
+                resolved.fresh_transaction_inventory_sha256
+            ),
+            cancelled_fresh_transaction_inventory_document_sha256=(
+                resolved.fresh_transaction_inventory_document_sha256
+            ),
+            cancelled_fresh_cleanup_evidence_sha256=(
+                project_update_legacy_recovery.sha256_document(cleanup_document)
+            ),
+            restored_old_transaction_sha256=str(
+                resolved.intent["old_transaction_sha256"]
+            ),
+            preserved_old_lock_sha256=str(resolved.intent["old_lock_sha256"]),
+            cancellation_plan_document_sha256=(
+                resolved.cancellation_plan_document_sha256
+            ),
+            cancellation_result_document_sha256=(
+                resolved.cancellation_result_document_sha256
+            ),
+            cancellation_result_sha256=resolved.cancellation_result_sha256,
+            cancelled_fresh_staging_document_sha256=stage_document_sha256,
+            cancelled_fresh_cleanup_evidence_document_sha256=(
+                cleanup_document_sha256
+            ),
+            restored_evidence_sha256=(
+                project_update_legacy_recovery.sha256_document(restore_document)
+            ),
+            restored_evidence_document_sha256=restore_document_sha256,
+        )
+        receipt_sha256 = with_store(
+            lambda store: store.write_terminal_receipt(receipt)
+        )
+    if type(receipt_sha256) is not str:
+        raise ArchiveServiceError(
+            "project_version_update_legacy_recovery_state_ambiguous"
+        )
+    _project_update_publish_legacy_cancellation_handoff_exact(
+        project_root=resolved.paths.project_root,
+        expected_approval_root=expected_approval_root,
+        expected_archive_id=expected_archive_id,
+        paths=resolved.paths,
+        intent_sha256=resolved.intent_sha256,
+        terminal_receipt_sha256=receipt_sha256,
+        cancellation_result_document_sha256=(
+            resolved.cancellation_result_document_sha256
+        ),
+        key_provider=key_provider,
+    )
+    with_store(
+        lambda store: store.publish_terminal_locator_and_retire(
+            intent_sha256=resolved.intent_sha256,
+            journal_head_sha256=str(control["journal_head_sha256"]),
+            previous_locator_sha256=str(control["locator_sha256"]),
+            terminal_receipt_sha256=receipt_sha256,
+        )
+    )
+    return project_update_legacy_recovery.cancellation_result_document()
+
+
+def _project_update_legacy_abandonment_sha256(
+    resolved: project_update_legacy_recovery.ResolvedActiveRecovery,
+) -> str:
+    """Rebuild the content-free predecessor abandonment authority exactly."""
+
+    old_ref = str(resolved.intent.get("old_transaction_ref") or "")
+    old_canonical = resolved.paths.project_root.joinpath(
+        *PurePosixPath(
+            project_update_transaction.TRANSACTION_ROOT_LOGICAL
+        ).parts,
+        old_ref,
+    )
+    candidates = tuple(
+        path
+        for path in (old_canonical, resolved.paths.old_transaction_vault)
+        if os.path.lexists(path)
+    )
+    try:
+        if (
+            len(candidates) != 1
+            or project_update_transaction.TRANSACTION_REF_RE.fullmatch(
+                old_ref
+            )
+            is None
+            or project_update_legacy_recovery.directory_tree_sha256(
+                candidates[0]
+            )
+            != resolved.intent.get("old_transaction_sha256")
+        ):
+            raise ArchiveServiceError(
+                "project_version_update_legacy_recovery_state_changed"
+            )
+        old_intent_sha256 = project_update_transaction.sha256_bytes(
+            project_update_legacy_recovery._read_regular(
+                candidates[0] / "intent.json"
+            )
+        )
+        return project_update_transaction.sha256_document(
+            {
+                "old_claim_sha256": resolved.intent["old_claim_sha256"],
+                "old_intent_sha256": old_intent_sha256,
+                "old_live_components_sha256": resolved.intent[
+                    "old_live_components_sha256"
+                ],
+                "old_lock_sha256": resolved.intent["old_lock_sha256"],
+                "old_transaction_sha256": resolved.intent[
+                    "old_transaction_sha256"
+                ],
+                "schema": (
+                    "wom-kit/project-update-legacy-abandonment/v0.4.19"
+                ),
+            }
+        )
+    except ArchiveServiceError:
+        raise
+    except BaseException:
+        raise ArchiveServiceError(
+            "project_version_update_legacy_recovery_state_ambiguous"
+        ) from None
+
+
+def _project_update_resume_legacy_preplan(
+    inspection_root: Path | str,
+    *,
+    resolved: project_update_legacy_recovery.ResolvedActiveRecovery,
+    with_store: Callable[[Callable[[Any], Any]], Any],
+    approval_executor: Callable[..., Mapping[str, Any]],
+    progress_callback: (
+        Callable[[str, str, int | None, int | None], None] | None
+    ),
+    expected_approval_root: Path,
+    expected_archive_id: str,
+    key_provider: Any,
+    resume_boundary: Callable[[], Any],
+) -> dict[str, Any]:
+    """Advance authenticated A-C recovery phases before native approval.
+
+    Every filesystem effect is idempotently re-observed, then followed by its
+    authenticated checkpoint and locator before the next phase starts.  A
+    power cut at any of those boundaries therefore performs no UI or domain
+    write; the next invocation repeats only the exact unfinished transition.
+    """
+
+    project_root = resolved.paths.project_root
+
+    def refresh() -> project_update_legacy_recovery.ResolvedActiveRecovery:
+        return project_update_legacy_recovery.resolve_active_recovery(
+            project_root,
+            expected_approval_root,
+            key_provider,
+            create_if_missing=False,
+        )
+
+    def checkpoint(
+        current: project_update_legacy_recovery.ResolvedActiveRecovery,
+        *,
+        phase: str,
+        evidence_sha256: str,
+        locator_state: str,
+    ) -> project_update_legacy_recovery.ResolvedActiveRecovery:
+        control = {
+            "with_store": with_store,
+            "intent_sha256": current.intent_sha256,
+            "journal_head_sha256": current.journal_head_sha256,
+            "locator_sha256": current.locator_sha256,
+            "recovery_phase": str(current.locator.get("state") or ""),
+        }
+        _project_update_legacy_recovery_checkpoint_control(
+            control,
+            phase=phase,
+            evidence_sha256=evidence_sha256,
+            locator_state=locator_state,
+        )
+        return refresh()
+
+    while True:
+        locator_state = str(resolved.locator.get("state") or "")
+        abandonment_sha256 = _project_update_legacy_abandonment_sha256(
+            resolved
+        )
+        if locator_state == "intent_sealed":
+            resolved = checkpoint(
+                resolved,
+                phase="legacy_eligibility_verified",
+                evidence_sha256=abandonment_sha256,
+                locator_state="legacy_eligible",
+            )
+            continue
+        if locator_state == "legacy_eligible":
+            staged = project_update_legacy_recovery.stage_old_transaction(
+                resolved.paths,
+                old_transaction_ref=str(
+                    resolved.intent["old_transaction_ref"]
+                ),
+                expected_tree_sha256=str(
+                    resolved.intent["old_transaction_sha256"]
+                ),
+            )
+            stage_evidence_sha256 = (
+                project_update_transaction.sha256_document(
+                    {
+                        "old_transaction_sha256": resolved.intent[
+                            "old_transaction_sha256"
+                        ],
+                        "schema": (
+                            "wom-kit/project-update-legacy-stage-evidence/"
+                            "v0.4.19"
+                        ),
+                        "state": staged,
+                    }
+                )
+            )
+            resolved = checkpoint(
+                resolved,
+                phase="old_transaction_staged",
+                evidence_sha256=stage_evidence_sha256,
+                locator_state="old_transaction_staged",
+            )
+            continue
+        if locator_state == "old_transaction_staged":
+            if resolved.fresh_allocation is not None:
+                if type(
+                    resolved.fresh_allocation_document_sha256
+                ) is not str:
+                    raise ArchiveServiceError(
+                        "project_version_update_legacy_recovery_state_ambiguous"
+                    )
+                resolved = checkpoint(
+                    resolved,
+                    phase="fresh_transaction_allocated",
+                    evidence_sha256=(
+                        resolved.fresh_allocation_document_sha256
+                    ),
+                    locator_state="fresh_transaction_allocated",
+                )
+                continue
+            if resolved.pre_fetch_ref_snapshot is None:
+                runner_lifetime = _ProjectVersionUpdateGitRunnerLifetime()
+                try:
+                    runner = runner_lifetime.acquire_preapproval()
+                    observation = (
+                        _wom_kit_project_update_pre_fetch_ref_snapshot_observation(
+                            project_root / ".zettel-kasten" / "source",
+                            str(
+                                resolved.fresh_approval_seed[
+                                    "requested_target_tag"
+                                ]
+                            ),
+                            runner=runner,
+                        )
+                    )
+                finally:
+                    runner_lifetime.close_after_service_transaction()
+                snapshot = observation.get("snapshot")
+                target_tag = str(
+                    resolved.fresh_approval_seed.get(
+                        "requested_target_tag"
+                    )
+                    or ""
+                )
+                if (
+                    observation.get("state") != "passed"
+                    or observation.get("reason_code") != "verified"
+                    or not isinstance(snapshot, Mapping)
+                    or set(snapshot)
+                    != {
+                        "refs",
+                        "requested_target_present",
+                        "requested_target_ref",
+                    }
+                    or not isinstance(snapshot.get("refs"), Mapping)
+                    or type(snapshot.get("requested_target_present"))
+                    is not bool
+                    or snapshot.get("requested_target_ref")
+                    != f"refs/tags/{target_tag}"
+                ):
+                    raise ArchiveServiceError(
+                        "project_version_update_legacy_recovery_state_ambiguous"
+                    )
+                with_store(
+                    lambda store: store.write_pre_fetch_ref_snapshot(
+                        observation
+                    )
+                )
+                resolved = refresh()
+            pre_record = resolved.pre_fetch_ref_snapshot
+            if not isinstance(pre_record, Mapping):
+                raise ArchiveServiceError(
+                    "project_version_update_legacy_recovery_state_ambiguous"
+                )
+            prepared = (
+                project_update_transaction.ProjectUpdateTransaction.prepare_reservation(
+                    project_identity_sha256=str(
+                        resolved.intent["project_identity_sha256"]
+                    ),
+                    requested_target_tag=str(
+                        resolved.fresh_approval_seed[
+                            "requested_target_tag"
+                        ]
+                    ),
+                    transaction_ref="update_" + secrets.token_hex(16),
+                    ownership_nonce=secrets.token_hex(16),
+                    created_at=(
+                        datetime.now(timezone.utc)
+                        .replace(microsecond=0)
+                        .isoformat()
+                        .replace("+00:00", "Z")
+                    ),
+                )
+            )
+            allocation = (
+                project_update_legacy_recovery.fresh_allocation_document(
+                    recovery_ref=resolved.paths.recovery_ref,
+                    prepared_reservation_document=prepared.document(),
+                    old_abandonment_sha256=abandonment_sha256,
+                    pre_ref_snapshot_document_sha256=str(
+                        resolved.pre_fetch_ref_snapshot_document_sha256
+                    ),
+                    pre_ref_snapshot_sha256=str(
+                        resolved.pre_fetch_ref_snapshot_sha256
+                    ),
+                )
+            )
+            with_store(
+                lambda store: store.write_fresh_allocation(allocation)
+            )
+            resolved = refresh()
+            continue
+        if locator_state == "fresh_transaction_allocated":
+            allocation = resolved.fresh_allocation
+            if not isinstance(allocation, Mapping):
+                raise ArchiveServiceError(
+                    "project_version_update_legacy_recovery_state_ambiguous"
+                )
+            prepared = (
+                project_update_transaction.ProjectUpdateTransaction.prepare_reservation(
+                    project_identity_sha256=str(
+                        allocation["project_identity_sha256"]
+                    ),
+                    requested_target_tag=str(
+                        allocation["requested_target_tag"]
+                    ),
+                    transaction_ref=str(
+                        allocation["fresh_transaction_ref"]
+                    ),
+                    ownership_nonce=str(allocation["fresh_ownership_nonce"]),
+                    created_at=str(allocation["fresh_created_at"]),
+                )
+            )
+            if prepared.sha256 != allocation.get(
+                "prepared_reservation_document_sha256"
+            ):
+                raise ArchiveServiceError(
+                    "project_version_update_legacy_recovery_state_changed"
+                )
+            reservation = (
+                project_update_transaction.ProjectUpdateTransaction.reserve_or_resume_exact(
+                    project_root,
+                    reservation=prepared,
+                )
+            )
+            reservation_document = (
+                project_update_legacy_recovery.fresh_reservation_document(
+                    recovery_ref=resolved.paths.recovery_ref,
+                    fresh_transaction_ref=reservation.transaction_ref,
+                    fresh_reservation_sha256=reservation.reservation.sha256,
+                    fresh_allocation_document_sha256=str(
+                        resolved.fresh_allocation_document_sha256
+                    ),
+                    old_abandonment_sha256=abandonment_sha256,
+                )
+            )
+            with_store(
+                lambda store: store.write_fresh_reservation(
+                    reservation_document
+                )
+            )
+            resolved = refresh()
+            if str(resolved.locator.get("state") or "") == (
+                "fresh_transaction_allocated"
+            ):
+                resolved = checkpoint(
+                    resolved,
+                    phase="fresh_reservation_bound",
+                    evidence_sha256=str(
+                        resolved.fresh_reservation_document_sha256
+                    ),
+                    locator_state="fresh_reservation_bound",
+                )
+            continue
+        if locator_state != "fresh_reservation_bound":
+            raise ArchiveServiceError(
+                "project_version_update_legacy_recovery_state_ambiguous"
+            )
+        break
+
+    allocation = resolved.fresh_allocation
+    reservation_record = resolved.fresh_reservation
+    if (
+        not isinstance(allocation, Mapping)
+        or not isinstance(reservation_record, Mapping)
+        or type(resolved.fresh_allocation_document_sha256) is not str
+        or type(resolved.pre_fetch_ref_snapshot_document_sha256) is not str
+        or type(resolved.pre_fetch_ref_snapshot_sha256) is not str
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_legacy_recovery_state_ambiguous"
+        )
+    prepared = (
+        project_update_transaction.ProjectUpdateTransaction.prepare_reservation(
+            project_identity_sha256=str(allocation["project_identity_sha256"]),
+            requested_target_tag=str(allocation["requested_target_tag"]),
+            transaction_ref=str(allocation["fresh_transaction_ref"]),
+            ownership_nonce=str(allocation["fresh_ownership_nonce"]),
+            created_at=str(allocation["fresh_created_at"]),
+        )
+    )
+    if (
+        prepared.sha256
+        != allocation.get("prepared_reservation_document_sha256")
+        or reservation_record.get("fresh_reservation_sha256")
+        != prepared.sha256
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_legacy_recovery_state_changed"
+        )
+    reviewer = safe_foreign_quarantine_actor_id(
+        resolved.fresh_approval_seed.get("reviewer")
+    )
+    target_tag = str(allocation["requested_target_tag"])
+    if reviewer is None or target_tag != f"v{WOM_KIT_VERSION}":
+        raise ArchiveServiceError(
+            "project_version_update_legacy_recovery_binding_invalid"
+        )
+    abandonment_sha256 = _project_update_legacy_abandonment_sha256(resolved)
+    prospective_seed_sha256 = project_update_transaction.sha256_document(
+        {
+            "old_abandonment_sha256": abandonment_sha256,
+            "schema": (
+                "wom-kit/project-update-legacy-prospective-seed/v0.4.19"
+            ),
+            "target_tag": target_tag,
+        }
+    )
+    recovery_summary = {
+        "schema": "wom-kit/project-update-legacy-prewrite-approval/v0.4.19",
+        "old_abandonment_sha256": abandonment_sha256,
+        "prospective_fresh_plan_sha256": prospective_seed_sha256,
+        "single_composite_approval": True,
+        "old_claim_reused": False,
+        "old_transaction_mutated": False,
+    }
+    control: dict[str, Any] = {
+        "paths": resolved.paths,
+        "old_transaction_ref": resolved.intent["old_transaction_ref"],
+        "old_transaction_tree_sha256": resolved.intent[
+            "old_transaction_sha256"
+        ],
+        "old_lock_bytes": _project_update_legacy_old_lock_bytes(resolved),
+        "old_abandonment_sha256": abandonment_sha256,
+        "intent_sha256": resolved.intent_sha256,
+        "journal_head_sha256": resolved.journal_head_sha256,
+        "locator_sha256": resolved.locator_sha256,
+        "recovery_phase": "fresh_reservation_bound",
+        "with_store": with_store,
+        "confirm_fresh_claim_absent": (
+            lambda context: _project_update_confirm_context_claim_absent(
+                expected_approval_root=expected_approval_root,
+                context=context,
+                key_provider=key_provider,
+                resume_boundary=resume_boundary,
+            )
+        ),
+        "progress_callback": progress_callback,
+        "approval_key_provider": key_provider,
+        "fresh_transaction_ref": prepared.transaction_ref,
+        "prepared_fresh_reservation": prepared,
+        "fresh_allocation_sha256": (
+            resolved.fresh_allocation_document_sha256
+        ),
+        "fresh_reservation_sha256": (
+            resolved.fresh_reservation_document_sha256
+        ),
+        "pre_ref_snapshot_document_sha256": (
+            resolved.pre_fetch_ref_snapshot_document_sha256
+        ),
+        "pre_ref_snapshot_sha256": resolved.pre_fetch_ref_snapshot_sha256,
+        "recovery_evidence_sha256": (
+            resolved.fresh_reservation_document_sha256
+        ),
+    }
+
+    def bind_existing_reservation(
+        reservation: project_update_transaction.ReservedProjectUpdateTransaction,
+    ) -> None:
+        if (
+            reservation.transaction_ref != prepared.transaction_ref
+            or reservation.reservation.sha256 != prepared.sha256
+        ):
+            raise ArchiveServiceError(
+                "project_version_update_legacy_recovery_binding_invalid"
+            )
+        document = project_update_legacy_recovery.fresh_reservation_document(
+            recovery_ref=resolved.paths.recovery_ref,
+            fresh_transaction_ref=reservation.transaction_ref,
+            fresh_reservation_sha256=reservation.reservation.sha256,
+            fresh_allocation_document_sha256=str(
+                resolved.fresh_allocation_document_sha256
+            ),
+            old_abandonment_sha256=abandonment_sha256,
+        )
+        document_sha256 = with_store(
+            lambda store: store.write_fresh_reservation(document)
+        )
+        if document_sha256 != resolved.fresh_reservation_document_sha256:
+            raise ArchiveServiceError(
+                "project_version_update_legacy_recovery_state_changed"
+            )
+
+    control["fresh_reservation_callback"] = bind_existing_reservation
+    return _wom_kit_project_version_update_legacy_core(
+        inspection_root,
+        target=target_tag,
+        dry_run=False,
+        approve=True,
+        reviewed_by=reviewer,
+        affirm_external_writers_quiescent=True,
+        approval_executor=approval_executor,
+        progress_callback=progress_callback,
+        _expected_approval_root=expected_approval_root,
+        _expected_archive_id=expected_archive_id,
+        _legacy_recovery_old_lock_bytes=control["old_lock_bytes"],
+        _legacy_recovery_approval_summary=recovery_summary,
+        _legacy_recovery_control=control,
+    )
+
+
+def _project_update_resume_active_legacy_recovery(
+    inspection_root: Path | str,
+    *,
+    project_root: Path,
+    approval_executor: Callable[..., Mapping[str, Any]],
+    progress_callback: (
+        Callable[[str, str, int | None, int | None], None] | None
+    ),
+    expected_approval_root: Path,
+    expected_archive_id: str,
+    key_provider: Any,
+    resume_boundary: Callable[[], Any],
+) -> dict[str, Any]:
+    """Resume only a fully authenticated current-schema recovery plan."""
+
+    if (
+        not callable(approval_executor)
+        or not callable(getattr(key_provider, "use_key", None))
+        or not callable(resume_boundary)
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_legacy_recovery_binding_invalid"
+        )
+
+    def report(stage: str, event: str) -> None:
+        if progress_callback is not None:
+            try:
+                progress_callback(stage, event, None, None)
+            except Exception:
+                pass
+
+    try:
+        with (
+            _project_update_terminal_control_boundary(project_root),
+            project_update_legacy_recovery.legacy_recovery_process_guard(
+                project_root,
+                terminal_control_lease_held=lambda: (
+                    _PROJECT_UPDATE_TERMINAL_CONTROL_LEASE.get() is not None
+                ),
+            ),
+        ):
+            resolved = (
+                project_update_legacy_recovery.resolve_active_recovery(
+                    project_root,
+                    expected_approval_root,
+                    key_provider,
+                    create_if_missing=False,
+                )
+            )
+
+            def with_store(action: Callable[[Any], Any]) -> Any:
+                def consume(key: memoryview) -> Any:
+                    with project_update_legacy_recovery.LegacyRecoveryStore(
+                        project_root,
+                        resolved.paths.recovery_ref,
+                        key,
+                    ) as store:
+                        return action(store)
+
+                return key_provider.use_key(
+                    expected_approval_root,
+                    consume,
+                    create_if_missing=False,
+                )
+            handoff_observations: list[
+                _ProjectUpdateTerminalHandoffObservation | None
+            ] = []
+            handoff_state = _project_update_terminal_handoff_state_read_only(
+                inspection_root,
+                _observation_out=handoff_observations,
+            )
+            if len(handoff_observations) != 1:
+                raise ArchiveServiceError(
+                    "project_version_update_legacy_recovery_state_ambiguous"
+                )
+            handoff_observation = handoff_observations[0]
+            plan = resolved.prospective_plan
+            locator_state = str(resolved.locator.get("state") or "")
+            phases = tuple(
+                str(item.get("phase") or "")
+                for item in resolved.checkpoints
+            )
+            allowed_tail = _PROJECT_UPDATE_LEGACY_RECOVERY_LOCATOR_TAIL.get(
+                locator_state
+            )
+            if locator_state == "terminal_completed":
+                terminal_receipt = resolved.terminal_receipt
+                if not isinstance(terminal_receipt, Mapping):
+                    raise ArchiveServiceError(
+                        "project_version_update_legacy_recovery_state_ambiguous"
+                    )
+                outcome = terminal_receipt.get("outcome")
+                allowed_tail = (
+                    "fresh_transaction_completed"
+                    if outcome == "success"
+                    else "unapproved_restored"
+                    if outcome == "unapproved_restored"
+                    else None
+                )
+            chain_matches_locator = bool(
+                locator_state == "intent_sealed" and not phases
+                or allowed_tail is not None
+                and bool(phases)
+                and phases[-1] == allowed_tail
+            )
+            if resolved.intent.get(
+                "archive_identity_sha256"
+            ) != exact_human_approval_archive_identity_sha256(
+                expected_archive_id
+            ):
+                raise ArchiveServiceError(
+                    "project_version_update_legacy_recovery_state_changed"
+                )
+            if (
+                locator_state
+                not in _PROJECT_UPDATE_LEGACY_RECOVERY_LOCATOR_TAIL
+                or not chain_matches_locator
+            ):
+                raise ArchiveServiceError(
+                    "project_version_update_legacy_recovery_state_ambiguous"
+                )
+
+            terminal_receipt = resolved.terminal_receipt
+            terminal_outcome = (
+                terminal_receipt.get("outcome")
+                if isinstance(terminal_receipt, Mapping)
+                else None
+            )
+            recovery_branch = _project_update_legacy_recovery_branch(
+                locator_state,
+                terminal_outcome=(
+                    str(terminal_outcome)
+                    if type(terminal_outcome) is str
+                    else None
+                ),
+            )
+            if recovery_branch in {"bootstrap", "reserve", "prepare_plan"}:
+                return _project_update_resume_legacy_preplan(
+                    inspection_root,
+                    resolved=resolved,
+                    with_store=with_store,
+                    approval_executor=approval_executor,
+                    progress_callback=progress_callback,
+                    expected_approval_root=expected_approval_root,
+                    expected_archive_id=expected_archive_id,
+                    key_provider=key_provider,
+                    resume_boundary=resume_boundary,
+                )
+            if terminal_outcome == "success" and locator_state in {
+                "fresh_transaction_completed",
+                "terminal_completed",
+            }:
+                if (
+                    handoff_state != "terminal_ready"
+                    or handoff_observation is None
+                ):
+                    raise ArchiveServiceError(
+                        "project_version_update_legacy_recovery_state_ambiguous"
+                    )
+                receipt_sha256 = (
+                    resolved.terminal_receipt_document_sha256
+                )
+                if type(receipt_sha256) is not str:
+                    raise ArchiveServiceError(
+                        "project_version_update_legacy_recovery_state_ambiguous"
+                    )
+                if locator_state == "fresh_transaction_completed":
+                    with_store(
+                        lambda store: store.publish_terminal_locator_and_retire(
+                            intent_sha256=resolved.intent_sha256,
+                            journal_head_sha256=resolved.journal_head_sha256,
+                            previous_locator_sha256=resolved.locator_sha256,
+                            terminal_receipt_sha256=receipt_sha256,
+                        )
+                    )
+                else:
+                    with_store(
+                        lambda store: store.retire_locator(
+                            expected_locator_sha256=resolved.locator_sha256
+                        )
+                    )
+                replayed = _project_update_replay_ready_terminal_handoff(
+                    inspection_root,
+                    target=None,
+                    reviewed_by=None,
+                    transaction_ref=None,
+                    approval_executor=approval_executor,
+                    expected_approval_root=expected_approval_root,
+                    expected_archive_id=expected_archive_id,
+                    _expected_handoff_observation=handoff_observation,
+                    _terminal_control_lease_held=True,
+                )
+                if replayed is None:
+                    raise ArchiveServiceError(
+                        "project_version_update_legacy_recovery_state_ambiguous"
+                    )
+                return replayed
+            if (
+                terminal_outcome == "unapproved_restored"
+                and locator_state == "unapproved_restored"
+            ):
+                old_ref = str(resolved.intent.get("old_transaction_ref") or "")
+                old_canonical = project_root.joinpath(
+                    *PurePosixPath(
+                        project_update_transaction.TRANSACTION_ROOT_LOGICAL
+                    ).parts,
+                    old_ref,
+                )
+                lock_path = project_root.joinpath(
+                    *PurePosixPath(
+                        project_update_transaction.PROJECT_UPDATE_LOCK_LOGICAL
+                    ).parts
+                )
+                old_lock = project_update_legacy_recovery._read_regular(
+                    lock_path
+                )
+                if (
+                    project_update_legacy_recovery.directory_tree_sha256(
+                        old_canonical
+                    )
+                    != resolved.intent.get("old_transaction_sha256")
+                    or project_update_transaction.sha256_bytes(old_lock)
+                    != resolved.intent.get("old_lock_sha256")
+                ):
+                    raise ArchiveServiceError(
+                        "project_version_update_legacy_recovery_state_changed"
+                    )
+                receipt_sha256 = resolved.terminal_receipt_document_sha256
+                cancellation_result_document_sha256 = (
+                    resolved.cancellation_result_document_sha256
+                )
+                if (
+                    handoff_state not in {None, "terminal_ready_unapproved"}
+                    or type(receipt_sha256) is not str
+                    or type(cancellation_result_document_sha256) is not str
+                ):
+                    raise ArchiveServiceError(
+                        "project_version_update_legacy_recovery_state_ambiguous"
+                    )
+                pending_terminal = resolved.pending_cancellation_terminal
+                expected_result_payload_sha256 = (
+                    project_update_transaction.sha256_document(
+                        _project_update_legacy_unapproved_restored_result()
+                    )
+                )
+                expected_archive_identity_sha256 = (
+                    exact_human_approval_archive_identity_sha256(
+                        expected_archive_id
+                    )
+                )
+                if handoff_state == "terminal_ready_unapproved":
+                    if (
+                        handoff_observation is None
+                        or not isinstance(
+                            pending_terminal,
+                            project_update_legacy_recovery.ResolvedPendingCancellationTerminal,
+                        )
+                        or pending_terminal.recovery_ref
+                        != resolved.paths.recovery_ref
+                        or pending_terminal.outcome != "unapproved_restored"
+                        or pending_terminal.archive_identity_sha256
+                        != expected_archive_identity_sha256
+                        or pending_terminal.intent_sha256
+                        != resolved.intent_sha256
+                        or pending_terminal.journal_head_sha256
+                        != resolved.journal_head_sha256
+                        or pending_terminal.active_locator_state
+                        != "unapproved_restored"
+                        or pending_terminal.active_locator_sha256
+                        != resolved.locator_sha256
+                        or pending_terminal.terminal_receipt_document_sha256
+                        != receipt_sha256
+                        or pending_terminal.cancellation_result_document_sha256
+                        != cancellation_result_document_sha256
+                        or pending_terminal.cancellation_result_sha256
+                        != resolved.cancellation_result_sha256
+                        or pending_terminal.result_payload_sha256
+                        != expected_result_payload_sha256
+                        or pending_terminal.terminal_handoff_document_sha256
+                        != handoff_observation.raw_sha256
+                        or re.fullmatch(
+                            r"sha256:[0-9a-f]{64}",
+                            pending_terminal.delivery_capability_sha256,
+                        )
+                        is None
+                    ):
+                        raise ArchiveServiceError(
+                            "project_version_update_legacy_recovery_state_ambiguous"
+                        )
+                elif pending_terminal is not None:
+                    raise ArchiveServiceError(
+                        "project_version_update_legacy_recovery_state_ambiguous"
+                    )
+                handoff_sha256, capability = (
+                    _project_update_publish_legacy_cancellation_handoff_exact(
+                        project_root=project_root,
+                        expected_approval_root=expected_approval_root,
+                        expected_archive_id=expected_archive_id,
+                        paths=resolved.paths,
+                        intent_sha256=resolved.intent_sha256,
+                        terminal_receipt_sha256=receipt_sha256,
+                        cancellation_result_document_sha256=(
+                            cancellation_result_document_sha256
+                        ),
+                        key_provider=key_provider,
+                    )
+                )
+                if (
+                    pending_terminal is not None
+                    and (
+                        handoff_sha256
+                        != pending_terminal.terminal_handoff_document_sha256
+                        or project_update_transaction.sha256_bytes(
+                            capability.encode("ascii")
+                        )
+                        != pending_terminal.delivery_capability_sha256
+                    )
+                ):
+                    raise ArchiveServiceError(
+                        "project_version_update_legacy_recovery_state_ambiguous"
+                    )
+                with_store(
+                    lambda store: store.publish_terminal_locator_and_retire(
+                        intent_sha256=resolved.intent_sha256,
+                        journal_head_sha256=resolved.journal_head_sha256,
+                        previous_locator_sha256=resolved.locator_sha256,
+                        terminal_receipt_sha256=receipt_sha256,
+                    )
+                )
+                return _project_update_legacy_unapproved_restored_result()
+
+            if (
+                resolved.cancellation_result is not None
+                and resolved.cancellation_plan is None
+            ):
+                # The fixed result alone does not prove that an exact native
+                # denial was durably bound before destructive cancellation.
+                raise ArchiveServiceError(
+                    "project_version_update_legacy_recovery_state_ambiguous"
+                )
+            if (
+                recovery_branch == "cancellation"
+                or resolved.cancellation_plan is not None
+            ):
+                return _project_update_resume_legacy_cancellation(
+                    resolved=resolved,
+                    with_store=with_store,
+                    expected_approval_root=expected_approval_root,
+                    expected_archive_id=expected_archive_id,
+                    key_provider=key_provider,
+                )
+
+            if (
+                not isinstance(plan, Mapping)
+                or resolved.fresh_transaction_ref is None
+                or plan.get("fresh_transaction_ref")
+                != resolved.fresh_transaction_ref
+                or plan.get("recovery_ref")
+                != resolved.paths.recovery_ref
+                or resolved.fresh_reservation is None
+                or not isinstance(
+                    resolved.fresh_transaction_inventory, Mapping
+                )
+                or type(
+                    resolved.fresh_transaction_inventory_document_sha256
+                )
+                is not str
+                or resolved.fresh_reservation.get(
+                    "fresh_transaction_ref"
+                )
+                != resolved.fresh_transaction_ref
+            ):
+                raise ArchiveServiceError(
+                    "project_version_update_legacy_recovery_state_ambiguous"
+                )
+
+            fresh_root = project_root.joinpath(
+                *PurePosixPath(
+                    project_update_transaction.TRANSACTION_ROOT_LOGICAL
+                ).parts,
+                resolved.fresh_transaction_ref,
+            )
+            live_fresh_inventory = (
+                project_update_legacy_recovery.directory_tree_inventory(
+                    fresh_root,
+                    progress_callback=(
+                        (
+                            lambda count, byte_count: progress_callback(
+                                "project-recovery-inventory",
+                                "running",
+                                count,
+                                byte_count,
+                            )
+                        )
+                        if progress_callback is not None
+                        else None
+                    ),
+                )
+            )
+
+            lock_path = project_root.joinpath(
+                *PurePosixPath(
+                    project_update_transaction.PROJECT_UPDATE_LOCK_LOGICAL
+                ).parts
+            )
+            old_lock_sha256 = str(
+                resolved.intent.get("old_lock_sha256") or ""
+            )
+            old_lock_bytes = _project_update_legacy_old_lock_bytes(
+                resolved
+            )
+            fresh_reservation_for_lock = (
+                project_update_transaction.ReservedProjectUpdateTransaction.open(
+                    project_root,
+                    resolved.fresh_transaction_ref,
+                )
+            )
+            fresh_lock_bytes = fresh_reservation_for_lock.lock_bytes()
+            suffix = resolved.paths.recovery_ref.removeprefix("recovery_")
+            replacement_path = lock_path.parent / (
+                f".legacy-recovery-{suffix}.fresh-lock"
+            )
+            public_backup_path = lock_path.parent / (
+                f".legacy-recovery-{suffix}.old-lock"
+            )
+            if os.path.lexists(replacement_path) or os.path.lexists(
+                public_backup_path
+            ):
+                lock_handoff_state = (
+                    project_update_legacy_recovery.classify_lock_handoff(
+                        resolved.paths,
+                        old_lock_bytes,
+                        fresh_lock_bytes,
+                    )
+                )
+                if lock_handoff_state not in {
+                    "old",
+                    "backup_linked",
+                    "fresh",
+                }:
+                    raise ArchiveServiceError(
+                        "project_version_update_legacy_recovery_lock_ambiguous"
+                    )
+                old_lock_active = lock_handoff_state in {
+                    "old",
+                    "backup_linked",
+                }
+                live_lock_bytes: bytes | None = (
+                    old_lock_bytes if old_lock_active else fresh_lock_bytes
+                )
+            else:
+                live_lock_bytes = (
+                    project_update_legacy_recovery._read_regular(lock_path)
+                    if os.path.lexists(lock_path)
+                    else None
+                )
+                old_lock_active = bool(
+                    live_lock_bytes is not None
+                    and hmac.compare_digest(
+                        live_lock_bytes,
+                        old_lock_bytes,
+                    )
+                )
+                if live_lock_bytes is not None and not (
+                    old_lock_active
+                    or hmac.compare_digest(
+                        live_lock_bytes,
+                        fresh_lock_bytes,
+                    )
+                ):
+                    raise ArchiveServiceError(
+                        "project_version_update_legacy_recovery_lock_ambiguous"
+                    )
+                lock_handoff_state = (
+                    "old"
+                    if old_lock_active
+                    else "fresh"
+                    if live_lock_bytes is not None
+                    else "absent"
+                )
+
+            control: dict[str, Any] = {
+                "paths": resolved.paths,
+                "old_transaction_ref": resolved.intent[
+                    "old_transaction_ref"
+                ],
+                "old_transaction_tree_sha256": resolved.intent[
+                    "old_transaction_sha256"
+                ],
+                "old_lock_bytes": old_lock_bytes,
+                "old_lock_sha256": old_lock_sha256,
+                "lock_handoff_state": lock_handoff_state,
+                "old_abandonment_sha256": plan[
+                    "old_abandonment_sha256"
+                ],
+                "intent_sha256": resolved.intent_sha256,
+                "journal_head_sha256": resolved.journal_head_sha256,
+                "locator_sha256": resolved.locator_sha256,
+                "with_store": with_store,
+                "progress_callback": progress_callback,
+                "approval_key_provider": key_provider,
+                "fresh_transaction_inventory": dict(
+                    resolved.fresh_transaction_inventory
+                ),
+                "fresh_transaction_inventory_document_sha256": (
+                    resolved.fresh_transaction_inventory_document_sha256
+                ),
+                "fresh_prospective_plan": dict(plan),
+                "fresh_prospective_plan_sha256": (
+                    resolved.prospective_plan_document_sha256
+                ),
+                "fresh_recovery_binding_sha256": plan[
+                    "fresh_recovery_binding_sha256"
+                ],
+                "recovery_phase": locator_state,
+            }
+            state, lifetime = _project_update_reopen_durable_state(
+                inspection_root,
+                target=None,
+                reviewed_by=None,
+                transaction_ref=None,
+                expected_approval_root=expected_approval_root,
+                expected_archive_id=expected_archive_id,
+                _authenticated_recovery_transaction_ref=(
+                    resolved.fresh_transaction_ref
+                ),
+                _legacy_recovery_control=control,
+            )
+            try:
+                fresh_binding = project_version_update_approval_binding(
+                    state.prepared_preview
+                )
+                fresh_context = fresh_binding.context(
+                    archive_id=expected_archive_id,
+                    reviewer_claim=state.reviewer,
+                )
+                control["confirm_fresh_claim_absent"] = (
+                    lambda candidate_context: (
+                        _project_update_confirm_context_claim_absent(
+                            expected_approval_root=expected_approval_root,
+                            context=candidate_context,
+                            key_provider=key_provider,
+                            resume_boundary=resume_boundary,
+                        )
+                    )
+                )
+            except BaseException:
+                _project_update_close_after_service_failure(
+                    state.directory_guard.close,
+                    lifetime,
+                )
+                raise
+            continuation_used = False
+            fresh_claim_absence_authenticated = False
+            native_approval_attempted = False
+            try:
+                if (
+                    state.transaction.intent.project_identity_sha256
+                    != resolved.intent.get("project_identity_sha256")
+                    or state.transaction.intent.sha256
+                    != plan.get("fresh_intent_sha256")
+                    or state.transaction.intent.reservation_sha256
+                    != resolved.fresh_reservation.get(
+                        "fresh_reservation_sha256"
+                    )
+                    or resolved.fresh_reservation.get(
+                        "old_abandonment_sha256"
+                    )
+                    != plan.get("old_abandonment_sha256")
+                    or fresh_binding.plan_sha256
+                    != plan.get("fresh_approval_plan_sha256")
+                    or fresh_binding.target_binding_sha256
+                    != plan.get(
+                        "fresh_approval_target_binding_sha256"
+                    )
+                    or exact_human_approval_context_sha256(fresh_context)
+                    != plan.get("fresh_approval_context_sha256")
+                ):
+                    raise ArchiveServiceError(
+                        "project_version_update_legacy_recovery_state_changed"
+                    )
+                reservation_checkpoint = next(
+                    (
+                        item
+                        for item in resolved.checkpoints
+                        if item.get("phase") == "fresh_reservation_bound"
+                    ),
+                    None,
+                )
+                plan_checkpoint = next(
+                    (
+                        item
+                        for item in resolved.checkpoints
+                        if item.get("phase") == "fresh_plan_sealed"
+                    ),
+                    None,
+                )
+                if (
+                    reservation_checkpoint is None
+                    or plan_checkpoint is None
+                    or reservation_checkpoint.get("evidence_sha256")
+                    != resolved.fresh_reservation_document_sha256
+                    or plan_checkpoint.get("evidence_sha256")
+                    != resolved.prospective_plan_document_sha256
+                ):
+                    raise ArchiveServiceError(
+                        "project_version_update_legacy_recovery_state_changed"
+                    )
+                fresh_journal = state.transaction.inspect().journal
+                fresh_checkpoints = tuple(fresh_journal.verified_prefix)
+                if fresh_journal.state != "exact":
+                    raise ArchiveServiceError(
+                        "project_version_update_legacy_recovery_state_changed"
+                    )
+                if old_lock_active:
+                    if (
+                        fresh_checkpoints
+                        or project_update_legacy_recovery.sha256_document(
+                            live_fresh_inventory
+                        )
+                        != plan.get(
+                            "fresh_transaction_inventory_sha256"
+                        )
+                    ):
+                        raise ArchiveServiceError(
+                            "project_version_update_legacy_recovery_state_changed"
+                        )
+                elif live_lock_bytes == state.expected_lock_bytes:
+                    if fresh_checkpoints and (
+                        fresh_checkpoints[0].phase != "lock_backlinked"
+                    ):
+                        raise ArchiveServiceError(
+                            "project_version_update_legacy_recovery_state_changed"
+                        )
+                elif live_lock_bytes is None:
+                    if (
+                        not fresh_checkpoints
+                        or fresh_checkpoints[-1].phase
+                        not in {"lock_released", "completed"}
+                        or locator_state
+                        not in {
+                            "fresh_lock_backlinked",
+                            "fresh_transaction_completed",
+                            "terminal_completed",
+                        }
+                    ):
+                        raise ArchiveServiceError(
+                            "project_version_update_legacy_recovery_lock_ambiguous"
+                        )
+                else:
+                    raise ArchiveServiceError(
+                        "project_version_update_legacy_recovery_lock_ambiguous"
+                    )
+
+                if handoff_state == "terminal_ready":
+                    if (
+                        handoff_observation is None
+                        or live_lock_bytes is not None
+                        or not fresh_checkpoints
+                        or fresh_checkpoints[-1].phase != "completed"
+                    ):
+                        raise ArchiveServiceError(
+                            "project_version_update_legacy_recovery_state_ambiguous"
+                        )
+
+                    def terminalize_ready_recovery(
+                        claim: _ClaimedExactHumanApproval,
+                    ) -> None:
+                        terminal_evidence = claim.succeeded_evidence_digests(
+                            fresh_context
+                        )
+                        terminal_evidence["static_receipt_sha256"] = (
+                            project_update_transaction.sha256_bytes(
+                                state.static_receipt_bytes
+                            )
+                        )
+                        _project_update_finalize_legacy_recovery_success(
+                            state,
+                            claim_evidence=terminal_evidence,
+                            fresh_transaction_completed_sha256=(
+                                fresh_checkpoints[-1].checkpoint_sha256
+                            ),
+                        )
+
+                    replayed = _project_update_replay_ready_terminal_handoff(
+                        inspection_root,
+                        target=None,
+                        reviewed_by=None,
+                        transaction_ref=None,
+                        approval_executor=approval_executor,
+                        expected_approval_root=expected_approval_root,
+                        expected_archive_id=expected_archive_id,
+                        _expected_handoff_observation=handoff_observation,
+                        _terminal_control_lease_held=True,
+                        _legacy_recovery_terminalizer=(
+                            terminalize_ready_recovery
+                        ),
+                    )
+                    if replayed is None:
+                        raise ArchiveServiceError(
+                            "project_version_update_legacy_recovery_state_ambiguous"
+                        )
+                    return _project_update_finish_nonterminal_service_result(
+                        replayed,
+                        lifetime,
+                        close_owned_resources=state.directory_guard.close,
+                    )
+                if handoff_state not in {
+                    None,
+                    "claim_succeeded_pre_unlock",
+                }:
+                    raise ArchiveServiceError(
+                        "project_version_update_legacy_recovery_state_ambiguous"
+                    )
+
+                def continue_started_claim(
+                    claim: _ClaimedExactHumanApproval,
+                    expected_plan_sha256: str,
+                    expected_target_binding_sha256: str,
+                ) -> Mapping[str, Any]:
+                    nonlocal continuation_used
+                    assert_same_binding(
+                        fresh_binding,
+                        expected_plan_sha256=expected_plan_sha256,
+                        expected_target_binding_sha256=(
+                            expected_target_binding_sha256
+                        ),
+                    )
+                    state.approved_plan_sha256 = fresh_binding.plan_sha256
+                    state.approved_target_binding_sha256 = (
+                        fresh_binding.target_binding_sha256
+                    )
+                    if continuation_used:
+                        raise ArchiveServiceError(
+                            "project_version_update_approval_continuation_reused"
+                        )
+                    continuation_used = True
+                    _project_update_activate_legacy_recovery_state(state)
+                    return _project_update_durable_writer(state, claim)
+
+                def finalize_succeeded_claim(
+                    claim: _ClaimedExactHumanApproval,
+                ) -> None:
+                    _project_update_succeeded_claim_finalizer(state, claim)
+
+                def started_guard(
+                    claim: _ClaimedExactHumanApproval,
+                ) -> bool:
+                    state.approved_plan_sha256 = fresh_binding.plan_sha256
+                    state.approved_target_binding_sha256 = (
+                        fresh_binding.target_binding_sha256
+                    )
+                    if state.transaction.inspect().journal.verified_prefix:
+                        return _project_update_claim_checkpoint_guard(
+                            state, claim, succeeded=False
+                        )
+                    return bool(
+                        old_lock_active
+                        and _project_update_legacy_recovery_preapproval_state_exact(
+                            state
+                        )
+                    )
+
+                def succeeded_guard(
+                    claim: _ClaimedExactHumanApproval,
+                ) -> bool:
+                    state.approved_plan_sha256 = fresh_binding.plan_sha256
+                    state.approved_target_binding_sha256 = (
+                        fresh_binding.target_binding_sha256
+                    )
+                    return _project_update_claim_checkpoint_guard(
+                        state, claim, succeeded=True
+                    )
+
+                no_claim = {"legacy_recovery_claim_missing": True}
+
+                def authenticated_candidate_missing(
+                    _approval_id: str,
+                ) -> Mapping[str, Any]:
+                    nonlocal fresh_claim_absence_authenticated
+                    fresh_claim_absence_authenticated = True
+                    return dict(no_claim)
+
+                with _project_update_terminal_execution_lease(
+                    state,
+                    expected_handoff_observation=(
+                        handoff_observation
+                        if handoff_state == "claim_succeeded_pre_unlock"
+                        else None
+                    ),
+                    fresh_absence=False,
+                ):
+                    result = approval_executor(
+                        copy.deepcopy(state.prepared_preview),
+                        continue_started_claim,
+                        finalize_succeeded_claim,
+                        started_guard,
+                        succeeded_guard,
+                        state.reviewer,
+                        candidate_missing_handler=(
+                            authenticated_candidate_missing
+                        ),
+                        resume_existing_composite=True,
+                    )
+                    if (
+                        isinstance(result, Mapping)
+                        and result.get("legacy_recovery_claim_missing")
+                        is True
+                    ):
+                        if not old_lock_active:
+                            raise ArchiveServiceError(
+                                "project_version_update_legacy_recovery_state_ambiguous"
+                            )
+                        native_approval_attempted = True
+                        result = approval_executor(
+                            copy.deepcopy(state.prepared_preview),
+                            continue_started_claim,
+                            finalize_succeeded_claim,
+                            started_guard,
+                            succeeded_guard,
+                            claim_publication_boundary=lambda: (
+                                _project_update_claim_publication_boundary(
+                                    state
+                                )
+                            ),
+                            recovery_key_provider=key_provider,
+                        )
+                    if not isinstance(result, Mapping):
+                        raise ArchiveServiceError(
+                            "project_version_update_result_invalid"
+                        )
+                    completed_result = dict(result)
+                    report(
+                        "write-receipt",
+                        "resume-legacy-terminal-result",
+                    )
+            except BaseException as failure:
+                if (
+                    not continuation_used
+                    and old_lock_active
+                    and fresh_claim_absence_authenticated
+                    and native_approval_attempted
+                    and _project_update_is_exact_native_approval_denial(
+                        failure
+                    )
+                ):
+                    restored_result = (
+                        _project_update_restore_legacy_recovery_after_unapproved(
+                            state
+                        )
+                    )
+                    if not _project_update_is_legacy_unapproved_terminal_result(
+                        restored_result
+                    ):
+                        raise ArchiveServiceError(
+                            "project_version_update_legacy_recovery_state_ambiguous"
+                        )
+                    return _project_update_finish_legacy_cancellation_result(
+                        restored_result,
+                        lifetime,
+                        close_owned_resources=state.directory_guard.close,
+                    )
+                _project_update_close_after_service_failure(
+                    state.directory_guard.close,
+                    lifetime,
+                )
+                raise
+            if not continuation_used:
+                # A returned mapping is not cancellation authority.  The
+                # production native broker represents a human denial only as
+                # the exact typed ``exact_human_approval_cancelled`` error
+                # handled above.  Preserve every recovery artifact for any
+                # continuation-free or injected mapping instead of turning it
+                # into destructive rollback permission.
+                _project_update_close_after_service_failure(
+                    state.directory_guard.close,
+                    lifetime,
+                )
+                raise ArchiveServiceError(
+                    "project_version_update_legacy_recovery_state_ambiguous"
+                )
+            return _project_update_finish_service_result(
+                completed_result,
+                state,
+                lifetime,
+                close_owned_resources=state.directory_guard.close,
+            )
+    except ArchiveServiceError:
+        raise
+    except project_update_legacy_recovery.LegacyProjectUpdateRecoveryError as failure:
+        raise ArchiveServiceError(failure.code) from None
+    except project_update_transaction.ProjectUpdateTransactionError as failure:
+        if failure.code in {
+            "project_update_transaction_reservation_busy",
+            "project_update_transaction_reservation_guard_unavailable",
+        }:
+            # An OS guard wait did not acquire ownership. Keep that distinct
+            # from changed recovery evidence; neither result grants repair,
+            # lock takeover, or a new approval.
+            raise ArchiveServiceError(failure.code) from None
+        raise ArchiveServiceError(
+            "project_version_update_legacy_recovery_state_ambiguous"
+        ) from None
+    except BaseException:
+        raise ArchiveServiceError(
+            "project_version_update_legacy_recovery_state_ambiguous"
+        ) from None
+
+
 def _wom_kit_project_version_update_resume_live_transaction(
     inspection_root: Path | str,
     *,
@@ -119433,6 +125280,10 @@ def _wom_kit_project_version_update_resume_live_transaction(
     _expected_archive_id: str,
     _approval_identifier_supplied: bool = False,
     _archive_identity_metadata_read: bool = False,
+    _legacy_recovery_key_provider: Any | None = None,
+    _legacy_recovery_resume_boundary: (
+        Callable[[], Any] | None
+    ) = None,
 ) -> dict[str, Any]:
     """Resume an authenticated claim/transaction pair with zero new native UI."""
 
@@ -119464,6 +125315,36 @@ def _wom_kit_project_version_update_resume_live_transaction(
         or str(reviewed_by or "").strip()
         or _approval_identifier_supplied
     )
+    project_root = _project_update_resume_project_root_read_only(
+        inspection_root
+    )
+    legacy_locator_presence = (
+        project_update_legacy_recovery.active_locator_presence_read_only(
+            project_root
+        )
+    )
+    if legacy_locator_presence == "present_unverified":
+        if (
+            operator_resume_identifiers_supplied
+            or _legacy_recovery_key_provider is None
+        ):
+            raise ArchiveServiceError(
+                "project_version_update_legacy_recovery_binding_invalid"
+            )
+        return _project_update_resume_active_legacy_recovery(
+            inspection_root,
+            project_root=project_root,
+            approval_executor=approval_executor,
+            progress_callback=progress_callback,
+            expected_approval_root=_expected_approval_root,
+            expected_archive_id=_expected_archive_id,
+            key_provider=_legacy_recovery_key_provider,
+            resume_boundary=_legacy_recovery_resume_boundary,
+        )
+    if legacy_locator_presence in {"unsafe", "unavailable"}:
+        raise ArchiveServiceError(
+            "project_version_update_legacy_recovery_state_ambiguous"
+        )
     initial_handoff_observation: list[
         _ProjectUpdateTerminalHandoffObservation | None
     ] = []
@@ -119489,9 +125370,55 @@ def _wom_kit_project_version_update_resume_live_transaction(
         raise ArchiveServiceError(
             "project_version_update_resume_locator_changed"
         )
-    project_root = _project_update_resume_project_root_read_only(
-        inspection_root
-    )
+    initial_handoff = initial_handoff_observation[0]
+    if (
+        initial_handoff is not None
+        and initial_handoff.state == "terminal_ready_unapproved"
+    ):
+        if (
+            operator_resume_identifiers_supplied
+            or _legacy_recovery_key_provider is None
+        ):
+            raise ArchiveServiceError(
+                "project_version_update_terminal_handoff_invalid"
+            )
+        with _project_update_terminal_control_boundary(project_root):
+            handoff_path, _guard = _project_update_terminal_handoff_paths(
+                project_root
+            )
+            observed = _project_update_read_terminal_document(
+                project_root,
+                handoff_path,
+            )
+            if (
+                observed is None
+                or observed[0].get("state") != "terminal_ready_unapproved"
+                or not hmac.compare_digest(
+                    project_update_transaction.sha256_bytes(observed[1]),
+                    initial_handoff.raw_sha256,
+                )
+            ):
+                raise ArchiveServiceError(
+                    "project_version_update_terminal_handoff_invalid"
+                )
+            cancellation_result = (
+                project_update_legacy_recovery.cancellation_result_document()
+            )
+            _project_update_reauthenticate_cancellation_terminal_delivery(
+                inspection_root,
+                capsule_bytes=observed[1],
+                expected_handoff_sha256=initial_handoff.raw_sha256,
+                expected_result=cancellation_result,
+                key_provider=_legacy_recovery_key_provider,
+                expected_approval_root=_expected_approval_root,
+                expected_archive_id=_expected_archive_id,
+                _terminal_control_lease_held=True,
+            )
+        report_progress(
+            "write-receipt",
+            "resume-unapproved-terminal-result-replayed",
+        )
+        return cancellation_result
     active_transaction_ref: str | None = None
     try:
         active_transaction_ref = (
@@ -119559,6 +125486,23 @@ def _wom_kit_project_version_update_resume_live_transaction(
                 active_transaction_ref,
             )
         )
+        runtime_cleanup_resume_pending = (
+            False
+            if active_transaction_ref is None
+            else _project_update_runtime_cleanup_sidecar_pending_read_only(
+                project_root=project_root,
+                transaction_ref=active_transaction_ref,
+            )
+        )
+        if runtime_cleanup_resume_pending is None:
+            return attach_abort_compaction_effect(
+                _project_update_terminal_cleanup_outcome_unknown_result(
+                    operator_resume_identifiers_supplied=(
+                        operator_resume_identifiers_supplied
+                    ),
+                    archive_identity_metadata_read=True,
+                )
+            )
         skip_abort_history_compaction = bool(
             cleanup_classification == "resume_required_exact"
             and (
@@ -119571,6 +125515,7 @@ def _wom_kit_project_version_update_resume_live_transaction(
                     )
                 )
                 or exact_preapproval_resume is not None
+                or runtime_cleanup_resume_pending
             )
         )
         if not skip_abort_history_compaction:
@@ -119935,6 +125880,19 @@ def _wom_kit_project_version_update_resume_live_transaction(
 
     report_progress("verify-release", "resume-authenticated-state")
 
+    legacy_recovery_result = (
+        _project_update_resume_legacy_approval_bound_prewrite(
+            state,
+            lifetime=lifetime,
+            approval_executor=approval_executor,
+            progress_callback=progress_callback,
+            key_provider=_legacy_recovery_key_provider,
+            resume_boundary=_legacy_recovery_resume_boundary,
+        )
+    )
+    if legacy_recovery_result is not None:
+        return attach_abort_compaction_effect(legacy_recovery_result)
+
     def continue_started_claim(
         claim: _ClaimedExactHumanApproval,
         expected_plan_sha256: str,
@@ -120270,6 +126228,15 @@ _PROJECT_UPDATE_STATIC_APPROVAL_CONTRACT = {
 _PROJECT_UPDATE_RECEIPT_MAX_BYTES = 2 * 1024 * 1024
 _PROJECT_UPDATE_TERMINAL_HANDOFF_SCHEMA = (
     "wom-kit/project-version-update-terminal-handoff/v0.4.16"
+)
+_PROJECT_UPDATE_CANCELLATION_TERMINAL_HANDOFF_SCHEMA = (
+    "wom-kit/project-version-update-cancellation-terminal-handoff/v0.4.19"
+)
+_PROJECT_UPDATE_CANCELLATION_TERMINAL_PAYLOAD_SCHEMA = (
+    "wom-kit/project-version-update-cancellation-terminal-payload/v0.4.19"
+)
+_PROJECT_UPDATE_CANCELLATION_TERMINAL_FINALIZATION_SCHEMA = (
+    project_update_legacy_recovery.CANCELLATION_TERMINAL_FINALIZATION_SCHEMA
 )
 _PROJECT_UPDATE_TERMINAL_RECORD_SCHEMA = (
     "wom-kit/project-version-update-terminal-record/v0.4.16"
@@ -120755,29 +126722,209 @@ def _project_update_safe_read_component(
     *,
     maximum: int,
 ) -> bytes | None | object:
-    """Return bytes/absence or one private sentinel for an unsafe live path."""
+    """Return bytes/absence without treating an unreadable path as absent."""
 
-    kind = wom_kit_real_path_kind(project_root, path)
-    if kind == "missing":
-        return None
-    if kind != "file" or not wom_kit_existing_path_components_are_real(
+    observation = _project_update_component_bytes_observation(
         project_root,
         path,
-    ):
+        maximum=maximum,
+    )
+    if observation["state"] == "unavailable":
+        return _PROJECT_UPDATE_UNAVAILABLE_LIVE_COMPONENT
+    if observation["state"] != "passed":
         return _PROJECT_UPDATE_UNSAFE_LIVE_COMPONENT
-    value = _wom_kit_read_bounded_real_bytes(
-        project_root,
-        path,
-        max_bytes=maximum,
-    )
-    return (
-        value
-        if isinstance(value, bytes)
-        else _PROJECT_UPDATE_UNSAFE_LIVE_COMPONENT
-    )
+    return observation["value"]
+
+
+def _project_update_component_bytes_observation(
+    project_root: Path,
+    path: Path,
+    *,
+    maximum: int,
+) -> dict[str, Any]:
+    """Read exact component bytes while preserving drift versus I/O loss."""
+
+    if type(maximum) is not int or maximum < 0:
+        return {
+            "state": "failed",
+            "reason_code": "project_update_component_size_policy_invalid",
+            "value": None,
+        }
+    observation = wom_kit_real_path_kind_observation(project_root, path)
+    if observation["state"] == "unavailable":
+        return {
+            "state": "unavailable",
+            "reason_code": "project_update_component_observation_unavailable",
+            "value": None,
+        }
+    kind = observation["kind"]
+    if kind == "missing":
+        return {
+            "state": "passed",
+            "reason_code": "verified_missing",
+            "value": None,
+        }
+    if observation["state"] != "passed" or kind != "file":
+        return {
+            "state": "failed",
+            "reason_code": "project_update_component_path_unsafe",
+            "value": None,
+        }
+    unavailable = {
+        "state": "unavailable",
+        "reason_code": "project_update_component_observation_unavailable",
+        "value": None,
+    }
+    changed = {
+        "state": "failed",
+        "reason_code": "project_update_component_changed",
+        "value": None,
+    }
+    try:
+        before = os.lstat(path)
+    except FileNotFoundError:
+        return changed
+    except (OSError, OverflowError):
+        return unavailable
+
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+
+    def is_regular_real(path_stat: os.stat_result) -> bool:
+        return bool(
+            stat.S_ISREG(path_stat.st_mode)
+            and not stat.S_ISLNK(path_stat.st_mode)
+            and not (
+                reparse_flag
+                and getattr(path_stat, "st_file_attributes", 0)
+                & reparse_flag
+            )
+        )
+
+    if not is_regular_real(before):
+        return changed
+    if before.st_size < 0 or before.st_size > maximum:
+        return {
+            "state": "failed",
+            "reason_code": "project_update_component_too_large",
+            "value": None,
+        }
+
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags)
+    except FileNotFoundError:
+        return changed
+    except (OSError, OverflowError):
+        return unavailable
+
+    result: dict[str, Any] = unavailable
+    close_unavailable = False
+    try:
+        try:
+            opened = os.fstat(descriptor)
+        except FileNotFoundError:
+            result = changed
+        except (OSError, OverflowError):
+            result = unavailable
+        else:
+            opened_matches_before = bool(
+                is_regular_real(opened)
+                and opened.st_size == before.st_size
+                and opened.st_mtime_ns == before.st_mtime_ns
+                and (
+                    not before.st_dev
+                    or not opened.st_dev
+                    or before.st_dev == opened.st_dev
+                )
+                and (
+                    not before.st_ino
+                    or not opened.st_ino
+                    or before.st_ino == opened.st_ino
+                )
+            )
+            if not opened_matches_before:
+                result = changed
+            else:
+                chunks: list[bytes] = []
+                total = 0
+                read_unavailable = False
+                while total <= maximum:
+                    try:
+                        chunk = os.read(
+                            descriptor,
+                            min(64 * 1024, maximum + 1 - total),
+                        )
+                    except (OSError, OverflowError):
+                        read_unavailable = True
+                        break
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    total += len(chunk)
+                if read_unavailable:
+                    result = unavailable
+                else:
+                    try:
+                        after = os.fstat(descriptor)
+                        path_after = os.lstat(path)
+                    except FileNotFoundError:
+                        result = changed
+                    except (OSError, OverflowError):
+                        result = unavailable
+                    else:
+                        stable = bool(
+                            total == opened.st_size
+                            and total <= maximum
+                            and is_regular_real(after)
+                            and is_regular_real(path_after)
+                            and after.st_size == opened.st_size
+                            and after.st_mtime_ns == opened.st_mtime_ns
+                            and path_after.st_size == opened.st_size
+                            and path_after.st_mtime_ns == opened.st_mtime_ns
+                            and (
+                                not opened.st_dev
+                                or not after.st_dev
+                                or opened.st_dev == after.st_dev
+                            )
+                            and (
+                                not opened.st_ino
+                                or not after.st_ino
+                                or opened.st_ino == after.st_ino
+                            )
+                            and (
+                                not opened.st_dev
+                                or not path_after.st_dev
+                                or opened.st_dev == path_after.st_dev
+                            )
+                            and (
+                                not opened.st_ino
+                                or not path_after.st_ino
+                                or opened.st_ino == path_after.st_ino
+                            )
+                        )
+                        result = (
+                            {
+                                "state": "passed",
+                                "reason_code": "verified",
+                                "value": b"".join(chunks),
+                            }
+                            if stable
+                            else changed
+                        )
+    finally:
+        try:
+            os.close(descriptor)
+        except OSError:
+            close_unavailable = True
+    if close_unavailable and result["state"] != "failed":
+        return unavailable
+    return result
 
 
 _PROJECT_UPDATE_UNSAFE_LIVE_COMPONENT = object()
+_PROJECT_UPDATE_UNAVAILABLE_LIVE_COMPONENT = object()
 
 
 @dataclass
@@ -120810,6 +126957,10 @@ class _ProjectVersionUpdateDurableApprovalState:
     runtime_post_sha256: str
     component_paths: dict[str, Path]
     runtime_materialization: project_runtime.RuntimeMaterialization | None = None
+    runtime_cleanup_capsule: (
+        project_runtime.RuntimeCandidateCleanupCapsule | None
+    ) = None
+    runtime_cleanup_terminal_evidence: dict[str, Any] | None = None
     approved_plan_sha256: str | None = None
     approved_target_binding_sha256: str | None = None
     terminal_update_verified: bool = False
@@ -120817,6 +126968,11 @@ class _ProjectVersionUpdateDurableApprovalState:
     terminal_domain_result: dict[str, Any] | None = None
     terminal_handoff_sha256: str | None = None
     existing_cleanup_authority_sha256: str | None = None
+    approved_snapshot_revalidation: dict[str, Any] | None = None
+    legacy_prewrite_recovery: dict[str, Any] | None = None
+    # Private, in-process-only recovery authority.  It contains callbacks and
+    # path objects and is deliberately excluded from every preview/receipt.
+    legacy_prewrite_recovery_control: dict[str, Any] | None = None
 
     def checkpoint_head(self) -> project_update_transaction.ProjectUpdateCheckpoint:
         journal = self.transaction.inspect().journal
@@ -122394,6 +128550,234 @@ def _project_update_terminal_delivery_capability(
     return capability
 
 
+def _project_update_terminal_document_capability_sha256(
+    document: Mapping[str, Any],
+) -> str | None:
+    """Read only the fixed capability digest slot for either terminal schema."""
+
+    if document.get("state") == "terminal_ready":
+        ready = document.get("ready")
+        payload = ready.get("payload") if isinstance(ready, Mapping) else None
+    elif document.get("state") == "terminal_ready_unapproved":
+        payload = document.get("payload")
+    else:
+        return None
+    value = (
+        payload.get("delivery_capability_sha256")
+        if isinstance(payload, Mapping)
+        else None
+    )
+    return (
+        str(value)
+        if type(value) is str
+        and re.fullmatch(r"sha256:[0-9a-f]{64}", value) is not None
+        else None
+    )
+
+
+def _project_update_cancellation_terminal_capability(
+    key: bytes | bytearray | memoryview,
+    binding: Mapping[str, Any],
+) -> str:
+    """Derive a one-result capability without exposing recovery-key bytes."""
+
+    capability_document = (
+        project_update_legacy_recovery.authenticated_document(
+            {
+                "schema": (
+                    "wom-kit/project-version-update-cancellation-terminal-"
+                    "delivery-capability/v0.4.19"
+                ),
+                **dict(binding),
+            },
+            key,
+        )
+    )
+    authentication = capability_document.get("authentication")
+    capability = (
+        authentication.get("mac")
+        if isinstance(authentication, Mapping)
+        else None
+    )
+    if (
+        type(capability) is not str
+        or re.fullmatch(r"hmac-sha256:[0-9a-f]{64}", capability) is None
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        )
+    return capability
+
+
+def _project_update_cancellation_terminal_document(
+    *,
+    recovery_ref: str,
+    archive_identity_sha256: str,
+    intent_sha256: str,
+    terminal_receipt_sha256: str,
+    cancellation_result_document_sha256: str,
+    key: bytes | bytearray | memoryview,
+) -> tuple[dict[str, Any], str]:
+    """Build one distinct, recovery-key-authenticated cancellation capsule."""
+
+    result = _project_update_legacy_unapproved_restored_result()
+    binding = {
+        "archive_identity_sha256": archive_identity_sha256,
+        "cancellation_result_document_sha256": (
+            cancellation_result_document_sha256
+        ),
+        "intent_sha256": intent_sha256,
+        "outcome": "unapproved_restored",
+        "recovery_ref": recovery_ref,
+        "result_payload_sha256": (
+            project_update_transaction.sha256_document(result)
+        ),
+        "terminal_receipt_sha256": terminal_receipt_sha256,
+    }
+    if (
+        re.fullmatch(r"recovery_[0-9a-f]{32}", recovery_ref) is None
+        or any(
+            re.fullmatch(r"sha256:[0-9a-f]{64}", str(value or ""))
+            is None
+            for value in (
+                archive_identity_sha256,
+                intent_sha256,
+                terminal_receipt_sha256,
+                cancellation_result_document_sha256,
+                binding["result_payload_sha256"],
+            )
+        )
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        )
+    capability = _project_update_cancellation_terminal_capability(
+        key,
+        binding,
+    )
+    payload = {
+        "schema": _PROJECT_UPDATE_CANCELLATION_TERMINAL_PAYLOAD_SCHEMA,
+        **binding,
+        "delivery_capability_sha256": (
+            project_update_transaction.sha256_bytes(
+                capability.encode("ascii")
+            )
+        ),
+    }
+    document = project_update_legacy_recovery.authenticated_document(
+        {
+            "schema": _PROJECT_UPDATE_CANCELLATION_TERMINAL_HANDOFF_SCHEMA,
+            "state": "terminal_ready_unapproved",
+            "payload": payload,
+        },
+        key,
+    )
+    return document, capability
+
+
+def _project_update_verify_cancellation_terminal_document(
+    document: Mapping[str, Any],
+    *,
+    expected_archive_identity_sha256: str,
+    key: bytes | bytearray | memoryview,
+) -> tuple[dict[str, Any], str]:
+    """Authenticate one cancellation capsule and rebuild its fixed result."""
+
+    try:
+        verified = project_update_legacy_recovery.verify_authenticated_document(
+            document,
+            key,
+        )
+        payload = verified.get("payload")
+        if (
+            set(verified) != {"schema", "state", "payload"}
+            or verified.get("schema")
+            != _PROJECT_UPDATE_CANCELLATION_TERMINAL_HANDOFF_SCHEMA
+            or verified.get("state") != "terminal_ready_unapproved"
+            or not isinstance(payload, Mapping)
+            or set(payload)
+            != {
+                "archive_identity_sha256",
+                "cancellation_result_document_sha256",
+                "delivery_capability_sha256",
+                "intent_sha256",
+                "outcome",
+                "recovery_ref",
+                "result_payload_sha256",
+                "schema",
+                "terminal_receipt_sha256",
+            }
+            or payload.get("schema")
+            != _PROJECT_UPDATE_CANCELLATION_TERMINAL_PAYLOAD_SCHEMA
+            or payload.get("outcome") != "unapproved_restored"
+            or payload.get("archive_identity_sha256")
+            != expected_archive_identity_sha256
+            or re.fullmatch(
+                r"recovery_[0-9a-f]{32}",
+                str(payload.get("recovery_ref") or ""),
+            )
+            is None
+            or any(
+                re.fullmatch(r"sha256:[0-9a-f]{64}", str(value or ""))
+                is None
+                for value in (
+                    payload.get("archive_identity_sha256"),
+                    payload.get("intent_sha256"),
+                    payload.get("terminal_receipt_sha256"),
+                    payload.get("cancellation_result_document_sha256"),
+                    payload.get("result_payload_sha256"),
+                    payload.get("delivery_capability_sha256"),
+                )
+            )
+        ):
+            raise ArchiveServiceError(
+                "project_version_update_terminal_handoff_invalid"
+            )
+        binding = {
+            key_name: payload[key_name]
+            for key_name in (
+                "archive_identity_sha256",
+                "cancellation_result_document_sha256",
+                "intent_sha256",
+                "outcome",
+                "recovery_ref",
+                "result_payload_sha256",
+                "terminal_receipt_sha256",
+            )
+        }
+        capability = _project_update_cancellation_terminal_capability(
+            key,
+            binding,
+        )
+        result = _project_update_legacy_unapproved_restored_result()
+        if (
+            not hmac.compare_digest(
+                str(payload["result_payload_sha256"]),
+                project_update_transaction.sha256_document(result),
+            )
+            or not hmac.compare_digest(
+                str(payload["delivery_capability_sha256"]),
+                project_update_transaction.sha256_bytes(
+                    capability.encode("ascii")
+                ),
+            )
+        ):
+            raise ArchiveServiceError(
+                "project_version_update_terminal_handoff_invalid"
+            )
+        return result, capability
+    except ArchiveServiceError:
+        raise
+    except project_update_legacy_recovery.LegacyProjectUpdateRecoveryError:
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        ) from None
+    except BaseException:
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        ) from None
+
+
 def _project_update_register_terminal_delivery_capability(
     handoff_sha256: str,
     capability: str,
@@ -122568,7 +128952,10 @@ def _project_update_terminal_delivery_capability_for_result(
     result: Mapping[str, Any],
 ) -> tuple[str, str] | None:
     terminal = result.get("terminal_finalization")
-    if (
+    cancellation_result = (
+        _project_update_is_legacy_unapproved_terminal_result(result)
+    )
+    if not cancellation_result and (
         not isinstance(terminal, Mapping)
         or terminal.get("durable_terminal_handoff_ready") is not True
         or result.get("ok") is not True
@@ -122581,9 +128968,37 @@ def _project_update_terminal_delivery_capability_for_result(
         project_root
     )
     observed = _project_update_read_terminal_document(project_root, handoff)
-    if observed is None or observed[0].get("state") != "terminal_ready":
+    expected_state = (
+        "terminal_ready_unapproved"
+        if cancellation_result
+        else "terminal_ready"
+    )
+    if observed is None or observed[0].get("state") != expected_state:
         return None
     handoff_sha256 = project_update_transaction.sha256_bytes(observed[1])
+    if cancellation_result:
+        payload = observed[0].get("payload")
+        with _PROJECT_UPDATE_TERMINAL_DELIVERY_CAPABILITIES_LOCK:
+            capability = _PROJECT_UPDATE_TERMINAL_DELIVERY_CAPABILITIES.get(
+                handoff_sha256
+            )
+        if (
+            not isinstance(payload, Mapping)
+            or payload.get("schema")
+            != _PROJECT_UPDATE_CANCELLATION_TERMINAL_PAYLOAD_SCHEMA
+            or payload.get("outcome") != "unapproved_restored"
+            or payload.get("result_payload_sha256")
+            != project_update_transaction.sha256_document(dict(result))
+            or type(capability) is not str
+            or not hmac.compare_digest(
+                project_update_transaction.sha256_bytes(
+                    capability.encode("ascii")
+                ),
+                str(payload.get("delivery_capability_sha256") or ""),
+            )
+        ):
+            return None
+        return capability, handoff_sha256
     pending = observed[0].get("pending")
     ready = observed[0].get("ready")
     ready_payload = ready.get("payload") if type(ready) is dict else None
@@ -122627,7 +129042,10 @@ def _project_update_terminal_delivery_output_proof(
         re.fullmatch(r"hmac-sha256:[0-9a-f]{64}", capability) is None
         or re.fullmatch(r"sha256:[0-9a-f]{64}", handoff_sha256) is None
         or not isinstance(result, Mapping)
-        or result.get("ok") is not True
+        or not (
+            result.get("ok") is True
+            or _project_update_is_legacy_unapproved_terminal_result(result)
+        )
         or type(output_relative) is not str
         or not output_relative.startswith(
             _PROJECT_UPDATE_OUTPUT_LOGICAL_PREFIX
@@ -123360,15 +129778,45 @@ def _project_update_claim_authority(
 def _project_update_runtime_matches_candidate(
     state: _ProjectVersionUpdateDurableApprovalState,
 ) -> bool:
+    """Compatibility scalar for callers that need only an exact match."""
+
+    return _project_update_runtime_candidate_observation(state)["state"] == "passed"
+
+
+def _project_update_runtime_candidate_observation(
+    state: _ProjectVersionUpdateDurableApprovalState,
+) -> dict[str, str]:
+    """Preserve runtime candidate drift versus observation failure."""
+
     try:
-        return bool(
-            project_runtime._existing_runtime_matches_candidate(
-                state.project_root,
-                state.runtime_candidate,
-            )
+        observation = project_runtime._existing_runtime_candidate_observation(
+            state.project_root,
+            state.runtime_candidate,
         )
-    except (OSError, project_runtime.ProjectRuntimeError):
-        return False
+    except OSError:
+        return {
+            "state": "unavailable",
+            "reason_code": "project_runtime_existing_observation_unavailable",
+        }
+    except project_runtime.ProjectRuntimeError as error:
+        unavailable = project_runtime._runtime_error_is_observation_unavailable(
+            error
+        )
+        return {
+            "state": "unavailable" if unavailable else "failed",
+            "reason_code": str(error),
+        }
+    if observation["state"] == "unavailable":
+        return {
+            "state": "unavailable",
+            "reason_code": str(observation["reason_code"]),
+        }
+    if observation["matches"]:
+        return {"state": "passed", "reason_code": "verified"}
+    return {
+        "state": "failed",
+        "reason_code": str(observation["reason_code"]),
+    }
 
 
 def _project_update_source_live_sha256(
@@ -123430,32 +129878,42 @@ def _project_update_live_component_sha256(
     live: dict[str, str] = {
         "source": _project_update_source_live_sha256(state),
     }
-    candidate_present = bool(
-        os.path.lexists(state.runtime_candidate.candidate_root)
-        or os.path.lexists(state.runtime_candidate.seal_path)
-    )
-    runtime_matches = _project_update_runtime_matches_candidate(state)
-    if runtime_matches:
+    runtime_observation = _project_update_runtime_candidate_observation(state)
+    if runtime_observation["state"] == "passed":
         live["runtime"] = state.runtime_post_sha256
-    elif (
-        state.runtime_candidate.existing_runtime_repair_required
-        and project_runtime.runtime_repair_state(
+    elif runtime_observation["state"] == "unavailable":
+        live["runtime"] = _project_update_unknown_component_sha256(
+            "runtime"
+        )
+    elif state.runtime_candidate.existing_runtime_repair_required:
+        repair_observation = project_runtime.runtime_repair_state_observation(
             state.runtime_candidate
         )
-        in {"preimage_final", "backup_only"}
+        if (
+            repair_observation["state"] == "passed"
+            and repair_observation["repair_state"]
+            in {"preimage_final", "backup_only"}
+        ):
+            live["runtime"] = state.runtime_pre_sha256
+        else:
+            live["runtime"] = _project_update_unknown_component_sha256(
+                "runtime"
+            )
+    elif state.runtime_pre_sha256 == (
+        project_update_transaction.ABSENT_COMPONENT_SHA256
     ):
-        live["runtime"] = state.runtime_pre_sha256
-    elif (
-        state.runtime_pre_sha256
-        == project_update_transaction.ABSENT_COMPONENT_SHA256
-        and not os.path.lexists(
+        final_observation = project_runtime._runtime_path_presence_observation(
             project_runtime.runtime_path(
                 state.project_root,
                 state.target_version,
             )
         )
-    ):
-        live["runtime"] = state.runtime_pre_sha256
+        live["runtime"] = (
+            state.runtime_pre_sha256
+            if final_observation["state"] == "passed"
+            and final_observation["present"] is False
+            else _project_update_unknown_component_sha256("runtime")
+        )
     else:
         live["runtime"] = _project_update_unknown_component_sha256(
             "runtime"
@@ -123484,14 +129942,331 @@ def _project_update_live_component_sha256(
             path,
             maximum=maximum,
         )
+        swap_path = _project_update_component_swap_path(state, component)
+        if value is None and os.path.lexists(swap_path):
+            # The exact Windows publisher first moves the observed preimage to
+            # this transaction-bound no-replace slot.  A hard exit in that
+            # narrow interval is still a preimage, not unexplained absence.
+            swap_value = _project_update_safe_read_component(
+                state.project_root,
+                swap_path,
+                maximum=maximum,
+            )
+            if (
+                isinstance(swap_value, bytes)
+                and hmac.compare_digest(
+                    _project_update_raw_component_sha256(swap_value),
+                    component.pre_sha256,
+                )
+            ):
+                value = swap_value
         live[component.component_ref] = (
             _project_update_unknown_component_sha256(
                 component.component_ref
             )
-            if value is _PROJECT_UPDATE_UNSAFE_LIVE_COMPONENT
+            if value is not None and not isinstance(value, bytes)
             else _project_update_raw_component_sha256(value)
         )
     return live
+
+
+def _project_update_component_swap_path(
+    state: _ProjectVersionUpdateDurableApprovalState,
+    component: project_update_transaction.ProjectUpdateComponent,
+) -> Path:
+    """Return one content-free, transaction-bound same-volume swap name."""
+
+    target = state.component_paths[component.component_ref]
+    transaction_ref = state.transaction.transaction_ref
+    token = hashlib.sha256(
+        f"{transaction_ref}\0{component.component_ref}".encode("ascii")
+    ).hexdigest()[:24]
+    return target.with_name(f".{target.name}.wom-swap-{token}")
+
+
+def _project_update_delete_exact_swap_bytes(
+    project_root: Path,
+    swap_path: Path,
+    expected_raw: bytes,
+) -> None:
+    """Delete one exact Windows swap while holding a no-write handle.
+
+    A name-based ``unlink`` after a hash check has a check/delete race: another
+    process can still mutate or replace the swap between those operations.  The
+    retained-handle primitive opens the exact object without sharing write
+    access, revalidates its identity and complete digest through that handle,
+    marks that handle delete-pending, and only then closes it.  If any writer is
+    still able to change the object, the open or validation fails and the swap
+    remains recoverable.
+    """
+
+    if os.name != "nt":
+        raise ArchiveServiceError(
+            "project_version_update_component_swap_cleanup_unsupported"
+        )
+    try:
+        observed = os.lstat(swap_path)
+    except OSError:
+        raise ArchiveServiceError(
+            "project_version_update_component_swap_cleanup_failed"
+        ) from None
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    if (
+        not stat.S_ISREG(observed.st_mode)
+        or stat.S_ISLNK(observed.st_mode)
+        or int(observed.st_nlink) != 1
+        or int(observed.st_size) != len(expected_raw)
+        or bool(
+            reparse_flag
+            and getattr(observed, "st_file_attributes", 0) & reparse_flag
+        )
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_component_swap_cleanup_failed"
+        )
+    expected = {
+        "type": "file",
+        "identity": {
+            "device": int(observed.st_dev),
+            "inode": int(observed.st_ino),
+        },
+        "size": len(expected_raw),
+        "mtime_ns": int(observed.st_mtime_ns),
+        "sha256": hashlib.sha256(expected_raw).hexdigest(),
+    }
+    try:
+        # Local import avoids the intentional reverse dependency used by the
+        # generic cleanup module to reuse this module's directory binding.
+        from .legacy_cleanup_bound_delete import _delete_exact_approved_file
+
+        _delete_exact_approved_file(project_root, swap_path, expected)
+        project_update_transaction._require_directory_durable(swap_path.parent)
+    except (OSError, RuntimeError, ValueError):
+        raise ArchiveServiceError(
+            "project_version_update_component_swap_cleanup_failed"
+        ) from None
+
+
+def _project_update_windows_publish_bytes_no_replace(
+    target: Path,
+    raw: bytes,
+    *,
+    _failpoint: Callable[[str, Path], None] | None = None,
+) -> None:
+    """Publish complete bytes through one crash-clean retained Windows handle.
+
+    The temporary file is opened with ``FILE_FLAG_DELETE_ON_CLOSE`` and
+    without write/delete sharing.  The same handle writes, flushes, fully
+    re-reads, identity-binds, and renames the file without replacement.  A
+    process exit before commit therefore removes that exact handle's file; no
+    later path-based cleanup can delete a raced replacement.  After a durable
+    rename, ``FileDispositionInfoEx`` clears delete-on-close on that same
+    handle.  A process exit before the clear may remove the postimage, but the
+    exact component swap remains the recoverable preimage.
+    """
+
+    if os.name != "nt" or not isinstance(raw, bytes):
+        raise OSError("project_update_component_atomic_publish_unsupported")
+    target = Path(os.path.abspath(str(target)))
+    from ctypes import wintypes
+    import msvcrt
+    from . import private_metadata_win32
+
+    class FileDispositionInformationEx(ctypes.Structure):
+        _fields_ = [("Flags", wintypes.DWORD)]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    create_file.restype = wintypes.HANDLE
+    set_information = kernel32.SetFileInformationByHandle
+    set_information.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+    ]
+    set_information.restype = wintypes.BOOL
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = [wintypes.HANDLE]
+    close_handle.restype = wintypes.BOOL
+
+    generic_read = 0x80000000
+    generic_write = 0x40000000
+    delete_access = 0x00010000
+    file_share_read = 0x00000001
+    create_new = 1
+    file_attribute_normal = 0x00000080
+    file_flag_delete_on_close = 0x04000000
+    invalid_handle = wintypes.HANDLE(-1).value
+    error_file_exists = {80, 183}
+    descriptor: int | None = None
+    handle_value: int | None = None
+    temporary_path: Path | None = None
+
+    for _ in range(8):
+        candidate = target.with_name(
+            f".{target.name}.{secrets.token_hex(8)}.wom-publish"
+        )
+        ctypes.set_last_error(0)
+        handle = create_file(
+            str(candidate),
+            generic_read | generic_write | delete_access,
+            file_share_read,
+            None,
+            create_new,
+            file_attribute_normal | file_flag_delete_on_close,
+            None,
+        )
+        value = handle if isinstance(handle, int) else getattr(handle, "value", None)
+        if value not in {None, invalid_handle}:
+            handle_value = int(value)
+            temporary_path = candidate
+            break
+        if ctypes.get_last_error() not in error_file_exists:
+            raise ctypes.WinError(ctypes.get_last_error())
+    if handle_value is None or temporary_path is None:
+        raise OSError("project_update_component_atomic_publish_failed")
+
+    try:
+        try:
+            descriptor = msvcrt.open_osfhandle(
+                handle_value,
+                os.O_RDWR | getattr(os, "O_BINARY", 0),
+            )
+        except BaseException:
+            close_handle(handle_value)
+            handle_value = None
+            raise
+        # Ownership has transferred to the CRT descriptor.
+        handle_value = msvcrt.get_osfhandle(descriptor)
+
+        offset = 0
+        while offset < len(raw):
+            written = os.write(descriptor, raw[offset : offset + 64 * 1024])
+            if written <= 0:
+                raise OSError("project_update_component_publish_write_incomplete")
+            offset += written
+        os.fsync(descriptor)
+
+        def exact_handle_binding(named_path: Path) -> dict[str, Any]:
+            before = os.fstat(descriptor)
+            reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or stat.S_ISLNK(before.st_mode)
+                or int(before.st_nlink) != 1
+                or int(before.st_size) != len(raw)
+                or bool(
+                    reparse_flag
+                    and getattr(before, "st_file_attributes", 0) & reparse_flag
+                )
+            ):
+                raise OSError("project_update_component_publish_handle_unsafe")
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            digest = hashlib.sha256()
+            remaining = len(raw)
+            while remaining:
+                chunk = os.read(descriptor, min(1024 * 1024, remaining))
+                if not chunk:
+                    raise OSError(
+                        "project_update_component_publish_read_incomplete"
+                    )
+                digest.update(chunk)
+                remaining -= len(chunk)
+            if os.read(descriptor, 1):
+                raise OSError(
+                    "project_update_component_publish_read_incomplete"
+                )
+            after = os.fstat(descriptor)
+            named = os.lstat(named_path)
+            binding = {
+                "identity": (int(before.st_dev), int(before.st_ino)),
+                "size": int(before.st_size),
+                "mtime_ns": int(before.st_mtime_ns),
+                "link_count": int(before.st_nlink),
+                "sha256": digest.hexdigest(),
+            }
+            if (
+                (int(after.st_dev), int(after.st_ino))
+                != binding["identity"]
+                or int(after.st_size) != binding["size"]
+                or int(after.st_mtime_ns) != binding["mtime_ns"]
+                or int(after.st_nlink) != binding["link_count"]
+                or not stat.S_ISREG(named.st_mode)
+                or stat.S_ISLNK(named.st_mode)
+                or (int(named.st_dev), int(named.st_ino))
+                != binding["identity"]
+                or int(named.st_size) != binding["size"]
+                or int(named.st_mtime_ns) != binding["mtime_ns"]
+                or int(named.st_nlink) != binding["link_count"]
+                or binding["sha256"] != hashlib.sha256(raw).hexdigest()
+            ):
+                raise OSError("project_update_component_publish_handle_changed")
+            return binding
+
+        creation_binding = exact_handle_binding(temporary_path)
+        if _failpoint is not None:
+            _failpoint("publish_temp_flushed_and_bound", temporary_path)
+        if exact_handle_binding(temporary_path) != creation_binding:
+            raise OSError("project_update_component_publish_handle_changed")
+
+        rename_information = private_metadata_win32.file_rename_info_buffer(
+            target,
+            replace_if_exists=False,
+        )
+        ctypes.set_last_error(0)
+        if not set_information(
+            handle_value,
+            3,  # FileRenameInfo
+            rename_information.backing,
+            rename_information.api_buffer_size,
+        ):
+            raise ctypes.WinError(ctypes.get_last_error())
+        if exact_handle_binding(target) != creation_binding:
+            raise OSError("project_update_component_publish_handle_changed")
+        project_update_transaction._require_directory_durable(target.parent)
+        if _failpoint is not None:
+            _failpoint(
+                "publish_target_durable_before_delete_on_close_cancel",
+                target,
+            )
+
+        # With FILE_FLAG_DELETE_ON_CLOSE, ON_CLOSE without DELETE clears the
+        # pending deletion state for this exact handle.  It cannot authorize a
+        # different object bearing the same path because that name was never
+        # reopened.
+        keep_on_close = FileDispositionInformationEx(0x00000008)
+        if not set_information(
+            handle_value,
+            21,  # FileDispositionInfoEx
+            ctypes.byref(keep_on_close),
+            ctypes.sizeof(keep_on_close),
+        ):
+            raise ctypes.WinError(ctypes.get_last_error())
+        if exact_handle_binding(target) != creation_binding:
+            raise OSError("project_update_component_publish_handle_changed")
+        if _failpoint is not None:
+            _failpoint("publish_delete_on_close_cancelled", target)
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            finally:
+                descriptor = None
+        elif handle_value is not None:
+            close_handle(handle_value)
+        # Never perform path-based cleanup here.  Before cancellation, the
+        # kernel deletes the retained handle's exact object on close.  After
+        # cancellation, the durable target is intentionally preserved.
 
 
 def _project_update_claim_checkpoint_guard(
@@ -123565,6 +130340,13 @@ def _project_update_exact_write_bytes(
     component: project_update_transaction.ProjectUpdateComponent,
     target_bytes: bytes,
 ) -> None:
+    if not hmac.compare_digest(
+        project_update_transaction.digest_component(target_bytes),
+        component.post_sha256,
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_private_plan_invalid"
+        )
     path = state.component_paths[component.component_ref]
     maximum = (
         _PROJECT_UPDATE_RECEIPT_MAX_BYTES
@@ -123573,18 +130355,74 @@ def _project_update_exact_write_bytes(
         if component.role == "launcher"
         else WOM_KIT_VERSION_PIN_MAX_BYTES
     )
+    swap_path = _project_update_component_swap_path(state, component)
     current = _project_update_safe_read_component(
         state.project_root,
         path,
         maximum=maximum,
     )
+    if current is _PROJECT_UPDATE_UNAVAILABLE_LIVE_COMPONENT:
+        raise ArchiveServiceError(
+            "project_version_update_component_observation_unavailable"
+        )
     if current is _PROJECT_UPDATE_UNSAFE_LIVE_COMPONENT:
         raise ArchiveServiceError(
             "project_version_update_component_path_unsafe"
         )
     current_sha256 = _project_update_raw_component_sha256(current)
+    swap = (
+        _project_update_safe_read_component(
+            state.project_root,
+            swap_path,
+            maximum=maximum,
+        )
+        if os.path.lexists(swap_path)
+        else None
+    )
+    if swap is _PROJECT_UPDATE_UNAVAILABLE_LIVE_COMPONENT:
+        raise ArchiveServiceError(
+            "project_version_update_component_observation_unavailable"
+        )
+    if swap is _PROJECT_UPDATE_UNSAFE_LIVE_COMPONENT:
+        raise ArchiveServiceError(
+            "project_version_update_component_path_unsafe"
+        )
     if hmac.compare_digest(current_sha256, component.post_sha256):
+        if swap is not None:
+            if not (
+                isinstance(swap, bytes)
+                and hmac.compare_digest(
+                    _project_update_raw_component_sha256(swap),
+                    component.pre_sha256,
+                )
+            ):
+                raise ArchiveServiceError(
+                    "project_version_update_component_compare_and_swap_failed"
+                )
+            _project_update_delete_exact_swap_bytes(
+                state.project_root,
+                swap_path,
+                swap,
+            )
         return
+    if current is None and swap is not None:
+        if not (
+            isinstance(swap, bytes)
+            and hmac.compare_digest(
+                _project_update_raw_component_sha256(swap),
+                component.pre_sha256,
+            )
+        ):
+            raise ArchiveServiceError(
+                "project_version_update_component_compare_and_swap_failed"
+            )
+        current_sha256 = component.pre_sha256
+    elif swap is not None:
+        # A target and swap existing together before the intended postimage is
+        # an ambiguous external race.  Preserve both and stop.
+        raise ArchiveServiceError(
+            "project_version_update_component_compare_and_swap_failed"
+        )
     if not hmac.compare_digest(current_sha256, component.pre_sha256):
         raise ArchiveServiceError(
             "project_version_update_component_compare_and_swap_failed"
@@ -123596,13 +130434,28 @@ def _project_update_exact_write_bytes(
             "project_version_update_component_path_unsafe"
         ) from None
     held_parent = state.project_root
-    if not state.directory_guard.is_held(held_parent):
+    held_parent_observation = state.directory_guard.held_observation(
+        held_parent
+    )
+    if held_parent_observation["state"] == "unavailable":
+        raise ArchiveServiceError(
+            "project_version_update_component_parent_observation_unavailable"
+        )
+    if held_parent_observation["state"] != "passed":
         raise ArchiveServiceError(
             "project_version_update_component_parent_unbound"
         )
     for part in relative_parent.parts:
         child = held_parent / part
-        kind = wom_kit_real_path_kind(state.project_root, child)
+        child_observation = wom_kit_real_path_kind_observation(
+            state.project_root,
+            child,
+        )
+        if child_observation["state"] == "unavailable":
+            raise ArchiveServiceError(
+                "project_version_update_component_parent_observation_unavailable"
+            )
+        kind = child_observation["kind"]
         if kind == "directory":
             held = state.directory_guard.hold(child)
         elif kind == "missing":
@@ -123613,23 +130466,96 @@ def _project_update_exact_write_bytes(
         else:
             held = False
         if not held:
+            after_hold_observation = wom_kit_real_path_kind_observation(
+                state.project_root,
+                child,
+            )
+            if (
+                after_hold_observation["state"] == "unavailable"
+                or (
+                    after_hold_observation["state"] == "passed"
+                    and after_hold_observation["kind"] == "directory"
+                )
+            ):
+                raise ArchiveServiceError(
+                    "project_version_update_component_parent_observation_unavailable"
+                )
             raise ArchiveServiceError(
                 "project_version_update_component_parent_unbound"
             )
         held_parent = child
-    if not wom_kit_existing_path_components_are_real(
+    path_components = wom_kit_path_components_observation(
         state.project_root,
         path,
+    )
+    if path_components["state"] == "unavailable":
+        raise ArchiveServiceError(
+            "project_version_update_component_observation_unavailable"
+        )
+    if (
+        path_components["state"] != "passed"
+        or path_components["kind"] not in {"real", "missing"}
     ):
         raise ArchiveServiceError(
             "project_version_update_component_path_unsafe"
         )
-    write_bytes_atomic(path, target_bytes)
+    if os.name != "nt":
+        raise ArchiveServiceError(
+            "project_version_update_component_atomic_publish_unsupported"
+        )
+    if current is not None and not os.path.lexists(swap_path):
+        # Windows os.rename is no-replace.  Whichever bytes occupy the target
+        # at this instant are atomically preserved before WOM can publish.  A
+        # raced value is detected from the swap and restored.
+        try:
+            os.rename(path, swap_path)
+            project_update_transaction._require_directory_durable(path.parent)
+        except OSError:
+            raise ArchiveServiceError(
+                "project_version_update_component_compare_and_swap_failed"
+            ) from None
+        preserved = _project_update_safe_read_component(
+            state.project_root,
+            swap_path,
+            maximum=maximum,
+        )
+        if not (
+            isinstance(preserved, bytes)
+            and hmac.compare_digest(
+                _project_update_raw_component_sha256(preserved),
+                component.pre_sha256,
+            )
+        ):
+            if not os.path.lexists(path):
+                try:
+                    os.rename(swap_path, path)
+                    project_update_transaction._require_directory_durable(
+                        path.parent
+                    )
+                except OSError:
+                    pass
+            raise ArchiveServiceError(
+                "project_version_update_component_compare_and_swap_failed"
+            )
+
+    try:
+        _project_update_windows_publish_bytes_no_replace(path, target_bytes)
+    except Exception:
+        # The retained-handle publisher may receive a private Win32 error or
+        # filesystem path from a low-level API.  Keep that diagnostic inside
+        # this service boundary; public callers receive only the fixed code.
+        raise ArchiveServiceError(
+            "project_version_update_component_compare_and_swap_failed"
+        ) from None
     verified = _project_update_safe_read_component(
         state.project_root,
         path,
         maximum=maximum,
     )
+    if verified is _PROJECT_UPDATE_UNAVAILABLE_LIVE_COMPONENT:
+        raise ArchiveServiceError(
+            "project_version_update_component_verification_unavailable"
+        )
     if verified is _PROJECT_UPDATE_UNSAFE_LIVE_COMPONENT or not isinstance(
         verified,
         bytes,
@@ -123639,6 +130565,204 @@ def _project_update_exact_write_bytes(
     ):
         raise ArchiveServiceError(
             "project_version_update_component_verification_failed"
+        )
+    if os.path.lexists(swap_path):
+        preserved = _project_update_safe_read_component(
+            state.project_root,
+            swap_path,
+            maximum=maximum,
+        )
+        if not (
+            isinstance(preserved, bytes)
+            and hmac.compare_digest(
+                _project_update_raw_component_sha256(preserved),
+                component.pre_sha256,
+            )
+        ):
+            raise ArchiveServiceError(
+                "project_version_update_component_compare_and_swap_failed"
+            )
+        _project_update_delete_exact_swap_bytes(
+            state.project_root,
+            swap_path,
+            preserved,
+        )
+
+
+def _project_update_prepare_runtime_cleanup(
+    candidate: project_runtime.PreparedRuntimeCandidate,
+) -> tuple[
+    project_runtime.RuntimeCandidateCleanupCapsule,
+    dict[str, Any],
+]:
+    """Finish candidate cleanup while retaining its durable sidecar."""
+
+    capsule = project_runtime.cleanup_prepared_runtime_candidate(candidate)
+    if not isinstance(
+        capsule,
+        project_runtime.RuntimeCandidateCleanupCapsule,
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_runtime_candidate_cleanup_failed"
+        )
+    evidence = project_runtime.runtime_candidate_cleanup_terminal_evidence(
+        capsule
+    )
+    if not isinstance(evidence, dict):
+        raise ArchiveServiceError(
+            "project_version_update_runtime_candidate_cleanup_failed"
+        )
+    return capsule, evidence
+
+
+def _project_update_runtime_cleanup_sidecar_pending_read_only(
+    *,
+    project_root: Path,
+    transaction_ref: str,
+) -> bool | None:
+    """Classify one exact sidecar reference without granting deletion."""
+
+    inventory = project_runtime.runtime_candidate_cleanup_sidecar_inventory(
+        project_root
+    )
+    if (
+        not isinstance(inventory, Mapping)
+        or inventory.get("state") != "passed"
+        or inventory.get("unattributed_sidecar_count") != 0
+        or any(
+            inventory.get(key)
+            for key in (
+                "orphaned_transaction_refs",
+                "review_required_transaction_refs",
+                "unavailable_transaction_refs",
+            )
+        )
+    ):
+        return None
+    recoverable = inventory.get("recoverable_transaction_refs")
+    if not isinstance(recoverable, (tuple, list)):
+        return None
+    return sum(item == transaction_ref for item in recoverable) == 1
+
+
+def _project_update_runtime_cleanup_sidecar_for_transaction(
+    *,
+    project_root: Path,
+    transaction_root: Path,
+    transaction_ref: str,
+) -> project_runtime.RuntimeCandidateCleanupCapsule | None:
+    """Load one exact recoverable sidecar without guessing from filenames."""
+
+    inventory = project_runtime.runtime_candidate_cleanup_sidecar_inventory(
+        project_root
+    )
+    if not isinstance(inventory, Mapping):
+        raise ArchiveServiceError(
+            "project_version_update_runtime_candidate_cleanup_failed"
+        )
+    recoverable = inventory.get("recoverable_transaction_refs")
+    unsafe = tuple(
+        str(item)
+        for key in (
+            "orphaned_transaction_refs",
+            "review_required_transaction_refs",
+            "unavailable_transaction_refs",
+        )
+        for item in (
+            inventory.get(key)
+            if isinstance(inventory.get(key), (tuple, list))
+            else ()
+        )
+    )
+    if transaction_ref in unsafe:
+        raise ArchiveServiceError(
+            "project_version_update_runtime_candidate_cleanup_failed"
+        )
+    if not isinstance(recoverable, (tuple, list)):
+        raise ArchiveServiceError(
+            "project_version_update_runtime_candidate_cleanup_failed"
+        )
+    matching = [item for item in recoverable if item == transaction_ref]
+    if len(matching) > 1:
+        raise ArchiveServiceError(
+            "project_version_update_runtime_candidate_cleanup_failed"
+        )
+    if not matching:
+        return None
+    try:
+        capsule = project_runtime.load_runtime_candidate_cleanup_capsule(
+            project_root,
+            transaction_root,
+        )
+        resumed = project_runtime.resume_runtime_candidate_cleanup(capsule)
+    except BaseException:
+        raise ArchiveServiceError(
+            "project_version_update_runtime_candidate_cleanup_failed"
+        ) from None
+    if not isinstance(
+        resumed,
+        project_runtime.RuntimeCandidateCleanupCapsule,
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_runtime_candidate_cleanup_failed"
+        )
+    return resumed
+
+
+def _project_update_retire_runtime_cleanup_after_durable_ack(
+    *,
+    project_root: Path,
+    transaction_root: Path,
+    transaction_ref: str,
+    capsule: project_runtime.RuntimeCandidateCleanupCapsule | None,
+) -> None:
+    """Retire only through a disk-revalidated transaction-issued ack."""
+
+    try:
+        durable_ack = (
+            project_update_transaction.load_runtime_cleanup_durable_ack(
+                project_root,
+                transaction_ref,
+            )
+        )
+    except BaseException:
+        raise ArchiveServiceError(
+            "project_version_update_runtime_candidate_cleanup_failed"
+        ) from None
+    selected = capsule
+    if durable_ack is None:
+        if selected is None:
+            selected = _project_update_runtime_cleanup_sidecar_for_transaction(
+                project_root=project_root,
+                transaction_root=transaction_root,
+                transaction_ref=transaction_ref,
+            )
+            if selected is None:
+                # Historical verified checkpoints did not bind a cleanup
+                # sidecar.  Exact absence is the only compatible old shape.
+                return
+        raise ArchiveServiceError(
+            "project_version_update_runtime_candidate_cleanup_failed"
+        )
+    if not project_update_transaction.revalidate_runtime_cleanup_durable_ack(
+        durable_ack
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_runtime_candidate_cleanup_failed"
+        )
+    if selected is None:
+        selected = _project_update_runtime_cleanup_sidecar_for_transaction(
+            project_root=project_root,
+            transaction_root=transaction_root,
+            transaction_ref=transaction_ref,
+        )
+    if not project_runtime.retire_runtime_candidate_cleanup_capsule(
+        selected,
+        durable_ack=durable_ack,
+        project_root=project_root if selected is None else None,
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_runtime_candidate_cleanup_failed"
         )
 
 
@@ -123684,28 +130808,25 @@ def _project_update_perform_component(
                     state.runtime_candidate
                 )
             )
-            if os.path.lexists(state.runtime_candidate.candidate_root) or os.path.lexists(
-                state.runtime_candidate.seal_path
-            ):
-                if not project_runtime.cleanup_prepared_runtime_candidate(
-                    state.runtime_candidate
-                ):
-                    raise ArchiveServiceError(
-                        "project_version_update_runtime_candidate_cleanup_failed"
-                    )
-            return
-        state.runtime_materialization = project_runtime.promote_runtime_candidate(
-            state.project_root,
-            target=state.target_version,
-            target_commit=state.target_commit,
-            bootstrap=state.runtime_bootstrap,
-            supply=state.runtime_supply,
-            prepared_candidate=state.runtime_candidate,
-        )
-        if not _project_update_runtime_matches_candidate(state):
-            raise ArchiveServiceError(
-                "project_version_update_runtime_promotion_failed"
+        else:
+            state.runtime_materialization = project_runtime.promote_runtime_candidate(
+                state.project_root,
+                target=state.target_version,
+                target_commit=state.target_commit,
+                bootstrap=state.runtime_bootstrap,
+                supply=state.runtime_supply,
+                prepared_candidate=state.runtime_candidate,
             )
+            if not _project_update_runtime_matches_candidate(state):
+                raise ArchiveServiceError(
+                    "project_version_update_runtime_promotion_failed"
+                )
+        (
+            state.runtime_cleanup_capsule,
+            state.runtime_cleanup_terminal_evidence,
+        ) = _project_update_prepare_runtime_cleanup(
+            state.runtime_candidate
+        )
         return
     target_bytes = (
         state.static_receipt_bytes
@@ -123721,6 +130842,110 @@ def _project_update_perform_component(
     _project_update_exact_write_bytes(state, component, target_bytes)
 
 
+_PROJECT_UPDATE_LEGACY_RUNTIME_POLICY_KEYS = frozenset(
+    {
+        "state",
+        "required",
+        "schema",
+        "policy_sha256",
+        "source_path",
+        "supply_lock_path",
+        "supply_lock_sha256",
+    }
+)
+_PROJECT_UPDATE_OBSERVED_RUNTIME_POLICY_KEYS = (
+    _PROJECT_UPDATE_LEGACY_RUNTIME_POLICY_KEYS
+    | {"observation_state", "observation_reason_code"}
+)
+_PROJECT_UPDATE_MISSING_PREDECESSOR_VALUE = object()
+
+
+def _project_update_approved_policy_uses_predecessor_shape(
+    *,
+    runtime_candidate_legacy: bool,
+    expected_policy: Mapping[str, Any],
+) -> bool:
+    """Select compatibility only from the exact approved policy shape.
+
+    Candidate serialization and approval-policy serialization evolved on
+    independent timelines.  In particular, an older candidate can coexist
+    with a current nine-field policy, which must remain strict.  Keep the
+    parameter while predecessor transactions still call this helper, but do
+    not use candidate age to weaken a current approval.
+    """
+
+    _ = runtime_candidate_legacy
+    return bool(
+        frozenset(expected_policy)
+        == _PROJECT_UPDATE_LEGACY_RUNTIME_POLICY_KEYS
+    )
+
+
+def _project_update_approved_comparison_projection(
+    live: Any,
+    expected: Any,
+    *,
+    predecessor_shape: bool,
+) -> Any:
+    """Project additive observations only for an authenticated predecessor."""
+
+    if not predecessor_shape:
+        return live
+    if type(expected) is dict:
+        if type(live) is not dict:
+            return live
+        return {
+            key: (
+                _project_update_approved_comparison_projection(
+                    live[key],
+                    expected_value,
+                    predecessor_shape=True,
+                )
+                if key in live
+                else _PROJECT_UPDATE_MISSING_PREDECESSOR_VALUE
+            )
+            for key, expected_value in expected.items()
+        }
+    if type(expected) is list:
+        if type(live) is not list or len(live) != len(expected):
+            return live
+        return [
+            _project_update_approved_comparison_projection(
+                live_value,
+                expected_value,
+                predecessor_shape=True,
+            )
+            for live_value, expected_value in zip(live, expected)
+        ]
+    return live
+
+
+def _project_update_approved_bootstrap_identity_matches(
+    live: project_runtime.BootstrapWheel | None,
+    sealed: project_runtime.BootstrapWheel,
+) -> bool:
+    """Compare approved wheel identity, not the resume-only non-fetch URL.
+
+    The caller must obtain ``live`` through bootstrap_wheel_for_target, which
+    verifies the running distribution's exact public origin. Reopened plans
+    intentionally reconstruct an unusable transport URL and never fetch it.
+    """
+
+    if not isinstance(live, project_runtime.BootstrapWheel):
+        return False
+    return (
+        live.version,
+        live.tag,
+        live.file_name,
+        live.sha256,
+    ) == (
+        sealed.version,
+        sealed.tag,
+        sealed.file_name,
+        sealed.sha256,
+    )
+
+
 def _project_update_assert_approved_snapshot_unchanged(
     state: _ProjectVersionUpdateDurableApprovalState,
 ) -> None:
@@ -123734,7 +130959,9 @@ def _project_update_assert_approved_snapshot_unchanged(
     governed by the transaction's exact live-component classifier.
     """
 
-    failure_code = "project_version_update_approved_snapshot_changed"
+    changed_code = "project_version_update_approved_snapshot_changed"
+    unavailable_code = "project_version_update_approved_snapshot_unavailable"
+
     try:
         plan = state.private_plan
         expected_snapshot = plan.get("preflight_git_snapshot")
@@ -123757,38 +130984,112 @@ def _project_update_assert_approved_snapshot_unchanged(
             or type(plan.get("preflight_git_config_digest")) is not str
             or type(plan.get("head_before")) is not str
         ):
-            raise ArchiveServiceError(failure_code)
+            raise ArchiveServiceError(changed_code)
+        expected_policy_keys = frozenset(expected_policy)
+        if expected_policy_keys not in {
+            _PROJECT_UPDATE_LEGACY_RUNTIME_POLICY_KEYS,
+            _PROJECT_UPDATE_OBSERVED_RUNTIME_POLICY_KEYS,
+        }:
+            raise ArchiveServiceError(changed_code)
+        predecessor_observation_shape = (
+            _project_update_approved_policy_uses_predecessor_shape(
+                runtime_candidate_legacy=(
+                    state.runtime_candidate.legacy_resume_shape
+                ),
+                expected_policy=expected_policy,
+            )
+        )
 
         live_pin_specs: list[dict[str, Any]] = []
         for private_spec in expected_pin_specs:
             if type(private_spec) is not dict:
-                raise ArchiveServiceError(failure_code)
+                raise ArchiveServiceError(changed_code)
             logical_value = private_spec.get("logical")
             if type(logical_value) is not str:
-                raise ArchiveServiceError(failure_code)
+                raise ArchiveServiceError(changed_code)
             logical = PurePosixPath(logical_value)
             if (
                 logical.is_absolute()
                 or not logical.parts
                 or any(part in {"", ".", ".."} for part in logical.parts)
             ):
-                raise ArchiveServiceError(failure_code)
+                raise ArchiveServiceError(changed_code)
             path = state.project_root.joinpath(*logical.parts)
             if not is_path_within_root(path, state.project_root):
-                raise ArchiveServiceError(failure_code)
+                raise ArchiveServiceError(changed_code)
             live_pin_specs.append({**private_spec, "path": path})
 
+        live_git_snapshot = _wom_kit_project_update_git_snapshot(
+            state.mirror_path,
+            runner=state.runner,
+        )
+        live_git_config_digest = wom_kit_project_update_git_config_trust_digest(
+            state.mirror_path,
+            runner=state.runner,
+        )
+        live_git_metadata_evidence = (
+            wom_kit_project_update_git_metadata_evidence(
+                state.project_root,
+                state.mirror_path,
+                runner=state.runner,
+            )
+        )
+        live_pins_observation = (
+            wom_kit_project_update_all_pins_snapshot_observation(
+                state.project_root,
+                live_pin_specs,
+            )
+        )
+        live_ref_observation = (
+            wom_kit_project_update_target_ref_snapshot_observation(
+                state.mirror_path,
+                state.target_tag,
+                runner=state.runner,
+            )
+        )
+        live_ref_snapshot = live_ref_observation.get("snapshot")
+        live_target_evidence = wom_kit_project_update_target_evidence(
+            state.mirror_path,
+            state.target_tag,
+            runner=state.runner,
+        )
         live_policy = wom_kit_project_update_runtime_policy(
             state.mirror_path,
             state.target_commit,
             runner=state.runner,
         )
-        live_supply = wom_kit_project_update_runtime_supply(
+        live_policy_state, live_policy_reason = (
+            _wom_kit_project_update_policy_observation(live_policy)
+        )
+        (
+            live_supply_state,
+            live_supply_reason,
+            live_supply,
+        ) = _wom_kit_project_update_runtime_supply_revalidation_observation(
             state.mirror_path,
             state.target_commit,
             state.target_version,
             live_policy,
             runner=state.runner,
+        )
+        live_bootstrap, live_bootstrap_summary = (
+            project_runtime.bootstrap_wheel_for_target(state.target_version)
+        )
+        live_runtime_plan, live_runtime_blockers, _ = (
+            project_runtime.plan_runtime(
+                state.project_root,
+                state.target_version,
+                policy_state=str(live_policy["state"]),
+                target_commit=state.target_commit,
+                bootstrap=live_bootstrap,
+                bootstrap_summary=live_bootstrap_summary,
+                supply=live_supply,
+                enforce_interpreter=True,
+            )
+        )
+        live_runtime_plan["policy"] = copy.deepcopy(live_policy)
+        live_runtime_plan["runtime_candidate"] = copy.deepcopy(
+            state.runtime_candidate.public_summary()
         )
         live_launcher = project_runtime.launcher_snapshot(
             state.project_root,
@@ -123809,68 +131110,215 @@ def _project_update_assert_approved_snapshot_unchanged(
                 runner=state.runner,
             )
         )
-        live_candidate_summary = dict(
-            project_runtime.verify_prepared_runtime_candidate(
-                state.runtime_candidate,
-                project_root=state.project_root,
-                target=state.target_version,
-                target_commit=state.target_commit,
-                bootstrap=state.runtime_bootstrap,
-                supply=state.runtime_supply,
+        (
+            candidate_observation_state,
+            candidate_observation_reason,
+            live_candidate_observation,
+        ) = project_runtime.verify_prepared_runtime_candidate_observation(
+            state.runtime_candidate,
+            project_root=state.project_root,
+            target=state.target_version,
+            target_commit=state.target_commit,
+            bootstrap=state.runtime_bootstrap,
+            supply=state.runtime_supply,
+        )
+        live_candidate_summary = (
+            dict(live_candidate_observation)
+            if live_candidate_observation is not None
+            else {}
+        )
+        if live_candidate_summary:
+            live_candidate_summary.pop("static_reverified", None)
+
+        expected_branch = expected_snapshot.get("branch")
+        source_branch_observation = (
+            {"state": "passed", "reason_code": "not_applicable"}
+            if expected_branch is None
+            else wom_kit_project_update_branch_observation(
+                state.mirror_path,
+                str(expected_branch),
+                str(plan["head_before"]),
+                runner=state.runner,
             )
         )
-        live_candidate_summary.pop("static_reverified", None)
-        exact = bool(
-            state.directory_guard.is_held(state.project_root)
-            and state.directory_guard.is_held(
+        runtime_plan_state, runtime_plan_reason = (
+            _wom_kit_project_update_runtime_plan_observation_state(
+                live_runtime_blockers,
+                prerequisite_states=(
+                    _wom_kit_project_update_runtime_plan_prerequisite_states(
+                        policy_state=live_policy_state,
+                        supply_state=live_supply_state,
+                        bootstrap_available=live_bootstrap is not None,
+                        launcher_state=str(
+                            live_launcher.get(
+                                "observation_state", "unavailable"
+                            )
+                        ),
+                    )
+                ),
+            )
+        )
+        observed = {
+            "git_snapshot": _wom_kit_project_update_preparation_check(
+                "git_snapshot",
+                live_git_snapshot == expected_snapshot,
+                available=live_git_snapshot is not None,
+            ),
+            "git_config_trust": _wom_kit_project_update_preparation_check(
+                "git_config_trust",
+                live_git_config_digest == plan["preflight_git_config_digest"],
+                available=live_git_config_digest is not None,
+            ),
+            "git_metadata": _wom_kit_project_update_observed_preparation_check(
+                "git_metadata",
+                str(live_git_metadata_evidence["state"]),
+                str(live_git_metadata_evidence["reason_code"]),
+                live_git_metadata_evidence["state"] == "passed",
+            ),
+            "version_pins": _wom_kit_project_update_observed_preparation_check(
+                "version_pins",
+                str(live_pins_observation["state"]),
+                str(live_pins_observation["reason_code"]),
+                live_pins_observation["state"] == "passed",
+            ),
+            "target_refs": _wom_kit_project_update_observed_preparation_check(
+                "target_refs",
+                str(live_ref_observation["state"]),
+                str(live_ref_observation["reason_code"]),
+                live_ref_snapshot == expected_ref_snapshot,
+            ),
+            "target_evidence": _wom_kit_project_update_observed_preparation_check(
+                "target_evidence",
+                str(live_target_evidence.get("observation_state", "unavailable")),
+                str(
+                    live_target_evidence.get(
+                        "observation_reason_code",
+                        "project_target_evidence_unavailable",
+                    )
+                ),
+                _project_update_approved_comparison_projection(
+                    live_target_evidence,
+                    expected_target_evidence,
+                    predecessor_shape=predecessor_observation_shape,
+                )
+                == expected_target_evidence,
+            ),
+            "runtime_policy": _wom_kit_project_update_observed_preparation_check(
+                "runtime_policy",
+                live_policy_state,
+                live_policy_reason,
+                _project_update_approved_comparison_projection(
+                    live_policy,
+                    expected_policy,
+                    predecessor_shape=predecessor_observation_shape,
+                )
+                == expected_policy,
+            ),
+            "runtime_supply": _wom_kit_project_update_observed_preparation_check(
+                "runtime_supply",
+                live_supply_state,
+                live_supply_reason,
+                live_supply == state.runtime_supply,
+            ),
+            "runtime_bootstrap": _wom_kit_project_update_preparation_check(
+                "runtime_bootstrap",
+                _project_update_approved_bootstrap_identity_matches(
+                    live_bootstrap, state.runtime_bootstrap
+                )
+                and live_bootstrap_summary == plan.get("runtime_bootstrap"),
+                available=live_bootstrap is not None,
+            ),
+            "runtime_plan": _wom_kit_project_update_observed_preparation_check(
+                "runtime_plan",
+                runtime_plan_state,
+                runtime_plan_reason,
+                _project_update_approved_comparison_projection(
+                    live_runtime_plan,
+                    plan.get("runtime_plan"),
+                    predecessor_shape=predecessor_observation_shape,
+                )
+                == plan.get("runtime_plan"),
+            ),
+            "launcher": _wom_kit_project_update_observed_preparation_check(
+                "launcher",
+                str(live_launcher.get("observation_state", "unavailable")),
+                str(
+                    live_launcher.get(
+                        "observation_reason_code",
+                        "project_runtime_launcher_observation_unavailable",
+                    )
+                ),
+                _project_update_approved_comparison_projection(
+                    live_launcher_private,
+                    expected_launcher,
+                    predecessor_shape=predecessor_observation_shape,
+                )
+                == expected_launcher,
+            ),
+            "materialization_preflight": (
+                _wom_kit_project_update_observed_preparation_check(
+                    "materialization_preflight",
+                    str(
+                        live_materialization.get(
+                            "observation_state", "unavailable"
+                        )
+                    ),
+                    str(
+                        live_materialization.get(
+                            "observation_reason_code",
+                            "project_materialization_preflight_unavailable",
+                        )
+                    ),
+                    _project_update_approved_comparison_projection(
+                        live_materialization,
+                        expected_materialization,
+                        predecessor_shape=predecessor_observation_shape,
+                    )
+                    == expected_materialization,
+                )
+            ),
+            "prepared_runtime_payload": (
+                _wom_kit_project_update_observed_preparation_check(
+                    "prepared_runtime_payload",
+                    candidate_observation_state,
+                    candidate_observation_reason,
+                    live_candidate_summary
+                    == state.runtime_candidate.public_summary(),
+                )
+            ),
+            "source_branch": _wom_kit_project_update_observed_preparation_check(
+                "source_branch",
+                str(source_branch_observation["state"]),
+                str(source_branch_observation["reason_code"]),
+                source_branch_observation["state"] == "passed",
+            ),
+        }
+        revalidation = wom_kit_project_update_runtime_preparation_revalidation(
+            observed
+        )
+        state.approved_snapshot_revalidation = copy.deepcopy(revalidation)
+        lock_observations = (
+            state.directory_guard.held_observation(state.project_root),
+            state.directory_guard.held_observation(
                 state.project_root / ".zettel-kasten"
-            )
-            and state.directory_guard.is_held(state.mirror_path)
-            and wom_kit_project_update_git_metadata_is_local_real(
-                state.project_root,
-                state.mirror_path,
-                runner=state.runner,
-            )
-            and _wom_kit_project_update_git_snapshot(
-                state.mirror_path,
-                runner=state.runner,
-            )
-            == expected_snapshot
-            and wom_kit_project_update_git_config_trust_digest(
-                state.mirror_path,
-                runner=state.runner,
-            )
-            == plan["preflight_git_config_digest"]
-            and wom_kit_project_update_all_pins_match_snapshot(
-                state.project_root,
-                live_pin_specs,
-            )
-            and wom_kit_project_update_target_ref_snapshot(
-                state.mirror_path,
-                state.target_tag,
-                runner=state.runner,
-            )
-            == expected_ref_snapshot
-            and wom_kit_project_update_target_evidence(
-                state.mirror_path,
-                state.target_tag,
-                runner=state.runner,
-            )
-            == expected_target_evidence
-            and live_policy == expected_policy
-            and live_supply == state.runtime_supply
-            and live_launcher_private == expected_launcher
-            and live_materialization == expected_materialization
-            and live_candidate_summary
-            == state.runtime_candidate.public_summary()
+            ),
+            state.directory_guard.held_observation(state.mirror_path),
         )
     except ArchiveServiceError:
         raise
     except Exception:
         # Never echo a Git path, runtime path, or provider/tool exception from
         # this post-native boundary.
-        raise ArchiveServiceError(failure_code) from None
-    if not exact:
+        raise ArchiveServiceError(unavailable_code) from None
+    lock_failure_code = _wom_kit_project_update_approved_lock_failure_code(
+        lock_observations
+    )
+    if lock_failure_code is not None:
+        raise ArchiveServiceError(lock_failure_code)
+    failure_code = _wom_kit_project_update_revalidation_failure_code(
+        revalidation
+    )
+    if failure_code is not None:
         raise ArchiveServiceError(failure_code)
 
 
@@ -123939,6 +131387,10 @@ def _project_update_build_domain_result(
             "launcher_write_attempted": launcher_changed,
             "launcher_written": launcher_changed,
             "materialized": runtime_summary,
+            "approved_snapshot_revalidation": copy.deepcopy(
+                state.approved_snapshot_revalidation
+                or wom_kit_project_update_runtime_preparation_revalidation()
+            ),
         }
     )
     return {
@@ -124087,6 +131539,15 @@ def _project_update_durable_writer(
             for item in checkpoints
         )
         if verified:
+            if component.role == "runtime":
+                _project_update_retire_runtime_cleanup_after_durable_ack(
+                    project_root=state.project_root,
+                    transaction_root=state.transaction.transaction_root,
+                    transaction_ref=state.transaction.transaction_ref,
+                    capsule=state.runtime_cleanup_capsule,
+                )
+                state.runtime_cleanup_capsule = None
+                state.runtime_cleanup_terminal_evidence = None
             continue
         intended = any(
             item.phase == component.role
@@ -124111,7 +131572,21 @@ def _project_update_durable_writer(
             live_component_sha256=_project_update_live_component_sha256(
                 state
             ),
+            runtime_cleanup_terminal_evidence=(
+                state.runtime_cleanup_terminal_evidence
+                if component.role == "runtime"
+                else None
+            ),
         )
+        if component.role == "runtime":
+            _project_update_retire_runtime_cleanup_after_durable_ack(
+                project_root=state.project_root,
+                transaction_root=state.transaction.transaction_root,
+                transaction_ref=state.transaction.transaction_ref,
+                capsule=state.runtime_cleanup_capsule,
+            )
+            state.runtime_cleanup_capsule = None
+            state.runtime_cleanup_terminal_evidence = None
 
     checkpoints = state.transaction.inspect().journal.verified_prefix
     if not any(item.phase == "domain_committed" for item in checkpoints):
@@ -124286,6 +131761,13 @@ def _project_update_succeeded_claim_finalizer(
             live,
         )
     )
+    _project_update_finalize_legacy_recovery_success(
+        state,
+        claim_evidence=evidence,
+        fresh_transaction_completed_sha256=(
+            inspection.journal.verified_prefix[-1].checkpoint_sha256
+        ),
+    )
     # This in-memory authority is established while the authenticated
     # succeeded claim and exact transaction are still open. It is never
     # reconstructed from a cleanup tombstone or proof in a later process.
@@ -124296,6 +131778,176 @@ def _project_update_succeeded_claim_finalizer(
             or state.terminal_handoff_sha256
         )
     )
+
+
+def _project_update_finalize_legacy_recovery_success(
+    state: _ProjectVersionUpdateDurableApprovalState,
+    *,
+    claim_evidence: Mapping[str, Any],
+    fresh_transaction_completed_sha256: str,
+) -> None:
+    """Seal the legacy handoff before the fresh transaction is cleaned.
+
+    This record is control-plane evidence only.  It neither mutates nor
+    finalizes the predecessor claim and it never serializes a path, claim ID,
+    transaction ID, or recovery ID into the public result.
+    """
+
+    control = getattr(state, "legacy_prewrite_recovery_control", None)
+    if control is None:
+        return
+    if not isinstance(control, dict):
+        raise ArchiveServiceError(
+            "project_version_update_legacy_recovery_binding_invalid"
+        )
+    paths = control.get("paths")
+    old_inventory_sha256 = control.get("old_transaction_tree_sha256")
+    old_lock_bytes = control.get("old_lock_bytes")
+    with_store = control.get("with_store")
+    intent_sha256 = control.get("intent_sha256")
+    if (
+        not isinstance(paths, project_update_legacy_recovery.RecoveryPaths)
+        or type(old_inventory_sha256) is not str
+        or type(old_lock_bytes) is not bytes
+        or not callable(with_store)
+        or type(intent_sha256) is not str
+        or type(fresh_transaction_completed_sha256) is not str
+        or not isinstance(claim_evidence, Mapping)
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_legacy_recovery_binding_invalid"
+        )
+    public_old_backup = state.transaction._lock_path.parent / (
+        ".legacy-recovery-"
+        + paths.recovery_ref.removeprefix("recovery_")
+        + ".old-lock"
+    )
+    debug_stage = "vault"
+    try:
+        vaulted = project_update_legacy_recovery.vault_old_lock_backup(
+            paths,
+            public_old_backup,
+            expected_old_lock_bytes=old_lock_bytes,
+        )
+        old_lock_backup_sha256 = vaulted["old_lock_backup_sha256"]
+        completion_evidence_sha256 = (
+            project_update_transaction.sha256_document(
+                {
+                    "claim_evidence_sha256": (
+                        project_update_transaction.sha256_document(
+                            dict(claim_evidence)
+                        )
+                    ),
+                    "fresh_transaction_completed_sha256": (
+                        fresh_transaction_completed_sha256
+                    ),
+                    "old_lock_backup_sha256": old_lock_backup_sha256,
+                    "schema": (
+                        "wom-kit/project-update-legacy-success-evidence/"
+                        "v0.4.19"
+                    ),
+                }
+            )
+        )
+        locator = with_store(lambda store: store.read_locator())
+        debug_stage = "checkpoint"
+        locator_state = str(locator.get("state") or "")
+        if locator_state == "fresh_lock_backlinked":
+            _project_update_legacy_recovery_checkpoint(
+                state,
+                phase="fresh_transaction_completed",
+                evidence_sha256=completion_evidence_sha256,
+                locator_state="fresh_transaction_completed",
+            )
+        elif locator_state in {
+            "fresh_transaction_completed",
+            "terminal_completed",
+        }:
+            checkpoints = with_store(
+                lambda store: store.read_checkpoints(
+                    intent_sha256=intent_sha256
+                )
+            )
+            if (
+                not checkpoints
+                or checkpoints[-1].get("phase")
+                != "fresh_transaction_completed"
+                or checkpoints[-1].get("evidence_sha256")
+                != completion_evidence_sha256
+            ):
+                raise ArchiveServiceError(
+                    "project_version_update_legacy_recovery_state_changed"
+                )
+            control["journal_head_sha256"] = locator.get(
+                "journal_head_sha256"
+            )
+            control["locator_sha256"] = (
+                project_update_legacy_recovery.sha256_bytes(
+                    project_update_legacy_recovery._read_regular(
+                        paths.locator_path
+                    )
+                )
+            )
+        else:
+            raise ArchiveServiceError(
+                "project_version_update_legacy_recovery_state_ambiguous"
+            )
+
+        journal_head_sha256 = control.get("journal_head_sha256")
+        locator_sha256 = control.get("locator_sha256")
+        if type(journal_head_sha256) is not str or type(locator_sha256) is not str:
+            raise ArchiveServiceError(
+                "project_version_update_legacy_recovery_binding_invalid"
+            )
+        receipt = project_update_legacy_recovery.terminal_receipt_document(
+            recovery_ref=paths.recovery_ref,
+            outcome="success",
+            intent_sha256=intent_sha256,
+            journal_head_sha256=journal_head_sha256,
+            fresh_transaction_ref=state.transaction.transaction_ref,
+            old_transaction_inventory_sha256=old_inventory_sha256,
+            fresh_transaction_completed_sha256=(
+                fresh_transaction_completed_sha256
+            ),
+            claim_evidence_sha256=(
+                project_update_transaction.sha256_document(
+                    dict(claim_evidence)
+                )
+            ),
+            old_lock_backup_sha256=old_lock_backup_sha256,
+        )
+        receipt_sha256 = with_store(
+            lambda store: store.write_terminal_receipt(receipt)
+        )
+        if locator_state == "terminal_completed":
+            if locator.get("terminal_receipt_sha256") != receipt_sha256:
+                raise ArchiveServiceError(
+                    "project_version_update_legacy_recovery_state_changed"
+                )
+            with_store(
+                lambda store: store.retire_locator(
+                    expected_locator_sha256=locator_sha256
+                )
+            )
+        else:
+            with_store(
+                lambda store: store.publish_terminal_locator_and_retire(
+                    intent_sha256=intent_sha256,
+                    journal_head_sha256=journal_head_sha256,
+                    previous_locator_sha256=locator_sha256,
+                    terminal_receipt_sha256=receipt_sha256,
+                )
+            )
+        control["recovery_phase"] = "terminal_completed"
+        control["terminal_receipt_sha256"] = receipt_sha256
+    except ArchiveServiceError:
+        raise
+    except project_update_legacy_recovery.LegacyProjectUpdateRecoveryError as failure:
+        raise ArchiveServiceError(failure.code) from None
+    except BaseException:
+        raise ArchiveServiceError(
+            "project_version_update_legacy_recovery_state_ambiguous"
+        ) from None
 
 
 def _project_update_attach_terminal_finalization(
@@ -124483,6 +132135,41 @@ def _project_update_finish_nonterminal_service_result(
     )
 
 
+def _project_update_finish_legacy_cancellation_result(
+    result: Mapping[str, Any],
+    lifetime: _ProjectVersionUpdateGitRunnerLifetime,
+    *,
+    close_owned_resources: Callable[[], None],
+) -> dict[str, Any]:
+    """Close without mutating one recovery-key-authenticated result."""
+
+    if not _project_update_is_legacy_unapproved_terminal_result(result):
+        _project_update_close_after_service_failure(
+            close_owned_resources,
+            lifetime,
+        )
+        raise ArchiveServiceError(
+            "project_version_update_legacy_recovery_state_ambiguous"
+        )
+    (
+        service_resource_close_failure,
+        runner_close_failure,
+    ) = _project_update_attempt_all_service_closes(
+        close_owned_resources,
+        lifetime,
+    )
+    if (
+        service_resource_close_failure is not None
+        or runner_close_failure is not None
+    ):
+        # The durable capsule remains authoritative for a later resume.  Adding
+        # close-truth fields here would change the authenticated result bytes.
+        raise ArchiveServiceError(
+            "project_version_update_terminal_delivery_unverified"
+        )
+    return dict(result)
+
+
 def _project_update_finish_resource_only_result(
     result: Mapping[str, Any],
     *,
@@ -124583,15 +132270,65 @@ def _project_update_cancel_before_native(
             expected_lock_bytes=state.expected_lock_bytes,
             live_component_sha256=live,
         )
-    if not project_runtime.cleanup_prepared_runtime_candidate(
-        state.runtime_candidate
-    ):
+    try:
+        existing_ack = (
+            project_update_transaction.load_runtime_cleanup_durable_ack(
+                state.project_root,
+                state.transaction.transaction_ref,
+            )
+        )
+    except BaseException:
         raise ArchiveServiceError(
             "project_version_update_runtime_candidate_cleanup_failed"
+        ) from None
+    cleanup_capsule: (
+        project_runtime.RuntimeCandidateCleanupCapsule | None
+    ) = None
+    cleanup_evidence: dict[str, Any] | None = None
+    if existing_ack is None:
+        cleanup_capsule, cleanup_evidence = (
+            _project_update_prepare_runtime_cleanup(
+                state.runtime_candidate
+            )
         )
-    state.transaction.cancel_before_approval(
-        expected_lock_bytes=state.expected_lock_bytes,
-        live_component_sha256=_project_update_live_component_sha256(state),
+    else:
+        cleanup_capsule = (
+            _project_update_runtime_cleanup_sidecar_for_transaction(
+                project_root=state.project_root,
+                transaction_root=state.transaction.transaction_root,
+                transaction_ref=state.transaction.transaction_ref,
+            )
+        )
+        if cleanup_capsule is not None:
+            observed = (
+                project_runtime.runtime_candidate_cleanup_terminal_evidence(
+                    cleanup_capsule
+                )
+            )
+            if not isinstance(observed, dict):
+                raise ArchiveServiceError(
+                    "project_version_update_runtime_candidate_cleanup_failed"
+                )
+            cleanup_evidence = observed
+        else:
+            tail = state.transaction.inspect().journal.verified_prefix[-1]
+            if tail.phase != "completed":
+                raise ArchiveServiceError(
+                    "project_version_update_runtime_candidate_cleanup_failed"
+                )
+    if cleanup_evidence is not None:
+        state.transaction.cancel_before_approval(
+            expected_lock_bytes=state.expected_lock_bytes,
+            live_component_sha256=(
+                _project_update_live_component_sha256(state)
+            ),
+            runtime_cleanup_terminal_evidence=cleanup_evidence,
+        )
+    _project_update_retire_runtime_cleanup_after_durable_ack(
+        project_root=state.project_root,
+        transaction_root=state.transaction.transaction_root,
+        transaction_ref=state.transaction.transaction_ref,
+        capsule=cleanup_capsule,
     )
     cleanup_authority = state.transaction.candidate_cleanup_receipt_sha256()
     if not state.transaction.exact_cleanup(
@@ -124610,13 +132347,20 @@ def _project_update_abort_unsealed_candidate(
 ) -> dict[str, Any]:
     """Remove one complete candidate, then durably abort its unsealed lock."""
 
-    if not project_runtime.cleanup_prepared_runtime_candidate(candidate):
-        raise ArchiveServiceError(
-            "project_version_update_runtime_candidate_cleanup_failed"
-        )
-    return reservation.abort_before_intent_seal(
-        expected_lock_bytes=expected_lock_bytes,
+    cleanup_capsule, cleanup_evidence = (
+        _project_update_prepare_runtime_cleanup(candidate)
     )
+    result = reservation.abort_before_intent_seal(
+        expected_lock_bytes=expected_lock_bytes,
+        runtime_cleanup_terminal_evidence=cleanup_evidence,
+    )
+    _project_update_retire_runtime_cleanup_after_durable_ack(
+        project_root=candidate.project_root,
+        transaction_root=reservation.transaction_root,
+        transaction_ref=reservation.transaction_ref,
+        capsule=cleanup_capsule,
+    )
+    return result
 
 
 def _project_update_prepare_durable_state(
@@ -124649,6 +132393,7 @@ def _project_update_prepare_durable_state(
     pin_specs: list[dict[str, Any]],
     launcher_snapshot: Mapping[str, Any],
     prepared_preview_base: Mapping[str, Any],
+    legacy_prewrite_recovery: Mapping[str, Any] | None = None,
 ) -> _ProjectVersionUpdateDurableApprovalState:
     """Construct receipt/intent once; no final approval digest is patched in."""
 
@@ -124675,7 +132420,18 @@ def _project_update_prepare_durable_state(
     static_receipt_path = project_root.joinpath(
         *PurePosixPath(static_receipt_relative).parts
     )
-    if wom_kit_real_path_kind(project_root, static_receipt_path) != "missing":
+    receipt_observation = wom_kit_real_path_kind_observation(
+        project_root,
+        static_receipt_path,
+    )
+    if receipt_observation["state"] == "unavailable":
+        raise ArchiveServiceError(
+            "project_version_update_transaction_receipt_observation_unavailable"
+        )
+    if (
+        receipt_observation["state"] != "passed"
+        or receipt_observation["kind"] != "missing"
+    ):
         raise ArchiveServiceError(
             "project_version_update_transaction_receipt_exists"
         )
@@ -125017,6 +132773,13 @@ def _project_update_prepare_durable_state(
             assert component.preimage_key is not None
             preimages[component.preimage_key] = matching["previous_bytes"]
 
+    recovery_binding_sha256 = None
+    recovery_summary: dict[str, Any] | None = None
+    if legacy_prewrite_recovery is not None:
+        recovery_summary = dict(legacy_prewrite_recovery)
+        recovery_binding_sha256 = project_update_transaction.sha256_document(
+            recovery_summary
+        )
     private_plan = {
         "schema": _PROJECT_UPDATE_PRIVATE_PLAN_SCHEMA,
         "transaction_ref": reservation.transaction_ref,
@@ -125077,6 +132840,11 @@ def _project_update_prepare_durable_state(
         "prepared_preview_base": copy.deepcopy(
             dict(prepared_preview_base)
         ),
+        **(
+            {"legacy_prewrite_recovery": recovery_summary}
+            if recovery_summary is not None
+            else {}
+        ),
     }
     private_plan_bytes = _project_update_canonical_bytes(
         _project_update_private_json_value(private_plan)
@@ -125120,6 +132888,15 @@ def _project_update_prepare_durable_state(
             "git-runner-binding": runner.private_binding_bytes(),
             "project-update-domain-plan": private_plan_bytes,
             "runtime-supply-lock": runtime_supply.raw_bytes,
+            **(
+                {
+                    "legacy-prewrite-recovery-binding": (
+                        recovery_binding_sha256 + "\n"
+                    ).encode("ascii")
+                }
+                if recovery_binding_sha256 is not None
+                else {}
+            ),
         },
         static_receipt_postimage=static_receipt_bytes,
         runtime_candidate_inventory_sha256=(
@@ -125129,8 +132906,10 @@ def _project_update_prepare_durable_state(
         runtime_candidate_receipt_relative_path=(
             project_runtime.PROJECT_RUNTIME_RECEIPT_NAME
         ),
+        _legacy_recovery_binding_sha256=recovery_binding_sha256,
     )
-    transaction.bind_sealed_intent_to_lock(expected_lock_bytes)
+    if recovery_binding_sha256 is None:
+        transaction.bind_sealed_intent_to_lock(expected_lock_bytes)
     component_paths: dict[str, Path] = {
         "launcher": project_root
         / project_runtime.PROJECT_RUNTIME_LAUNCHER_RELATIVE,
@@ -125170,12 +132949,18 @@ def _project_update_prepare_durable_state(
         runtime_pre_sha256=runtime_pre_sha256,
         runtime_post_sha256=runtime_post_sha256,
         component_paths=component_paths,
+        legacy_prewrite_recovery=(
+            copy.deepcopy(recovery_summary)
+            if recovery_summary is not None
+            else None
+        ),
     )
-    transaction.append(
-        phase="lock_backlinked",
-        stage="verified",
-        live_component_sha256=_project_update_live_component_sha256(state),
-    )
+    if recovery_binding_sha256 is None:
+        transaction.append(
+            phase="lock_backlinked",
+            stage="verified",
+            live_component_sha256=_project_update_live_component_sha256(state),
+        )
     return state
 
 
@@ -125230,7 +133015,7 @@ def _project_update_build_prepared_preview(
             "transaction_ref": transaction.transaction_ref,
             "transaction_logical_ref": transaction.transaction_logical_ref,
             "intent_sha256": transaction.intent.sha256,
-            "lock_backlinked": True,
+            "lock_backlinked": state.legacy_prewrite_recovery is None,
             "directory_fsync_required": True,
             "static_receipt_domain_plan_sha256": (
                 transaction.intent.static_receipt_domain_plan_sha256
@@ -125258,6 +133043,15 @@ def _project_update_build_prepared_preview(
             "dynamic_claim_fields_embedded": False,
             "deterministic_one_pass_construction": True,
         },
+        **(
+            {
+                "legacy_prewrite_recovery": copy.deepcopy(
+                    state.legacy_prewrite_recovery
+                )
+            }
+            if state.legacy_prewrite_recovery is not None
+            else {}
+        ),
     }
     prepared["fetch"]["phase"] = "before_native_approval"
     prepared["write_boundary"].update(
@@ -125281,6 +133075,1477 @@ def _project_update_build_prepared_preview(
     return prepared
 
 
+def _project_update_legacy_recovery_checkpoint(
+    state: _ProjectVersionUpdateDurableApprovalState,
+    *,
+    phase: str,
+    evidence_sha256: str,
+    locator_state: str,
+) -> None:
+    control = getattr(state, "legacy_prewrite_recovery_control", None)
+    if not isinstance(control, dict):
+        raise ArchiveServiceError(
+            "project_version_update_legacy_recovery_binding_invalid"
+        )
+    _project_update_legacy_recovery_checkpoint_control(
+        control,
+        phase=phase,
+        evidence_sha256=evidence_sha256,
+        locator_state=locator_state,
+    )
+
+
+def _project_update_legacy_recovery_checkpoint_control(
+    control: dict[str, Any],
+    *,
+    phase: str,
+    evidence_sha256: str,
+    locator_state: str,
+) -> None:
+    """Advance one authenticated recovery without requiring a live writer."""
+
+    with_store = control.get("with_store")
+    intent_sha256 = control.get("intent_sha256")
+    previous_locator_sha256 = control.get("locator_sha256")
+    if (
+        not callable(with_store)
+        or type(intent_sha256) is not str
+        or type(previous_locator_sha256) is not str
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_legacy_recovery_binding_invalid"
+        )
+
+    def append(store: Any) -> tuple[str, str]:
+        journal_head = store.append_checkpoint(
+            phase=phase,
+            stage="verified",
+            intent_sha256=intent_sha256,
+            evidence_sha256=evidence_sha256,
+            expected_previous_checkpoint_sha256=(
+                control.get("journal_head_sha256")
+            ),
+        )
+        locator_sha = store.publish_locator(
+            state=locator_state,
+            intent_sha256=intent_sha256,
+            journal_head_sha256=journal_head,
+            previous_locator_sha256=previous_locator_sha256,
+        )
+        return journal_head, locator_sha
+
+    try:
+        journal_head, locator_sha = with_store(append)
+    except BaseException:
+        raise ArchiveServiceError(
+            "project_version_update_legacy_recovery_state_ambiguous"
+        ) from None
+    control["journal_head_sha256"] = journal_head
+    control["locator_sha256"] = locator_sha
+    control["recovery_phase"] = locator_state
+    control["recovery_evidence_sha256"] = evidence_sha256
+
+
+def _project_update_activate_legacy_recovery_state(
+    state: _ProjectVersionUpdateDurableApprovalState,
+) -> None:
+    """Atomically hand the public lock from the immutable old tx to fresh."""
+
+    control = getattr(state, "legacy_prewrite_recovery_control", None)
+    if not isinstance(control, dict):
+        return
+    paths = control.get("paths")
+    old_lock_bytes = control.get("old_lock_bytes")
+    if (
+        not isinstance(paths, project_update_legacy_recovery.RecoveryPaths)
+        or type(old_lock_bytes) is not bytes
+        or not old_lock_bytes
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_legacy_recovery_binding_invalid"
+        )
+    lock_path = paths.project_root.joinpath(
+        *PurePosixPath(project_update_legacy_recovery.LOCK_LOGICAL).parts
+    )
+    fresh_lock_bytes = state.expected_lock_bytes
+    replacement = lock_path.parent / (
+        ".legacy-recovery-"
+        + paths.recovery_ref.removeprefix("recovery_")
+        + ".fresh-lock"
+    )
+    backup = lock_path.parent / (
+        ".legacy-recovery-"
+        + paths.recovery_ref.removeprefix("recovery_")
+        + ".old-lock"
+    )
+    try:
+        replacement, backup = (
+            project_update_legacy_recovery.prepare_lock_handoff_files(
+                paths, fresh_lock_bytes=fresh_lock_bytes
+            )
+        )
+        handoff_state = project_update_legacy_recovery.classify_lock_handoff(
+            paths,
+            old_lock_bytes,
+            fresh_lock_bytes,
+        )
+        if handoff_state in {"old", "backup_linked"}:
+            project_update_legacy_recovery.atomic_replace_lock_with_backup_windows(
+                lock_path,
+                replacement,
+                backup,
+                expected_old_bytes=old_lock_bytes,
+                expected_fresh_bytes=fresh_lock_bytes,
+            )
+        elif handoff_state != "fresh":
+            raise ArchiveServiceError(
+                "project_version_update_legacy_recovery_lock_ambiguous"
+            )
+        if (
+            project_update_legacy_recovery.classify_lock_handoff(
+                paths,
+                old_lock_bytes,
+                fresh_lock_bytes,
+            )
+            != "fresh"
+        ):
+            raise ArchiveServiceError(
+                "project_version_update_legacy_recovery_lock_ambiguous"
+            )
+        project_update_transaction._require_directory_durable(lock_path.parent)
+        reserved = project_update_transaction.ReservedProjectUpdateTransaction.open(
+            state.project_root,
+            state.transaction.transaction_ref,
+        )
+        observed = reserved.acquire_lock()
+        if not hmac.compare_digest(observed, fresh_lock_bytes):
+            raise ArchiveServiceError(
+                "project_version_update_legacy_recovery_lock_ambiguous"
+            )
+        state.transaction.bind_sealed_intent_to_lock(fresh_lock_bytes)
+        journal = state.transaction.inspect().journal
+        if not journal.verified_prefix:
+            state.transaction.append(
+                phase="lock_backlinked",
+                stage="verified",
+                live_component_sha256=_project_update_live_component_sha256(state),
+            )
+        elif journal.verified_prefix[-1].phase != "lock_backlinked":
+            raise ArchiveServiceError(
+                "project_version_update_legacy_recovery_state_ambiguous"
+            )
+        _project_update_legacy_recovery_checkpoint(
+            state,
+            phase="fresh_lock_backlinked",
+            evidence_sha256=project_update_transaction.sha256_document(
+                {
+                    "fresh_intent_sha256": state.transaction.intent.sha256,
+                    "fresh_lock_sha256": project_update_transaction.sha256_bytes(
+                        fresh_lock_bytes
+                    ),
+                    "old_lock_backup_sha256": project_update_transaction.sha256_bytes(
+                        old_lock_bytes
+                    ),
+                    "schema": (
+                        "wom-kit/project-update-legacy-lock-handoff-evidence/"
+                        "v0.4.19"
+                    ),
+                }
+            ),
+            locator_state="fresh_lock_backlinked",
+        )
+    except ArchiveServiceError:
+        raise
+    except BaseException:
+        raise ArchiveServiceError(
+            "project_version_update_legacy_recovery_lock_ambiguous"
+        ) from None
+
+
+def _project_update_publish_legacy_cancellation_handoff_exact(
+    *,
+    project_root: Path,
+    expected_approval_root: Path,
+    expected_archive_id: str,
+    paths: project_update_legacy_recovery.RecoveryPaths,
+    intent_sha256: str,
+    terminal_receipt_sha256: str,
+    cancellation_result_document_sha256: str,
+    key_provider: Any,
+) -> tuple[str, str]:
+    """Publish and re-authenticate one cancellation capsule before retirement."""
+
+    if (
+        not isinstance(paths, project_update_legacy_recovery.RecoveryPaths)
+        or type(intent_sha256) is not str
+        or type(terminal_receipt_sha256) is not str
+        or type(cancellation_result_document_sha256) is not str
+        or not callable(getattr(key_provider, "use_key", None))
+        or _PROJECT_UPDATE_TERMINAL_CONTROL_LEASE.get() is None
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_legacy_recovery_binding_invalid"
+        )
+    try:
+        # Re-entering the terminal boundary does not take a second OS lease;
+        # it verifies that the currently held lease belongs to this exact
+        # project root and that its retained directory/guard identities have
+        # not changed.  A non-empty ContextVar alone is not sufficient.
+        with _project_update_terminal_control_boundary(project_root):
+            pass
+    except (OSError, RuntimeError, ValueError):
+        raise ArchiveServiceError(
+            "project_version_update_legacy_recovery_binding_invalid"
+        ) from None
+    expected_archive_identity_sha256 = (
+        exact_human_approval_archive_identity_sha256(expected_archive_id)
+    )
+
+    def publish(key: memoryview) -> tuple[str, str]:
+        with project_update_legacy_recovery.LegacyRecoveryStore(
+            project_root,
+            paths.recovery_ref,
+            key,
+        ) as store:
+            result_record = store.read_cancellation_result()
+            receipt = store.read_terminal_receipt()
+            receipt_raw = project_update_legacy_recovery._read_regular(
+                paths.recovery_root / "terminal-receipt.json"
+            )
+            if (
+                result_record.get("cancellation_result_document_sha256")
+                != cancellation_result_document_sha256
+                or project_update_legacy_recovery.sha256_bytes(receipt_raw)
+                != terminal_receipt_sha256
+                or receipt.get("outcome") != "unapproved_restored"
+                or receipt.get("intent_sha256") != intent_sha256
+                or receipt.get("cancellation_result_document_sha256")
+                != cancellation_result_document_sha256
+                or receipt.get("cancellation_result_sha256")
+                != result_record.get("cancellation_result_sha256")
+            ):
+                raise ArchiveServiceError(
+                    "project_version_update_legacy_recovery_state_ambiguous"
+                )
+        document, capability = _project_update_cancellation_terminal_document(
+            recovery_ref=paths.recovery_ref,
+            archive_identity_sha256=expected_archive_identity_sha256,
+            intent_sha256=intent_sha256,
+            terminal_receipt_sha256=terminal_receipt_sha256,
+            cancellation_result_document_sha256=(
+                cancellation_result_document_sha256
+            ),
+            key=key,
+        )
+        handoff, _guard = _project_update_terminal_handoff_paths(project_root)
+        handoff_sha256 = _project_update_write_terminal_document_exact(
+            project_root,
+            handoff,
+            document,
+            expected_previous_value=None,
+        )
+        observed = _project_update_read_terminal_document(project_root, handoff)
+        if observed is None or not hmac.compare_digest(
+            project_update_transaction.sha256_bytes(observed[1]),
+            handoff_sha256,
+        ):
+            raise ArchiveServiceError(
+                "project_version_update_terminal_handoff_invalid"
+            )
+        verified_result, verified_capability = (
+            _project_update_verify_cancellation_terminal_document(
+                observed[0],
+                expected_archive_identity_sha256=(
+                    expected_archive_identity_sha256
+                ),
+                key=key,
+            )
+        )
+        if (
+            not _project_update_is_legacy_unapproved_terminal_result(
+                verified_result
+            )
+            or not hmac.compare_digest(capability, verified_capability)
+        ):
+            raise ArchiveServiceError(
+                "project_version_update_terminal_handoff_invalid"
+            )
+        _project_update_register_terminal_delivery_capability(
+            handoff_sha256,
+            capability,
+        )
+        return handoff_sha256, capability
+
+    try:
+        return key_provider.use_key(
+            expected_approval_root,
+            publish,
+            create_if_missing=False,
+        )
+    except ArchiveServiceError:
+        raise
+    except BaseException:
+        raise ArchiveServiceError(
+            "project_version_update_legacy_recovery_state_ambiguous"
+        ) from None
+
+
+def _project_update_publish_legacy_cancellation_handoff(
+    state: _ProjectVersionUpdateDurableApprovalState,
+    *,
+    terminal_receipt_sha256: str,
+    cancellation_result_document_sha256: str,
+) -> tuple[str, str]:
+    control = getattr(state, "legacy_prewrite_recovery_control", None)
+    if (
+        not isinstance(control, dict)
+        # Native cancellation is observed while the fresh execution lease is
+        # held, but Python exits that inner context before the exact restore
+        # branch can publish its terminal capsule.  The archive-wide terminal
+        # control lease remains held across both steps and the exact publisher
+        # below independently requires it.  Requiring the now-ended fresh
+        # execution owner here would make every valid denial fail only after
+        # the predecessor had already been restored.
+        or _PROJECT_UPDATE_TERMINAL_CONTROL_LEASE.get() is None
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_legacy_recovery_binding_invalid"
+        )
+    return _project_update_publish_legacy_cancellation_handoff_exact(
+        project_root=state.project_root,
+        expected_approval_root=state.expected_approval_root,
+        expected_archive_id=state.expected_archive_id,
+        paths=control.get("paths"),
+        intent_sha256=control.get("intent_sha256"),
+        terminal_receipt_sha256=terminal_receipt_sha256,
+        cancellation_result_document_sha256=(
+            cancellation_result_document_sha256
+        ),
+        key_provider=control.get("approval_key_provider"),
+    )
+
+
+def _project_update_restore_legacy_recovery_after_unapproved(
+    state: _ProjectVersionUpdateDurableApprovalState,
+) -> dict[str, Any]:
+    """Restore exact predecessor state only after fresh-claim absence proof."""
+
+    control = state.legacy_prewrite_recovery_control
+    if not isinstance(control, dict):
+        raise ArchiveServiceError(
+            "project_version_update_legacy_recovery_binding_invalid"
+        )
+    paths = control.get("paths")
+    old_transaction_ref = control.get("old_transaction_ref")
+    old_tree_sha256 = control.get("old_transaction_tree_sha256")
+    old_lock_bytes = control.get("old_lock_bytes")
+    fresh_inventory = control.get("fresh_transaction_inventory")
+    fresh_inventory_document_sha256 = control.get(
+        "fresh_transaction_inventory_document_sha256"
+    )
+    confirm = control.get("confirm_fresh_claim_absent")
+    with_store = control.get("with_store")
+    intent_sha256 = control.get("intent_sha256")
+    old_abandonment_sha256 = control.get("old_abandonment_sha256")
+    prospective_plan_document_sha256 = control.get(
+        "fresh_prospective_plan_sha256"
+    )
+    if (
+        not isinstance(paths, project_update_legacy_recovery.RecoveryPaths)
+        or type(old_transaction_ref) is not str
+        or type(old_tree_sha256) is not str
+        or type(old_lock_bytes) is not bytes
+        or not isinstance(fresh_inventory, Mapping)
+        or type(fresh_inventory_document_sha256) is not str
+        or not callable(confirm)
+        or not callable(with_store)
+        or type(intent_sha256) is not str
+        or type(old_abandonment_sha256) is not str
+        or type(prospective_plan_document_sha256) is not str
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_legacy_recovery_binding_invalid"
+        )
+    binding = project_version_update_approval_binding(state.prepared_preview)
+    context = binding.context(
+        archive_id=state.expected_archive_id,
+        reviewer_claim=state.reviewer,
+    )
+    try:
+        if not bool(confirm(context)):
+            raise ArchiveServiceError(
+                "project_version_update_legacy_recovery_state_ambiguous"
+            )
+        claim_absence_evidence_sha256 = (
+            project_update_transaction.sha256_document(
+                {
+                    "approval_context_sha256": (
+                        exact_human_approval_context_sha256(context)
+                    ),
+                    "claim_state": "absent_authenticated",
+                    "schema": (
+                        "wom-kit/project-update-legacy-claim-absence/"
+                        "v0.4.19"
+                    ),
+                }
+            )
+        )
+        fresh_inventory_sha256 = (
+            project_update_legacy_recovery.sha256_document(fresh_inventory)
+        )
+        cancellation_result = (
+            project_update_legacy_recovery.cancellation_result_document()
+        )
+        cancellation_result_record = with_store(
+            lambda store: store.write_cancellation_result(
+                cancellation_result
+            )
+        )
+        cancellation_plan = (
+            project_update_legacy_recovery.cancellation_plan_document(
+                recovery_ref=paths.recovery_ref,
+                intent_sha256=intent_sha256,
+                fresh_transaction_ref=state.transaction.transaction_ref,
+                prospective_plan_document_sha256=(
+                    prospective_plan_document_sha256
+                ),
+                fresh_approval_plan_sha256=binding.plan_sha256,
+                fresh_approval_context_sha256=(
+                    exact_human_approval_context_sha256(context)
+                ),
+                claim_absence_evidence_sha256=(
+                    claim_absence_evidence_sha256
+                ),
+                old_transaction_ref=old_transaction_ref,
+                old_transaction_sha256=old_tree_sha256,
+                old_lock_sha256=(
+                    project_update_transaction.sha256_bytes(old_lock_bytes)
+                ),
+                old_abandonment_sha256=old_abandonment_sha256,
+                fresh_transaction_inventory_sha256=(
+                    fresh_inventory_sha256
+                ),
+                fresh_transaction_inventory_document_sha256=(
+                    fresh_inventory_document_sha256
+                ),
+                cancellation_result_sha256=(
+                    cancellation_result_record[
+                        "cancellation_result_sha256"
+                    ]
+                ),
+                cancellation_result_document_sha256=(
+                    cancellation_result_record[
+                        "cancellation_result_document_sha256"
+                    ]
+                ),
+            )
+        )
+        cancellation_plan_document_sha256 = with_store(
+            lambda store: store.write_cancellation_plan(
+                cancellation_plan
+            )
+        )
+        staged = (
+            project_update_legacy_recovery.stage_cancelled_fresh_transaction(
+                paths,
+                fresh_transaction_ref=state.transaction.transaction_ref,
+                fresh_transaction_inventory=fresh_inventory,
+            )
+        )
+        cancellation_stage_evidence = (
+            project_update_legacy_recovery.cancellation_stage_evidence_document(
+                recovery_ref=paths.recovery_ref,
+                intent_sha256=intent_sha256,
+                fresh_transaction_ref=state.transaction.transaction_ref,
+                cancellation_plan_document_sha256=(
+                    cancellation_plan_document_sha256
+                ),
+                claim_absence_evidence_sha256=(
+                    claim_absence_evidence_sha256
+                ),
+                fresh_transaction_inventory_sha256=(
+                    fresh_inventory_sha256
+                ),
+                fresh_transaction_inventory_document_sha256=(
+                    fresh_inventory_document_sha256
+                ),
+                stage_state=staged,
+            )
+        )
+        cancelled_fresh_staging_sha256 = (
+            project_update_transaction.sha256_document(
+                cancellation_stage_evidence
+            )
+        )
+        cancelled_fresh_staging_document_sha256 = with_store(
+            lambda store: store.write_cancellation_stage_evidence(
+                cancellation_stage_evidence
+            )
+        )
+        _project_update_legacy_recovery_checkpoint(
+            state,
+            phase="cancelled_fresh_staged",
+            evidence_sha256=(
+                cancelled_fresh_staging_document_sha256
+            ),
+            locator_state="cancelled_fresh_staged",
+        )
+        deleted = (
+            project_update_legacy_recovery.delete_cancelled_fresh_transaction(
+                paths,
+                fresh_transaction_inventory=fresh_inventory,
+            )
+        )
+        cancellation_cleanup_evidence = (
+            project_update_legacy_recovery.cancellation_cleanup_evidence_document(
+                recovery_ref=paths.recovery_ref,
+                intent_sha256=intent_sha256,
+                fresh_transaction_ref=state.transaction.transaction_ref,
+                cancellation_plan_document_sha256=(
+                    cancellation_plan_document_sha256
+                ),
+                cancellation_stage_evidence_document_sha256=(
+                    cancelled_fresh_staging_document_sha256
+                ),
+                fresh_transaction_inventory_sha256=(
+                    fresh_inventory_sha256
+                ),
+                fresh_transaction_inventory_document_sha256=(
+                    fresh_inventory_document_sha256
+                ),
+                cleanup_state=deleted,
+            )
+        )
+        cancelled_fresh_cleanup_evidence_sha256 = (
+            project_update_transaction.sha256_document(
+                cancellation_cleanup_evidence
+            )
+        )
+        cancelled_fresh_cleanup_evidence_document_sha256 = with_store(
+            lambda store: store.write_cancellation_cleanup_evidence(
+                cancellation_cleanup_evidence
+            )
+        )
+        _project_update_legacy_recovery_checkpoint(
+            state,
+            phase="cancelled_fresh_cleaned",
+            evidence_sha256=(
+                cancelled_fresh_cleanup_evidence_document_sha256
+            ),
+            locator_state="cancelled_fresh_cleaned",
+        )
+        restored = project_update_legacy_recovery.restore_old_transaction(
+            paths,
+            old_transaction_ref=old_transaction_ref,
+            expected_tree_sha256=old_tree_sha256,
+        )
+        live_lock = paths.project_root.joinpath(
+            *PurePosixPath(project_update_legacy_recovery.LOCK_LOGICAL).parts
+        )
+        if not hmac.compare_digest(
+            project_update_legacy_recovery._read_regular(live_lock),
+            old_lock_bytes,
+        ):
+            raise ArchiveServiceError(
+                "project_version_update_legacy_recovery_state_changed"
+            )
+        cancellation_restore_evidence = (
+            project_update_legacy_recovery.cancellation_restore_evidence_document(
+                recovery_ref=paths.recovery_ref,
+                intent_sha256=intent_sha256,
+                fresh_transaction_ref=state.transaction.transaction_ref,
+                cancellation_plan_document_sha256=(
+                    cancellation_plan_document_sha256
+                ),
+                cancellation_cleanup_evidence_document_sha256=(
+                    cancelled_fresh_cleanup_evidence_document_sha256
+                ),
+                old_transaction_ref=old_transaction_ref,
+                old_transaction_sha256=old_tree_sha256,
+                old_lock_sha256=(
+                    project_update_transaction.sha256_bytes(old_lock_bytes)
+                ),
+                restore_state=restored,
+            )
+        )
+        restored_evidence_sha256 = (
+            project_update_transaction.sha256_document(
+                cancellation_restore_evidence
+            )
+        )
+        restored_evidence_document_sha256 = with_store(
+            lambda store: store.write_cancellation_restore_evidence(
+                cancellation_restore_evidence
+            )
+        )
+        _project_update_legacy_recovery_checkpoint(
+            state,
+            phase="unapproved_restored",
+            evidence_sha256=restored_evidence_document_sha256,
+            locator_state="unapproved_restored",
+        )
+        journal_head_sha256 = control.get("journal_head_sha256")
+        locator_sha256 = control.get("locator_sha256")
+        if type(journal_head_sha256) is not str or type(locator_sha256) is not str:
+            raise ArchiveServiceError(
+                "project_version_update_legacy_recovery_binding_invalid"
+            )
+        receipt = project_update_legacy_recovery.terminal_receipt_document(
+            recovery_ref=paths.recovery_ref,
+            outcome="unapproved_restored",
+            intent_sha256=intent_sha256,
+            journal_head_sha256=journal_head_sha256,
+            fresh_transaction_ref=state.transaction.transaction_ref,
+            old_transaction_inventory_sha256=old_tree_sha256,
+            claim_absence_evidence_sha256=claim_absence_evidence_sha256,
+            cancelled_fresh_staging_sha256=(
+                cancelled_fresh_staging_sha256
+            ),
+            cancelled_fresh_transaction_inventory_sha256=(
+                fresh_inventory_sha256
+            ),
+            cancelled_fresh_transaction_inventory_document_sha256=(
+                fresh_inventory_document_sha256
+            ),
+            cancelled_fresh_cleanup_evidence_sha256=(
+                cancelled_fresh_cleanup_evidence_sha256
+            ),
+            restored_old_transaction_sha256=old_tree_sha256,
+            preserved_old_lock_sha256=(
+                project_update_transaction.sha256_bytes(old_lock_bytes)
+            ),
+            cancellation_plan_document_sha256=(
+                cancellation_plan_document_sha256
+            ),
+            cancellation_result_document_sha256=(
+                cancellation_result_record[
+                    "cancellation_result_document_sha256"
+                ]
+            ),
+            cancellation_result_sha256=(
+                cancellation_result_record[
+                    "cancellation_result_sha256"
+                ]
+            ),
+            cancelled_fresh_staging_document_sha256=(
+                cancelled_fresh_staging_document_sha256
+            ),
+            cancelled_fresh_cleanup_evidence_document_sha256=(
+                cancelled_fresh_cleanup_evidence_document_sha256
+            ),
+            restored_evidence_sha256=restored_evidence_sha256,
+            restored_evidence_document_sha256=(
+                restored_evidence_document_sha256
+            ),
+        )
+        receipt_sha256 = with_store(
+            lambda store: store.write_terminal_receipt(receipt)
+        )
+        handoff_sha256, _capability = (
+            _project_update_publish_legacy_cancellation_handoff(
+                state,
+                terminal_receipt_sha256=receipt_sha256,
+                cancellation_result_document_sha256=(
+                    cancellation_result_record[
+                        "cancellation_result_document_sha256"
+                    ]
+                ),
+            )
+        )
+        with_store(
+            lambda store: store.publish_terminal_locator_and_retire(
+                intent_sha256=intent_sha256,
+                journal_head_sha256=journal_head_sha256,
+                previous_locator_sha256=locator_sha256,
+                terminal_receipt_sha256=receipt_sha256,
+            )
+        )
+        control["recovery_phase"] = "terminal_completed"
+        control["terminal_receipt_sha256"] = receipt_sha256
+        control["terminal_handoff_sha256"] = handoff_sha256
+        return cancellation_result
+    except ArchiveServiceError:
+        raise
+    except BaseException:
+        raise ArchiveServiceError(
+            "project_version_update_legacy_recovery_state_ambiguous"
+        ) from None
+
+
+def _project_update_confirm_context_claim_absent(
+    *,
+    expected_approval_root: Path,
+    context: ExactHumanApprovalContext,
+    key_provider: Any,
+    resume_boundary: Callable[[], Any],
+) -> bool:
+    """Re-authenticate exact claim absence without exposing claim names."""
+
+    if (
+        type(context) is not ExactHumanApprovalContext
+        or not callable(getattr(key_provider, "use_key", None))
+        or not callable(resume_boundary)
+    ):
+        return False
+    try:
+        with resume_boundary() as filesystem_boundary:
+            if (
+                not isinstance(filesystem_boundary, tuple)
+                or len(filesystem_boundary) != 2
+            ):
+                return False
+            bound_archive_root, claim_parent_binding = filesystem_boundary
+            claims_root = bound_archive_root.joinpath(
+                *Path(CLAIMS_RELATIVE_ROOT).parts
+            )
+            if (
+                bound_archive_root != expected_approval_root
+                or not isinstance(claim_parent_binding, Mapping)
+                or claim_parent_binding.get("path") != claims_root
+            ):
+                return False
+
+            def consume(key: memoryview) -> bool:
+                directory_target = claim_parent_binding.get("descriptor")
+                if type(directory_target) is not int:
+                    directory_target = claim_parent_binding.get("path")
+                names = os.listdir(directory_target)
+                if len(names) > 100_000:
+                    return False
+                expected_context_sha256 = exact_human_approval_context_sha256(
+                    context
+                )
+                for name in names:
+                    match = re.fullmatch(
+                        r"(approval_[0-9a-f]{32})\.json", str(name)
+                    )
+                    if match is None:
+                        continue
+                    routed_context, _status = _authenticated_claim_routing_core(
+                        bound_archive_root,
+                        match.group(1),
+                        key,
+                        bound_archive_root=bound_archive_root,
+                        claim_parent_binding=claim_parent_binding,
+                    )
+                    if hmac.compare_digest(
+                        routed_context,
+                        expected_context_sha256,
+                    ):
+                        return False
+                return True
+
+            result = key_provider.use_key(
+                expected_approval_root,
+                consume,
+                create_if_missing=False,
+            )
+            return type(result) is bool and result
+    except BaseException:
+        return False
+
+
+class _ProjectUpdateBorrowedApprovalKeyProvider:
+    """Keep the already-authenticated predecessor key inside one handoff.
+
+    The selected-claim handler receives this memoryview only while the
+    non-creating claim-directory boundary is held.  The fresh approval uses
+    the same archive-local key without creating, exporting, or serializing it.
+    """
+
+    def __init__(self, archive_root: Path, key: memoryview) -> None:
+        self._archive_root = archive_root
+        self._key = key
+
+    def use_key(
+        self,
+        archive_root: Path | str,
+        consumer: Callable[[memoryview], Any],
+        *,
+        create_if_missing: bool = False,
+    ) -> Any:
+        try:
+            current = require_existing_archive_root(archive_root)
+        except BaseException:
+            raise ExactHumanApprovalError(
+                "exact_human_approval_key_unavailable"
+            ) from None
+        if (
+            current != self._archive_root
+            or not callable(consumer)
+            or type(create_if_missing) is not bool
+            or len(self._key) != 32
+        ):
+            raise ExactHumanApprovalError(
+                "exact_human_approval_key_unavailable"
+            )
+        return consumer(self._key)
+
+
+def _project_update_resume_legacy_approval_bound_prewrite(
+    state: _ProjectVersionUpdateDurableApprovalState,
+    *,
+    lifetime: _ProjectVersionUpdateGitRunnerLifetime,
+    approval_executor: Callable[..., Mapping[str, Any]],
+    progress_callback: (
+        Callable[[str, str, int | None, int | None], None] | None
+    ),
+    key_provider: Any | None,
+    resume_boundary: Callable[[], Any] | None,
+) -> dict[str, Any] | None:
+    """Replace one exact v0.4.15 approval-bound prewrite transaction.
+
+    Discovery authenticates the existing claim and validates its old
+    checkpoint while the claim-directory boundary is still held.  The old
+    claim is never resumed or finalized.  Its selected handler only creates
+    the authenticated recovery control plane, moves the byte-identical old
+    transaction to its vault, and synchronously starts one current-schema
+    transaction with one fresh native approval.
+    """
+
+    transaction = getattr(state, "transaction", None)
+    if not isinstance(
+        transaction,
+        project_update_transaction.ProjectUpdateTransaction,
+    ):
+        # This compatibility entrypoint is also exercised by narrow service
+        # tests whose already-finalized state intentionally omits transaction
+        # internals.  Such a state cannot be an authenticated v0.4.15
+        # predecessor and must stay on the ordinary resume path.
+        return None
+    inspection = transaction.inspect()
+    checkpoints = tuple(inspection.journal.verified_prefix)
+    phases = tuple(item.phase for item in checkpoints)
+    state_target_tag = getattr(state, "target_tag", None)
+    if state_target_tag is None:
+        state_target_tag = getattr(
+            getattr(transaction, "reservation", None),
+            "requested_target_tag",
+            None,
+        )
+    legacy_candidate = bool(
+        state_target_tag == "v0.4.15"
+        and transaction.intent.runtime_candidate.legacy_document_shape
+    )
+    eligible = bool(
+        legacy_candidate
+        and inspection.journal.state == "exact"
+        and inspection.lock_backlinked
+        and len(checkpoints) == 2
+        and phases == ("lock_backlinked", "approval_bound")
+        and all(item.stage == "verified" for item in checkpoints)
+        and getattr(state, "existing_cleanup_authority_sha256", None) is None
+    )
+    if not legacy_candidate:
+        return None
+    existing_cleanup_authority = getattr(
+        state, "existing_cleanup_authority_sha256", None
+    )
+    if (
+        inspection.journal.state == "exact"
+        and checkpoints
+        and checkpoints[-1].phase == "completed"
+        and checkpoints[-1].stage == "verified"
+        and (
+            existing_cleanup_authority is None
+            or (
+                type(existing_cleanup_authority) is str
+                and re.fullmatch(
+                    r"sha256:[0-9a-f]{64}", existing_cleanup_authority
+                ) is not None
+            )
+        )
+    ):
+        try:
+            observed_cleanup_authority = (
+                transaction.cleanup_authority_sha256_read_only()
+            )
+        except BaseException:
+            _project_update_close_after_service_failure(
+                state.directory_guard.close,
+                lifetime,
+            )
+            raise ArchiveServiceError(
+                "project_version_update_legacy_recovery_state_ambiguous"
+            ) from None
+        # A completed predecessor can stop before its cleanup plan or after
+        # its tombstone move. Neither is an abandoned prewrite. Matching
+        # absence authorizes no cleanup: the ordinary terminal route must
+        # still authenticate the succeeded claim, receipts and live bytes.
+        if existing_cleanup_authority == observed_cleanup_authority:
+            return None
+    if not eligible or key_provider is None or not callable(resume_boundary):
+        _project_update_close_after_service_failure(
+            state.directory_guard.close,
+            lifetime,
+        )
+        raise ArchiveServiceError(
+            "project_version_update_legacy_recovery_state_ambiguous"
+        )
+
+    old_live = _project_update_live_component_sha256(state)
+    if transaction.classify_live_components(old_live).overall != "prewrite_exact":
+        _project_update_close_after_service_failure(
+            state.directory_guard.close,
+            lifetime,
+        )
+        raise ArchiveServiceError(
+            "project_version_update_legacy_recovery_state_changed"
+        )
+    old_binding = project_version_update_approval_binding(
+        state.prepared_preview
+    )
+    state.approved_plan_sha256 = old_binding.plan_sha256
+    state.approved_target_binding_sha256 = (
+        old_binding.target_binding_sha256
+    )
+    old_context = old_binding.context(
+        archive_id=state.expected_archive_id,
+        reviewer_claim=state.reviewer,
+    )
+
+    def started_guard(claim: _ClaimedExactHumanApproval) -> bool:
+        return _project_update_claim_checkpoint_guard(
+            state,
+            claim,
+            succeeded=False,
+        )
+
+    def succeeded_guard(_claim: _ClaimedExactHumanApproval) -> bool:
+        # An already-succeeded predecessor is a different terminal-recovery
+        # family.  This transition is exclusively for the started prewrite.
+        return False
+
+    def selected_handler(
+        approval_id: str,
+        key: memoryview,
+        filesystem_boundary: tuple[Path, dict[str, Any]] | None,
+    ) -> Mapping[str, Any]:
+        if filesystem_boundary is None:
+            raise ArchiveServiceError(
+                "project_version_update_legacy_recovery_state_ambiguous"
+            )
+        bound_archive_root, claim_parent_binding = filesystem_boundary
+        claims_root = bound_archive_root.joinpath(
+            *Path(CLAIMS_RELATIVE_ROOT).parts
+        )
+        if (
+            bound_archive_root != state.expected_approval_root
+            or claim_parent_binding.get("path") != claims_root
+        ):
+            raise ArchiveServiceError(
+                "project_version_update_legacy_recovery_state_ambiguous"
+            )
+        claim_raw = _read_claim_bytes(
+            claims_root / f"{approval_id}.json",
+            bound_archive_root=bound_archive_root,
+            claim_parent_binding=claim_parent_binding,
+        )
+        old_claim_sha256 = project_update_transaction.sha256_bytes(
+            claim_raw
+        )
+        old_lock_bytes = state.expected_lock_bytes
+        if not hmac.compare_digest(
+            project_update_legacy_recovery._read_regular(
+                state.transaction._lock_path
+            ),
+            old_lock_bytes,
+        ):
+            raise ArchiveServiceError(
+                "project_version_update_legacy_recovery_state_changed"
+            )
+        if progress_callback is not None:
+            try:
+                progress_callback(
+                    "project-recovery-inventory", "running", 0, 0
+                )
+            except Exception:
+                pass
+        old_inventory = project_update_legacy_recovery.directory_tree_inventory(
+            state.transaction.transaction_root,
+            progress_callback=(
+                (
+                    lambda count, byte_count: progress_callback(
+                        "project-recovery-inventory",
+                        "running",
+                        count,
+                        byte_count,
+                    )
+                )
+                if progress_callback is not None
+                else None
+            ),
+        )
+        old_tree_sha256 = project_update_legacy_recovery.sha256_document(
+            old_inventory
+        )
+        live_sha256 = project_update_transaction.sha256_document(old_live)
+        abandonment_sha256 = project_update_transaction.sha256_document(
+            {
+                "old_claim_sha256": old_claim_sha256,
+                "old_intent_sha256": state.transaction.intent.sha256,
+                "old_live_components_sha256": live_sha256,
+                "old_lock_sha256": (
+                    project_update_transaction.sha256_bytes(old_lock_bytes)
+                ),
+                "old_transaction_sha256": old_tree_sha256,
+                "schema": (
+                    "wom-kit/project-update-legacy-abandonment/"
+                    "v0.4.19"
+                ),
+            }
+        )
+        prospective_sha256 = project_update_transaction.sha256_document(
+            {
+                "old_abandonment_sha256": abandonment_sha256,
+                "schema": (
+                    "wom-kit/project-update-legacy-prospective-seed/"
+                    "v0.4.19"
+                ),
+                "target_tag": f"v{WOM_KIT_VERSION}",
+            }
+        )
+        recovery_summary = {
+            "schema": (
+                "wom-kit/project-update-legacy-prewrite-approval/"
+                "v0.4.19"
+            ),
+            "old_abandonment_sha256": abandonment_sha256,
+            "prospective_fresh_plan_sha256": prospective_sha256,
+            "single_composite_approval": True,
+            "old_claim_reused": False,
+            "old_transaction_mutated": False,
+        }
+        recovery_ref = project_update_legacy_recovery.new_recovery_ref()
+        paths = project_update_legacy_recovery.RecoveryPaths.build(
+            state.project_root,
+            recovery_ref,
+        )
+
+        def with_store(action: Callable[[Any], Any]) -> Any:
+            with project_update_legacy_recovery.LegacyRecoveryStore(
+                state.project_root,
+                recovery_ref,
+                key,
+            ) as store:
+                return action(store)
+
+        fresh_approval_seed = (
+            project_update_legacy_recovery.fresh_approval_seed_document(
+                recovery_ref=recovery_ref,
+                reviewer=state.reviewer,
+                old_transaction_ref=state.transaction.transaction_ref,
+                old_transaction_sha256=old_tree_sha256,
+                archive_identity_sha256=(
+                    exact_human_approval_archive_identity_sha256(
+                        state.expected_archive_id
+                    )
+                ),
+                project_identity_sha256=(
+                    state.transaction.intent.project_identity_sha256
+                ),
+                requested_target_tag=f"v{WOM_KIT_VERSION}",
+            )
+        )
+        fresh_approval_seed_document_sha256 = with_store(
+            lambda store: store.write_fresh_approval_seed(
+                fresh_approval_seed
+            )
+        )
+        recovery_intent = (
+            project_update_legacy_recovery.recovery_intent_document(
+                recovery_ref=recovery_ref,
+                old_transaction_ref=state.transaction.transaction_ref,
+                old_transaction_sha256=old_tree_sha256,
+                old_claim_sha256=old_claim_sha256,
+                old_lock_sha256=(
+                    project_update_transaction.sha256_bytes(old_lock_bytes)
+                ),
+                old_live_components_sha256=live_sha256,
+                archive_identity_sha256=(
+                    exact_human_approval_archive_identity_sha256(
+                        state.expected_archive_id
+                    )
+                ),
+                project_identity_sha256=(
+                    state.transaction.intent.project_identity_sha256
+                ),
+                fresh_approval_seed_document_sha256=(
+                    fresh_approval_seed_document_sha256
+                ),
+            )
+        )
+
+        def publish_checkpoint(
+            *,
+            phase: str,
+            evidence_sha256: str,
+            locator_state: str,
+            intent_sha256: str,
+            previous_locator_sha256: str,
+            previous_checkpoint_sha256: str | None,
+        ) -> tuple[str, str]:
+            def append(store: Any) -> tuple[str, str]:
+                head = store.append_checkpoint(
+                    phase=phase,
+                    stage="verified",
+                    intent_sha256=intent_sha256,
+                    evidence_sha256=evidence_sha256,
+                    expected_previous_checkpoint_sha256=(
+                        previous_checkpoint_sha256
+                    ),
+                )
+                locator = store.publish_locator(
+                    state=locator_state,
+                    intent_sha256=intent_sha256,
+                    journal_head_sha256=head,
+                    previous_locator_sha256=previous_locator_sha256,
+                )
+                return head, locator
+
+            return with_store(append)
+
+        intent_sha256 = with_store(
+            lambda store: store.initialize(recovery_intent)
+        )
+        locator_sha256 = project_update_legacy_recovery.sha256_bytes(
+            project_update_legacy_recovery._read_regular(
+                paths.locator_path
+            )
+        )
+        journal_head_sha256, locator_sha256 = publish_checkpoint(
+            phase="legacy_eligibility_verified",
+            evidence_sha256=abandonment_sha256,
+            locator_state="legacy_eligible",
+            intent_sha256=intent_sha256,
+            previous_locator_sha256=locator_sha256,
+            previous_checkpoint_sha256=None,
+        )
+        staged = project_update_legacy_recovery.stage_old_transaction(
+            paths,
+            old_transaction_ref=state.transaction.transaction_ref,
+            expected_tree_sha256=old_tree_sha256,
+        )
+        journal_head_sha256, locator_sha256 = publish_checkpoint(
+            phase="old_transaction_staged",
+            evidence_sha256=project_update_transaction.sha256_document(
+                {
+                    "old_transaction_sha256": old_tree_sha256,
+                    "schema": (
+                        "wom-kit/project-update-legacy-stage-evidence/"
+                        "v0.4.19"
+                    ),
+                    "state": staged,
+                }
+            ),
+            locator_state="old_transaction_staged",
+            intent_sha256=intent_sha256,
+            previous_locator_sha256=locator_sha256,
+            previous_checkpoint_sha256=journal_head_sha256,
+        )
+
+        # Authenticate the exact fresh ref before reserve() can publish its
+        # directory.  Recovery never guesses ownership by enumerating the
+        # transaction namespace after a crash in the reserve/callback gap.
+        fresh_transaction_ref = "update_" + secrets.token_hex(16)
+        fresh_reservation_created_at = (
+            datetime.now(timezone.utc)
+            .replace(microsecond=0)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+        fresh_reservation_nonce = secrets.token_hex(16)
+        prepared_fresh_reservation = (
+            project_update_transaction.ProjectUpdateTransaction.prepare_reservation(
+                project_identity_sha256=(
+                    state.transaction.intent.project_identity_sha256
+                ),
+                requested_target_tag=f"v{WOM_KIT_VERSION}",
+                transaction_ref=fresh_transaction_ref,
+                ownership_nonce=fresh_reservation_nonce,
+                created_at=fresh_reservation_created_at,
+            )
+        )
+        pre_fetch_ref_snapshot = (
+            _wom_kit_project_update_pre_fetch_ref_snapshot_observation(
+                state.mirror_path,
+                f"v{WOM_KIT_VERSION}",
+                runner=state.runner,
+            )
+        )
+        pre_fetch_snapshot_value = pre_fetch_ref_snapshot.get("snapshot")
+        if (
+            pre_fetch_ref_snapshot.get("state") != "passed"
+            or pre_fetch_ref_snapshot.get("reason_code") != "verified"
+            or not isinstance(pre_fetch_snapshot_value, Mapping)
+            or set(pre_fetch_snapshot_value)
+            != {
+                "refs",
+                "requested_target_present",
+                "requested_target_ref",
+            }
+            or not isinstance(pre_fetch_snapshot_value.get("refs"), Mapping)
+            or type(
+                pre_fetch_snapshot_value.get("requested_target_present")
+            )
+            is not bool
+            or pre_fetch_snapshot_value.get("requested_target_ref")
+            != f"refs/tags/v{WOM_KIT_VERSION}"
+        ):
+            raise ArchiveServiceError(
+                "project_version_update_legacy_recovery_state_ambiguous"
+            )
+        pre_fetch_ref_record = with_store(
+            lambda store: store.write_pre_fetch_ref_snapshot(
+                pre_fetch_ref_snapshot
+            )
+        )
+        fresh_allocation = (
+            project_update_legacy_recovery.fresh_allocation_document(
+                recovery_ref=paths.recovery_ref,
+                prepared_reservation_document=(
+                    prepared_fresh_reservation.document()
+                ),
+                old_abandonment_sha256=abandonment_sha256,
+                pre_ref_snapshot_document_sha256=(
+                    pre_fetch_ref_record[
+                        "pre_ref_snapshot_document_sha256"
+                    ]
+                ),
+                pre_ref_snapshot_sha256=(
+                    pre_fetch_ref_record["pre_ref_snapshot_sha256"]
+                ),
+            )
+        )
+
+        def persist_fresh_allocation(store: Any) -> tuple[str, str, str]:
+            allocation_sha256 = store.write_fresh_allocation(
+                fresh_allocation
+            )
+            head = store.append_checkpoint(
+                phase="fresh_transaction_allocated",
+                stage="verified",
+                intent_sha256=intent_sha256,
+                evidence_sha256=allocation_sha256,
+                expected_previous_checkpoint_sha256=journal_head_sha256,
+            )
+            locator = store.publish_locator(
+                state="fresh_transaction_allocated",
+                intent_sha256=intent_sha256,
+                journal_head_sha256=head,
+                previous_locator_sha256=locator_sha256,
+            )
+            return allocation_sha256, head, locator
+
+        (
+            fresh_allocation_sha256,
+            journal_head_sha256,
+            locator_sha256,
+        ) = with_store(persist_fresh_allocation)
+
+        expected_fresh_context: list[ExactHumanApprovalContext] = []
+
+        def confirm_fresh_claim_absent(
+            context: ExactHumanApprovalContext,
+        ) -> bool:
+            if type(context) is not ExactHumanApprovalContext:
+                return False
+            expected_fresh_context[:] = [context]
+            try:
+                directory_target = claim_parent_binding.get("descriptor")
+                if type(directory_target) is not int:
+                    directory_target = claim_parent_binding.get("path")
+                names = os.listdir(directory_target)
+                if len(names) > 100_000:
+                    return False
+                expected_context_sha256 = (
+                    exact_human_approval_context_sha256(context)
+                )
+                for name in names:
+                    match = re.fullmatch(
+                        r"(approval_[0-9a-f]{32})\.json", str(name)
+                    )
+                    if match is None:
+                        continue
+                    routed_context, _status = (
+                        _authenticated_claim_routing_core(
+                            bound_archive_root,
+                            match.group(1),
+                            key,
+                            bound_archive_root=bound_archive_root,
+                            claim_parent_binding=claim_parent_binding,
+                        )
+                    )
+                    if hmac.compare_digest(
+                        routed_context,
+                        expected_context_sha256,
+                    ):
+                        return False
+                return True
+            except BaseException:
+                return False
+
+        control: dict[str, Any] = {
+            "paths": paths,
+            "old_transaction_ref": state.transaction.transaction_ref,
+            "old_transaction_tree_sha256": old_tree_sha256,
+            "old_lock_bytes": old_lock_bytes,
+            "old_abandonment_sha256": abandonment_sha256,
+            "intent_sha256": intent_sha256,
+            "journal_head_sha256": journal_head_sha256,
+            "locator_sha256": locator_sha256,
+            "recovery_phase": "fresh_transaction_allocated",
+            "with_store": with_store,
+            "confirm_fresh_claim_absent": confirm_fresh_claim_absent,
+            "progress_callback": progress_callback,
+            "approval_key_provider": (
+                _ProjectUpdateBorrowedApprovalKeyProvider(
+                    bound_archive_root,
+                    key,
+                )
+            ),
+            "fresh_transaction_ref": fresh_transaction_ref,
+            "prepared_fresh_reservation": prepared_fresh_reservation,
+            "fresh_allocation_sha256": fresh_allocation_sha256,
+            "pre_ref_snapshot_document_sha256": (
+                pre_fetch_ref_record[
+                    "pre_ref_snapshot_document_sha256"
+                ]
+            ),
+            "pre_ref_snapshot_sha256": (
+                pre_fetch_ref_record["pre_ref_snapshot_sha256"]
+            ),
+            "recovery_evidence_sha256": fresh_allocation_sha256,
+        }
+
+        def bind_fresh_reservation(
+            reservation: (
+                project_update_transaction.ReservedProjectUpdateTransaction
+            ),
+        ) -> None:
+            if not isinstance(
+                reservation,
+                project_update_transaction.ReservedProjectUpdateTransaction,
+            ):
+                raise ArchiveServiceError(
+                    "project_version_update_legacy_recovery_binding_invalid"
+                )
+            if reservation.transaction_ref != fresh_transaction_ref:
+                raise ArchiveServiceError(
+                    "project_version_update_legacy_recovery_binding_invalid"
+                )
+            document = (
+                project_update_legacy_recovery.fresh_reservation_document(
+                    recovery_ref=paths.recovery_ref,
+                    fresh_transaction_ref=reservation.transaction_ref,
+                    fresh_reservation_sha256=(
+                        reservation.reservation.sha256
+                    ),
+                    fresh_allocation_document_sha256=(
+                        fresh_allocation_sha256
+                    ),
+                    old_abandonment_sha256=abandonment_sha256,
+                )
+            )
+
+            def persist(store: Any) -> tuple[str, str, str]:
+                reservation_sha256 = store.write_fresh_reservation(
+                    document
+                )
+                head = store.append_checkpoint(
+                    phase="fresh_reservation_bound",
+                    stage="verified",
+                    intent_sha256=intent_sha256,
+                    evidence_sha256=reservation_sha256,
+                    expected_previous_checkpoint_sha256=(
+                        control["journal_head_sha256"]
+                    ),
+                )
+                locator = store.publish_locator(
+                    state="fresh_reservation_bound",
+                    intent_sha256=intent_sha256,
+                    journal_head_sha256=head,
+                    previous_locator_sha256=control["locator_sha256"],
+                )
+                return reservation_sha256, head, locator
+
+            reservation_sha256, head, locator = with_store(persist)
+            control["fresh_reservation_sha256"] = reservation_sha256
+            control["journal_head_sha256"] = head
+            control["locator_sha256"] = locator
+            control["recovery_phase"] = "fresh_reservation_bound"
+            control["recovery_evidence_sha256"] = reservation_sha256
+
+        control["fresh_reservation_callback"] = bind_fresh_reservation
+        try:
+            return _wom_kit_project_version_update_legacy_core(
+                state.inspection_root,
+                target=f"v{WOM_KIT_VERSION}",
+                dry_run=False,
+                approve=True,
+                reviewed_by=state.reviewer,
+                affirm_external_writers_quiescent=True,
+                approval_executor=approval_executor,
+                progress_callback=progress_callback,
+                _expected_approval_root=state.expected_approval_root,
+                _expected_archive_id=state.expected_archive_id,
+                _legacy_recovery_old_lock_bytes=old_lock_bytes,
+                _legacy_recovery_approval_summary=recovery_summary,
+                _legacy_recovery_control=control,
+            )
+        except BaseException:
+            raise
+
+    try:
+        from .exact_human_approval_workflow import (
+            _discover_exact_human_approved_transaction_resume_core,
+        )
+
+        with (
+            _project_update_terminal_execution_lease(
+                state,
+                expected_handoff_observation=None,
+                fresh_absence=False,
+            ),
+            project_update_legacy_recovery.legacy_recovery_process_guard(
+                state.project_root,
+                terminal_control_lease_held=lambda: (
+                    _PROJECT_UPDATE_TERMINAL_CONTROL_LEASE.get() is not None
+                ),
+            ),
+        ):
+            result = _discover_exact_human_approved_transaction_resume_core(
+                state.expected_approval_root,
+                old_context,
+                started_guard,
+                succeeded_guard,
+                _selected_candidate_handler=selected_handler,
+                key_provider=key_provider,
+                resume_boundary=resume_boundary,
+            )
+        if not isinstance(result, Mapping):
+            raise ArchiveServiceError(
+                "project_version_update_legacy_recovery_state_ambiguous"
+            )
+        return _project_update_finish_nonterminal_service_result(
+            result,
+            lifetime,
+            close_owned_resources=state.directory_guard.close,
+        )
+    except project_update_legacy_recovery.LegacyProjectUpdateRecoveryError as failure:
+        _project_update_close_after_service_failure(
+            state.directory_guard.close,
+            lifetime,
+        )
+        raise ArchiveServiceError(failure.code) from None
+    except BaseException:
+        _project_update_close_after_service_failure(
+            state.directory_guard.close,
+            lifetime,
+        )
+        raise
+
+
 def _project_update_reopen_durable_state(
     inspection_root: Path | str,
     *,
@@ -125289,6 +134554,8 @@ def _project_update_reopen_durable_state(
     transaction_ref: str | None,
     expected_approval_root: Path,
     expected_archive_id: str,
+    _authenticated_recovery_transaction_ref: str | None = None,
+    _legacy_recovery_control: Mapping[str, Any] | None = None,
 ) -> tuple[
     _ProjectVersionUpdateDurableApprovalState,
     _ProjectVersionUpdateGitRunnerLifetime,
@@ -125326,11 +134593,25 @@ def _project_update_reopen_durable_state(
             "project_version_update_approval_archive_identity_changed"
         )
     supplied_transaction_ref = str(transaction_ref or "").strip()
-    discovered_transaction_ref = (
-        project_update_transaction.active_transaction_ref_for_resume_read_only(
-            project_root
+    if _authenticated_recovery_transaction_ref is None:
+        discovered_transaction_ref = (
+            project_update_transaction
+            .active_transaction_ref_for_resume_read_only(project_root)
         )
-    )
+    else:
+        discovered_transaction_ref = str(
+            _authenticated_recovery_transaction_ref
+        )
+        if (
+            project_update_transaction.TRANSACTION_REF_RE.fullmatch(
+                discovered_transaction_ref
+            )
+            is None
+            or not isinstance(_legacy_recovery_control, Mapping)
+        ):
+            raise ArchiveServiceError(
+                "project_version_update_legacy_recovery_binding_invalid"
+            )
     if (
         supplied_transaction_ref
         and supplied_transaction_ref != discovered_transaction_ref
@@ -125371,6 +134652,41 @@ def _project_update_reopen_durable_state(
     private_plan = _project_update_parse_private_plan(
         transaction.private_binding_bytes("project-update-domain-plan")
     )
+    if _authenticated_recovery_transaction_ref is not None:
+        recovery_summary = private_plan.get("legacy_prewrite_recovery")
+        expected_recovery_binding_sha256 = (
+            _legacy_recovery_control.get(
+                "fresh_recovery_binding_sha256"
+            )
+            if isinstance(_legacy_recovery_control, Mapping)
+            else None
+        )
+        if (
+            not isinstance(recovery_summary, Mapping)
+            or type(expected_recovery_binding_sha256) is not str
+            or re.fullmatch(
+                r"sha256:[0-9a-f]{64}",
+                expected_recovery_binding_sha256,
+            )
+            is None
+            or not hmac.compare_digest(
+                project_update_transaction.sha256_document(
+                    dict(recovery_summary)
+                ),
+                expected_recovery_binding_sha256,
+            )
+            or not hmac.compare_digest(
+                transaction.private_binding_bytes(
+                    "legacy-prewrite-recovery-binding"
+                ),
+                (expected_recovery_binding_sha256 + "\n").encode(
+                    "ascii"
+                ),
+            )
+        ):
+            raise ArchiveServiceError(
+                "project_version_update_legacy_recovery_binding_invalid"
+            )
     reviewer = safe_foreign_quarantine_actor_id(private_plan.get("reviewer"))
     supplied_reviewer = str(reviewed_by or "").strip()
     if (
@@ -125599,6 +134915,18 @@ def _project_update_reopen_durable_state(
             existing_cleanup_authority_sha256=(
                 existing_cleanup_authority_sha256
             ),
+            legacy_prewrite_recovery=(
+                copy.deepcopy(private_plan["legacy_prewrite_recovery"])
+                if isinstance(
+                    private_plan.get("legacy_prewrite_recovery"), Mapping
+                )
+                else None
+            ),
+            legacy_prewrite_recovery_control=(
+                dict(_legacy_recovery_control)
+                if _legacy_recovery_control is not None
+                else None
+            ),
         )
         reopened_checkpoints = tuple(
             transaction.inspect().journal.verified_prefix
@@ -125656,6 +134984,9 @@ def _wom_kit_project_version_update_legacy_core_generator(
     _expected_approval_root: Path | None = None,
     _expected_archive_id: str | None = None,
     _git_runner_lifetime: _ProjectVersionUpdateGitRunnerLifetime,
+    _legacy_recovery_old_lock_bytes: bytes | None = None,
+    _legacy_recovery_approval_summary: Mapping[str, Any] | None = None,
+    _legacy_recovery_control: Mapping[str, Any] | None = None,
 ) -> Any:
     """Run the updater, optionally yielding one lock-held exact preview."""
 
@@ -125666,16 +134997,96 @@ def _wom_kit_project_version_update_legacy_core_generator(
     target_version = normalize_version_label(target_tag)
     reviewer = safe_foreign_quarantine_actor_id(reviewed_by)
     inspection = Path(os.path.abspath(str(Path(inspection_root).expanduser())))
+    preflight_check_names = (
+        "project_root_binding",
+        "inspection_root",
+        "project_root",
+        "metadata_root",
+        "source_mirror",
+        "update_lock",
+        "git_inside_worktree",
+        "git_worktree_root_exact",
+        "git_metadata_local_real",
+        "git_head",
+        "git_snapshot",
+        "source_mirror_pin_tracking",
+        "origin_configuration",
+        "source_version_metadata",
+        "git_transaction_snapshot",
+        "git_config_trust",
+    )
+    preflight_checks: dict[str, dict[str, str]] = {
+        name: {
+            "state": "not_reached",
+            "reason_code": "project_preflight_not_reached",
+        }
+        for name in preflight_check_names
+    }
+
+    def record_preflight_check(
+        name: str,
+        state: str,
+        reason_code: str,
+    ) -> None:
+        if name not in preflight_checks or state not in {
+            "passed",
+            "failed",
+            "not_reached",
+            "unavailable",
+        }:
+            raise ArchiveServiceError("project_version_update_preflight_invalid")
+        preflight_checks[name] = {
+            "state": state,
+            "reason_code": reason_code,
+        }
+
     local_metadata_root = inspection / ".zettel-kasten"
     parent_metadata_root = inspection.parent / ".zettel-kasten"
+    local_metadata_observation = wom_kit_real_path_kind_observation(
+        inspection,
+        local_metadata_root,
+    )
+    archive_config_observation = wom_kit_real_path_kind_observation(
+        inspection,
+        inspection / "archive.yml",
+    )
+    parent_metadata_observation = wom_kit_real_path_kind_observation(
+        inspection.parent,
+        parent_metadata_root,
+    )
+    root_binding_observations = (
+        local_metadata_observation,
+        archive_config_observation,
+        parent_metadata_observation,
+    )
+    if any(
+        item["state"] == "unavailable"
+        for item in root_binding_observations
+    ):
+        record_preflight_check(
+            "project_root_binding",
+            "unavailable",
+            "project_root_binding_observation_unavailable",
+        )
+    elif any(item["state"] == "failed" for item in root_binding_observations):
+        record_preflight_check(
+            "project_root_binding",
+            "failed",
+            "project_root_binding_unsafe",
+        )
+    else:
+        record_preflight_check(
+            "project_root_binding",
+            "passed",
+            "verified",
+        )
     project_root = (
         inspection.parent
         if (
-            wom_kit_real_path_kind(inspection, local_metadata_root) == "missing"
-            and wom_kit_real_path_kind(inspection, inspection / "archive.yml")
-            == "file"
-            and wom_kit_real_path_kind(inspection.parent, parent_metadata_root)
-            == "directory"
+            preflight_checks["project_root_binding"]["state"] == "passed"
+            and local_metadata_observation["kind"] == "missing"
+            and archive_config_observation["kind"] == "file"
+            and parent_metadata_observation["kind"] == "directory"
         )
         else inspection
     )
@@ -125718,18 +135129,93 @@ def _wom_kit_project_version_update_legacy_core_generator(
         )
     if reviewed_by and reviewer is None:
         blockers.append("reviewed_by must be a safe non-secret actor id.")
-    inspection_kind = wom_kit_real_path_kind(inspection, inspection)
-    project_root_kind = wom_kit_real_path_kind(project_root, project_root)
-    metadata_kind = wom_kit_real_path_kind(project_root, metadata_root)
-    mirror_kind = wom_kit_real_path_kind(project_root, mirror_path)
-    if inspection_kind != "directory":
+    if preflight_checks["project_root_binding"]["state"] == "unavailable":
+        blockers.append(
+            "The archive-to-project root binding could not be observed safely."
+        )
+    elif preflight_checks["project_root_binding"]["state"] == "failed":
+        blockers.append("The archive-to-project root binding is unsafe.")
+
+    inspection_observation = wom_kit_real_path_kind_observation(
+        inspection,
+        inspection,
+    )
+    inspection_kind = str(inspection_observation["kind"])
+    if inspection_observation["state"] == "unavailable":
+        record_preflight_check(
+            "inspection_root",
+            "unavailable",
+            "inspection_root_observation_unavailable",
+        )
+        blockers.append(
+            "The project/archive inspection root could not be observed safely."
+        )
+    elif (
+        inspection_observation["state"] != "passed"
+        or inspection_kind != "directory"
+    ):
+        record_preflight_check(
+            "inspection_root",
+            "failed",
+            "inspection_root_missing_or_unsafe",
+        )
         blockers.append("The project/archive inspection root must be an existing directory.")
-    if project_root_kind != "directory":
+    else:
+        record_preflight_check("inspection_root", "passed", "verified")
+
+    project_root_observation = wom_kit_real_path_kind_observation(
+        project_root,
+        project_root,
+    )
+    project_root_kind = str(project_root_observation["kind"])
+    if project_root_observation["state"] == "unavailable":
+        record_preflight_check(
+            "project_root",
+            "unavailable",
+            "project_root_observation_unavailable",
+        )
+        blockers.append("The resolved project root could not be observed safely.")
+    elif (
+        project_root_observation["state"] != "passed"
+        or project_root_kind != "directory"
+    ):
+        record_preflight_check(
+            "project_root",
+            "failed",
+            "project_root_missing_or_unsafe",
+        )
         blockers.append("The resolved project root must be an existing directory.")
-    if metadata_kind not in {"directory", "missing"}:
+    else:
+        record_preflight_check("project_root", "passed", "verified")
+
+    metadata_observation = wom_kit_real_path_kind_observation(
+        project_root,
+        metadata_root,
+    )
+    metadata_kind = str(metadata_observation["kind"])
+    if metadata_observation["state"] == "unavailable":
+        record_preflight_check(
+            "metadata_root",
+            "unavailable",
+            "project_metadata_root_observation_unavailable",
+        )
+        blockers.append(
+            "The project .zettel-kasten directory could not be observed safely."
+        )
+    elif (
+        metadata_observation["state"] != "passed"
+        or metadata_kind not in {"directory", "missing"}
+    ):
+        record_preflight_check(
+            "metadata_root",
+            "failed",
+            "project_metadata_root_unsafe",
+        )
         blockers.append(
             "The project .zettel-kasten directory must be a real directory, not a symlink or reparse point."
         )
+    else:
+        record_preflight_check("metadata_root", "passed", "verified")
     if (
         not wom_kit_existing_path_components_are_real(project_root, receipts_parent)
         or not wom_kit_existing_path_components_are_real(project_root, receipts_root)
@@ -125738,164 +135224,461 @@ def _wom_kit_project_version_update_legacy_core_generator(
         blockers.append(
             "The project version-update receipt directory must stay real and inside the project root."
         )
-    if mirror_kind == "missing":
-        blockers.append("The project-local .zettel-kasten/source mirror is missing.")
-    elif mirror_kind != "directory" or not is_path_within_root(mirror_path, project_root):
+    mirror_observation = wom_kit_real_path_kind_observation(
+        project_root,
+        mirror_path,
+    )
+    mirror_kind = str(mirror_observation["kind"])
+    if mirror_observation["state"] == "unavailable":
+        record_preflight_check(
+            "source_mirror",
+            "unavailable",
+            "project_source_mirror_observation_unavailable",
+        )
+        blockers.append(
+            "The project-local source mirror could not be observed safely."
+        )
+    elif mirror_observation["state"] != "passed":
+        record_preflight_check(
+            "source_mirror",
+            "failed",
+            "project_source_mirror_unsafe",
+        )
         blockers.append(
             "The project source mirror must be a real directory without a symlink or reparse component inside the project root."
         )
-    if not wom_kit_existing_path_components_are_real(project_root, lock_path):
-        blockers.append("The project version-update lock path is unsafe.")
-    if wom_kit_real_path_kind(project_root, lock_path) != "missing":
-        blockers.append("A project version update lock already exists; review the prior run before continuing.")
+    elif mirror_kind == "missing":
+        record_preflight_check(
+            "source_mirror",
+            "failed",
+            "project_source_mirror_missing",
+        )
+        blockers.append("The project-local .zettel-kasten/source mirror is missing.")
+    elif mirror_kind != "directory" or not is_path_within_root(mirror_path, project_root):
+        record_preflight_check(
+            "source_mirror",
+            "failed",
+            "project_source_mirror_unsafe",
+        )
+        blockers.append(
+            "The project source mirror must be a real directory without a symlink or reparse component inside the project root."
+        )
+    else:
+        record_preflight_check("source_mirror", "passed", "verified")
 
-    git_repo_verified = False
-    worktree_clean = False
-    origin_configured = False
-    mirror_pin_tracked = False
-    unexpected_worktree_entry_count = 0
+    lock_observation = wom_kit_real_path_kind_observation(
+        project_root,
+        lock_path,
+    )
+    lock_kind = str(lock_observation["kind"])
+    legacy_recovery_mode = bool(
+        type(_legacy_recovery_old_lock_bytes) is bytes
+        and _legacy_recovery_old_lock_bytes
+        and isinstance(_legacy_recovery_approval_summary, Mapping)
+        and isinstance(_legacy_recovery_control, Mapping)
+    )
+    legacy_recovery_inputs_present = (
+        _legacy_recovery_old_lock_bytes is not None,
+        _legacy_recovery_approval_summary is not None,
+        _legacy_recovery_control is not None,
+    )
+    if any(legacy_recovery_inputs_present) and not all(
+        legacy_recovery_inputs_present
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_legacy_recovery_binding_invalid"
+        )
+    if lock_observation["state"] == "unavailable":
+        record_preflight_check(
+            "update_lock",
+            "unavailable",
+            "project_update_lock_observation_unavailable",
+        )
+        blockers.append("The project version update lock could not be observed safely.")
+    elif (
+        lock_observation["state"] != "passed"
+        or not wom_kit_existing_path_components_are_real(project_root, lock_path)
+    ):
+        record_preflight_check(
+            "update_lock",
+            "failed",
+            "project_update_lock_unsafe",
+        )
+        blockers.append("The project version-update lock path is unsafe.")
+    elif lock_kind != "missing" and not legacy_recovery_mode:
+        record_preflight_check(
+            "update_lock",
+            "failed",
+            "project_update_lock_present",
+        )
+        blockers.append("A project version update lock already exists; review the prior run before continuing.")
+    elif lock_kind == "missing" and legacy_recovery_mode:
+        record_preflight_check(
+            "update_lock",
+            "failed",
+            "project_update_legacy_recovery_lock_missing",
+        )
+        blockers.append("project_update_legacy_recovery_lock_missing")
+    elif legacy_recovery_mode:
+        observed_old_lock = _wom_kit_read_bounded_real_bytes(
+            project_root,
+            lock_path,
+            max_bytes=project_update_transaction.MAX_DOCUMENT_BYTES + 1,
+        )
+        if observed_old_lock != _legacy_recovery_old_lock_bytes:
+            record_preflight_check(
+                "update_lock",
+                "failed",
+                "project_update_legacy_recovery_lock_changed",
+            )
+            blockers.append("project_update_legacy_recovery_lock_changed")
+        else:
+            record_preflight_check("update_lock", "passed", "verified")
+    else:
+        record_preflight_check("update_lock", "passed", "verified")
+
+    git_repo_verified: bool | None = None
+    worktree_clean: bool | None = None
+    origin_configured: bool | None = None
+    mirror_pin_tracked: bool | None = None
+    unexpected_worktree_entry_count: int | None = None
     head_before: str | None = None
     head_after: str | None = None
     original_branch: str | None = None
     current_versions: dict[str, str | None] = {"package": None, "pyproject": None, "root_shim": None}
     runtime_import_origin_within_project_source_mirror = bool(
-        mirror_path.is_dir()
+        mirror_observation["state"] == "passed"
+        and mirror_kind == "directory"
         and is_path_within_root(Path(__file__).resolve(), mirror_path)
     )
 
-    if mirror_kind == "directory":
-        inside_ok, inside_text = _wom_kit_project_update_git(
+    path_preflight_passed = all(
+        preflight_checks[name]["state"] == "passed"
+        for name in (
+            "project_root_binding",
+            "inspection_root",
+            "project_root",
+            "metadata_root",
+            "source_mirror",
+            "update_lock",
+        )
+    )
+    if path_preflight_passed:
+        inside_available, inside_return_code, inside_text = (
+            _wom_kit_project_update_git_observation(
             mirror_path,
             ["rev-parse", "--is-inside-work-tree"],
             runner=git_runner,
+            )
         )
-        top_ok, top_text = _wom_kit_project_update_git(
-            mirror_path,
-            ["rev-parse", "--show-toplevel"],
-            runner=git_runner,
-        )
-        try:
-            exact_top = top_ok and Path(top_text).resolve() == mirror_path.resolve()
-        except (OSError, RuntimeError, ValueError):
-            exact_top = False
-        git_repo_verified = bool(
-            inside_ok
-            and inside_text == "true"
-            and exact_top
-            and wom_kit_project_update_git_metadata_is_local_real(
+        if not inside_available:
+            record_preflight_check(
+                "git_inside_worktree",
+                "unavailable",
+                "project_git_inside_worktree_observation_unavailable",
+            )
+        elif inside_return_code != 0 or inside_text != "true":
+            record_preflight_check(
+                "git_inside_worktree",
+                "failed",
+                "project_git_inside_worktree_unverified",
+            )
+        else:
+            record_preflight_check("git_inside_worktree", "passed", "verified")
+
+        if preflight_checks["git_inside_worktree"]["state"] == "passed":
+            top_available, top_return_code, top_text = (
+                _wom_kit_project_update_git_observation(
+                    mirror_path,
+                    ["rev-parse", "--show-toplevel"],
+                    runner=git_runner,
+                )
+            )
+            top_resolution_unavailable = False
+            try:
+                exact_top = bool(
+                    top_available
+                    and top_return_code == 0
+                    and Path(top_text).resolve() == mirror_path.resolve()
+                )
+            except OSError:
+                exact_top = False
+                top_resolution_unavailable = True
+            except (RuntimeError, ValueError):
+                exact_top = False
+            if not top_available or top_resolution_unavailable:
+                record_preflight_check(
+                    "git_worktree_root_exact",
+                    "unavailable",
+                    "project_git_worktree_root_observation_unavailable",
+                )
+            elif top_return_code != 0 or not exact_top:
+                record_preflight_check(
+                    "git_worktree_root_exact",
+                    "failed",
+                    "project_git_worktree_root_unverified",
+                )
+            else:
+                record_preflight_check(
+                    "git_worktree_root_exact",
+                    "passed",
+                    "verified",
+                )
+
+        if preflight_checks["git_worktree_root_exact"]["state"] == "passed":
+            git_metadata_evidence = wom_kit_project_update_git_metadata_evidence(
                 project_root,
                 mirror_path,
                 runner=git_runner,
             )
+            record_preflight_check(
+                "git_metadata_local_real",
+                str(git_metadata_evidence["state"]),
+                str(git_metadata_evidence["reason_code"]),
+            )
+
+        git_required_states = {
+            preflight_checks[name]["state"]
+            for name in (
+                "git_inside_worktree",
+                "git_worktree_root_exact",
+                "git_metadata_local_real",
+            )
+        }
+        git_repo_verified = (
+            True
+            if git_required_states == {"passed"}
+            else False
+            if "failed" in git_required_states
+            else None
         )
-        if not git_repo_verified:
+        if git_repo_verified is not True:
             blockers.append(
                 "The project source mirror must be the exact root of a Git working tree whose real .git metadata stays inside that mirror."
             )
         else:
-            head_ok, head_text = _wom_kit_project_update_git(
-                mirror_path,
-                ["rev-parse", "--verify", "HEAD"],
-                runner=git_runner,
-            )
-            if head_ok and re.fullmatch(r"[0-9a-fA-F]{40,64}", head_text):
-                head_before = head_text.lower()
-                head_after = head_before
-            else:
-                blockers.append("The project source mirror has no valid HEAD commit.")
-            symbolic_head_state, branch_text = (
-                wom_kit_project_update_symbolic_head_state(
+            head_available, head_return_code, head_text = (
+                _wom_kit_project_update_git_observation(
                     mirror_path,
+                    ["rev-parse", "--verify", "HEAD"],
                     runner=git_runner,
                 )
             )
-            original_branch = (
-                branch_text
-                if symbolic_head_state == "branch"
-                else None
-            )
-            if symbolic_head_state == "invalid":
-                blockers.append(
-                    "The project source mirror symbolic HEAD state could not be read safely."
+            if not head_available:
+                record_preflight_check(
+                    "git_head",
+                    "unavailable",
+                    "project_git_head_observation_unavailable",
                 )
-            if (
-                original_branch is not None
-                and (
-                    head_before is None
-                    or not wom_kit_project_update_branch_points_to_commit(
+                blockers.append(
+                    "The project source mirror HEAD could not be observed safely."
+                )
+            elif (
+                head_return_code == 0
+                and re.fullmatch(r"[0-9a-fA-F]{40,64}", head_text)
+            ):
+                record_preflight_check("git_head", "passed", "verified")
+                head_before = head_text.lower()
+                head_after = head_before
+            else:
+                record_preflight_check(
+                    "git_head",
+                    "failed",
+                    "project_git_head_invalid",
+                )
+                blockers.append("The project source mirror has no valid HEAD commit.")
+            if preflight_checks["git_head"]["state"] == "passed":
+                symbolic_head_state, branch_text = (
+                    wom_kit_project_update_symbolic_head_state(
+                        mirror_path,
+                        runner=git_runner,
+                    )
+                )
+                original_branch = (
+                    branch_text
+                    if symbolic_head_state == "branch"
+                    else None
+                )
+                if symbolic_head_state == "invalid":
+                    blockers.append(
+                        "The project source mirror symbolic HEAD state could not be read safely."
+                    )
+                if (
+                    original_branch is not None
+                    and not wom_kit_project_update_branch_points_to_commit(
                         mirror_path,
                         original_branch,
                         head_before,
                         runner=git_runner,
                     )
+                ):
+                    blockers.append(
+                        "The original project source branch cannot be restored safely with Git's branch-name rules."
+                    )
+                initial_snapshot = _wom_kit_project_update_git_snapshot(
+                    mirror_path,
+                    runner=git_runner,
                 )
+                unexpected_worktree_entry_count = (
+                    len(
+                        [
+                            path
+                            for path in initial_snapshot.get(
+                                "untracked_paths",
+                                [],
+                            )
+                            if path != "installed-version.txt"
+                        ]
+                    )
+                    if initial_snapshot is not None
+                    else None
+                )
+                if initial_snapshot is None:
+                    record_preflight_check(
+                        "git_snapshot",
+                        "unavailable",
+                        "project_git_snapshot_observation_unavailable",
+                    )
+                    blockers.append(
+                        "The project source mirror worktree snapshot could not be read safely."
+                    )
+                else:
+                    worktree_clean = wom_kit_project_update_snapshot_is_clean(
+                        initial_snapshot,
+                        expected_head=head_before,
+                        expected_branch=original_branch,
+                    )
+                    record_preflight_check(
+                        "git_snapshot",
+                        "passed" if worktree_clean else "failed",
+                        (
+                            "verified"
+                            if worktree_clean
+                            else "project_git_worktree_dirty"
+                        ),
+                    )
+                if worktree_clean is False:
+                    blockers.append(
+                        "The project source mirror has changed bytes, an unsafe index, or unknown untracked files."
+                    )
+
+            if preflight_checks["git_snapshot"]["state"] == "passed":
+                tracked_available, tracked_return_code, _ = (
+                    _wom_kit_project_update_git_observation(
+                        mirror_path,
+                        [
+                            "ls-files",
+                            "--error-unmatch",
+                            "--",
+                            "installed-version.txt",
+                        ],
+                        runner=git_runner,
+                    )
+                )
+                if tracked_available and tracked_return_code == 0:
+                    mirror_pin_tracked = True
+                    record_preflight_check(
+                        "source_mirror_pin_tracking",
+                        "failed",
+                        "project_source_pin_tracked",
+                    )
+                    blockers.append(
+                        "The source-mirror installed-version pin must not be Git-tracked."
+                    )
+                elif tracked_available and tracked_return_code == 1:
+                    mirror_pin_tracked = False
+                    record_preflight_check(
+                        "source_mirror_pin_tracking",
+                        "passed",
+                        "verified",
+                    )
+                else:
+                    record_preflight_check(
+                        "source_mirror_pin_tracking",
+                        "unavailable",
+                        "project_source_pin_tracking_unavailable",
+                    )
+                    blockers.append(
+                        "The source-mirror installed-version pin tracking state could not be observed safely."
+                    )
+
+            if (
+                preflight_checks["source_mirror_pin_tracking"]["state"]
+                == "passed"
             ):
-                blockers.append(
-                    "The original project source branch cannot be restored safely with Git's branch-name rules."
+                origin_available, origin_return_code, origin_key_text = (
+                    _wom_kit_project_update_git_observation(
+                        mirror_path,
+                        [
+                            "config",
+                            "--local",
+                            "--no-includes",
+                            "--name-only",
+                            "--get-regexp",
+                            r"^remote\.origin\.url$",
+                        ],
+                        runner=git_runner,
+                    )
                 )
-            initial_snapshot = _wom_kit_project_update_git_snapshot(
-                mirror_path,
-                runner=git_runner,
-            )
-            unexpected_worktree_entry_count = (
-                len(
-                    [
-                        path
-                        for path in initial_snapshot.get(
-                            "untracked_paths",
-                            [],
-                        )
-                        if path != "installed-version.txt"
-                    ]
+                origin_key_lines = [
+                    line.strip().lower()
+                    for line in origin_key_text.splitlines()
+                    if line.strip()
+                ]
+                if (
+                    origin_available
+                    and origin_return_code == 0
+                    and origin_key_lines == ["remote.origin.url"]
+                ):
+                    origin_configured = True
+                    record_preflight_check(
+                        "origin_configuration",
+                        "passed",
+                        "verified",
+                    )
+                elif origin_available and origin_return_code in {0, 1}:
+                    origin_configured = False
+                    record_preflight_check(
+                        "origin_configuration",
+                        "failed",
+                        "project_origin_not_configured",
+                    )
+                    blockers.append(
+                        "The project source mirror must have a configured origin remote."
+                    )
+                else:
+                    record_preflight_check(
+                        "origin_configuration",
+                        "unavailable",
+                        "project_origin_configuration_unavailable",
+                    )
+                    blockers.append(
+                        "The project source mirror origin configuration could not be observed safely."
+                    )
+
+            if preflight_checks["origin_configuration"]["state"] == "passed":
+                current_versions_observation = (
+                    wom_kit_project_update_source_versions_observation(
+                        mirror_path
+                    )
                 )
-                if initial_snapshot is not None
-                else 0
-            )
-            worktree_clean = wom_kit_project_update_snapshot_is_clean(
-                initial_snapshot,
-                expected_head=head_before,
-                expected_branch=original_branch,
-            )
-            if initial_snapshot is None:
-                blockers.append(
-                    "The project source mirror worktree snapshot could not be read safely."
+                record_preflight_check(
+                    "source_version_metadata",
+                    str(current_versions_observation["state"]),
+                    str(current_versions_observation["reason_code"]),
                 )
-            elif not worktree_clean:
-                blockers.append(
-                    "The project source mirror has changed bytes, an unsafe index, or unknown untracked files."
-                )
-            tracked_pin_ok, _ = _wom_kit_project_update_git(
-                mirror_path,
-                ["ls-files", "--error-unmatch", "--", "installed-version.txt"],
-                runner=git_runner,
-            )
-            mirror_pin_tracked = tracked_pin_ok
-            if mirror_pin_tracked:
-                blockers.append("The source-mirror installed-version pin must not be Git-tracked.")
-            origin_ok, origin_key_text = _wom_kit_project_update_git(
-                mirror_path,
-                [
-                    "config",
-                    "--local",
-                    "--no-includes",
-                    "--name-only",
-                    "--get-regexp",
-                    r"^remote\.origin\.url$",
-                ],
-                runner=git_runner,
-            )
-            origin_key_lines = [
-                line.strip().lower()
-                for line in origin_key_text.splitlines()
-                if line.strip()
-            ]
-            origin_configured = bool(
-                origin_ok
-                and origin_key_lines == ["remote.origin.url"]
-            )
-            if not origin_configured:
-                blockers.append("The project source mirror must have a configured origin remote.")
-            current_versions = wom_kit_project_update_source_versions(mirror_path)
+                if current_versions_observation["state"] == "passed":
+                    current_versions = dict(
+                        current_versions_observation["versions"]
+                    )
+                elif current_versions_observation["state"] == "unavailable":
+                    blockers.append(
+                        "The project source version metadata could not be observed safely."
+                    )
+                else:
+                    blockers.append(
+                        "The project source version metadata is missing, unsafe, or invalid."
+                    )
 
     pin_specs: list[dict[str, Any]] = []
     project_pin_path = metadata_root / "installed-version.txt"
@@ -125911,8 +135694,18 @@ def _wom_kit_project_version_update_legacy_core_generator(
         }
     )
     mirror_pin_path = mirror_path / "installed-version.txt"
-    mirror_pin_kind = wom_kit_real_path_kind(project_root, mirror_pin_path)
-    if mirror_pin_kind != "missing":
+    mirror_pin_observation = wom_kit_real_path_kind_observation(
+        project_root,
+        mirror_pin_path,
+    )
+    if mirror_pin_observation["state"] == "unavailable":
+        blockers.append(
+            "A recognized installed-version pin location could not be observed safely."
+        )
+    elif not (
+        mirror_pin_observation["state"] == "passed"
+        and mirror_pin_observation["kind"] == "missing"
+    ):
         pin_specs.append(
             {
                 "path": mirror_pin_path,
@@ -125921,8 +135714,18 @@ def _wom_kit_project_version_update_legacy_core_generator(
             }
         )
     legacy_pin_path = project_root / "installed-version.txt"
-    legacy_pin_kind = wom_kit_real_path_kind(project_root, legacy_pin_path)
-    if legacy_pin_kind != "missing":
+    legacy_pin_observation = wom_kit_real_path_kind_observation(
+        project_root,
+        legacy_pin_path,
+    )
+    if legacy_pin_observation["state"] == "unavailable":
+        blockers.append(
+            "A recognized installed-version pin location could not be observed safely."
+        )
+    elif not (
+        legacy_pin_observation["state"] == "passed"
+        and legacy_pin_observation["kind"] == "missing"
+    ):
         pin_specs.append(
             {
                 "path": legacy_pin_path,
@@ -125933,12 +135736,26 @@ def _wom_kit_project_version_update_legacy_core_generator(
 
     for spec in pin_specs:
         path = spec["path"]
-        path_kind = wom_kit_real_path_kind(project_root, path)
-        spec["existed"] = path_kind == "file"
+        path_observation = wom_kit_real_path_kind_observation(
+            project_root,
+            path,
+        )
+        path_kind = str(path_observation["kind"])
+        spec["existed"] = (
+            path_kind == "file"
+            if path_observation["state"] == "passed"
+            else None
+        )
         spec["previous_bytes"] = None
         spec["previous_version"] = None
+        if path_observation["state"] == "unavailable":
+            blockers.append(
+                "A recognized installed-version pin location could not be observed safely."
+            )
+            continue
         if (
-            path_kind not in {"file", "missing"}
+            path_observation["state"] != "passed"
+            or path_kind not in {"file", "missing"}
             or not wom_kit_existing_path_components_are_real(project_root, path)
         ):
             blockers.append(
@@ -125967,37 +135784,72 @@ def _wom_kit_project_version_update_legacy_core_generator(
             spec["previous_bytes"] = previous_bytes
             spec["previous_version"] = f"v{previous_version}"
 
+    initial_preflight_complete = (
+        preflight_checks["source_version_metadata"]["state"] == "passed"
+    )
     preflight_git_snapshot = (
         _wom_kit_project_update_git_snapshot(
             mirror_path,
             runner=git_runner,
         )
-        if git_repo_verified
+        if initial_preflight_complete
         else None
     )
+    if initial_preflight_complete:
+        transaction_snapshot_clean = bool(
+            preflight_git_snapshot is not None
+            and wom_kit_project_update_snapshot_is_clean(
+                preflight_git_snapshot,
+                expected_head=head_before,
+                expected_branch=original_branch,
+            )
+        )
+        record_preflight_check(
+            "git_transaction_snapshot",
+            (
+                "unavailable"
+                if preflight_git_snapshot is None
+                else "passed"
+                if transaction_snapshot_clean
+                else "failed"
+            ),
+            (
+                "project_git_transaction_snapshot_unavailable"
+                if preflight_git_snapshot is None
+                else "verified"
+                if transaction_snapshot_clean
+                else "project_git_transaction_snapshot_changed"
+            ),
+        )
     preflight_git_config_digest = (
         wom_kit_project_update_git_config_trust_digest(
             mirror_path,
             runner=git_runner,
         )
-        if git_repo_verified
+        if preflight_checks["git_transaction_snapshot"]["state"] == "passed"
         else None
     )
-    if git_repo_verified and preflight_git_snapshot is None:
+    if preflight_checks["git_transaction_snapshot"]["state"] == "unavailable":
         blockers.append(
             "The project source mirror state snapshot could not be captured safely."
         )
-    if git_repo_verified and preflight_git_config_digest is None:
-        blockers.append(
-            "The effective configured-origin Git trust settings could not be bound safely."
-        )
-    elif not wom_kit_project_update_snapshot_is_clean(
-        preflight_git_snapshot,
-        expected_head=head_before,
-        expected_branch=original_branch,
-    ):
+    elif preflight_checks["git_transaction_snapshot"]["state"] == "failed":
         blockers.append(
             "The project source mirror changed during preflight; rerun the dry-run."
+        )
+    if preflight_checks["git_transaction_snapshot"]["state"] == "passed":
+        record_preflight_check(
+            "git_config_trust",
+            "passed" if preflight_git_config_digest is not None else "unavailable",
+            (
+                "verified"
+                if preflight_git_config_digest is not None
+                else "project_git_config_trust_unavailable"
+            ),
+        )
+    if preflight_checks["git_config_trust"]["state"] == "unavailable":
+        blockers.append(
+            "The effective configured-origin Git trust settings could not be bound safely."
         )
 
     forward_only_blocked = False
@@ -126044,7 +135896,10 @@ def _wom_kit_project_version_update_legacy_core_generator(
             target_tag,
             runner=git_runner,
         )
-        if git_repo_verified and WOM_KIT_PROJECT_UPDATE_TAG_RE.fullmatch(target_tag)
+        if (
+            preflight_checks["git_config_trust"]["state"] == "passed"
+            and WOM_KIT_PROJECT_UPDATE_TAG_RE.fullmatch(target_tag)
+        )
         else {
             "tag_available_locally": False,
             "annotated_tag_verified": False,
@@ -126053,6 +135908,8 @@ def _wom_kit_project_version_update_legacy_core_generator(
             "target_reachable_from_origin_main": False,
             "source_versions": {"package": None, "pyproject": None, "root_shim": None},
             "all_source_versions_match_target": False,
+            "observation_state": "not_reached",
+            "observation_reason_code": "project_target_evidence_not_reached",
         }
     )
     project_runtime_bootstrap, project_runtime_bootstrap_summary = (
@@ -126107,6 +135964,10 @@ def _wom_kit_project_version_update_legacy_core_generator(
     prepared_runtime_bundle: Any | None = None
     prepared_runtime_bundle_summary: dict[str, Any] | None = None
     prepared_runtime_bundle_cleanup_state = "not_required"
+    existing_runtime_noop_observation: dict[str, Any] | None = None
+    runtime_preparation_revalidation = (
+        wom_kit_project_update_runtime_preparation_revalidation()
+    )
 
     def refresh_project_runtime_plan(*, enforce_interpreter: bool) -> None:
         nonlocal project_runtime_policy
@@ -126132,7 +135993,11 @@ def _wom_kit_project_version_update_legacy_core_generator(
             project_runtime_policy,
             runner=git_runner,
         )
-        if target_version is None or project_root_kind != "directory":
+        if (
+            target_version is None
+            or not WOM_KIT_PROJECT_UPDATE_TAG_RE.fullmatch(target_tag)
+            or project_root_kind != "directory"
+        ):
             return
         project_runtime_plan, project_runtime_plan_blockers, project_runtime_plan_warnings = (
             project_runtime.plan_runtime(
@@ -126201,6 +136066,7 @@ def _wom_kit_project_version_update_legacy_core_generator(
         _ProjectVersionUpdateDurableApprovalState | None
     ) = None
     durable_handoff_complete = False
+    owned_abort_compaction: _ProjectUpdateAbortHistoryCompactionOutcome | None = None
     target_git_snapshot: dict[str, Any] | None = None
     trusted_target_ref_snapshot: dict[str, str] | None = None
     source_materialization_completed = False
@@ -126273,6 +136139,18 @@ def _wom_kit_project_version_update_legacy_core_generator(
     def result_payload(status: str) -> dict[str, Any]:
         nonlocal last_result_payload
         target_commit = target_evidence.get("target_commit")
+        preflight_states = {
+            detail["state"] for detail in preflight_checks.values()
+        }
+        preflight_state = (
+            "failed"
+            if "failed" in preflight_states
+            else "unavailable"
+            if "unavailable" in preflight_states
+            else "passed"
+            if preflight_states == {"passed"}
+            else "not_reached"
+        )
         rolled_back = (
             status in {"failed_rolled_back", "interrupted_rolled_back"}
             and rollback.get("succeeded") is True
@@ -126287,6 +136165,14 @@ def _wom_kit_project_version_update_legacy_core_generator(
             else "wom-kit/project-version-update-receipt/v0.2"
         )
         runtime_result = dict(project_runtime_plan)
+        runtime_result["preparation_revalidation"] = copy.deepcopy(
+            runtime_preparation_revalidation
+        )
+        if existing_runtime_noop_observation is not None:
+            runtime_result["existing_runtime_noop_verification"] = {
+                name: existing_runtime_noop_observation[name]
+                for name in ("state", "reason_code", "reusable", "repair_required")
+            }
         if project_runtime_materialization is not None and not rolled_back:
             runtime_result["materialized"] = (
                 project_runtime_materialization.public_summary()
@@ -126308,7 +136194,11 @@ def _wom_kit_project_version_update_legacy_core_generator(
             {
                 "path": spec["logical"],
                 "role": spec["role"],
-                "existed_before": bool(spec.get("existed")),
+                "existed_before": (
+                    spec.get("existed")
+                    if type(spec.get("existed")) is bool
+                    else None
+                ),
                 "previous_version": spec.get("previous_version"),
                 "target_version": target_tag if WOM_KIT_PROJECT_UPDATE_TAG_RE.fullmatch(target_tag) else None,
                 "written": spec["logical"] in final_pins_written,
@@ -126384,6 +136274,12 @@ def _wom_kit_project_version_update_legacy_core_generator(
             "lifecycle_action": "project_version_update",
             "status": status,
             "mode": "approve" if approve else "dry_run",
+            "preflight": {
+                "state": preflight_state,
+                "checks": copy.deepcopy(preflight_checks),
+                "private_values_echoed": False,
+                "local_paths_echoed": False,
+            },
             "target": {
                 "tag": target_tag or None,
                 "version": target_version,
@@ -126577,6 +136473,30 @@ def _wom_kit_project_version_update_legacy_core_generator(
                 "objet_bytes_read": False,
             },
         }
+        if owned_abort_compaction is not None:
+            if owned_abort_compaction.incomplete:
+                # Source/runtime no-op is not a completed user journey while
+                # its own terminal control history blocks the next command.
+                # Preserve that evidence for the established identifier-free
+                # resume path; never turn uncertain cleanup into success.
+                payload.update(
+                    _project_update_terminal_cleanup_outcome_unknown_result(
+                        operator_resume_identifiers_supplied=False,
+                        archive_identity_metadata_read=True,
+                    )
+                )
+                # A competing writer may acquire a new lock after our own
+                # abort released it. The generic no-lock cleanup result must
+                # not report that successor's lock as absent.
+                lock_presence = wom_kit_real_path_kind_observation(project_root, lock_path)
+                payload["observed_version_update_lock_present"] = (
+                    lock_presence["kind"] != "missing"
+                    if lock_presence["state"] == "passed"
+                    else None
+                )
+            payload = _project_update_attach_abort_history_compaction_effect(
+                payload, owned_abort_compaction,
+            )
         last_result_payload = payload
         return payload
 
@@ -126662,12 +136582,33 @@ def _wom_kit_project_version_update_legacy_core_generator(
                     }
                 )
             )
+            prepared_legacy_reservation = (
+                _legacy_recovery_control.get(
+                    "prepared_fresh_reservation"
+                )
+                if legacy_recovery_mode
+                and isinstance(_legacy_recovery_control, Mapping)
+                else None
+            )
+            if legacy_recovery_mode and (
+                not isinstance(
+                    prepared_legacy_reservation,
+                    project_update_transaction.ProjectUpdateReservation,
+                )
+                or prepared_legacy_reservation.project_identity_sha256
+                != project_identity_sha256
+                or prepared_legacy_reservation.requested_target_tag
+                != target_tag
+            ):
+                raise ArchiveServiceError(
+                    "project_version_update_legacy_recovery_binding_invalid"
+                )
             cleanup_classification, _history_count = (
                 _project_update_terminal_cleanup_artifact_classification_read_only(
                     project_root
                 )
             )
-            if cleanup_classification not in {
+            if not legacy_recovery_mode and cleanup_classification not in {
                 "absent",
                 "history_only_exact",
             }:
@@ -126679,20 +136620,40 @@ def _wom_kit_project_version_update_legacy_core_generator(
                     close_owned_resources=directory_guard.close,
                 )
             durable_reservation = (
-                project_update_transaction.ProjectUpdateTransaction.reserve(
+                project_update_transaction.ProjectUpdateTransaction.reserve_or_resume_exact(
+                    project_root,
+                    reservation=prepared_legacy_reservation,
+                )
+                if legacy_recovery_mode
+                else project_update_transaction.ProjectUpdateTransaction.reserve(
                     project_root,
                     project_identity_sha256=project_identity_sha256,
                     requested_target_tag=target_tag,
                     created_at=reservation_created_at,
                 )
             )
+            if legacy_recovery_mode:
+                fresh_reservation_callback = (
+                    _legacy_recovery_control.get(
+                        "fresh_reservation_callback"
+                    )
+                    if isinstance(_legacy_recovery_control, Mapping)
+                    else None
+                )
+                if not callable(fresh_reservation_callback):
+                    raise ArchiveServiceError(
+                        "project_version_update_legacy_recovery_binding_invalid"
+                    )
+                fresh_reservation_callback(durable_reservation)
             post_reservation_classification, _history_count = (
                 _project_update_terminal_cleanup_artifact_classification_read_only(
                     project_root,
                     allowed_reservation=durable_reservation,
                 )
             )
-            durable_lock_bytes = durable_reservation.acquire_lock()
+            durable_lock_bytes = durable_reservation.lock_bytes()
+            if not legacy_recovery_mode:
+                durable_lock_bytes = durable_reservation.acquire_lock()
             lock_acquired = True
             lock_release_state = "held"
             lock_stat = os.lstat(lock_path)
@@ -126703,12 +136664,19 @@ def _wom_kit_project_version_update_legacy_core_generator(
                 _project_update_terminal_cleanup_artifact_classification_read_only(
                     project_root,
                     allowed_reservation=durable_reservation,
-                    allowed_lock_bytes=durable_lock_bytes,
+                    allowed_lock_bytes=(
+                        _legacy_recovery_old_lock_bytes
+                        if legacy_recovery_mode
+                        else durable_lock_bytes
+                    ),
                 )
             )
             if (
-                post_reservation_classification != "reservation_exact"
-                or post_lock_classification != "reservation_exact"
+                not legacy_recovery_mode
+                and (
+                    post_reservation_classification != "reservation_exact"
+                    or post_lock_classification != "reservation_exact"
+                )
             ):
                 blockers.append(
                     "The project-update transaction namespace changed at the lock boundary; the exact new reservation was aborted before approval or domain work."
@@ -126756,56 +136724,138 @@ def _wom_kit_project_version_update_legacy_core_generator(
             close_owned_resources=directory_guard.close,
         )
     except WomKitProjectUpdateReceiptUncertainError:
-        lock_acquired = bool(
-            wom_kit_real_path_kind(project_root, lock_path) != "missing"
+        lock_cleanup = (
+            _wom_kit_project_update_reconcile_lock_after_acquire_failure(
+                project_root,
+                lock_path,
+                (
+                    lock_reservation.get("identity")
+                    if lock_reservation is not None
+                    else None
+                ),
+                expected_lock_bytes=(
+                    durable_lock_bytes
+                    if isinstance(durable_lock_bytes, bytes)
+                    else WOM_KIT_PROJECT_UPDATE_LOCK_BYTES
+                ),
+                release_owned=False,
+            )
         )
-        preserve_lock = lock_acquired
-        rollback["attempted"] = lock_acquired
-        rollback["succeeded"] = False
+        lock_removed = lock_cleanup["lock_removed"]
+        lock_acquired = lock_removed is not True
+        preserve_lock = bool(lock_cleanup["preserve_lock"])
+        rollback["attempted"] = lock_removed is not True
+        rollback["succeeded"] = lock_removed is True
         rollback["source_restored"] = True
         rollback["pins_restored"] = True
-        rollback["lock_removed"] = False
+        rollback["lock_removed"] = lock_removed
         blockers.append(
             "The project version update lock ownership could not be verified; the uncertain path was preserved for review."
+            if lock_removed is not True
+            else "The project version update lock cleanup was independently verified after an uncertain acquisition failure."
         )
         return _project_update_finish_resource_only_result(
-            result_payload("failed_rollback_incomplete"),
+            result_payload(
+                "failed_rollback_incomplete"
+                if lock_removed is not True
+                else "blocked"
+            ),
             close_owned_resources=directory_guard.close,
         )
     except OSError:
-        blockers.append("The project version update lock could not be created.")
-        return _project_update_finish_resource_only_result(
-            result_payload("blocked"),
-            close_owned_resources=directory_guard.close,
-        )
-    except BaseException:
-        lock_removed = bool(
-            wom_kit_real_path_kind(project_root, lock_path) == "missing"
-            or (
-                lock_reservation is not None
-                and _wom_kit_project_update_release_owned_lock(
-                    project_root,
-                    lock_path,
-                    lock_reservation.get("identity"),
-                )
+        lock_cleanup = (
+            _wom_kit_project_update_reconcile_lock_after_acquire_failure(
+                project_root,
+                lock_path,
+                (
+                    lock_reservation.get("identity")
+                    if lock_reservation is not None
+                    else None
+                ),
+                expected_lock_bytes=(
+                    durable_lock_bytes
+                    if isinstance(durable_lock_bytes, bytes)
+                    else WOM_KIT_PROJECT_UPDATE_LOCK_BYTES
+                ),
+                release_owned=True,
             )
         )
-        lock_acquired = not lock_removed
-        preserve_lock = not lock_removed
-        rollback["attempted"] = False
-        rollback["succeeded"] = lock_removed
+        lock_removed = lock_cleanup["lock_removed"]
+        lock_acquired = lock_removed is not True
+        preserve_lock = bool(lock_cleanup["preserve_lock"])
+        rollback["attempted"] = bool(lock_cleanup["release_attempted"])
+        rollback["succeeded"] = lock_removed is True
+        rollback["source_restored"] = True
+        rollback["pins_restored"] = True
+        rollback["lock_removed"] = lock_removed
+        blockers.append(
+            "The project version update lock could not be created."
+            if lock_removed is True
+            else "The project version update lock state could not be verified after an acquisition failure; the uncertain path was preserved for review."
+        )
+        return _project_update_finish_resource_only_result(
+            result_payload(
+                "blocked"
+                if lock_removed is True
+                else "failed_rollback_incomplete"
+            ),
+            close_owned_resources=directory_guard.close,
+        )
+    except BaseException as acquisition_failure:
+        if (
+            isinstance(
+                acquisition_failure,
+                project_update_transaction.ProjectUpdateTransactionError,
+            )
+            and acquisition_failure.code in {
+                "project_update_transaction_reservation_busy",
+                "project_update_transaction_reservation_guard_unavailable",
+            }
+            and durable_reservation is None
+            and not lock_acquired
+            and lock_reservation is None
+        ):
+            # The reservation guard was never acquired. In particular the
+            # old legacy lock belongs to the running operation, not to this
+            # invocation's generic acquisition-failure cleanup path.
+            directory_guard.close()
+            raise ArchiveServiceError(acquisition_failure.code) from None
+        lock_identity = (
+            lock_reservation.get("identity")
+            if lock_reservation is not None
+            else None
+        )
+        expected_lock_bytes = (
+            durable_lock_bytes
+            if isinstance(durable_lock_bytes, bytes)
+            else WOM_KIT_PROJECT_UPDATE_LOCK_BYTES
+        )
+        lock_cleanup = (
+            _wom_kit_project_update_reconcile_lock_after_acquire_failure(
+                project_root,
+                lock_path,
+                lock_identity,
+                expected_lock_bytes=expected_lock_bytes,
+                release_owned=True,
+            )
+        )
+        lock_removed = lock_cleanup["lock_removed"]
+        lock_acquired = lock_removed is not True
+        preserve_lock = bool(lock_cleanup["preserve_lock"])
+        rollback["attempted"] = bool(lock_cleanup["release_attempted"])
+        rollback["succeeded"] = lock_removed is True
         rollback["source_restored"] = True
         rollback["pins_restored"] = True
         rollback["lock_removed"] = lock_removed
         blockers.append(
             "The project version update was interrupted while acquiring its lock; an uncertain lock was preserved for review."
-            if not lock_removed
+            if lock_removed is not True
             else "The project version update was interrupted before local mutation."
         )
         return _project_update_finish_resource_only_result(
             result_payload(
                 "interrupted_rollback_incomplete"
-                if not lock_removed
+                if lock_removed is not True
                 else "interrupted_rolled_back"
             ),
             close_owned_resources=directory_guard.close,
@@ -126839,11 +136889,49 @@ def _wom_kit_project_version_update_legacy_core_generator(
             )
         prepared_runtime_bundle_cleanup_state = "verified_absent"
 
+    def compact_current_abort_or_raise() -> None:
+        nonlocal owned_abort_compaction
+        if durable_reservation is None or durable_approval_state is not None:
+            raise ArchiveServiceError("project_update_transaction_cleanup_refused")
+        # Only the reservation created by this invocation is eligible. Its
+        # own validated abort receipt, not a new human approval or a guessed
+        # global history sweep, authorizes the existing exact cleanup core.
+        owned_abort_compaction = _ProjectUpdateAbortHistoryCompactionOutcome(
+            discovered_count=1, attempted_count=1, completed_count=0,
+            cleanup_proof_count=0, incomplete=True,
+        )
+        terminal = durable_reservation.inspect_abort_receipt()
+        authority = terminal.get("receipt_sha256") if isinstance(terminal, Mapping) else None
+        if (
+            type(authority) is not str
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", authority) is None
+            or not durable_reservation.exact_cleanup(cleanup_authority_sha256=authority)
+        ):
+            raise ArchiveServiceError("project_update_transaction_cleanup_refused")
+        owned_abort_compaction = _ProjectUpdateAbortHistoryCompactionOutcome(
+            discovered_count=1, attempted_count=1, completed_count=1,
+            cleanup_proof_count=1, incomplete=False,
+        )
+
     def release_current_lock_or_raise(intent_status: str) -> None:
         nonlocal lock_acquired, lock_release_intent_status
         nonlocal lock_release_state, preserve_lock
         if not lock_acquired:
             return
+        if legacy_recovery_mode:
+            # Before the fresh exact plan exists the live public lock still
+            # belongs to the immutable predecessor.  Ordinary reservation
+            # abort assumes the fresh reservation owns that lock and would
+            # therefore either fail or, worse, weaken recovery truth.  Keep
+            # every authenticated recovery artifact in place; the phase
+            # router will retry the same deterministic pre-plan work.
+            preserve_lock = True
+            rollback["attempted"] = False
+            rollback["succeeded"] = False
+            rollback["lock_removed"] = False
+            raise ArchiveServiceError(
+                "project_version_update_legacy_recovery_state_ambiguous"
+            )
         if durable_reservation is not None:
             if durable_approval_state is not None:
                 _project_update_cancel_before_native(
@@ -126861,6 +136949,8 @@ def _wom_kit_project_version_update_legacy_core_generator(
             lock_release_intent_status = intent_status
             lock_release_state = "released"
             lock_acquired = False
+            if durable_approval_state is None:
+                compact_current_abort_or_raise()
             return
         # Every terminal state removes the exact pre-approval network bundle
         # before releasing the project lock.  Uncertain cleanup preserves the
@@ -127213,42 +137303,84 @@ def _wom_kit_project_version_update_legacy_core_generator(
                 )
                 release_current_lock_or_raise("blocked")
                 return result_payload("blocked")
-            try:
-                prepared_runtime_bundle = (
-                    project_runtime.prepare_runtime_candidate(
+            # A same-version no-op must not download wheels or construct a
+            # replacement runtime merely to discover that the installed one
+            # is already correct. Verify retained supply and static executable
+            # bytes before running the installed interpreter, then share the
+            # exact post-observation revalidation used by real preparation.
+            if (
+                not legacy_recovery_mode
+                and head_before == target_commit
+                and pins_already_target
+                and target_runtime_source_integrity_verified
+                and not checkout_required
+                and bool(project_runtime_launcher_snapshot.get("already_target"))
+            ):
+                existing_runtime_noop_observation = (
+                    project_runtime.verify_existing_runtime_for_noop(
                         project_root,
-                        durable_reservation.transaction_root,
                         target=target_version or "",
                         target_commit=target_commit,
                         bootstrap=project_runtime_bootstrap,
                         supply=project_runtime_supply,
-                        running_version=WOM_KIT_VERSION,
-                        receipt_created_at=durable_reservation.created_at,
                         progress_callback=progress_callback,
                     )
                 )
-                prepared_runtime_bundle_cleanup_state = "pending"
-                prepared_runtime_bundle_summary = dict(
-                    prepared_runtime_bundle.public_summary()
-                )
-            except project_runtime.PreparedRuntimeBundleCleanupError:
-                prepared_runtime_bundle_cleanup_state = "uncertain"
-                rollback["prepared_runtime_bundle_removed"] = False
-                preserve_lock = True
-                raise
-            except project_runtime.PreparedRuntimeCandidateIncompleteError as failure:
-                prepared_runtime_bundle_cleanup_state = "uncertain"
-                rollback["prepared_runtime_bundle_removed"] = False
-                preserve_lock = True
-                blockers.append(str(failure))
-                raise
-            except project_runtime.ProjectRuntimeError as failure:
-                blockers.append(str(failure))
-                release_current_lock_or_raise("blocked")
-                return result_payload("blocked")
-            project_runtime_plan["runtime_candidate"] = copy.deepcopy(
-                prepared_runtime_bundle_summary
+                if existing_runtime_noop_observation["state"] in {
+                    "unavailable", "not_reached",
+                } or (
+                    existing_runtime_noop_observation["state"] == "failed"
+                    and existing_runtime_noop_observation["repair_required"] is not True
+                ):
+                    blockers.append(existing_runtime_noop_observation["reason_code"])
+                    release_current_lock_or_raise("blocked")
+                    return result_payload("blocked")
+            reuse_verified_existing_runtime = bool(
+                existing_runtime_noop_observation is not None
+                and existing_runtime_noop_observation["state"] == "passed"
+                and existing_runtime_noop_observation["reusable"] is True
             )
+            if reuse_verified_existing_runtime:
+                prepared_runtime_bundle_summary = dict(
+                    existing_runtime_noop_observation["installed"]
+                )
+            else:
+                try:
+                    prepared_runtime_bundle = (
+                        project_runtime.prepare_runtime_candidate(
+                            project_root,
+                            durable_reservation.transaction_root,
+                            target=target_version or "",
+                            target_commit=target_commit,
+                            bootstrap=project_runtime_bootstrap,
+                            supply=project_runtime_supply,
+                            running_version=WOM_KIT_VERSION,
+                            receipt_created_at=durable_reservation.created_at,
+                            progress_callback=progress_callback,
+                        )
+                    )
+                    prepared_runtime_bundle_cleanup_state = "pending"
+                    prepared_runtime_bundle_summary = dict(
+                        prepared_runtime_bundle.public_summary()
+                    )
+                except project_runtime.PreparedRuntimeBundleCleanupError:
+                    prepared_runtime_bundle_cleanup_state = "uncertain"
+                    rollback["prepared_runtime_bundle_removed"] = False
+                    preserve_lock = True
+                    raise
+                except project_runtime.PreparedRuntimeCandidateIncompleteError as failure:
+                    prepared_runtime_bundle_cleanup_state = "uncertain"
+                    rollback["prepared_runtime_bundle_removed"] = False
+                    preserve_lock = True
+                    blockers.append(str(failure))
+                    raise
+                except project_runtime.ProjectRuntimeError as failure:
+                    blockers.append(str(failure))
+                    release_current_lock_or_raise("blocked")
+                    return result_payload("blocked")
+                project_runtime_plan["runtime_candidate"] = copy.deepcopy(
+                    prepared_runtime_bundle_summary
+                )
 
             # Bundle preparation may perform bounded downloads for long enough
             # that another process can change the source, pins, refs, policy,
@@ -127262,12 +137394,15 @@ def _wom_kit_project_version_update_legacy_core_generator(
                     runner=git_runner,
                 )
             )
-            post_bundle_ref_snapshot = (
-                wom_kit_project_update_target_ref_snapshot(
+            post_bundle_ref_observation = (
+                wom_kit_project_update_target_ref_snapshot_observation(
                     mirror_path,
                     target_tag,
                     runner=git_runner,
                 )
+            )
+            post_bundle_ref_snapshot = post_bundle_ref_observation.get(
+                "snapshot"
             )
             post_bundle_runtime_policy = (
                 wom_kit_project_update_runtime_policy(
@@ -127276,14 +137411,22 @@ def _wom_kit_project_version_update_legacy_core_generator(
                     runner=git_runner,
                 )
             )
-            post_bundle_runtime_supply = (
-                wom_kit_project_update_runtime_supply(
+            (
+                post_bundle_runtime_policy_state,
+                post_bundle_runtime_policy_reason,
+            ) = _wom_kit_project_update_policy_observation(
+                post_bundle_runtime_policy
+            )
+            (
+                post_bundle_runtime_supply_state,
+                post_bundle_runtime_supply_reason,
+                post_bundle_runtime_supply,
+            ) = _wom_kit_project_update_runtime_supply_revalidation_observation(
                     mirror_path,
                     target_commit,
                     target_version,
                     post_bundle_runtime_policy,
                     runner=git_runner,
-                )
             )
             (
                 post_bundle_bootstrap,
@@ -127308,9 +137451,10 @@ def _wom_kit_project_version_update_legacy_core_generator(
             post_bundle_runtime_plan["policy"] = dict(
                 post_bundle_runtime_policy
             )
-            post_bundle_runtime_plan["runtime_candidate"] = copy.deepcopy(
-                prepared_runtime_bundle_summary
-            )
+            if not reuse_verified_existing_runtime:
+                post_bundle_runtime_plan["runtime_candidate"] = copy.deepcopy(
+                    prepared_runtime_bundle_summary
+                )
             post_bundle_launcher_snapshot = (
                 project_runtime.launcher_snapshot(
                     project_root,
@@ -127327,76 +137471,267 @@ def _wom_kit_project_version_update_legacy_core_generator(
                     runner=git_runner,
                 )
             )
-            try:
-                post_bundle_live_summary = dict(
-                    project_runtime.verify_prepared_runtime_candidate(
-                        prepared_runtime_bundle,
-                        project_root=project_root,
+            if reuse_verified_existing_runtime:
+                existing_runtime_noop_observation = (
+                    project_runtime.verify_existing_runtime_for_noop(
+                        project_root,
                         target=target_version or "",
                         target_commit=target_commit,
                         bootstrap=project_runtime_bootstrap,
                         supply=project_runtime_supply,
+                        progress_callback=progress_callback,
                     )
                 )
+                prepared_runtime_payload_state = existing_runtime_noop_observation["state"]
+                prepared_runtime_payload_reason = existing_runtime_noop_observation["reason_code"]
+                post_bundle_live_observation = existing_runtime_noop_observation["installed"]
+            else:
+                (
+                    prepared_runtime_payload_state,
+                    prepared_runtime_payload_reason,
+                    post_bundle_live_observation,
+                ) = project_runtime.verify_prepared_runtime_candidate_observation(
+                    prepared_runtime_bundle,
+                    project_root=project_root,
+                    target=target_version or "",
+                    target_commit=target_commit,
+                    bootstrap=project_runtime_bootstrap,
+                    supply=project_runtime_supply,
+                )
+            post_bundle_live_summary = (
+                dict(post_bundle_live_observation)
+                if post_bundle_live_observation is not None
+                else {}
+            )
+            if post_bundle_live_summary:
                 post_bundle_live_summary.pop(
                     "static_reverified",
                     None,
                 )
-            except project_runtime.ProjectRuntimeError:
-                post_bundle_live_summary = {}
-            post_bundle_state_still_exact = bool(
-                _wom_kit_project_update_git_snapshot(
+
+            post_bundle_git_snapshot = _wom_kit_project_update_git_snapshot(
+                mirror_path,
+                runner=git_runner,
+            )
+            post_bundle_git_config_digest = (
+                wom_kit_project_update_git_config_trust_digest(
                     mirror_path,
                     runner=git_runner,
                 )
-                == preflight_git_snapshot
-                and wom_kit_project_update_git_config_trust_digest(
-                    mirror_path,
-                    runner=git_runner,
-                )
-                == preflight_git_config_digest
-                and wom_kit_project_update_git_metadata_is_local_real(
+            )
+            post_bundle_git_metadata_evidence = (
+                wom_kit_project_update_git_metadata_evidence(
                     project_root,
                     mirror_path,
                     runner=git_runner,
                 )
-                and wom_kit_project_update_all_pins_match_snapshot(
+            )
+            post_bundle_pins_observation = (
+                wom_kit_project_update_all_pins_snapshot_observation(
                     project_root,
                     pin_specs,
                 )
-                and post_bundle_ref_snapshot
-                == trusted_target_ref_snapshot
-                and post_bundle_target_evidence == target_evidence
-                and post_bundle_runtime_policy == project_runtime_policy
-                and post_bundle_runtime_supply == project_runtime_supply
-                and post_bundle_bootstrap == project_runtime_bootstrap
-                and post_bundle_bootstrap_summary
-                == project_runtime_bootstrap_summary
-                and not post_bundle_runtime_blockers
-                and post_bundle_runtime_plan == project_runtime_plan
-                and post_bundle_launcher_snapshot
-                == project_runtime_launcher_snapshot
-                and post_bundle_materialization_preflight
-                == materialization_preflight
-                and post_bundle_live_summary
-                == prepared_runtime_bundle_summary
-                and (
-                    original_branch is None
-                    or (
-                        head_before is not None
-                        and wom_kit_project_update_branch_points_to_commit(
-                            mirror_path,
-                            original_branch,
-                            head_before,
-                            runner=git_runner,
-                        )
+            )
+            post_bundle_branch_observation = (
+                {"state": "passed", "reason_code": "not_applicable"}
+                if original_branch is None
+                else wom_kit_project_update_branch_observation(
+                        mirror_path,
+                        original_branch,
+                        head_before or "",
+                        runner=git_runner,
                     )
+            )
+
+            def preparation_check(
+                name: str,
+                matches: bool,
+                *,
+                available: bool = True,
+                reason_code: str | None = None,
+            ) -> tuple[str, str]:
+                return _wom_kit_project_update_preparation_check(
+                    name,
+                    matches,
+                    available=available,
+                    reason_code=reason_code,
                 )
+
+            def observed_preparation_check(
+                name: str,
+                observation_state: str,
+                observation_reason_code: str,
+                matches: bool,
+            ) -> tuple[str, str]:
+                return _wom_kit_project_update_observed_preparation_check(
+                    name,
+                    observation_state,
+                    observation_reason_code,
+                    matches,
+                )
+
+            post_runtime_plan_state, post_runtime_plan_reason = (
+                _wom_kit_project_update_runtime_plan_observation_state(
+                    post_bundle_runtime_blockers,
+                    prerequisite_states=(
+                        _wom_kit_project_update_runtime_plan_prerequisite_states(
+                            policy_state=post_bundle_runtime_policy_state,
+                            supply_state=post_bundle_runtime_supply_state,
+                            bootstrap_available=(
+                                post_bundle_bootstrap is not None
+                            ),
+                            launcher_state=str(
+                                post_bundle_launcher_snapshot.get(
+                                    "observation_state", "unavailable"
+                                )
+                            ),
+                        )
+                    ),
+                )
+            )
+
+            runtime_preparation_revalidation = (
+                wom_kit_project_update_runtime_preparation_revalidation(
+                    {
+                        "git_snapshot": preparation_check(
+                            "git_snapshot",
+                            post_bundle_git_snapshot == preflight_git_snapshot,
+                            available=post_bundle_git_snapshot is not None,
+                        ),
+                        "git_config_trust": preparation_check(
+                            "git_config_trust",
+                            post_bundle_git_config_digest
+                            == preflight_git_config_digest,
+                            available=post_bundle_git_config_digest is not None,
+                        ),
+                        "git_metadata": preparation_check(
+                            "git_metadata",
+                            post_bundle_git_metadata_evidence["state"]
+                            == "passed",
+                            available=(
+                                post_bundle_git_metadata_evidence["state"]
+                                != "unavailable"
+                            ),
+                            reason_code=str(
+                                post_bundle_git_metadata_evidence[
+                                    "reason_code"
+                                ]
+                            ),
+                        ),
+                        "version_pins": observed_preparation_check(
+                            "version_pins",
+                            str(post_bundle_pins_observation["state"]),
+                            str(post_bundle_pins_observation["reason_code"]),
+                            post_bundle_pins_observation["state"] == "passed",
+                        ),
+                        "target_refs": observed_preparation_check(
+                            "target_refs",
+                            str(post_bundle_ref_observation["state"]),
+                            str(post_bundle_ref_observation["reason_code"]),
+                            post_bundle_ref_snapshot
+                            == trusted_target_ref_snapshot,
+                        ),
+                        "target_evidence": observed_preparation_check(
+                            "target_evidence",
+                            str(
+                                post_bundle_target_evidence.get(
+                                    "observation_state", "unavailable"
+                                )
+                            ),
+                            str(
+                                post_bundle_target_evidence.get(
+                                    "observation_reason_code",
+                                    "project_target_evidence_unavailable",
+                                )
+                            ),
+                            post_bundle_target_evidence == target_evidence,
+                        ),
+                        "runtime_policy": observed_preparation_check(
+                            "runtime_policy",
+                            post_bundle_runtime_policy_state,
+                            post_bundle_runtime_policy_reason,
+                            post_bundle_runtime_policy
+                            == project_runtime_policy,
+                        ),
+                        "runtime_supply": observed_preparation_check(
+                            "runtime_supply",
+                            post_bundle_runtime_supply_state,
+                            post_bundle_runtime_supply_reason,
+                            post_bundle_runtime_supply
+                            == project_runtime_supply,
+                        ),
+                        "runtime_bootstrap": preparation_check(
+                            "runtime_bootstrap",
+                            post_bundle_bootstrap
+                            == project_runtime_bootstrap
+                            and post_bundle_bootstrap_summary
+                            == project_runtime_bootstrap_summary,
+                            available=post_bundle_bootstrap is not None,
+                        ),
+                        "runtime_plan": observed_preparation_check(
+                            "runtime_plan",
+                            post_runtime_plan_state,
+                            post_runtime_plan_reason,
+                            post_bundle_runtime_plan == project_runtime_plan,
+                        ),
+                        "launcher": observed_preparation_check(
+                            "launcher",
+                            str(
+                                post_bundle_launcher_snapshot.get(
+                                    "observation_state", "unavailable"
+                                )
+                            ),
+                            str(
+                                post_bundle_launcher_snapshot.get(
+                                    "observation_reason_code",
+                                    "project_runtime_launcher_observation_unavailable",
+                                )
+                            ),
+                            post_bundle_launcher_snapshot
+                            == project_runtime_launcher_snapshot,
+                        ),
+                        "materialization_preflight": observed_preparation_check(
+                            "materialization_preflight",
+                            str(
+                                post_bundle_materialization_preflight.get(
+                                    "observation_state", "unavailable"
+                                )
+                            ),
+                            str(
+                                post_bundle_materialization_preflight.get(
+                                    "observation_reason_code",
+                                    "project_materialization_preflight_unavailable",
+                                )
+                            ),
+                            post_bundle_materialization_preflight
+                            == materialization_preflight,
+                        ),
+                        "prepared_runtime_payload": observed_preparation_check(
+                            "prepared_runtime_payload",
+                            prepared_runtime_payload_state,
+                            prepared_runtime_payload_reason,
+                            post_bundle_live_summary
+                            == prepared_runtime_bundle_summary,
+                        ),
+                        "source_branch": observed_preparation_check(
+                            "source_branch",
+                            str(post_bundle_branch_observation["state"]),
+                            str(post_bundle_branch_observation["reason_code"]),
+                            post_bundle_branch_observation["state"] == "passed",
+                        ),
+                    }
+                )
+            )
+            post_bundle_state_still_exact = bool(
+                runtime_preparation_revalidation["state"] == "passed"
             )
             if not post_bundle_state_still_exact:
                 blockers.append(
                     "project_version_update_state_changed_during_runtime_preparation"
                 )
+                if reuse_verified_existing_runtime:
+                    release_current_lock_or_raise("blocked")
+                    return result_payload("blocked")
                 try:
                     _project_update_abort_unsealed_candidate(
                         reservation=durable_reservation,
@@ -127413,40 +137748,45 @@ def _wom_kit_project_version_update_legacy_core_generator(
                 prepared_runtime_bundle = None
                 lock_acquired = False
                 lock_release_state = "released"
+                compact_current_abort_or_raise()
                 return result_payload("blocked")
 
-            # A required project runtime is a policy invariant, not proof that
-            # this invocation still has a domain change to make.  Only the
-            # complete pre-native candidate can prove the existing runtime is
-            # byte-for-byte reusable.  Once that proof is available, an exact
-            # source/pin/launcher target is a true no-op: remove the transient
-            # candidate, durably abort the still-unsealed reservation, and do
-            # not open a second native approval or write another receipt.
+            # Retained-supply proof takes the no-candidate fast path. A repair
+            # preparation may also discover exact equivalence; in either case
+            # preserve the active bytes and do not create approval/domain
+            # receipts. Close the existing reservation using its own authority.
             if (
                 head_before == target_commit
                 and pins_already_target
                 and target_runtime_source_integrity_verified
                 and not checkout_required
-                and prepared_runtime_bundle.existing_runtime_reusable
+                and (
+                    reuse_verified_existing_runtime
+                    or prepared_runtime_bundle.existing_runtime_reusable
+                )
                 and bool(
                     project_runtime_launcher_snapshot.get("already_target")
                 )
             ):
-                try:
-                    _project_update_abort_unsealed_candidate(
-                        reservation=durable_reservation,
-                        expected_lock_bytes=durable_lock_bytes,
-                        candidate=prepared_runtime_bundle,
-                    )
-                except BaseException:
-                    prepared_runtime_bundle_cleanup_state = "uncertain"
-                    rollback["prepared_runtime_bundle_removed"] = False
-                    preserve_lock = True
-                    raise
-                prepared_runtime_bundle_cleanup_state = "verified_absent"
-                rollback["prepared_runtime_bundle_removed"] = True
-                lock_acquired = False
-                lock_release_state = "released"
+                if reuse_verified_existing_runtime:
+                    release_current_lock_or_raise("no_change")
+                else:
+                    try:
+                        _project_update_abort_unsealed_candidate(
+                            reservation=durable_reservation,
+                            expected_lock_bytes=durable_lock_bytes,
+                            candidate=prepared_runtime_bundle,
+                        )
+                    except BaseException:
+                        prepared_runtime_bundle_cleanup_state = "uncertain"
+                        rollback["prepared_runtime_bundle_removed"] = False
+                        preserve_lock = True
+                        raise
+                    prepared_runtime_bundle_cleanup_state = "verified_absent"
+                    rollback["prepared_runtime_bundle_removed"] = True
+                    lock_acquired = False
+                    lock_release_state = "released"
+                    compact_current_abort_or_raise()
                 head_after = head_before
                 installed_summary = copy.deepcopy(
                     project_runtime_plan.get("installed", {})
@@ -127456,6 +137796,9 @@ def _wom_kit_project_version_update_legacy_core_generator(
                         "status": "verified",
                         "verified": True,
                         "verification_basis": (
+                            "trusted_retained_supply_and_fresh_process"
+                            if reuse_verified_existing_runtime
+                            else
                             "sealed_candidate_equivalence_and_live_existing_runtime_verification"
                         ),
                         "live_reverification_required_before_reuse": False,
@@ -127532,7 +137875,20 @@ def _wom_kit_project_version_update_legacy_core_generator(
                 pin_specs=pin_specs,
                 launcher_snapshot=project_runtime_launcher_snapshot,
                 prepared_preview_base=prepared_preview_base,
+                legacy_prewrite_recovery=(
+                    _legacy_recovery_approval_summary
+                    if legacy_recovery_mode
+                    else None
+                ),
             )
+            if legacy_recovery_mode:
+                # This is a shallow private handoff on purpose: callbacks and
+                # authenticated store handles are not serializable and must
+                # never enter the durable/public plan.  The exact content-free
+                # approval summary was sealed separately above.
+                durable_approval_state.legacy_prewrite_recovery_control = (
+                    dict(_legacy_recovery_control)
+                )
             # This is the permanent transport boundary.  Every later Git
             # process is the held absolute executable and local plumbing only.
             git_runner.close_transport_boundary()
@@ -127678,13 +138034,14 @@ def _wom_kit_project_version_update_legacy_core_generator(
                 )
             )
 
-            current_ref_snapshot = (
-                wom_kit_project_update_target_ref_snapshot(
+            current_ref_observation = (
+                wom_kit_project_update_target_ref_snapshot_observation(
                     mirror_path,
                     target_tag,
                     runner=git_runner,
                 )
             )
+            current_ref_snapshot = current_ref_observation.get("snapshot")
             current_target_evidence = (
                 wom_kit_project_update_target_evidence(
                     mirror_path,
@@ -127699,14 +138056,22 @@ def _wom_kit_project_version_update_legacy_core_generator(
                     runner=git_runner,
                 )
             )
-            current_runtime_supply = (
-                wom_kit_project_update_runtime_supply(
+            (
+                current_runtime_policy_state,
+                current_runtime_policy_reason,
+            ) = _wom_kit_project_update_policy_observation(
+                current_runtime_policy
+            )
+            (
+                current_runtime_supply_state,
+                current_runtime_supply_reason,
+                current_runtime_supply,
+            ) = _wom_kit_project_update_runtime_supply_revalidation_observation(
                     mirror_path,
                     target_commit,
                     target_version,
                     current_runtime_policy,
                     runner=git_runner,
-                )
             )
             current_bootstrap, current_bootstrap_summary = (
                 project_runtime.bootstrap_wheel_for_target(
@@ -127728,45 +138093,55 @@ def _wom_kit_project_version_update_legacy_core_generator(
             current_runtime_plan["policy"] = copy.deepcopy(
                 current_runtime_policy
             )
+            current_bundle_observation_state = "passed"
+            current_bundle_observation_reason = "not_applicable"
             if prepared_runtime_bundle is not None:
-                try:
-                    if (
-                        current_bootstrap is None
-                        or current_runtime_supply is None
-                    ):
-                        raise project_runtime.ProjectRuntimeError(
-                            "project_runtime_prepared_bundle_binding_invalid"
-                        )
-                    live_bundle_summary = dict(
-                        project_runtime.verify_prepared_runtime_bundle(
+                if current_bootstrap is None or current_runtime_supply is None:
+                    current_bundle_summary = {}
+                    current_bundle_observation_state = "unavailable"
+                    current_bundle_observation_reason = (
+                        "runtime_preparation_prepared_runtime_payload_unavailable"
+                    )
+                else:
+                    (
+                        current_bundle_observation_state,
+                        current_bundle_observation_reason,
+                        current_bundle_observation,
+                    ) = (
+                        project_runtime
+                        .verify_prepared_runtime_candidate_observation(
                             prepared_runtime_bundle,
+                            project_root=project_root,
                             target=target_version or "",
                             target_commit=target_commit,
                             bootstrap=current_bootstrap,
                             supply=current_runtime_supply,
                         )
                     )
-                    live_reverified = (
-                        live_bundle_summary.pop(
-                            "live_reverified",
-                            None,
-                        )
-                        is True
-                    )
-                    current_bundle_summary = (
-                        live_bundle_summary
-                        if (
-                            live_reverified
-                            and live_bundle_summary
-                            == prepared_runtime_bundle_summary
-                        )
+                    live_bundle_summary = (
+                        dict(current_bundle_observation)
+                        if current_bundle_observation is not None
                         else {}
                     )
-                except project_runtime.ProjectRuntimeError:
-                    current_bundle_summary = {}
+                    if live_bundle_summary:
+                        live_bundle_summary.pop("static_reverified", None)
+                    current_bundle_summary = (
+                        live_bundle_summary
+                        if live_bundle_summary
+                        == prepared_runtime_bundle_summary
+                        else {}
+                    )
                 current_runtime_plan["prepared_bundle"] = copy.deepcopy(
                     current_bundle_summary
                 )
+                if (
+                    current_bundle_observation_state == "passed"
+                    and not current_bundle_summary
+                ):
+                    current_bundle_observation_state = "failed"
+                    current_bundle_observation_reason = (
+                        "runtime_preparation_prepared_runtime_payload_changed"
+                    )
             current_materialization_preflight = (
                 wom_kit_project_update_materialization_preflight(
                     project_root,
@@ -127777,13 +138152,228 @@ def _wom_kit_project_version_update_legacy_core_generator(
                     runner=git_runner,
                 )
             )
+            current_launcher_snapshot = project_runtime.launcher_snapshot(
+                project_root,
+                target_version or "",
+            )
+            current_git_snapshot = _wom_kit_project_update_git_snapshot(
+                mirror_path,
+                runner=git_runner,
+            )
+            current_git_config_digest = (
+                wom_kit_project_update_git_config_trust_digest(
+                    mirror_path,
+                    runner=git_runner,
+                )
+            )
+            current_git_metadata_evidence = (
+                wom_kit_project_update_git_metadata_evidence(
+                    project_root,
+                    mirror_path,
+                    runner=git_runner,
+                )
+            )
+            current_pins_observation = (
+                wom_kit_project_update_all_pins_snapshot_observation(
+                    project_root,
+                    pin_specs,
+                )
+            )
+            current_branch_observation = (
+                {"state": "passed", "reason_code": "not_applicable"}
+                if original_branch is None
+                else wom_kit_project_update_branch_observation(
+                    mirror_path,
+                    original_branch,
+                    head_before or "",
+                    runner=git_runner,
+                )
+            )
+            current_runtime_plan_state, current_runtime_plan_reason = (
+                _wom_kit_project_update_runtime_plan_observation_state(
+                    current_runtime_blockers,
+                    prerequisite_states=(
+                        _wom_kit_project_update_runtime_plan_prerequisite_states(
+                            policy_state=current_runtime_policy_state,
+                            supply_state=current_runtime_supply_state,
+                            bootstrap_available=current_bootstrap is not None,
+                            launcher_state=str(
+                                current_launcher_snapshot.get(
+                                    "observation_state", "unavailable"
+                                )
+                            ),
+                        )
+                    ),
+                )
+            )
+            runtime_preparation_revalidation = (
+                wom_kit_project_update_runtime_preparation_revalidation(
+                    {
+                        "git_snapshot": (
+                            _wom_kit_project_update_preparation_check(
+                                "git_snapshot",
+                                current_git_snapshot == preflight_git_snapshot,
+                                available=current_git_snapshot is not None,
+                            )
+                        ),
+                        "git_config_trust": (
+                            _wom_kit_project_update_preparation_check(
+                                "git_config_trust",
+                                current_git_config_digest
+                                == preflight_git_config_digest,
+                                available=current_git_config_digest is not None,
+                            )
+                        ),
+                        "git_metadata": (
+                            _wom_kit_project_update_observed_preparation_check(
+                                "git_metadata",
+                                str(current_git_metadata_evidence["state"]),
+                                str(
+                                    current_git_metadata_evidence[
+                                        "reason_code"
+                                    ]
+                                ),
+                                current_git_metadata_evidence["state"]
+                                == "passed",
+                            )
+                        ),
+                        "version_pins": (
+                            _wom_kit_project_update_observed_preparation_check(
+                                "version_pins",
+                                str(current_pins_observation["state"]),
+                                str(current_pins_observation["reason_code"]),
+                                current_pins_observation["state"] == "passed",
+                            )
+                        ),
+                        "target_refs": (
+                            _wom_kit_project_update_observed_preparation_check(
+                                "target_refs",
+                                str(current_ref_observation["state"]),
+                                str(current_ref_observation["reason_code"]),
+                                current_ref_snapshot == prepared_ref_snapshot,
+                            )
+                        ),
+                        "target_evidence": (
+                            _wom_kit_project_update_observed_preparation_check(
+                                "target_evidence",
+                                str(
+                                    current_target_evidence.get(
+                                        "observation_state", "unavailable"
+                                    )
+                                ),
+                                str(
+                                    current_target_evidence.get(
+                                        "observation_reason_code",
+                                        "project_target_evidence_unavailable",
+                                    )
+                                ),
+                                current_target_evidence
+                                == prepared_target_evidence,
+                            )
+                        ),
+                        "runtime_policy": (
+                            _wom_kit_project_update_observed_preparation_check(
+                                "runtime_policy",
+                                current_runtime_policy_state,
+                                current_runtime_policy_reason,
+                                current_runtime_policy
+                                == prepared_runtime_policy,
+                            )
+                        ),
+                        "runtime_supply": (
+                            _wom_kit_project_update_observed_preparation_check(
+                                "runtime_supply",
+                                current_runtime_supply_state,
+                                current_runtime_supply_reason,
+                                current_runtime_supply
+                                == prepared_runtime_supply,
+                            )
+                        ),
+                        "runtime_bootstrap": (
+                            _wom_kit_project_update_preparation_check(
+                                "runtime_bootstrap",
+                                current_bootstrap == prepared_bootstrap
+                                and current_bootstrap_summary
+                                == prepared_bootstrap_summary,
+                                available=current_bootstrap is not None,
+                            )
+                        ),
+                        "runtime_plan": (
+                            _wom_kit_project_update_observed_preparation_check(
+                                "runtime_plan",
+                                current_runtime_plan_state,
+                                current_runtime_plan_reason,
+                                current_runtime_plan == prepared_runtime_plan,
+                            )
+                        ),
+                        "launcher": (
+                            _wom_kit_project_update_observed_preparation_check(
+                                "launcher",
+                                str(
+                                    current_launcher_snapshot.get(
+                                        "observation_state", "unavailable"
+                                    )
+                                ),
+                                str(
+                                    current_launcher_snapshot.get(
+                                        "observation_reason_code",
+                                        "project_runtime_launcher_observation_unavailable",
+                                    )
+                                ),
+                                current_launcher_snapshot
+                                == project_runtime_launcher_snapshot,
+                            )
+                        ),
+                        "materialization_preflight": (
+                            _wom_kit_project_update_observed_preparation_check(
+                                "materialization_preflight",
+                                str(
+                                    current_materialization_preflight.get(
+                                        "observation_state", "unavailable"
+                                    )
+                                ),
+                                str(
+                                    current_materialization_preflight.get(
+                                        "observation_reason_code",
+                                        "project_materialization_preflight_unavailable",
+                                    )
+                                ),
+                                current_materialization_preflight
+                                == prepared_materialization_preflight,
+                            )
+                        ),
+                        "prepared_runtime_payload": (
+                            _wom_kit_project_update_observed_preparation_check(
+                                "prepared_runtime_payload",
+                                current_bundle_observation_state,
+                                current_bundle_observation_reason,
+                                (
+                                    prepared_runtime_bundle is None
+                                    or bool(current_bundle_summary)
+                                ),
+                            )
+                        ),
+                        "source_branch": (
+                            _wom_kit_project_update_observed_preparation_check(
+                                "source_branch",
+                                str(current_branch_observation["state"]),
+                                str(
+                                    current_branch_observation["reason_code"]
+                                ),
+                                current_branch_observation["state"]
+                                == "passed",
+                            )
+                        ),
+                    }
+                )
+            )
             lock_identity = (
                 lock_reservation.get("identity")
                 if lock_reservation is not None
                 else None
             )
-            prepared_state_still_exact = bool(
-                wom_kit_project_update_owned_lock_present(
+            prepared_lock_observation = (
+                wom_kit_project_update_owned_lock_observation(
                     project_root,
                     lock_path,
                     lock_identity,
@@ -127793,36 +138383,17 @@ def _wom_kit_project_version_update_legacy_core_generator(
                         else WOM_KIT_PROJECT_UPDATE_LOCK_BYTES
                     ),
                 )
-                and _wom_kit_project_update_git_snapshot(
-                    mirror_path,
-                    runner=git_runner,
-                )
-                == preflight_git_snapshot
-                and wom_kit_project_update_git_config_trust_digest(
-                    mirror_path,
-                    runner=git_runner,
-                )
-                == preflight_git_config_digest
-                and wom_kit_project_update_all_pins_match_snapshot(
-                    project_root,
-                    pin_specs,
-                )
-                and current_ref_snapshot == prepared_ref_snapshot
-                and current_target_evidence == prepared_target_evidence
-                and current_runtime_policy == prepared_runtime_policy
-                and current_runtime_supply == prepared_runtime_supply
-                and current_bootstrap == prepared_bootstrap
-                and current_bootstrap_summary
-                == prepared_bootstrap_summary
-                and not current_runtime_blockers
-                and current_runtime_plan == prepared_runtime_plan
-                and current_materialization_preflight
-                == prepared_materialization_preflight
             )
-            if not prepared_state_still_exact:
-                blockers.append(
-                    "project_version_update_approved_snapshot_changed"
+            prepared_revalidation_failure = (
+                _wom_kit_project_update_approved_lock_failure_code(
+                    (prepared_lock_observation,)
                 )
+                or _wom_kit_project_update_revalidation_failure_code(
+                    runtime_preparation_revalidation
+                )
+            )
+            if prepared_revalidation_failure is not None:
+                blockers.append(prepared_revalidation_failure)
                 release_current_lock_or_raise("blocked")
                 return result_payload("blocked")
 
@@ -128352,13 +138923,50 @@ def _wom_kit_project_version_update_legacy_core_generator(
                 WomKitProjectUpdateReceiptUncertainError,
             )
         )
-        lock_kind_after_failure = wom_kit_real_path_kind(
-            project_root,
-            lock_path,
+        lock_identity = (
+            lock_reservation.get("identity")
+            if lock_reservation is not None
+            else None
+        )
+        lock_after_failure = (
+            _wom_kit_project_update_lock_after_failure_observation(
+                project_root,
+                lock_path,
+                lock_identity,
+                expected_lock_bytes=(
+                    durable_lock_bytes
+                    if durable_lock_bytes is not None
+                    else WOM_KIT_PROJECT_UPDATE_LOCK_BYTES
+                ),
+            )
+        )
+        lock_confirmed_missing = bool(
+            lock_after_failure["state"] == "failed"
+            and lock_after_failure["kind"] == "missing"
         )
         if (
             lock_release_state in {"releasing", "released"}
-            and lock_kind_after_failure == "missing"
+            and lock_after_failure["state"] == "unavailable"
+            and lock_release_intent_status is not None
+        ):
+            preserve_lock = True
+            rollback["attempted"] = False
+            rollback["succeeded"] = False
+            rollback["source_restored"] = None
+            rollback["pins_restored"] = None
+            rollback["lock_removed"] = None
+            rollback["fetched_refs_may_remain"] = fetch_attempted
+            blockers.append(
+                "The project update lock could not be observed after the lock-release boundary; its state is uncertain and automatic rollback was skipped."
+            )
+            return result_payload(
+                "interrupted_rollback_incomplete"
+                if interrupted
+                else "failed_rollback_incomplete"
+            )
+        if (
+            lock_release_state in {"releasing", "released"}
+            and lock_confirmed_missing
             and lock_release_intent_status is not None
         ):
             lock_acquired = False
@@ -128386,33 +138994,33 @@ def _wom_kit_project_version_update_legacy_core_generator(
                 else "failed_rollback_incomplete"
             )
 
-        lock_identity = (
-            lock_reservation.get("identity")
-            if lock_reservation is not None
-            else None
-        )
-        if lock_acquired and not wom_kit_project_update_owned_lock_present(
-            project_root,
-            lock_path,
-            lock_identity,
-            expected_lock_bytes=(
-                durable_lock_bytes
-                if durable_lock_bytes is not None
-                else WOM_KIT_PROJECT_UPDATE_LOCK_BYTES
-            ),
+        if (
+            (
+                lock_acquired
+                or lock_release_state in {"releasing", "released"}
+            )
+            and lock_after_failure["state"] != "passed"
         ):
-            lock_missing = lock_kind_after_failure == "missing"
-            lock_acquired = not lock_missing
-            preserve_lock = not lock_missing
+            if lock_after_failure["state"] == "unavailable":
+                preserve_lock = True
+                rollback["lock_removed"] = None
+                blocker = (
+                    "The project update lock could not be observed before rollback; its state is uncertain and automatic rollback was skipped."
+                )
+            else:
+                lock_missing = lock_confirmed_missing
+                lock_acquired = not lock_missing
+                preserve_lock = not lock_missing
+                rollback["lock_removed"] = lock_missing
+                blocker = (
+                    "The project update lock was removed or replaced before rollback; automatic rollback was skipped to avoid running without the owned lock."
+                )
             rollback["attempted"] = False
             rollback["succeeded"] = False
             rollback["source_restored"] = None
             rollback["pins_restored"] = None
-            rollback["lock_removed"] = lock_missing
             rollback["fetched_refs_may_remain"] = fetch_attempted
-            blockers.append(
-                "The project update lock was removed or replaced before rollback; automatic rollback was skipped to avoid running without the owned lock."
-            )
+            blockers.append(blocker)
             return result_payload(
                 "interrupted_rollback_incomplete"
                 if interrupted
@@ -128716,7 +139324,7 @@ def _wom_kit_project_version_update_legacy_core_generator(
         rollback["project_runtime_launcher_restored"] = (
             project_runtime_launcher_restored
         )
-        lock_removed = False
+        lock_removed: bool | None = False
         if (
             source_restored
             and pins_restored
@@ -128740,12 +139348,45 @@ def _wom_kit_project_version_update_legacy_core_generator(
                 if lock_removed:
                     lock_acquired = False
             except BaseException:
-                lock_removed = (
-                    wom_kit_real_path_kind(project_root, lock_path)
-                    == "missing"
+                lock_after_release = (
+                    _wom_kit_project_update_lock_after_failure_observation(
+                        project_root,
+                        lock_path,
+                        identity,
+                        expected_lock_bytes=(
+                            durable_lock_bytes
+                            if durable_lock_bytes is not None
+                            else WOM_KIT_PROJECT_UPDATE_LOCK_BYTES
+                        ),
+                    )
                 )
-                if lock_removed:
+                lock_removed = (
+                    True
+                    if lock_after_release["kind"] == "missing"
+                    else None
+                    if lock_after_release["state"] == "unavailable"
+                    else False
+                )
+                if lock_removed is True:
                     lock_acquired = False
+            if lock_removed is False:
+                lock_after_release = (
+                    _wom_kit_project_update_lock_after_failure_observation(
+                        project_root,
+                        lock_path,
+                        identity,
+                        expected_lock_bytes=(
+                            durable_lock_bytes
+                            if durable_lock_bytes is not None
+                            else WOM_KIT_PROJECT_UPDATE_LOCK_BYTES
+                        ),
+                    )
+                )
+                if lock_after_release["kind"] == "missing":
+                    lock_removed = True
+                    lock_acquired = False
+                elif lock_after_release["state"] == "unavailable":
+                    lock_removed = None
         elif not lock_acquired:
             lock_removed = True
         rollback["lock_removed"] = lock_removed
@@ -128759,6 +139400,10 @@ def _wom_kit_project_version_update_legacy_core_generator(
             and lock_removed
         )
         preserve_lock = not bool(rollback["succeeded"])
+        if lock_removed is None:
+            blockers.append(
+                "The project update lock could not be observed after rollback cleanup; its state remains uncertain and no further cleanup was attempted."
+            )
         blockers.append(
             (
                 "The project version update was interrupted and its local mutation was rolled back."
@@ -128801,6 +139446,163 @@ def _wom_kit_project_version_update_legacy_core_generator(
                 )
 
 
+def _project_update_seal_legacy_fresh_plan(
+    state: _ProjectVersionUpdateDurableApprovalState,
+    *,
+    safe_progress_callback: (
+        Callable[[str, str, int | None, int | None], None] | None
+    ),
+) -> None:
+    """Seal C-phase evidence before the native approval boundary.
+
+    Each private document is immutable and create-only.  Re-entering after a
+    power cut therefore either observes the exact prior document or fails
+    closed; it never manufactures a second plan, transaction, or approval.
+    """
+
+    control = getattr(state, "legacy_prewrite_recovery_control", None)
+    if not isinstance(control, dict):
+        raise ArchiveServiceError(
+            "project_version_update_legacy_recovery_binding_invalid"
+        )
+    paths = control.get("paths")
+    old_abandonment_sha256 = control.get("old_abandonment_sha256")
+    with_store = control.get("with_store")
+    if (
+        not isinstance(
+            paths,
+            project_update_legacy_recovery.RecoveryPaths,
+        )
+        or type(old_abandonment_sha256) is not str
+        or not callable(with_store)
+        or not isinstance(
+            getattr(state, "legacy_prewrite_recovery", None), Mapping
+        )
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_legacy_recovery_binding_invalid"
+        )
+
+    fresh_inventory = project_update_legacy_recovery.directory_tree_inventory(
+        state.transaction.transaction_root,
+        progress_callback=(
+            (
+                lambda count, byte_count: safe_progress_callback(
+                    "project-recovery-inventory",
+                    "running",
+                    count,
+                    byte_count,
+                )
+            )
+            if safe_progress_callback is not None
+            else None
+        ),
+    )
+    # The recovery inventory's semantic digest uses the recovery protocol's
+    # newline-terminated canonical form.  The transaction protocol has a
+    # different canonical byte form and must not be mixed into this binding.
+    fresh_inventory_sha256 = project_update_legacy_recovery.sha256_document(
+        fresh_inventory
+    )
+    fresh_binding = project_version_update_approval_binding(
+        state.prepared_preview
+    )
+    fresh_context = fresh_binding.context(
+        archive_id=state.expected_archive_id,
+        reviewer_claim=state.reviewer,
+    )
+    post_fetch_ref_snapshot = (
+        wom_kit_project_update_target_ref_snapshot_observation(
+            state.mirror_path,
+            state.target_tag,
+            runner=state.runner,
+        )
+    )
+    if (
+        post_fetch_ref_snapshot.get("state") != "passed"
+        or post_fetch_ref_snapshot.get("reason_code") != "verified"
+        or post_fetch_ref_snapshot.get("snapshot")
+        != state.private_plan.get("target_ref_snapshot")
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_legacy_recovery_state_changed"
+        )
+    try:
+        post_fetch_ref_record = with_store(
+            lambda store: store.write_post_fetch_ref_snapshot(
+                post_fetch_ref_snapshot,
+                pre_ref_snapshot_document_sha256=control[
+                    "pre_ref_snapshot_document_sha256"
+                ],
+                pre_ref_snapshot_sha256=control["pre_ref_snapshot_sha256"],
+                requested_target_tag=state.target_tag,
+            )
+        )
+        fresh_inventory_record = with_store(
+            lambda store: store.write_fresh_transaction_inventory(
+                fresh_transaction_ref=state.transaction.transaction_ref,
+                inventory=fresh_inventory,
+            )
+        )
+    except project_update_legacy_recovery.LegacyProjectUpdateRecoveryError as failure:
+        raise ArchiveServiceError(failure.code) from None
+
+    fresh_recovery_binding_sha256 = project_update_transaction.sha256_document(
+        dict(state.legacy_prewrite_recovery)
+    )
+    prospective = project_update_legacy_recovery.prospective_plan_document(
+        recovery_ref=paths.recovery_ref,
+        fresh_transaction_ref=state.transaction.transaction_ref,
+        fresh_intent_sha256=state.transaction.intent.sha256,
+        fresh_transaction_inventory_sha256=fresh_inventory_sha256,
+        fresh_transaction_inventory_document_sha256=(
+            fresh_inventory_record[
+                "fresh_transaction_inventory_document_sha256"
+            ]
+        ),
+        fresh_allocation_document_sha256=control["fresh_allocation_sha256"],
+        post_ref_snapshot_document_sha256=(
+            post_fetch_ref_record["post_ref_snapshot_document_sha256"]
+        ),
+        post_ref_snapshot_sha256=(
+            post_fetch_ref_record["post_ref_snapshot_sha256"]
+        ),
+        fresh_approval_plan_sha256=fresh_binding.plan_sha256,
+        fresh_approval_target_binding_sha256=(
+            fresh_binding.target_binding_sha256
+        ),
+        fresh_approval_context_sha256=(
+            exact_human_approval_context_sha256(fresh_context)
+        ),
+        fresh_recovery_binding_sha256=fresh_recovery_binding_sha256,
+        old_abandonment_sha256=old_abandonment_sha256,
+    )
+    try:
+        prospective_sha256 = with_store(
+            lambda store: store.write_prospective_plan(prospective)
+        )
+    except project_update_legacy_recovery.LegacyProjectUpdateRecoveryError as failure:
+        raise ArchiveServiceError(failure.code) from None
+
+    control["fresh_transaction_inventory"] = fresh_inventory
+    control["fresh_prospective_plan"] = prospective
+    control["fresh_prospective_plan_sha256"] = prospective_sha256
+    control["fresh_transaction_inventory_document_sha256"] = (
+        fresh_inventory_record[
+            "fresh_transaction_inventory_document_sha256"
+        ]
+    )
+    control["fresh_recovery_binding_sha256"] = (
+        fresh_recovery_binding_sha256
+    )
+    _project_update_legacy_recovery_checkpoint(
+        state,
+        phase="fresh_plan_sealed",
+        evidence_sha256=prospective_sha256,
+        locator_state="fresh_plan_sealed",
+    )
+
+
 def _wom_kit_project_version_update_legacy_core(
     inspection_root: Path | str,
     *,
@@ -128816,6 +139618,9 @@ def _wom_kit_project_version_update_legacy_core(
     | None = None,
     _expected_approval_root: Path | None = None,
     _expected_archive_id: str | None = None,
+    _legacy_recovery_old_lock_bytes: bytes | None = None,
+    _legacy_recovery_approval_summary: Mapping[str, Any] | None = None,
+    _legacy_recovery_control: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Drive the historical core or one live lock-held approval yield."""
 
@@ -128853,6 +139658,11 @@ def _wom_kit_project_version_update_legacy_core(
         _expected_approval_root=_expected_approval_root,
         _expected_archive_id=_expected_archive_id,
         _git_runner_lifetime=git_runner_lifetime,
+        _legacy_recovery_old_lock_bytes=_legacy_recovery_old_lock_bytes,
+        _legacy_recovery_approval_summary=(
+            _legacy_recovery_approval_summary
+        ),
+        _legacy_recovery_control=_legacy_recovery_control,
     )
     try:
         prepared_preview = next(transaction)
@@ -128916,6 +139726,7 @@ def _wom_kit_project_version_update_legacy_core(
                 binding.target_binding_sha256
             )
             try:
+                _project_update_activate_legacy_recovery_state(state)
                 return _project_update_durable_writer(state, claim)
             except ArchiveServiceError:
                 raise
@@ -128988,19 +139799,56 @@ def _wom_kit_project_version_update_legacy_core(
         def claim_publication_boundary() -> Any:
             return _project_update_claim_publication_boundary(state)
 
+        legacy_control = getattr(
+            state, "legacy_prewrite_recovery_control", None
+        )
+        if legacy_control is not None:
+            _project_update_seal_legacy_fresh_plan(
+                state,
+                safe_progress_callback=safe_progress_callback,
+            )
+
         try:
             with _project_update_terminal_execution_lease(
                 state,
                 expected_handoff_observation=None,
                 fresh_absence=True,
             ):
+                approval_arguments: dict[str, Any] = {
+                    "claim_publication_boundary": (
+                        claim_publication_boundary
+                    )
+                }
+                if getattr(
+                    state, "legacy_prewrite_recovery_control", None
+                ) is not None:
+                    recovery_key_provider = (
+                        getattr(
+                            state, "legacy_prewrite_recovery_control", {}
+                        ).get(
+                            "approval_key_provider"
+                        )
+                    )
+                    if recovery_key_provider is None:
+                        raise ArchiveServiceError(
+                            "project_version_update_legacy_recovery_binding_invalid"
+                        )
+                    approval_arguments["recovery_key_provider"] = (
+                        recovery_key_provider
+                    )
+                    # The resume CLI intentionally accepts no new reviewer
+                    # identifier.  This composite decision remains bound to
+                    # the authenticated predecessor reviewer's content-free
+                    # claim rather than accidentally passing ``None`` into
+                    # the native context.
+                    approval_arguments["resume_reviewer"] = state.reviewer
                 result = approval_executor(
                     copy.deepcopy(dict(prepared.preview)),
                     durable_continue_after_approval,
                     durable_claim_succeeded_finalizer,
                     durable_started_guard,
                     durable_succeeded_guard,
-                    claim_publication_boundary=claim_publication_boundary,
+                    **approval_arguments,
                 )
                 if not continuation_used:
                     raise ArchiveServiceError(
@@ -129022,6 +139870,37 @@ def _wom_kit_project_version_update_legacy_core(
                     "project_version_update_fresh_terminal_present_prewrite",
                 }
             )
+            if (
+                getattr(state, "legacy_prewrite_recovery_control", None)
+                is not None
+                and not continuation_used
+            ):
+                if _project_update_is_exact_native_approval_denial(failure):
+                    restored_result = (
+                        _project_update_restore_legacy_recovery_after_unapproved(
+                            state
+                        )
+                    )
+                    if not _project_update_is_legacy_unapproved_terminal_result(
+                        restored_result
+                    ):
+                        _project_update_close_after_service_failure(
+                            transaction.close,
+                            git_runner_lifetime,
+                        )
+                        raise ArchiveServiceError(
+                            "project_version_update_legacy_recovery_state_ambiguous"
+                        )
+                    return _project_update_finish_legacy_cancellation_result(
+                        restored_result,
+                        git_runner_lifetime,
+                        close_owned_resources=transaction.close,
+                    )
+                _project_update_close_after_service_failure(
+                    transaction.close,
+                    git_runner_lifetime,
+                )
+                raise
             if terminal_boundary_unknown and not continuation_used:
                 cleanup_completed = False
                 try:
@@ -129595,13 +140474,18 @@ def runtime_context_doctor_findings(
             "code_counts": [],
             "items": [],
             "suggested_commands": [],
+            "suggested_command_entries": [],
             "suggested_commands_truncated": False,
+            "suggested_command_entries_truncated": False,
+            "suggested_command_entries_authoritative": True,
             "claim_boundary": "Doctor did not run; no archive health findings are available.",
         }
 
     findings: list[dict[str, Any]] = []
     code_counts: dict[tuple[str, str], int] = {}
     suggested_commands: list[str] = []
+    suggested_command_entries: list[dict[str, Any]] = []
+    seen_suggested_commands: set[str] = set()
     for raw_item in diagnostics:
         if not isinstance(raw_item, dict):
             continue
@@ -129635,9 +140519,38 @@ def runtime_context_doctor_findings(
             )
             if value:
                 item[field] = value
+        raw_suggested_status = raw_item.get("suggested_command_status")
+        suggested_status = (
+            copy.deepcopy(raw_suggested_status)
+            if isinstance(raw_suggested_status, dict)
+            else None
+        )
+        if suggested_status is not None:
+            item["suggested_command_status"] = suggested_status
         command = item.get("suggested_command")
-        if isinstance(command, str) and command not in suggested_commands:
-            suggested_commands.append(command)
+        if isinstance(command, str) and command not in seen_suggested_commands:
+            seen_suggested_commands.add(command)
+            nested_availability = (
+                suggested_status.get("capability_availability")
+                if isinstance(suggested_status, dict)
+                else None
+            )
+            safe_bare_candidate = bool(
+                isinstance(suggested_status, dict)
+                and suggested_status.get("resolution_state") == "resolved"
+                and suggested_status.get("requested_mode_available") is True
+                and isinstance(nested_availability, dict)
+                and nested_availability.get("available") is True
+            )
+            suggested_command_entries.append(
+                {
+                    "suggested_command": command,
+                    "suggested_command_status": suggested_status,
+                    "bare_execution_candidate": safe_bare_candidate,
+                }
+            )
+            if safe_bare_candidate:
+                suggested_commands.append(command)
         findings.append(item)
 
     severity_order = {"ERROR": 0, "WARN": 1}
@@ -129650,6 +140563,9 @@ def runtime_context_doctor_findings(
     ]
     returned_items = findings[:RUNTIME_CONTEXT_DOCTOR_FINDING_LIMIT]
     returned_commands = suggested_commands[:RUNTIME_CONTEXT_DOCTOR_COMMAND_LIMIT]
+    returned_command_entries = suggested_command_entries[
+        :RUNTIME_CONTEXT_DOCTOR_COMMAND_LIMIT
+    ]
     return {
         "checked": True,
         "selected_levels": selected_levels,
@@ -129659,10 +140575,17 @@ def runtime_context_doctor_findings(
         "code_counts": count_rows,
         "items": returned_items,
         "suggested_commands": returned_commands,
+        "suggested_command_entries": returned_command_entries,
         "suggested_commands_truncated": len(returned_commands) < len(suggested_commands),
+        "suggested_command_entries_truncated": (
+            len(returned_command_entries) < len(suggested_command_entries)
+        ),
+        "suggested_command_entries_authoritative": True,
         "claim_boundary": (
             "ERROR and WARN findings are included so an operator can identify the completed Doctor result "
-            "without rerunning it. INFO diagnostics remain count-only."
+            "without rerunning it. INFO diagnostics remain count-only. "
+            "suggested_command_entries is authoritative and preserves each parser-derived status; "
+            "the compatibility suggested_commands list contains only explicitly available modes."
         ),
     }
 

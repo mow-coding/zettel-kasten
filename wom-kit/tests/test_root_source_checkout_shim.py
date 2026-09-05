@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -58,7 +59,14 @@ class RootSourceCheckoutShimTests(unittest.TestCase):
             self.assertEqual(completed.returncode, 0, completed.stderr)
             payload = json.loads(completed.stdout)
 
-        self.assertEqual(payload["version"], "0.4.18")
+        # This checkout owns a literal PEP 621 version. Inspect that single
+        # declaration without requiring Python 3.11's tomllib on supported 3.10.
+        metadata = (KIT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        project_section = re.search(r"(?ms)^\[project\]\s*(.*?)(?=^\[|\Z)", metadata)
+        self.assertIsNotNone(project_section)
+        versions = re.findall(r'^version\s*=\s*"([^"\r\n]+)"\s*$', project_section.group(1), re.MULTILINE)
+        self.assertEqual(len(versions), 1)
+        self.assertEqual(payload["version"], versions[0])
         self.assertEqual(Path(payload["paths"][0]).resolve(), SOURCE_PACKAGE)
         self.assertEqual(
             Path(payload["archive_cli"]).resolve().parent,

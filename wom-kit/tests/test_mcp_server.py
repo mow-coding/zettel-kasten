@@ -2425,6 +2425,74 @@ class McpServerTests(unittest.TestCase):
             finally:
                 self.stop_server(process)
 
+    def test_archive_runtime_context_full_doctor_preserves_command_status(
+        self,
+    ) -> None:
+        parser = archive_cli.build_parser()
+        inventory = archive_cli._parser_capability_inventory(parser)
+        suggested_command = (
+            "archive remint-reconcile <archive-root> "
+            "--zettel-id <id> --approve"
+        )
+        status = archive_cli.command_status.resolve_suggested_command_mode(
+            inventory,
+            suggested_command,
+            trusted_parser=parser,
+        )
+
+        class FakeDoctor:
+            def __init__(self, archive_root: Path) -> None:
+                self.archive_root = archive_root
+
+            def run(self) -> list[archive_cli.Diagnostic]:
+                return [
+                    archive_cli.Diagnostic(
+                        severity="WARN",
+                        code="synthetic_writer_unavailable",
+                        message="Synthetic unavailable writer.",
+                        suggested_command=suggested_command,
+                        suggested_command_status=status,
+                    )
+                ]
+
+            def read_observations(self) -> dict[str, bool]:
+                return {
+                    "zettel_bodies_read": False,
+                    "objet_bytes_read": False,
+                    "archive_text_scanned_for_secret_patterns": False,
+                }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            with mock.patch.object(mcp_server.archive_cli, "Doctor", FakeDoctor):
+                response = mcp_server.handle_tools_call(
+                    {
+                        "name": "archive_runtime_context",
+                        "arguments": {
+                            "archive_root": str(archive_root),
+                            "full_doctor": True,
+                        },
+                    }
+                )
+
+        self.assertFalse(response["isError"])
+        findings = response["structuredContent"]["doctor_findings"]
+        self.assertEqual(findings["suggested_commands"], [])
+        self.assertEqual(
+            findings["items"][0]["suggested_command_status"], status
+        )
+        self.assertEqual(
+            findings["suggested_command_entries"],
+            [
+                {
+                    "suggested_command": suggested_command,
+                    "suggested_command_status": status,
+                    "bare_execution_candidate": False,
+                }
+            ],
+        )
+        self.assertTrue(findings["suggested_command_entries_authoritative"])
+
     def test_archive_runtime_context_tool_ignores_local_path_disclosure_without_env_gate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
