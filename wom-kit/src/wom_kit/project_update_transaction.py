@@ -18,6 +18,7 @@ import re
 import secrets
 import stat
 import time
+import weakref
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -36,6 +37,12 @@ RESERVATION_ABORT_INTENT_SCHEMA = (
 )
 RESERVATION_ABORT_RECEIPT_SCHEMA = (
     "wom-kit/project-update-reservation-abort-receipt/v0.4.3"
+)
+RESERVATION_ABORT_INTENT_SCHEMA_V0419 = (
+    "wom-kit/project-update-reservation-abort-intent/v0.4.19"
+)
+RESERVATION_ABORT_RECEIPT_SCHEMA_V0419 = (
+    "wom-kit/project-update-reservation-abort-receipt/v0.4.19"
 )
 RESERVATION_ABORT_PLAN_SCHEMA = (
     "wom-kit/project-update-reservation-abort-plan/v0.4.3"
@@ -86,6 +93,23 @@ RUNTIME_PARENT_RESTORATION_SCHEMA = (
 RUNTIME_PATH_IDENTITIES_SCHEMA = (
     "wom-kit/project-update-runtime-path-identities/v0.4.3"
 )
+RUNTIME_CLEANUP_TERMINAL_EVIDENCE_SCHEMA = (
+    "wom-kit/project-update-runtime-cleanup-terminal-evidence/v0.4.19"
+)
+EMPTY_ABORT_CLAIM_INTENT_SCHEMA = (
+    "wom-kit/project-update-empty-abort-claim-intent/v0.4.19"
+)
+EMPTY_ABORT_CLAIM_SCHEMA = (
+    "wom-kit/project-update-empty-abort-namespace-claim/v0.4.19"
+)
+EMPTY_ABORT_CLAIM_IDENTITY_SCHEMA = (
+    "wom-kit/project-update-empty-abort-claim-identity/v0.4.19"
+)
+EMPTY_ABORT_CLAIM_RETIREMENT_SCHEMA = (
+    "wom-kit/project-update-empty-abort-claim-retirement/v0.4.19"
+)
+_RUNTIME_CLEANUP_CAPSULE_PREFIX = ".runtime-candidate-cleanup_"
+_RUNTIME_CLEANUP_CAPSULE_SUFFIX = ".json"
 
 TRANSACTION_ROOT_LOGICAL = ".zettel-kasten/private/version-updates"
 PROJECT_UPDATE_LOCK_LOGICAL = ".zettel-kasten/version-update.lock"
@@ -122,6 +146,9 @@ PRIVATE_BINDINGS_NAME = "private-bindings"
 RESERVATION_LOCK_BACKLINK_NAME = "reservation-lock-backlink.json"
 RESERVATION_ABORT_INTENT_NAME = "reservation-abort-intent.json"
 RESERVATION_ABORT_RECEIPT_NAME = "reservation-abort-receipt.json"
+EMPTY_ABORT_CLAIM_INTENT_NAME = "empty-abort-claim-intent.json"
+EMPTY_ABORT_CLAIM_ANCHOR_NAME = "empty-abort-claim-anchor.json"
+EMPTY_ABORT_CLAIM_RETIREMENT_NAME = "empty-abort-claim-retirement.json"
 RESERVATION_ABORT_CLEANUP_PLAN_NAME = (
     "reservation-abort-cleanup-plan-v0417.json"
 )
@@ -1514,6 +1541,488 @@ class ProjectUpdateIntent:
 
 
 @dataclass(frozen=True)
+class _RuntimeCleanupEvidenceBinding:
+    terminal_evidence_sha256: str
+    capsule_sha256: str
+    capsule_identity_sha256: str
+
+
+_RUNTIME_CLEANUP_DIGEST_FIELDS = (
+    "runtime_cleanup_terminal_evidence_sha256",
+    "runtime_cleanup_capsule_sha256",
+    "runtime_cleanup_capsule_identity_sha256",
+)
+
+
+@dataclass(frozen=True)
+class _EmptyAbortClaimBinding:
+    claim_intent_sha256: str
+    claim_sha256: str
+    claim_identity_sha256: str
+
+
+@dataclass(frozen=True)
+class _EmptyAbortClaimState:
+    binding: _EmptyAbortClaimBinding
+    claim_raw: bytes
+    anchor_info: os.stat_result
+    sidecar_state: Literal["linked", "absent", "foreign"]
+
+
+_EMPTY_ABORT_CLAIM_DIGEST_FIELDS = (
+    "empty_abort_claim_intent_sha256",
+    "empty_abort_claim_sha256",
+    "empty_abort_claim_identity_sha256",
+)
+
+
+def _runtime_cleanup_binding_from_record(
+    value: Mapping[str, Any],
+    *,
+    required: bool,
+    code: str,
+) -> _RuntimeCleanupEvidenceBinding | None:
+    present = tuple(value.get(name) for name in _RUNTIME_CLEANUP_DIGEST_FIELDS)
+    if not any(item is not None for item in present):
+        if required:
+            raise _fail(code)
+        return None
+    if not all(item is not None for item in present):
+        raise _fail(code)
+    for item in present:
+        _digest(item, code=code)
+    return _RuntimeCleanupEvidenceBinding(
+        terminal_evidence_sha256=str(present[0]),
+        capsule_sha256=str(present[1]),
+        capsule_identity_sha256=str(present[2]),
+    )
+
+
+def _runtime_cleanup_terminal_evidence_binding(
+    value: Mapping[str, Any],
+    *,
+    transaction_ref: str,
+    target_tag: str,
+    runtime_candidate: RuntimeCandidateBinding | None,
+) -> _RuntimeCleanupEvidenceBinding:
+    """Validate one complete, content-free runtime cleanup proof.
+
+    The runtime subsystem owns the physical capsule and its deletion.  This
+    transaction layer accepts only the exact public terminal projection and
+    binds its three digests to durable transaction evidence.  Raw paths and
+    filesystem identities are deliberately absent; the capsule identity is
+    represented only by its opaque digest.
+    """
+
+    if not isinstance(value, Mapping):
+        raise _fail("project_update_transaction_candidate_invalid")
+    document = dict(value)
+    expected = {
+        "absolute_paths_echoed",
+        "candidate_root_absent",
+        "candidate_sha256",
+        "cleanup_complete",
+        "normal_seal_absent",
+        "outer_transaction_ack_required_before_retire",
+        "private_paths_echoed",
+        "provider_inventory_bytes",
+        "provider_inventory_count",
+        "provider_inventory_sha256",
+        "quarantine_root_absent",
+        "runtime_cleanup_capsule_identity_sha256",
+        "runtime_cleanup_capsule_sha256",
+        "runtime_parent_restored",
+        "schema",
+        "sidecar_must_retire_before_transaction_cleanup",
+        "status",
+        "target_tag",
+        "transaction_ref",
+    }
+    required_true = (
+        "candidate_root_absent",
+        "cleanup_complete",
+        "normal_seal_absent",
+        "outer_transaction_ack_required_before_retire",
+        "quarantine_root_absent",
+        "runtime_parent_restored",
+        "sidecar_must_retire_before_transaction_cleanup",
+    )
+    required_false = (
+        "absolute_paths_echoed",
+        "private_paths_echoed",
+    )
+    if (
+        set(document) != expected
+        or document.get("schema")
+        != RUNTIME_CLEANUP_TERMINAL_EVIDENCE_SCHEMA
+        or document.get("status") != "terminal_cleanup_evidence"
+        or document.get("transaction_ref") != transaction_ref
+        or document.get("target_tag") != target_tag
+        or any(document.get(name) is not True for name in required_true)
+        or any(document.get(name) is not False for name in required_false)
+        or type(document.get("provider_inventory_count")) is not int
+        or not 0
+        < document["provider_inventory_count"]
+        <= MAX_RUNTIME_CANDIDATE_ENTRIES
+        or type(document.get("provider_inventory_bytes")) is not int
+        or document["provider_inventory_bytes"] < 0
+    ):
+        raise _fail("project_update_transaction_candidate_invalid")
+    for name in (
+        "candidate_sha256",
+        "provider_inventory_sha256",
+        "runtime_cleanup_capsule_identity_sha256",
+        "runtime_cleanup_capsule_sha256",
+    ):
+        _digest(
+            document.get(name),
+            code="project_update_transaction_candidate_invalid",
+        )
+    if runtime_candidate is not None and (
+        document["candidate_sha256"]
+        != runtime_candidate.provider_candidate_sha256
+        or document["provider_inventory_sha256"]
+        != runtime_candidate.provider_inventory_sha256
+        or document["provider_inventory_count"]
+        != runtime_candidate.inventory_count
+        or document["provider_inventory_bytes"]
+        != runtime_candidate.inventory_bytes
+    ):
+        raise _fail("project_update_transaction_candidate_invalid")
+    return _RuntimeCleanupEvidenceBinding(
+        terminal_evidence_sha256=sha256_document(document),
+        capsule_sha256=str(document["runtime_cleanup_capsule_sha256"]),
+        capsule_identity_sha256=str(
+            document["runtime_cleanup_capsule_identity_sha256"]
+        ),
+    )
+
+
+def _runtime_cleanup_sidecar_present(
+    path: Path,
+    *,
+    code: str,
+) -> bool:
+    """Observe one sidecar without collapsing access failure into absence."""
+
+    try:
+        os.lstat(path)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        raise _fail(code) from None
+    return True
+
+
+def _runtime_cleanup_sidecar_test_hook(_boundary: str) -> None:
+    """Private deterministic race seam; production performs no callback."""
+
+
+def _empty_abort_claim_test_hook(_boundary: str) -> None:
+    """Private deterministic crash/race seam; production performs no callback."""
+
+
+def _empty_abort_claim_identity_document(
+    info: os.stat_result,
+) -> dict[str, Any]:
+    identity = {
+        "device": int(info.st_dev),
+        "inode": int(info.st_ino),
+        "schema": EMPTY_ABORT_CLAIM_IDENTITY_SCHEMA,
+    }
+    if identity["device"] < 0 or identity["inode"] <= 0:
+        raise _fail("project_update_transaction_candidate_invalid")
+    return identity
+
+
+def _empty_abort_claim_identity_sha256(info: os.stat_result) -> str:
+    return sha256_document(_empty_abort_claim_identity_document(info))
+
+
+def _read_retained_claim_descriptor(
+    path: Path,
+    descriptor: int,
+    *,
+    within: Path,
+    allowed_link_counts: frozenset[int],
+) -> tuple[bytes, os.stat_result]:
+    """Read and validate one claim through its already retained descriptor."""
+
+    _within(path, within)
+    try:
+        before = os.fstat(descriptor)
+        named = os.lstat(path)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or stat.S_ISLNK(named.st_mode)
+            or _is_reparse(named)
+            or not stat.S_ISREG(named.st_mode)
+            or int(before.st_nlink) not in allowed_link_counts
+            or int(named.st_nlink) not in allowed_link_counts
+            or (int(before.st_dev), int(before.st_ino))
+            != (int(named.st_dev), int(named.st_ino))
+            or int(before.st_size) > MAX_DOCUMENT_BYTES + 1
+        ):
+            raise OSError("claim descriptor changed")
+        if os.name == "nt":
+            import msvcrt
+
+            from .archive_services import _windows_assert_default_backup_stream_only
+
+            _windows_assert_default_backup_stream_only(
+                msvcrt.get_osfhandle(descriptor),
+                expected_size=int(before.st_size),
+                error_prefix="project_update_transaction_claim",
+            )
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        chunks: list[bytes] = []
+        remaining = MAX_DOCUMENT_BYTES + 2
+        while remaining:
+            chunk = os.read(descriptor, min(1024 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        raw = b"".join(chunks)
+        after = os.fstat(descriptor)
+        named_after = os.lstat(path)
+        if (
+            len(raw) > MAX_DOCUMENT_BYTES + 1
+            or (int(after.st_dev), int(after.st_ino), int(after.st_size))
+            != (int(before.st_dev), int(before.st_ino), int(before.st_size))
+            or (int(named_after.st_dev), int(named_after.st_ino))
+            != (int(before.st_dev), int(before.st_ino))
+            or int(after.st_nlink) not in allowed_link_counts
+            or int(named_after.st_nlink) not in allowed_link_counts
+        ):
+            raise OSError("claim descriptor changed")
+        return raw, after
+    except ProjectUpdateTransactionError:
+        raise
+    except OSError:
+        raise _fail("project_update_transaction_candidate_invalid") from None
+
+
+@contextmanager
+def _held_resumable_exact_prefix_file(
+    path: Path,
+    *,
+    within: Path,
+    expected_factory: Callable[[os.stat_result], bytes],
+    boundary_prefix: str,
+    allowed_final_link_counts: frozenset[int],
+) -> Iterator[tuple[int, bytes, os.stat_result]]:
+    """Create or resume one exact-prefix file while retaining its handle.
+
+    A zero-byte or strict-prefix crash artifact is completed in place.  Extra
+    or different bytes, an unexpected hardlink, a reparse point, or an ADS is
+    never replaced or removed.
+    """
+
+    _within(path, within)
+    try:
+        descriptor = os.open(
+            path,
+            _flags(os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_EXCL),
+            0o600,
+        )
+        created = True
+    except FileExistsError:
+        created = False
+        try:
+            descriptor = os.open(path, _flags(os.O_RDWR | os.O_APPEND))
+        except OSError:
+            raise _fail("project_update_transaction_candidate_invalid") from None
+    except OSError:
+        raise _fail("project_update_transaction_candidate_invalid") from None
+    try:
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or stat.S_ISLNK(opened.st_mode)
+            or _is_reparse(opened)
+            or int(opened.st_nlink) not in allowed_final_link_counts
+        ):
+            raise _fail("project_update_transaction_candidate_invalid")
+        expected = expected_factory(opened)
+        if type(expected) is not bytes or not expected:
+            raise _fail("project_update_transaction_candidate_invalid")
+        if created:
+            existing = b""
+            _empty_abort_claim_test_hook(boundary_prefix + "_after_create")
+        else:
+            existing, named = _read_retained_claim_descriptor(
+                path,
+                descriptor,
+                within=within,
+                allowed_link_counts=allowed_final_link_counts,
+            )
+            if (
+                (int(named.st_dev), int(named.st_ino))
+                != (int(opened.st_dev), int(opened.st_ino))
+                or int(named.st_nlink) not in allowed_final_link_counts
+            ):
+                raise _fail("project_update_transaction_candidate_invalid")
+        if len(existing) > len(expected) or not hmac.compare_digest(
+            existing,
+            expected[: len(existing)],
+        ):
+            raise _fail("project_update_transaction_candidate_invalid")
+        remaining = expected[len(existing) :]
+        if remaining:
+            if int(opened.st_nlink) != 1:
+                raise _fail("project_update_transaction_candidate_invalid")
+            split = max(1, len(remaining) // 2)
+            try:
+                _write_all(descriptor, remaining[:split])
+                os.fsync(descriptor)
+                _empty_abort_claim_test_hook(boundary_prefix + "_after_prefix")
+                _write_all(descriptor, remaining[split:])
+                os.fsync(descriptor)
+            except OSError:
+                raise _fail(
+                    "project_update_transaction_durability_unverified"
+                ) from None
+        _empty_abort_claim_test_hook(boundary_prefix + "_after_complete")
+        final_raw, final_named = _read_retained_claim_descriptor(
+            path,
+            descriptor,
+            within=within,
+            allowed_link_counts=allowed_final_link_counts,
+        )
+        final_opened = os.fstat(descriptor)
+        if (
+            not hmac.compare_digest(final_raw, expected)
+            or (int(final_named.st_dev), int(final_named.st_ino))
+            != (int(opened.st_dev), int(opened.st_ino))
+            or (int(final_opened.st_dev), int(final_opened.st_ino))
+            != (int(opened.st_dev), int(opened.st_ino))
+            or int(final_named.st_nlink) not in allowed_final_link_counts
+        ):
+            raise _fail("project_update_transaction_candidate_invalid")
+        yield descriptor, expected, final_named
+        after_opened = os.fstat(descriptor)
+        after_raw, after_named = _read_retained_claim_descriptor(
+            path,
+            descriptor,
+            within=within,
+            allowed_link_counts=allowed_final_link_counts,
+        )
+        if (
+            not hmac.compare_digest(after_raw, expected)
+            or (int(after_named.st_dev), int(after_named.st_ino))
+            != (int(opened.st_dev), int(opened.st_ino))
+            or (int(after_opened.st_dev), int(after_opened.st_ino))
+            != (int(opened.st_dev), int(opened.st_ino))
+            or int(after_named.st_nlink) not in allowed_final_link_counts
+        ):
+            raise _fail("project_update_transaction_candidate_invalid")
+    finally:
+        os.close(descriptor)
+
+
+_RESERVATION_ABORT_INTENT_BASE_KEYS = frozenset(
+    {
+        "candidate_absence_observation_sha256",
+        "candidate_cleanup_evidence_sha256",
+        "lock_sha256",
+        "reservation_lock_backlink_sha256",
+        "reservation_sha256",
+        "schema",
+        "transaction_logical_ref",
+        "transaction_ref",
+    }
+)
+_RESERVATION_ABORT_RECEIPT_BASE_KEYS = frozenset(
+    {
+        "abort_intent_sha256",
+        "candidate_absence_observation_sha256",
+        "candidate_cleanup_evidence_sha256",
+        "lock_absence_observation_sha256",
+        "lock_parent_durability",
+        "reservation_sha256",
+        "schema",
+        "state",
+        "transaction_logical_ref",
+        "transaction_ref",
+    }
+)
+
+
+def _reservation_abort_authority_bindings(
+    value: Mapping[str, Any],
+    *,
+    record_kind: Literal["intent", "receipt"],
+) -> tuple[
+    _RuntimeCleanupEvidenceBinding | None,
+    _EmptyAbortClaimBinding | None,
+]:
+    """Accept old rows and exactly one of the two v0.4.19 authorities."""
+
+    if record_kind == "intent":
+        base_keys = _RESERVATION_ABORT_INTENT_BASE_KEYS
+        old_schema = RESERVATION_ABORT_INTENT_SCHEMA
+        current_schema = RESERVATION_ABORT_INTENT_SCHEMA_V0419
+    else:
+        base_keys = _RESERVATION_ABORT_RECEIPT_BASE_KEYS
+        old_schema = RESERVATION_ABORT_RECEIPT_SCHEMA
+        current_schema = RESERVATION_ABORT_RECEIPT_SCHEMA_V0419
+    keys = frozenset(value)
+    schema = value.get("schema")
+    if keys == base_keys and schema == old_schema:
+        return None, None
+    if schema != current_schema:
+        raise _fail("project_update_transaction_state_transition_invalid")
+    if keys == base_keys.union(_RUNTIME_CLEANUP_DIGEST_FIELDS):
+        return (
+            _runtime_cleanup_binding_from_record(
+                value,
+                required=True,
+                code="project_update_transaction_state_transition_invalid",
+            ),
+            None,
+        )
+    if keys == base_keys.union(_EMPTY_ABORT_CLAIM_DIGEST_FIELDS):
+        digests = tuple(value.get(name) for name in _EMPTY_ABORT_CLAIM_DIGEST_FIELDS)
+        for item in digests:
+            _digest(
+                item,
+                code="project_update_transaction_state_transition_invalid",
+            )
+        return (
+            None,
+            _EmptyAbortClaimBinding(
+                claim_intent_sha256=str(digests[0]),
+                claim_sha256=str(digests[1]),
+                claim_identity_sha256=str(digests[2]),
+            ),
+        )
+    raise _fail("project_update_transaction_state_transition_invalid")
+
+
+def _reservation_abort_runtime_cleanup_binding(
+    value: Mapping[str, Any],
+    *,
+    record_kind: Literal["intent", "receipt"],
+) -> _RuntimeCleanupEvidenceBinding | None:
+    return _reservation_abort_authority_bindings(
+        value,
+        record_kind=record_kind,
+    )[0]
+
+
+def _reservation_abort_empty_claim_binding(
+    value: Mapping[str, Any],
+    *,
+    record_kind: Literal["intent", "receipt"],
+) -> _EmptyAbortClaimBinding | None:
+    return _reservation_abort_authority_bindings(
+        value,
+        record_kind=record_kind,
+    )[1]
+
+
+@dataclass(frozen=True)
 class LockObservation:
     pid: int | None = None
     process_start: str | None = None
@@ -2750,6 +3259,9 @@ class ProjectUpdateCheckpoint:
     runtime_candidate_binding_sha256: str | None = None
     candidate_cleanup_receipt_sha256: str | None = None
     candidate_absence_observation_sha256: str | None = None
+    runtime_cleanup_terminal_evidence_sha256: str | None = None
+    runtime_cleanup_capsule_sha256: str | None = None
+    runtime_cleanup_capsule_identity_sha256: str | None = None
 
 
 def _validate_static_receipt_postimage(
@@ -2947,6 +3459,90 @@ class JournalInspection:
         )
 
 
+_ISSUED_RUNTIME_CLEANUP_ACKS: dict[
+    int,
+    weakref.ReferenceType["RuntimeCleanupDurableAck"],
+] = {}
+
+
+@dataclass(frozen=True, init=False)
+class RuntimeCleanupDurableAck:
+    """Opaque proof that transaction-owned durable bytes bind cleanup.
+
+    Instances are issued only by :func:`load_runtime_cleanup_durable_ack`.
+    The public surface contains content-free digests; the project path and
+    the exact disk-record identity remain private and are never represented
+    by ``repr``.  A copied or manually constructed instance is not issued and
+    therefore fails the public revalidation boundary.
+    """
+
+    transaction_ref: str
+    target_tag: str
+    authority_kind: str
+    authority_record_sha256: str
+    authority_record_identity_sha256: str
+    transaction_identity_sha256: str
+    runtime_cleanup_terminal_evidence_sha256: str
+    runtime_cleanup_capsule_sha256: str
+    runtime_cleanup_capsule_identity_sha256: str
+    _project_root: Path = field(repr=False, compare=True)
+
+    def __copy__(self) -> "RuntimeCleanupDurableAck":
+        raise TypeError("runtime cleanup durable ack is not copyable")
+
+    def __deepcopy__(self, _memo: Any) -> "RuntimeCleanupDurableAck":
+        raise TypeError("runtime cleanup durable ack is not copyable")
+
+
+def _issue_runtime_cleanup_durable_ack(
+    *,
+    project_root: Path,
+    transaction_ref: str,
+    target_tag: str,
+    authority_kind: str,
+    authority_record_sha256: str,
+    authority_record_identity_sha256: str,
+    transaction_identity_sha256: str,
+    binding: _RuntimeCleanupEvidenceBinding,
+) -> RuntimeCleanupDurableAck:
+    value = object.__new__(RuntimeCleanupDurableAck)
+    fields: dict[str, Any] = {
+        "transaction_ref": transaction_ref,
+        "target_tag": target_tag,
+        "authority_kind": authority_kind,
+        "authority_record_sha256": authority_record_sha256,
+        "authority_record_identity_sha256": (
+            authority_record_identity_sha256
+        ),
+        "transaction_identity_sha256": transaction_identity_sha256,
+        "runtime_cleanup_terminal_evidence_sha256": (
+            binding.terminal_evidence_sha256
+        ),
+        "runtime_cleanup_capsule_sha256": binding.capsule_sha256,
+        "runtime_cleanup_capsule_identity_sha256": (
+            binding.capsule_identity_sha256
+        ),
+        "_project_root": project_root,
+    }
+    for name, item in fields.items():
+        object.__setattr__(value, name, item)
+    issued_id = id(value)
+
+    def retire_issued(
+        reference: weakref.ReferenceType[RuntimeCleanupDurableAck],
+        *,
+        identity: int = issued_id,
+    ) -> None:
+        if _ISSUED_RUNTIME_CLEANUP_ACKS.get(identity) is reference:
+            _ISSUED_RUNTIME_CLEANUP_ACKS.pop(identity, None)
+
+    _ISSUED_RUNTIME_CLEANUP_ACKS[issued_id] = weakref.ref(
+        value,
+        retire_issued,
+    )
+    return value
+
+
 @dataclass(frozen=True)
 class ProjectUpdateInspection:
     schema: str
@@ -3112,6 +3708,26 @@ def _checkpoint_matches_event(
         checkpoint.candidate_cleanup_receipt_sha256,
         checkpoint.candidate_absence_observation_sha256,
     )
+    runtime_cleanup_values = (
+        checkpoint.runtime_cleanup_terminal_evidence_sha256,
+        checkpoint.runtime_cleanup_capsule_sha256,
+        checkpoint.runtime_cleanup_capsule_identity_sha256,
+    )
+    runtime_cleanup_allowed = bool(
+        (
+            checkpoint.phase == "runtime"
+            and checkpoint.stage == "verified"
+        )
+        or checkpoint.phase == "preapproval_cancelled"
+    )
+    if (
+        any(value is not None for value in runtime_cleanup_values)
+        and (
+            not all(value is not None for value in runtime_cleanup_values)
+            or not runtime_cleanup_allowed
+        )
+    ):
+        return False
     authority = event.authority
     if authority not in {"cancel_intent", "cancel_verified"} and any(
         value is not None for value in cancellation_values
@@ -3126,6 +3742,7 @@ def _checkpoint_matches_event(
                 checkpoint.claim_receipt_sha256,
                 checkpoint.claim_mac_sha256,
                 *cancellation_values,
+                *runtime_cleanup_values,
             )
         ) and not checkpoint.claim_evidence_digests
     if authority == "cancel_intent":
@@ -3141,6 +3758,7 @@ def _checkpoint_matches_event(
                     checkpoint.approval_mac_sha256,
                     checkpoint.claim_receipt_sha256,
                     checkpoint.claim_mac_sha256,
+                    *runtime_cleanup_values,
                 )
             )
             and not checkpoint.claim_evidence_digests
@@ -4128,10 +4746,15 @@ class ReservedProjectUpdateTransaction:
     def acquire_lock(self, *, observation: LockObservation | None = None) -> bytes:
         """Acquire or exactly resume this reservation's immutable O_EXCL lock."""
 
-        if os.path.lexists(
-            self._transaction_root / RESERVATION_ABORT_INTENT_NAME
-        ) or os.path.lexists(
-            self._transaction_root / RESERVATION_ABORT_RECEIPT_NAME
+        if any(
+            os.path.lexists(self._transaction_root / name)
+            for name in (
+                RESERVATION_ABORT_INTENT_NAME,
+                RESERVATION_ABORT_RECEIPT_NAME,
+                EMPTY_ABORT_CLAIM_INTENT_NAME,
+                EMPTY_ABORT_CLAIM_ANCHOR_NAME,
+                EMPTY_ABORT_CLAIM_RETIREMENT_NAME,
+            )
         ):
             raise _fail("project_update_transaction_state_transition_invalid")
         expected = self.lock_bytes(observation=observation)
@@ -4270,15 +4893,548 @@ class ReservedProjectUpdateTransaction:
             }
         )
 
+    def _empty_abort_claim_intent_document(self) -> dict[str, Any]:
+        return {
+            "claim_nonce_sha256": sha256_document(
+                {
+                    "ownership_nonce": self.reservation.ownership_nonce,
+                    "reservation_sha256": self.reservation.sha256,
+                    "schema": EMPTY_ABORT_CLAIM_INTENT_SCHEMA,
+                    "transaction_ref": self.transaction_ref,
+                }
+            ),
+            "reservation_sha256": self.reservation.sha256,
+            "schema": EMPTY_ABORT_CLAIM_INTENT_SCHEMA,
+            "state": "claim_intended",
+            "transaction_logical_ref": self.transaction_logical_ref,
+            "transaction_ref": self.transaction_ref,
+        }
+
+    def _validate_empty_claim_abort_intent_before_lock_release(
+        self,
+        expected_lock_bytes: bytes,
+    ) -> _EmptyAbortClaimBinding:
+        """Validate the exact claim-bound intent/live-lock crash prefix."""
+
+        self._verify_reservation_backlink(expected_lock_bytes)
+        intent_path = self._transaction_root / RESERVATION_ABORT_INTENT_NAME
+        abort_intent = _parse_document(
+            _read_regular(intent_path, within=self._transaction_root),
+            code="project_update_transaction_state_transition_invalid",
+        )
+        runtime_cleanup, empty_claim = _reservation_abort_authority_bindings(
+            abort_intent,
+            record_kind="intent",
+        )
+        if runtime_cleanup is not None or empty_claim is None:
+            raise _fail("project_update_transaction_state_transition_invalid")
+        backlink = self._read_reservation_backlink()
+        candidate_absence = _candidate_absence_observation(
+            self._transaction_root,
+            transaction_ref=self.transaction_ref,
+            reservation_sha256=self.reservation.sha256,
+            intent_sha256=None,
+            runtime_candidate_binding_sha256=None,
+        )
+        expected = {
+            "candidate_absence_observation_sha256": candidate_absence,
+            "candidate_cleanup_evidence_sha256": self.reservation_abort_plan_sha256(),
+            "empty_abort_claim_identity_sha256": (
+                empty_claim.claim_identity_sha256
+            ),
+            "empty_abort_claim_intent_sha256": empty_claim.claim_intent_sha256,
+            "empty_abort_claim_sha256": empty_claim.claim_sha256,
+            "lock_sha256": backlink["lock_sha256"],
+            "reservation_lock_backlink_sha256": sha256_document(backlink),
+            "reservation_sha256": self.reservation.sha256,
+            "schema": RESERVATION_ABORT_INTENT_SCHEMA_V0419,
+            "transaction_logical_ref": self.transaction_logical_ref,
+            "transaction_ref": self.transaction_ref,
+        }
+        if not hmac.compare_digest(
+            canonical_json_bytes(abort_intent),
+            canonical_json_bytes(expected),
+        ):
+            raise _fail("project_update_transaction_state_transition_invalid")
+        files, directories = ProjectUpdateTransaction._descendant_names(
+            self._transaction_root,
+            allowed_two_link_files=frozenset({EMPTY_ABORT_CLAIM_ANCHOR_NAME}),
+        )
+        if directories or files != {
+            "append.guard",
+            "marker.json",
+            RESERVATION_LOCK_BACKLINK_NAME,
+            RESERVATION_ABORT_INTENT_NAME,
+            EMPTY_ABORT_CLAIM_INTENT_NAME,
+            EMPTY_ABORT_CLAIM_ANCHOR_NAME,
+        }:
+            raise _fail("project_update_transaction_candidate_invalid")
+        self._read_empty_abort_claim(
+            expected_binding=empty_claim,
+            allow_retired_link=False,
+        )
+        return empty_claim
+
+    def _empty_abort_claim_document(
+        self,
+        *,
+        claim_intent: Mapping[str, Any],
+        claim_info: os.stat_result,
+    ) -> dict[str, Any]:
+        identity = _empty_abort_claim_identity_document(claim_info)
+        return {
+            "claim_identity": identity,
+            "claim_identity_sha256": sha256_document(identity),
+            "claim_intent_sha256": sha256_document(claim_intent),
+            "claim_nonce_sha256": claim_intent["claim_nonce_sha256"],
+            "reservation_sha256": self.reservation.sha256,
+            "schema": EMPTY_ABORT_CLAIM_SCHEMA,
+            "state": "namespace_claimed",
+            "transaction_logical_ref": self.transaction_logical_ref,
+            "transaction_ref": self.transaction_ref,
+        }
+
+    def _read_empty_abort_claim_intent(self) -> dict[str, Any]:
+        path = self._transaction_root / EMPTY_ABORT_CLAIM_INTENT_NAME
+        value = _parse_document(
+            _read_regular(
+                path,
+                within=self._transaction_root,
+                maximum=MAX_DOCUMENT_BYTES + 1,
+            ),
+            code="project_update_transaction_candidate_invalid",
+        )
+        expected = self._empty_abort_claim_intent_document()
+        if not hmac.compare_digest(
+            canonical_json_bytes(value),
+            canonical_json_bytes(expected),
+        ):
+            raise _fail("project_update_transaction_candidate_invalid")
+        return value
+
+    def _read_empty_abort_claim(
+        self,
+        *,
+        expected_binding: _EmptyAbortClaimBinding | None = None,
+        allow_retired_link: bool,
+    ) -> _EmptyAbortClaimState:
+        claim_intent = self._read_empty_abort_claim_intent()
+        anchor_path = self._transaction_root / EMPTY_ABORT_CLAIM_ANCHOR_NAME
+        capsule_parent = self._transaction_root.parent
+        capsule_path = capsule_parent / (
+            _RUNTIME_CLEANUP_CAPSULE_PREFIX
+            + self.transaction_ref
+            + _RUNTIME_CLEANUP_CAPSULE_SUFFIX
+        )
+        _within(capsule_path, capsule_parent)
+        with ExitStack() as stack:
+            stack.enter_context(
+                _cleanup_bound_directory_context(
+                    self._project_root,
+                    capsule_parent,
+                )
+            )
+            stack.enter_context(
+                _cleanup_bound_directory_context(
+                    self._project_root,
+                    self._transaction_root,
+                )
+            )
+            anchor_raw, anchor_info = _read_cleanup_linked_regular(
+                self._project_root,
+                anchor_path,
+                maximum=MAX_DOCUMENT_BYTES + 1,
+            )
+            claim = _parse_document(
+                anchor_raw,
+                code="project_update_transaction_candidate_invalid",
+            )
+            expected_claim = self._empty_abort_claim_document(
+                claim_intent=claim_intent,
+                claim_info=anchor_info,
+            )
+            if not hmac.compare_digest(
+                canonical_json_bytes(claim),
+                canonical_json_bytes(expected_claim),
+            ):
+                raise _fail("project_update_transaction_candidate_invalid")
+            binding = _EmptyAbortClaimBinding(
+                claim_intent_sha256=sha256_document(claim_intent),
+                claim_sha256=sha256_bytes(anchor_raw),
+                claim_identity_sha256=str(claim["claim_identity_sha256"]),
+            )
+            if expected_binding is not None and binding != expected_binding:
+                raise _fail("project_update_transaction_state_transition_invalid")
+            sidecar_present = _runtime_cleanup_sidecar_present(
+                capsule_path,
+                code="project_update_transaction_candidate_invalid",
+            )
+            if int(anchor_info.st_nlink) == 2:
+                if not sidecar_present:
+                    raise _fail("project_update_transaction_candidate_invalid")
+                sidecar_raw, sidecar_info = _read_cleanup_linked_regular(
+                    self._project_root,
+                    capsule_path,
+                    maximum=MAX_DOCUMENT_BYTES + 1,
+                )
+                if (
+                    not hmac.compare_digest(sidecar_raw, anchor_raw)
+                    or (int(sidecar_info.st_dev), int(sidecar_info.st_ino))
+                    != (int(anchor_info.st_dev), int(anchor_info.st_ino))
+                    or int(sidecar_info.st_nlink) != 2
+                ):
+                    raise _fail("project_update_transaction_candidate_invalid")
+                sidecar_state: Literal["linked", "absent", "foreign"] = "linked"
+            elif int(anchor_info.st_nlink) == 1 and allow_retired_link:
+                if not sidecar_present:
+                    sidecar_state = "absent"
+                else:
+                    try:
+                        sidecar_info = os.lstat(capsule_path)
+                    except OSError:
+                        raise _fail(
+                            "project_update_transaction_candidate_invalid"
+                        ) from None
+                    if (
+                        (int(sidecar_info.st_dev), int(sidecar_info.st_ino))
+                        == (int(anchor_info.st_dev), int(anchor_info.st_ino))
+                    ):
+                        raise _fail("project_update_transaction_candidate_invalid")
+                    sidecar_state = "foreign"
+            else:
+                raise _fail("project_update_transaction_candidate_invalid")
+            return _EmptyAbortClaimState(
+                binding=binding,
+                claim_raw=anchor_raw,
+                anchor_info=anchor_info,
+                sidecar_state=sidecar_state,
+            )
+
+    def _prepare_empty_abort_claim(self) -> _EmptyAbortClaimState:
+        """Durably occupy the runtime sidecar namespace before abort writes."""
+
+        claim_intent = self._empty_abort_claim_intent_document()
+        claim_intent_raw = _document_bytes(claim_intent)
+        claim_intent_path = self._transaction_root / EMPTY_ABORT_CLAIM_INTENT_NAME
+        capsule_parent = self._transaction_root.parent
+        capsule_path = capsule_parent / (
+            _RUNTIME_CLEANUP_CAPSULE_PREFIX
+            + self.transaction_ref
+            + _RUNTIME_CLEANUP_CAPSULE_SUFFIX
+        )
+        anchor_path = self._transaction_root / EMPTY_ABORT_CLAIM_ANCHOR_NAME
+        _within(capsule_path, capsule_parent)
+        with ExitStack() as stack:
+            stack.enter_context(
+                _cleanup_bound_directory_context(
+                    self._project_root,
+                    capsule_parent,
+                )
+            )
+            stack.enter_context(
+                _cleanup_bound_directory_context(
+                    self._project_root,
+                    self._transaction_root,
+                )
+            )
+            with _held_resumable_exact_prefix_file(
+                claim_intent_path,
+                within=self._transaction_root,
+                expected_factory=lambda _info: claim_intent_raw,
+                boundary_prefix="claim_intent",
+                allowed_final_link_counts=frozenset({1}),
+            ):
+                pass
+            _require_directory_durable(self._transaction_root)
+            _empty_abort_claim_test_hook("after_claim_intent_durable")
+
+            created = False
+            try:
+                claim_descriptor = os.open(
+                    capsule_path,
+                    _flags(os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_EXCL),
+                    0o600,
+                )
+                created = True
+            except FileExistsError:
+                # Claim intent alone never proves ownership of an existing
+                # empty/prefix sidecar.  Only the durable same-inode anchor
+                # authorizes resuming bytes after a process loss.
+                if not os.path.lexists(anchor_path):
+                    raise _fail(
+                        "project_update_transaction_candidate_invalid"
+                    ) from None
+                try:
+                    claim_descriptor = os.open(
+                        capsule_path,
+                        _flags(os.O_RDWR | os.O_APPEND),
+                    )
+                except OSError:
+                    raise _fail(
+                        "project_update_transaction_candidate_invalid"
+                    ) from None
+            except OSError:
+                raise _fail(
+                    "project_update_transaction_candidate_invalid"
+                ) from None
+            stack.callback(os.close, claim_descriptor)
+            try:
+                claim_info = os.fstat(claim_descriptor)
+            except OSError:
+                raise _fail(
+                    "project_update_transaction_candidate_invalid"
+                ) from None
+            if (
+                not stat.S_ISREG(claim_info.st_mode)
+                or stat.S_ISLNK(claim_info.st_mode)
+                or _is_reparse(claim_info)
+                or int(claim_info.st_nlink) != (1 if created else 2)
+            ):
+                raise _fail("project_update_transaction_candidate_invalid")
+            expected_identity = (
+                int(claim_info.st_dev),
+                int(claim_info.st_ino),
+            )
+            expected_raw = _document_bytes(
+                self._empty_abort_claim_document(
+                    claim_intent=claim_intent,
+                    claim_info=claim_info,
+                )
+            )
+            if created:
+                # This deliberately exposes no resumable authority.  A hard
+                # exit here leaves an ambiguous foreign-looking zero-byte
+                # sidecar which the next process preserves and fixed-blocks.
+                _empty_abort_claim_test_hook(
+                    "claim_sidecar_unbound_after_create"
+                )
+                _empty_abort_claim_test_hook("before_claim_anchor")
+                try:
+                    os.link(
+                        capsule_path,
+                        anchor_path,
+                        follow_symlinks=False,
+                    )
+                    os.fsync(claim_descriptor)
+                except OSError:
+                    raise _fail(
+                        "project_update_transaction_candidate_invalid"
+                    ) from None
+                _require_directory_durable(capsule_parent)
+                _require_directory_durable(self._transaction_root)
+                # Existing crash tests use after-create as the first safe
+                # resumable boundary; it is now intentionally after anchor.
+                _empty_abort_claim_test_hook("claim_sidecar_after_create")
+                _empty_abort_claim_test_hook("after_claim_anchor")
+            try:
+                anchor_descriptor = os.open(
+                    anchor_path,
+                    _flags(os.O_RDONLY),
+                )
+            except OSError:
+                raise _fail(
+                    "project_update_transaction_candidate_invalid"
+                ) from None
+            stack.callback(os.close, anchor_descriptor)
+            existing, sidecar_info = _read_retained_claim_descriptor(
+                capsule_path,
+                claim_descriptor,
+                within=capsule_parent,
+                allowed_link_counts=frozenset({2}),
+            )
+            anchor_raw, anchor_info = _read_retained_claim_descriptor(
+                anchor_path,
+                anchor_descriptor,
+                within=self._transaction_root,
+                allowed_link_counts=frozenset({2}),
+            )
+            if (
+                not hmac.compare_digest(existing, anchor_raw)
+                or (int(sidecar_info.st_dev), int(sidecar_info.st_ino))
+                != expected_identity
+                or (int(anchor_info.st_dev), int(anchor_info.st_ino))
+                != expected_identity
+                or len(existing) > len(expected_raw)
+                or not hmac.compare_digest(
+                    existing,
+                    expected_raw[: len(existing)],
+                )
+            ):
+                raise _fail("project_update_transaction_candidate_invalid")
+            remaining = expected_raw[len(existing) :]
+            if remaining:
+                split = max(1, len(remaining) // 2)
+                try:
+                    _write_all(claim_descriptor, remaining[:split])
+                    os.fsync(claim_descriptor)
+                    _empty_abort_claim_test_hook("claim_sidecar_after_prefix")
+                    _write_all(claim_descriptor, remaining[split:])
+                    os.fsync(claim_descriptor)
+                except OSError:
+                    raise _fail(
+                        "project_update_transaction_durability_unverified"
+                    ) from None
+            _empty_abort_claim_test_hook("claim_sidecar_after_complete")
+            final_sidecar, final_sidecar_info = (
+                _read_retained_claim_descriptor(
+                    capsule_path,
+                    claim_descriptor,
+                    within=capsule_parent,
+                    allowed_link_counts=frozenset({2}),
+                )
+            )
+            final_anchor, final_anchor_info = _read_retained_claim_descriptor(
+                anchor_path,
+                anchor_descriptor,
+                within=self._transaction_root,
+                allowed_link_counts=frozenset({2}),
+            )
+            if (
+                not hmac.compare_digest(final_sidecar, expected_raw)
+                or not hmac.compare_digest(final_anchor, expected_raw)
+                or (int(final_sidecar_info.st_dev), int(final_sidecar_info.st_ino))
+                != expected_identity
+                or (int(final_anchor_info.st_dev), int(final_anchor_info.st_ino))
+                != expected_identity
+                or int(final_sidecar_info.st_nlink) != 2
+                or int(final_anchor_info.st_nlink) != 2
+            ):
+                raise _fail("project_update_transaction_candidate_invalid")
+        _empty_abort_claim_test_hook("after_claim_bound")
+        return self._read_empty_abort_claim(
+            allow_retired_link=False,
+        )
+
+    @contextmanager
+    def _held_empty_abort_claim_lock_boundary(
+        self,
+        *,
+        expected_binding: _EmptyAbortClaimBinding,
+    ) -> Iterator[Callable[[], None]]:
+        """Retain both claim names through the lock-release boundary.
+
+        On Windows the two retained descriptors prevent either pathname from
+        being deleted or replaced while the live project lock is released.
+        On every platform the callback proves that both names still identify
+        the exact two-link inode, exact claim bytes, and default stream before
+        the next irreversible step.  A path-only observation is deliberately
+        insufficient here.
+        """
+
+        capsule_parent = self._transaction_root.parent
+        capsule_path = capsule_parent / (
+            _RUNTIME_CLEANUP_CAPSULE_PREFIX
+            + self.transaction_ref
+            + _RUNTIME_CLEANUP_CAPSULE_SUFFIX
+        )
+        anchor_path = self._transaction_root / EMPTY_ABORT_CLAIM_ANCHOR_NAME
+        _within(capsule_path, capsule_parent)
+        claim_intent = self._read_empty_abort_claim_intent()
+        if not hmac.compare_digest(
+            sha256_document(claim_intent),
+            expected_binding.claim_intent_sha256,
+        ):
+            raise _fail("project_update_transaction_state_transition_invalid")
+
+        with ExitStack() as stack:
+            stack.enter_context(
+                _cleanup_bound_directory_context(
+                    self._project_root,
+                    capsule_parent,
+                )
+            )
+            stack.enter_context(
+                _cleanup_bound_directory_context(
+                    self._project_root,
+                    self._transaction_root,
+                )
+            )
+            try:
+                sidecar_descriptor = os.open(
+                    capsule_path,
+                    _flags(os.O_RDONLY),
+                )
+                stack.callback(os.close, sidecar_descriptor)
+                anchor_descriptor = os.open(
+                    anchor_path,
+                    _flags(os.O_RDONLY),
+                )
+                stack.callback(os.close, anchor_descriptor)
+            except OSError:
+                raise _fail(
+                    "project_update_transaction_candidate_invalid"
+                ) from None
+
+            def revalidate() -> None:
+                sidecar_raw, sidecar_info = _read_retained_claim_descriptor(
+                    capsule_path,
+                    sidecar_descriptor,
+                    within=capsule_parent,
+                    allowed_link_counts=frozenset({2}),
+                )
+                anchor_raw, anchor_info = _read_retained_claim_descriptor(
+                    anchor_path,
+                    anchor_descriptor,
+                    within=self._transaction_root,
+                    allowed_link_counts=frozenset({2}),
+                )
+                expected_claim = self._empty_abort_claim_document(
+                    claim_intent=claim_intent,
+                    claim_info=sidecar_info,
+                )
+                if (
+                    not hmac.compare_digest(sidecar_raw, anchor_raw)
+                    or not hmac.compare_digest(
+                        sidecar_raw,
+                        _document_bytes(expected_claim),
+                    )
+                    or sha256_bytes(sidecar_raw)
+                    != expected_binding.claim_sha256
+                    or _empty_abort_claim_identity_sha256(sidecar_info)
+                    != expected_binding.claim_identity_sha256
+                    or (int(sidecar_info.st_dev), int(sidecar_info.st_ino))
+                    != (int(anchor_info.st_dev), int(anchor_info.st_ino))
+                    or int(sidecar_info.st_nlink) != 2
+                    or int(anchor_info.st_nlink) != 2
+                ):
+                    raise _fail(
+                        "project_update_transaction_candidate_invalid"
+                    )
+
+            revalidate()
+            yield revalidate
+            revalidate()
+
     def _validated_abort_intent_after_lock_release(
         self,
-    ) -> tuple[dict[str, Any], dict[str, Any], str, str, str]:
+        *,
+        allow_receipt_prefix: bool = False,
+    ) -> tuple[
+        dict[str, Any],
+        dict[str, Any],
+        str,
+        str,
+        str,
+        _RuntimeCleanupEvidenceBinding | None,
+        _EmptyAbortClaimBinding | None,
+    ]:
         """Validate the sole receipt-pending empty-reservation abort state."""
 
         if os.path.lexists(self._lock_path):
             raise _fail("project_update_transaction_lock_invalid")
+        backlink = self._read_reservation_backlink()
+        intent_path = self._transaction_root / RESERVATION_ABORT_INTENT_NAME
+        abort_intent = _parse_document(
+            _read_regular(intent_path, within=self._transaction_root),
+            code="project_update_transaction_state_transition_invalid",
+        )
+        runtime_cleanup, empty_claim = _reservation_abort_authority_bindings(
+            abort_intent,
+            record_kind="intent",
+        )
         files, directories = ProjectUpdateTransaction._descendant_names(
-            self._transaction_root
+            self._transaction_root,
+            allowed_two_link_files=frozenset({EMPTY_ABORT_CLAIM_ANCHOR_NAME}),
         )
         expected_files = {
             "append.guard",
@@ -4286,25 +5442,22 @@ class ReservedProjectUpdateTransaction:
             RESERVATION_LOCK_BACKLINK_NAME,
             RESERVATION_ABORT_INTENT_NAME,
         }
+        if empty_claim is not None:
+            expected_files.update(
+                {
+                    EMPTY_ABORT_CLAIM_INTENT_NAME,
+                    EMPTY_ABORT_CLAIM_ANCHOR_NAME,
+                }
+            )
+        if allow_receipt_prefix:
+            expected_files.add(RESERVATION_ABORT_RECEIPT_NAME)
         if directories or files != expected_files:
             raise _fail("project_update_transaction_candidate_invalid")
-
-        backlink = self._read_reservation_backlink()
-        intent_path = self._transaction_root / RESERVATION_ABORT_INTENT_NAME
-        abort_intent = _parse_document(
-            _read_regular(intent_path, within=self._transaction_root),
-            code="project_update_transaction_state_transition_invalid",
-        )
-        expected_intent_keys = {
-            "candidate_absence_observation_sha256",
-            "candidate_cleanup_evidence_sha256",
-            "lock_sha256",
-            "reservation_lock_backlink_sha256",
-            "reservation_sha256",
-            "schema",
-            "transaction_logical_ref",
-            "transaction_ref",
-        }
+        if empty_claim is not None:
+            self._read_empty_abort_claim(
+                expected_binding=empty_claim,
+                allow_retired_link=False,
+            )
         cleanup_evidence = _digest(
             abort_intent.get("candidate_cleanup_evidence_sha256"),
             code="project_update_transaction_state_transition_invalid",
@@ -4317,9 +5470,7 @@ class ReservedProjectUpdateTransaction:
             runtime_candidate_binding_sha256=None,
         )
         if (
-            set(abort_intent) != expected_intent_keys
-            or abort_intent.get("schema") != RESERVATION_ABORT_INTENT_SCHEMA
-            or abort_intent.get("transaction_ref") != self.transaction_ref
+            abort_intent.get("transaction_ref") != self.transaction_ref
             or abort_intent.get("transaction_logical_ref")
             != self.transaction_logical_ref
             or abort_intent.get("reservation_sha256")
@@ -4339,7 +5490,268 @@ class ReservedProjectUpdateTransaction:
             candidate_absence,
             cleanup_evidence,
             lock_absence,
+            runtime_cleanup,
+            empty_claim,
         )
+
+    def _empty_abort_claim_retirement_document(
+        self,
+        *,
+        claim: _EmptyAbortClaimBinding,
+        receipt: Mapping[str, Any],
+        sidecar_parent_durability: DirectoryDurability,
+    ) -> dict[str, Any]:
+        return {
+            "abort_receipt_sha256": sha256_document(receipt),
+            "claim_anchor_link_count": 1,
+            "empty_abort_claim_identity_sha256": claim.claim_identity_sha256,
+            "empty_abort_claim_intent_sha256": claim.claim_intent_sha256,
+            "empty_abort_claim_sha256": claim.claim_sha256,
+            "foreign_entry_policy": "preserve_and_review",
+            "global_sidecar_absence_asserted": False,
+            "original_claim_identity_retired": True,
+            "reservation_sha256": self.reservation.sha256,
+            "schema": EMPTY_ABORT_CLAIM_RETIREMENT_SCHEMA,
+            "sidecar_parent_durability": (
+                sidecar_parent_durability.public_document()
+            ),
+            "state": "original_claim_identity_retired",
+            "transaction_logical_ref": self.transaction_logical_ref,
+            "transaction_ref": self.transaction_ref,
+        }
+
+    def _read_empty_abort_claim_retirement(
+        self,
+        *,
+        claim: _EmptyAbortClaimBinding,
+        receipt: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        retirement_path = (
+            self._transaction_root / EMPTY_ABORT_CLAIM_RETIREMENT_NAME
+        )
+        if not _runtime_cleanup_sidecar_present(
+            retirement_path,
+            code="project_update_transaction_candidate_invalid",
+        ):
+            return None
+        claim_state = self._read_empty_abort_claim(
+            expected_binding=claim,
+            allow_retired_link=True,
+        )
+        if int(claim_state.anchor_info.st_nlink) != 1:
+            raise _fail("project_update_transaction_candidate_invalid")
+        parent_durability = _require_directory_durable(
+            self._transaction_root.parent
+        )
+        expected = self._empty_abort_claim_retirement_document(
+            claim=claim,
+            receipt=receipt,
+            sidecar_parent_durability=parent_durability,
+        )
+        actual = _parse_document(
+            _read_regular(
+                retirement_path,
+                within=self._transaction_root,
+                maximum=MAX_DOCUMENT_BYTES + 1,
+            ),
+            code="project_update_transaction_candidate_invalid",
+        )
+        if not hmac.compare_digest(
+            canonical_json_bytes(actual),
+            canonical_json_bytes(expected),
+        ):
+            raise _fail("project_update_transaction_candidate_invalid")
+        return actual
+
+    def _unlink_exact_empty_abort_claim(
+        self,
+        *,
+        claim_state: _EmptyAbortClaimState,
+    ) -> None:
+        capsule_parent = self._transaction_root.parent
+        capsule_path = capsule_parent / (
+            _RUNTIME_CLEANUP_CAPSULE_PREFIX
+            + self.transaction_ref
+            + _RUNTIME_CLEANUP_CAPSULE_SUFFIX
+        )
+        anchor_path = self._transaction_root / EMPTY_ABORT_CLAIM_ANCHOR_NAME
+        expected_identity = (
+            int(claim_state.anchor_info.st_dev),
+            int(claim_state.anchor_info.st_ino),
+        )
+        _empty_abort_claim_test_hook("before_claim_original_name_retire")
+        if os.name == "nt":
+            try:
+                _unlink_exact_cleanup_plan_duplicate_windows(
+                    self._project_root,
+                    capsule_path,
+                    anchor_path,
+                    expected_raw=claim_state.claim_raw,
+                    expected_identity=expected_identity,
+                )
+            except OSError:
+                raise _fail("project_update_transaction_candidate_invalid") from None
+        else:
+            try:
+                descriptor = os.open(capsule_path, _flags(os.O_RDONLY))
+            except OSError:
+                raise _fail("project_update_transaction_candidate_invalid") from None
+            try:
+                opened = os.fstat(descriptor)
+                source_raw, source_info = _read_cleanup_linked_regular(
+                    self._project_root,
+                    capsule_path,
+                    maximum=MAX_DOCUMENT_BYTES + 1,
+                )
+                anchor_raw, anchor_info = _read_cleanup_linked_regular(
+                    self._project_root,
+                    anchor_path,
+                    maximum=MAX_DOCUMENT_BYTES + 1,
+                )
+                if (
+                    not hmac.compare_digest(source_raw, claim_state.claim_raw)
+                    or not hmac.compare_digest(anchor_raw, claim_state.claim_raw)
+                    or (int(opened.st_dev), int(opened.st_ino))
+                    != expected_identity
+                    or (int(source_info.st_dev), int(source_info.st_ino))
+                    != expected_identity
+                    or (int(anchor_info.st_dev), int(anchor_info.st_ino))
+                    != expected_identity
+                    or int(opened.st_nlink) != 2
+                    or int(source_info.st_nlink) != 2
+                    or int(anchor_info.st_nlink) != 2
+                ):
+                    raise _fail("project_update_transaction_candidate_invalid")
+                _empty_abort_claim_test_hook("before_claim_original_name_unlink")
+                # Repeat the exact path/anchor proof at the last testable
+                # boundary before unlink.  The retained descriptor attributes
+                # the mutation to the same inode; the anchor proves the result.
+                source_raw, source_info = _read_cleanup_linked_regular(
+                    self._project_root,
+                    capsule_path,
+                    maximum=MAX_DOCUMENT_BYTES + 1,
+                )
+                anchor_raw, anchor_info = _read_cleanup_linked_regular(
+                    self._project_root,
+                    anchor_path,
+                    maximum=MAX_DOCUMENT_BYTES + 1,
+                )
+                if (
+                    not hmac.compare_digest(source_raw, claim_state.claim_raw)
+                    or not hmac.compare_digest(anchor_raw, claim_state.claim_raw)
+                    or (int(source_info.st_dev), int(source_info.st_ino))
+                    != expected_identity
+                    or (int(anchor_info.st_dev), int(anchor_info.st_ino))
+                    != expected_identity
+                    or int(source_info.st_nlink) != 2
+                    or int(anchor_info.st_nlink) != 2
+                ):
+                    raise _fail("project_update_transaction_candidate_invalid")
+                os.unlink(capsule_path)
+            except ProjectUpdateTransactionError:
+                raise
+            except OSError:
+                raise _fail("project_update_transaction_candidate_invalid") from None
+            finally:
+                os.close(descriptor)
+            _require_directory_durable(capsule_parent)
+            anchor_raw, anchor_info = _read_cleanup_linked_regular(
+                self._project_root,
+                anchor_path,
+                maximum=MAX_DOCUMENT_BYTES + 1,
+            )
+            if (
+                not hmac.compare_digest(anchor_raw, claim_state.claim_raw)
+                or (int(anchor_info.st_dev), int(anchor_info.st_ino))
+                != expected_identity
+                or int(anchor_info.st_nlink) != 1
+            ):
+                raise _fail("project_update_transaction_candidate_invalid")
+
+    def _retire_empty_abort_claim(
+        self,
+        *,
+        claim: _EmptyAbortClaimBinding,
+        receipt: Mapping[str, Any],
+    ) -> str:
+        with ExitStack() as stack:
+            stack.enter_context(
+                _cleanup_bound_directory_context(
+                    self._project_root,
+                    self._transaction_root.parent,
+                )
+            )
+            stack.enter_context(
+                _cleanup_bound_directory_context(
+                    self._project_root,
+                    self._transaction_root,
+                )
+            )
+            claim_state = self._read_empty_abort_claim(
+                expected_binding=claim,
+                allow_retired_link=True,
+            )
+            retirement_path = (
+                self._transaction_root / EMPTY_ABORT_CLAIM_RETIREMENT_NAME
+            )
+            retirement_present = _runtime_cleanup_sidecar_present(
+                retirement_path,
+                code="project_update_transaction_candidate_invalid",
+            )
+            retired_now = False
+            if retirement_present:
+                if int(claim_state.anchor_info.st_nlink) != 1:
+                    raise _fail("project_update_transaction_candidate_invalid")
+            elif claim_state.sidecar_state == "linked":
+                self._unlink_exact_empty_abort_claim(claim_state=claim_state)
+                retired_now = True
+            elif claim_state.sidecar_state == "foreign":
+                # Without an already durable retirement record, a foreign
+                # replacement is temporally ambiguous.  Preserve and block.
+                raise _fail("project_update_transaction_candidate_invalid")
+            elif int(claim_state.anchor_info.st_nlink) != 1:
+                raise _fail("project_update_transaction_candidate_invalid")
+            _empty_abort_claim_test_hook("after_claim_original_name_retired")
+            final_claim = self._read_empty_abort_claim(
+                expected_binding=claim,
+                allow_retired_link=True,
+            )
+            if (
+                int(final_claim.anchor_info.st_nlink) != 1
+                or (
+                    final_claim.sidecar_state == "foreign"
+                    and not retired_now
+                    and not retirement_present
+                )
+                or final_claim.sidecar_state == "linked"
+            ):
+                raise _fail("project_update_transaction_candidate_invalid")
+            parent_durability = _require_directory_durable(
+                self._transaction_root.parent
+            )
+            retirement = self._empty_abort_claim_retirement_document(
+                claim=claim,
+                receipt=receipt,
+                sidecar_parent_durability=parent_durability,
+            )
+            retirement_raw = _document_bytes(retirement)
+            with _held_resumable_exact_prefix_file(
+                retirement_path,
+                within=self._transaction_root,
+                expected_factory=lambda _info: retirement_raw,
+                boundary_prefix="claim_retirement",
+                allowed_final_link_counts=frozenset({1}),
+            ):
+                pass
+            _require_directory_durable(self._transaction_root)
+            _empty_abort_claim_test_hook("after_claim_retirement_durable")
+        verified = self._read_empty_abort_claim_retirement(
+            claim=claim,
+            receipt=receipt,
+        )
+        if verified is None:
+            raise _fail("project_update_transaction_candidate_invalid")
+        return sha256_document(verified)
 
     def inspect_abort_receipt_pending_read_only(self) -> dict[str, Any] | None:
         """Classify an exact post-unlink/pre-receipt abort without writing."""
@@ -4348,26 +5760,113 @@ class ReservedProjectUpdateTransaction:
         receipt_path = self._transaction_root / RESERVATION_ABORT_RECEIPT_NAME
         if not os.path.lexists(intent_path) and not os.path.lexists(receipt_path):
             return None
-        if not os.path.lexists(intent_path) or os.path.lexists(receipt_path):
+        if not os.path.lexists(intent_path):
             raise _fail("project_update_transaction_state_transition_invalid")
+        if os.path.lexists(receipt_path):
+            pending = self._inspect_abort_receipt_core(
+                require_claim_retirement=False,
+            )
+            if (
+                pending is None
+                or pending.get("empty_abort_claim_retirement_sha256") is not None
+            ):
+                raise _fail("project_update_transaction_state_transition_invalid")
+            return {
+                **pending,
+                "state": "abort_claim_retirement_pending",
+            }
         (
             _backlink,
             abort_intent,
             _candidate_absence,
             cleanup_evidence,
             _lock_absence,
+            runtime_cleanup,
+            empty_claim,
         ) = self._validated_abort_intent_after_lock_release()
-        return {
+        result = {
             "abort_intent_sha256": sha256_document(abort_intent),
             "candidate_cleanup_evidence_sha256": cleanup_evidence,
-            "schema": RESERVATION_ABORT_INTENT_SCHEMA,
+            "schema": str(abort_intent["schema"]),
             "state": "abort_receipt_pending_after_lock_release",
             "transaction_logical_ref": self.transaction_logical_ref,
             "transaction_ref": self.transaction_ref,
         }
+        if runtime_cleanup is not None:
+            result.update(
+                {
+                    "runtime_cleanup_terminal_evidence_sha256": (
+                        runtime_cleanup.terminal_evidence_sha256
+                    ),
+                    "runtime_cleanup_capsule_sha256": (
+                        runtime_cleanup.capsule_sha256
+                    ),
+                    "runtime_cleanup_capsule_identity_sha256": (
+                        runtime_cleanup.capsule_identity_sha256
+                    ),
+                }
+            )
+        elif empty_claim is not None:
+            result.update(
+                {
+                    "empty_abort_claim_intent_sha256": (
+                        empty_claim.claim_intent_sha256
+                    ),
+                    "empty_abort_claim_sha256": empty_claim.claim_sha256,
+                    "empty_abort_claim_identity_sha256": (
+                        empty_claim.claim_identity_sha256
+                    ),
+                }
+            )
+        return result
 
     def resume_abort_after_lock_release(self) -> dict[str, Any]:
+        """Finish a receipt-pending abort under the namespace guard."""
+
+        guard = self._transaction_root / "append.guard"
+        with _exclusive_guard(guard, within=self._transaction_root):
+            return self._resume_abort_after_lock_release_guard_held()
+
+    def _resume_abort_after_lock_release_guard_held(self) -> dict[str, Any]:
         """Complete the exact receipt after process loss following lock unlink."""
+
+        receipt_path = self._transaction_root / RESERVATION_ABORT_RECEIPT_NAME
+        if os.path.lexists(receipt_path):
+            try:
+                pending = self._inspect_abort_receipt_core(
+                    require_claim_retirement=False,
+                    tolerate_retirement_prefix=True,
+                )
+            except ProjectUpdateTransactionError:
+                pending = None
+            if pending is not None:
+                claim_digest = pending.get("empty_abort_claim_sha256")
+                if claim_digest is not None:
+                    claim = _EmptyAbortClaimBinding(
+                        claim_intent_sha256=_digest(
+                            pending.get("empty_abort_claim_intent_sha256"),
+                            code="project_update_transaction_state_transition_invalid",
+                        ),
+                        claim_sha256=_digest(
+                            claim_digest,
+                            code="project_update_transaction_state_transition_invalid",
+                        ),
+                        claim_identity_sha256=_digest(
+                            pending.get("empty_abort_claim_identity_sha256"),
+                            code="project_update_transaction_state_transition_invalid",
+                        ),
+                    )
+                    receipt = _parse_document(
+                        _read_regular(receipt_path, within=self._transaction_root),
+                        code="project_update_transaction_state_transition_invalid",
+                    )
+                    self._retire_empty_abort_claim(claim=claim, receipt=receipt)
+                terminal = self.inspect_abort_receipt()
+                if terminal is None:
+                    raise _fail(
+                        "project_update_transaction_state_transition_invalid"
+                    )
+                return terminal
 
         (
             backlink,
@@ -4375,42 +5874,236 @@ class ReservedProjectUpdateTransaction:
             candidate_absence,
             cleanup_evidence,
             _prior_lock_absence,
-        ) = self._validated_abort_intent_after_lock_release()
-        lock_parent_durability = _require_directory_durable(
-            self._lock_path.parent
+            runtime_cleanup,
+            empty_claim,
+        ) = self._validated_abort_intent_after_lock_release(
+            allow_receipt_prefix=os.path.lexists(receipt_path),
         )
-        # Recheck after the durability call so a newly acquired live lock is
-        # never covered by a stale absence observation.
+        capsule_path = self._transaction_root.parent / (
+            _RUNTIME_CLEANUP_CAPSULE_PREFIX
+            + self.transaction_ref
+            + _RUNTIME_CLEANUP_CAPSULE_SUFFIX
+        )
+        _within(capsule_path, self._transaction_root.parent)
+        if runtime_cleanup is None and empty_claim is None:
+            if _runtime_cleanup_sidecar_present(
+                capsule_path,
+                code="project_update_transaction_candidate_invalid",
+            ):
+                raise _fail("project_update_transaction_candidate_invalid")
+            _runtime_cleanup_sidecar_test_hook(
+                "resume_after_initial_absence"
+            )
+        if (
+            runtime_cleanup is None
+            and empty_claim is None
+            and _runtime_cleanup_sidecar_present(
+            capsule_path,
+            code="project_update_transaction_candidate_invalid",
+            )
+        ):
+            raise _fail("project_update_transaction_candidate_invalid")
+        if empty_claim is not None:
+            with self._held_empty_abort_claim_lock_boundary(
+                expected_binding=empty_claim,
+            ) as claim_revalidate:
+                receipt = self._commit_reservation_abort_records_guard_held(
+                    backlink=backlink,
+                    abort_intent=abort_intent,
+                    candidate_absence=candidate_absence,
+                    cleanup_evidence=cleanup_evidence,
+                    runtime_cleanup=runtime_cleanup,
+                    empty_claim=empty_claim,
+                    claim_revalidate=claim_revalidate,
+                    expected_lock_bytes=b"",
+                )
+        else:
+            receipt = self._commit_reservation_abort_records_guard_held(
+                backlink=backlink,
+                abort_intent=abort_intent,
+                candidate_absence=candidate_absence,
+                cleanup_evidence=cleanup_evidence,
+                runtime_cleanup=runtime_cleanup,
+                empty_claim=None,
+                claim_revalidate=None,
+                expected_lock_bytes=b"",
+            )
+        if empty_claim is not None:
+            self._retire_empty_abort_claim(
+                claim=empty_claim,
+                receipt=receipt,
+            )
+        terminal = self.inspect_abort_receipt()
+        if terminal is None:
+            raise _fail("project_update_transaction_state_transition_invalid")
+        return terminal
+
+    def _commit_reservation_abort_records_guard_held(
+        self,
+        *,
+        backlink: Mapping[str, Any],
+        abort_intent: dict[str, Any],
+        candidate_absence: str,
+        cleanup_evidence: str,
+        runtime_cleanup: _RuntimeCleanupEvidenceBinding | None,
+        empty_claim: _EmptyAbortClaimBinding | None,
+        claim_revalidate: Callable[[], None] | None,
+        expected_lock_bytes: bytes,
+    ) -> dict[str, Any]:
+        """Write intent/receipt and release the lock under one claim hold."""
+
+        def claim_boundary(boundary: str | None = None) -> None:
+            if boundary is not None:
+                try:
+                    _empty_abort_claim_test_hook(boundary)
+                except OSError:
+                    raise _fail(
+                        "project_update_transaction_candidate_invalid"
+                    ) from None
+            if claim_revalidate is not None:
+                claim_revalidate()
+
+        intent_path = self._transaction_root / RESERVATION_ABORT_INTENT_NAME
+        receipt_path = self._transaction_root / RESERVATION_ABORT_RECEIPT_NAME
+        intent_bytes = _document_bytes(abort_intent)
+        if os.path.lexists(intent_path):
+            if not hmac.compare_digest(
+                _read_regular(intent_path, within=self._transaction_root),
+                intent_bytes,
+            ):
+                raise _fail(
+                    "project_update_transaction_state_transition_invalid"
+                )
+        else:
+            if empty_claim is not None:
+                with _held_resumable_exact_prefix_file(
+                    intent_path,
+                    within=self._transaction_root,
+                    expected_factory=lambda _info: intent_bytes,
+                    boundary_prefix="claim_abort_intent",
+                    allowed_final_link_counts=frozenset({1}),
+                ):
+                    pass
+            else:
+                _write_new(
+                    intent_path,
+                    intent_bytes,
+                    within=self._transaction_root,
+                )
+            _require_directory_durable(self._transaction_root)
+        claim_boundary("after_abort_intent_durable")
+        if os.path.lexists(self._lock_path):
+            self._verify_reservation_backlink(expected_lock_bytes)
+            claim_boundary("before_abort_lock_unlink")
+            try:
+                self._lock_path.unlink()
+            except OSError:
+                raise _fail("project_update_transaction_lock_invalid") from None
+            claim_boundary("after_abort_lock_unlinked")
+        lock_parent_durability = _require_directory_durable(self._lock_path.parent)
         lock_absence = self._absent_lock_observation(backlink)
-        receipt = {
+        claim_boundary()
+        receipt: dict[str, Any] = {
             "abort_intent_sha256": sha256_document(abort_intent),
             "candidate_absence_observation_sha256": candidate_absence,
             "candidate_cleanup_evidence_sha256": cleanup_evidence,
             "lock_absence_observation_sha256": lock_absence,
             "lock_parent_durability": lock_parent_durability.public_document(),
             "reservation_sha256": self.reservation.sha256,
-            "schema": RESERVATION_ABORT_RECEIPT_SCHEMA,
+            "schema": (
+                RESERVATION_ABORT_RECEIPT_SCHEMA_V0419
+                if runtime_cleanup is not None or empty_claim is not None
+                else RESERVATION_ABORT_RECEIPT_SCHEMA
+            ),
             "state": "aborted_before_intent_seal",
             "transaction_logical_ref": self.transaction_logical_ref,
             "transaction_ref": self.transaction_ref,
         }
-        receipt_path = self._transaction_root / RESERVATION_ABORT_RECEIPT_NAME
-        _write_new(
-            receipt_path,
-            _document_bytes(receipt),
-            within=self._transaction_root,
-        )
-        _require_directory_durable(self._transaction_root)
-        terminal = self.inspect_abort_receipt()
-        if terminal is None:
-            raise _fail("project_update_transaction_state_transition_invalid")
-        return terminal
+        if runtime_cleanup is not None:
+            receipt.update(
+                {
+                    "runtime_cleanup_terminal_evidence_sha256": (
+                        runtime_cleanup.terminal_evidence_sha256
+                    ),
+                    "runtime_cleanup_capsule_sha256": (
+                        runtime_cleanup.capsule_sha256
+                    ),
+                    "runtime_cleanup_capsule_identity_sha256": (
+                        runtime_cleanup.capsule_identity_sha256
+                    ),
+                }
+            )
+        elif empty_claim is not None:
+            receipt.update(
+                {
+                    "empty_abort_claim_intent_sha256": (
+                        empty_claim.claim_intent_sha256
+                    ),
+                    "empty_abort_claim_sha256": empty_claim.claim_sha256,
+                    "empty_abort_claim_identity_sha256": (
+                        empty_claim.claim_identity_sha256
+                    ),
+                }
+            )
+        receipt_bytes = _document_bytes(receipt)
+        if empty_claim is not None:
+            with _held_resumable_exact_prefix_file(
+                receipt_path,
+                within=self._transaction_root,
+                expected_factory=lambda _info: receipt_bytes,
+                boundary_prefix="claim_abort_receipt",
+                allowed_final_link_counts=frozenset({1}),
+            ):
+                pass
+        else:
+            if os.path.lexists(receipt_path):
+                if not hmac.compare_digest(
+                    _read_regular(
+                        receipt_path,
+                        within=self._transaction_root,
+                    ),
+                    receipt_bytes,
+                ):
+                    raise _fail(
+                        "project_update_transaction_state_transition_invalid"
+                    )
+            else:
+                _write_new(
+                    receipt_path,
+                    receipt_bytes,
+                    within=self._transaction_root,
+                )
+            _require_directory_durable(self._transaction_root)
+        claim_boundary("after_abort_receipt_durable")
+        return receipt
 
     def abort_before_intent_seal(
         self,
         *,
         expected_lock_bytes: bytes,
+        runtime_cleanup_terminal_evidence: Mapping[str, Any] | None = None,
         candidate_cleanup_evidence_sha256: str | None = None,
+    ) -> dict[str, Any]:
+        """Abort one unsealed reservation under the namespace guard."""
+
+        guard = self._transaction_root / "append.guard"
+        with _exclusive_guard(guard, within=self._transaction_root):
+            return self._abort_before_intent_seal_guard_held(
+                expected_lock_bytes=expected_lock_bytes,
+                runtime_cleanup_terminal_evidence=(
+                    runtime_cleanup_terminal_evidence
+                ),
+                candidate_cleanup_evidence_sha256=(
+                    candidate_cleanup_evidence_sha256
+                ),
+            )
+
+    def _abort_before_intent_seal_guard_held(
+        self,
+        *,
+        expected_lock_bytes: bytes,
+        runtime_cleanup_terminal_evidence: Mapping[str, Any] | None,
+        candidate_cleanup_evidence_sha256: str | None,
     ) -> dict[str, Any]:
         """Exactly release an unchanged reservation after candidate absence.
 
@@ -4420,11 +6113,25 @@ class ReservedProjectUpdateTransaction:
         """
 
         _parse_lock_bytes(expected_lock_bytes, reservation=self.reservation)
+        receipt_path = self._transaction_root / RESERVATION_ABORT_RECEIPT_NAME
+        if os.path.lexists(receipt_path):
+            return self._resume_abort_after_lock_release_guard_held()
+        supplied_runtime_cleanup = (
+            None
+            if runtime_cleanup_terminal_evidence is None
+            else _runtime_cleanup_terminal_evidence_binding(
+                runtime_cleanup_terminal_evidence,
+                transaction_ref=self.reservation.transaction_ref,
+                target_tag=self.reservation.requested_target_tag,
+                runtime_candidate=None,
+            )
+        )
         backlink = self._read_reservation_backlink()
         if backlink["lock_sha256"] != sha256_bytes(expected_lock_bytes):
             raise _fail("project_update_transaction_lock_invalid")
         files, directories = ProjectUpdateTransaction._descendant_names(
-            self._transaction_root
+            self._transaction_root,
+            allowed_two_link_files=frozenset({EMPTY_ABORT_CLAIM_ANCHOR_NAME}),
         )
         allowed_files = {
             "append.guard",
@@ -4432,6 +6139,9 @@ class ReservedProjectUpdateTransaction:
             RESERVATION_LOCK_BACKLINK_NAME,
             RESERVATION_ABORT_INTENT_NAME,
             RESERVATION_ABORT_RECEIPT_NAME,
+            EMPTY_ABORT_CLAIM_INTENT_NAME,
+            EMPTY_ABORT_CLAIM_ANCHOR_NAME,
+            EMPTY_ABORT_CLAIM_RETIREMENT_NAME,
         }
         if directories or not files.issubset(allowed_files) or not {
             "append.guard",
@@ -4456,70 +6166,178 @@ class ReservedProjectUpdateTransaction:
             )
             if cleanup_evidence != exact_cleanup_evidence:
                 raise _fail("project_update_transaction_candidate_invalid")
-        abort_intent = {
+        abort_intent_base: dict[str, Any] = {
             "candidate_absence_observation_sha256": candidate_absence,
             "candidate_cleanup_evidence_sha256": cleanup_evidence,
             "lock_sha256": backlink["lock_sha256"],
             "reservation_lock_backlink_sha256": sha256_document(backlink),
             "reservation_sha256": self.reservation.sha256,
-            "schema": RESERVATION_ABORT_INTENT_SCHEMA,
             "transaction_logical_ref": self.transaction_logical_ref,
             "transaction_ref": self.transaction_ref,
         }
         intent_path = self._transaction_root / RESERVATION_ABORT_INTENT_NAME
-        intent_bytes = _document_bytes(abort_intent)
         if os.path.lexists(intent_path):
-            if not hmac.compare_digest(
-                _read_regular(intent_path, within=self._transaction_root),
-                intent_bytes,
-            ):
-                raise _fail("project_update_transaction_state_transition_invalid")
-        else:
-            _write_new(intent_path, intent_bytes, within=self._transaction_root)
-            _require_directory_durable(self._transaction_root)
-
-        if os.path.lexists(self._lock_path):
-            self._verify_reservation_backlink(expected_lock_bytes)
             try:
-                self._lock_path.unlink()
-            except OSError:
-                raise _fail("project_update_transaction_lock_invalid") from None
-        lock_parent_durability = _require_directory_durable(self._lock_path.parent)
-        lock_absence = self._absent_lock_observation(backlink)
-        receipt = {
-            "abort_intent_sha256": sha256_document(abort_intent),
-            "candidate_absence_observation_sha256": candidate_absence,
-            "candidate_cleanup_evidence_sha256": cleanup_evidence,
-            "lock_absence_observation_sha256": lock_absence,
-            "lock_parent_durability": lock_parent_durability.public_document(),
-            "reservation_sha256": self.reservation.sha256,
-            "schema": RESERVATION_ABORT_RECEIPT_SCHEMA,
-            "state": "aborted_before_intent_seal",
-            "transaction_logical_ref": self.transaction_logical_ref,
-            "transaction_ref": self.transaction_ref,
-        }
-        receipt_path = self._transaction_root / RESERVATION_ABORT_RECEIPT_NAME
-        receipt_bytes = _document_bytes(receipt)
-        if os.path.lexists(receipt_path):
-            if not hmac.compare_digest(
-                _read_regular(receipt_path, within=self._transaction_root),
-                receipt_bytes,
+                existing_abort_intent = _parse_document(
+                    _read_regular(intent_path, within=self._transaction_root),
+                    code="project_update_transaction_state_transition_invalid",
+                )
+            except ProjectUpdateTransactionError:
+                if supplied_runtime_cleanup is not None:
+                    raise
+                partial_claim = self._read_empty_abort_claim(
+                    allow_retired_link=False,
+                )
+                expected_partial_intent = {
+                    **abort_intent_base,
+                    "empty_abort_claim_identity_sha256": (
+                        partial_claim.binding.claim_identity_sha256
+                    ),
+                    "empty_abort_claim_intent_sha256": (
+                        partial_claim.binding.claim_intent_sha256
+                    ),
+                    "empty_abort_claim_sha256": (
+                        partial_claim.binding.claim_sha256
+                    ),
+                    "schema": RESERVATION_ABORT_INTENT_SCHEMA_V0419,
+                }
+                expected_partial_raw = _document_bytes(expected_partial_intent)
+                with _held_resumable_exact_prefix_file(
+                    intent_path,
+                    within=self._transaction_root,
+                    expected_factory=lambda _info: expected_partial_raw,
+                    boundary_prefix="claim_abort_intent",
+                    allowed_final_link_counts=frozenset({1}),
+                ):
+                    pass
+                _require_directory_durable(self._transaction_root)
+                existing_abort_intent = _parse_document(
+                    _read_regular(intent_path, within=self._transaction_root),
+                    code="project_update_transaction_state_transition_invalid",
+                )
+            existing_runtime_cleanup, existing_empty_claim = (
+                _reservation_abort_authority_bindings(
+                    existing_abort_intent,
+                    record_kind="intent",
+                )
+            )
+            if existing_runtime_cleanup != supplied_runtime_cleanup:
+                raise _fail(
+                    "project_update_transaction_state_transition_invalid"
+                )
+            effective_runtime_cleanup = existing_runtime_cleanup
+            effective_empty_claim = existing_empty_claim
+            if effective_empty_claim is not None:
+                self._read_empty_abort_claim(
+                    expected_binding=effective_empty_claim,
+                    allow_retired_link=False,
+                )
+            elif any(
+                name in files
+                for name in (
+                    EMPTY_ABORT_CLAIM_INTENT_NAME,
+                    EMPTY_ABORT_CLAIM_ANCHOR_NAME,
+                    EMPTY_ABORT_CLAIM_RETIREMENT_NAME,
+                )
             ):
-                raise _fail("project_update_transaction_state_transition_invalid")
+                raise _fail("project_update_transaction_candidate_invalid")
         else:
-            _write_new(receipt_path, receipt_bytes, within=self._transaction_root)
-            _require_directory_durable(self._transaction_root)
-        return {
-            "candidate_cleanup_evidence_sha256": cleanup_evidence,
-            "receipt_sha256": sha256_document(receipt),
-            "schema": RESERVATION_ABORT_RECEIPT_SCHEMA,
-            "state": "aborted_before_intent_seal",
-            "transaction_logical_ref": self.transaction_logical_ref,
-            "transaction_ref": self.transaction_ref,
+            effective_runtime_cleanup = supplied_runtime_cleanup
+            if effective_runtime_cleanup is None:
+                claim_state = self._prepare_empty_abort_claim()
+                effective_empty_claim = claim_state.binding
+            else:
+                effective_empty_claim = None
+                if any(
+                    name in files
+                    for name in (
+                        EMPTY_ABORT_CLAIM_INTENT_NAME,
+                        EMPTY_ABORT_CLAIM_ANCHOR_NAME,
+                        EMPTY_ABORT_CLAIM_RETIREMENT_NAME,
+                    )
+                ):
+                    raise _fail("project_update_transaction_candidate_invalid")
+        abort_intent = {
+            **abort_intent_base,
+            "schema": (
+                RESERVATION_ABORT_INTENT_SCHEMA_V0419
+                if (
+                    effective_runtime_cleanup is not None
+                    or effective_empty_claim is not None
+                )
+                else RESERVATION_ABORT_INTENT_SCHEMA
+            ),
         }
+        if effective_runtime_cleanup is not None:
+            abort_intent.update(
+                {
+                    "runtime_cleanup_terminal_evidence_sha256": (
+                        effective_runtime_cleanup.terminal_evidence_sha256
+                    ),
+                    "runtime_cleanup_capsule_sha256": (
+                        effective_runtime_cleanup.capsule_sha256
+                    ),
+                    "runtime_cleanup_capsule_identity_sha256": (
+                        effective_runtime_cleanup.capsule_identity_sha256
+                    ),
+                }
+            )
+        elif effective_empty_claim is not None:
+            abort_intent.update(
+                {
+                    "empty_abort_claim_intent_sha256": (
+                        effective_empty_claim.claim_intent_sha256
+                    ),
+                    "empty_abort_claim_sha256": (
+                        effective_empty_claim.claim_sha256
+                    ),
+                    "empty_abort_claim_identity_sha256": (
+                        effective_empty_claim.claim_identity_sha256
+                    ),
+                }
+            )
+        if effective_empty_claim is not None:
+            with self._held_empty_abort_claim_lock_boundary(
+                expected_binding=effective_empty_claim,
+            ) as claim_revalidate:
+                receipt = self._commit_reservation_abort_records_guard_held(
+                    backlink=backlink,
+                    abort_intent=abort_intent,
+                    candidate_absence=candidate_absence,
+                    cleanup_evidence=cleanup_evidence,
+                    runtime_cleanup=effective_runtime_cleanup,
+                    empty_claim=effective_empty_claim,
+                    claim_revalidate=claim_revalidate,
+                    expected_lock_bytes=expected_lock_bytes,
+                )
+        else:
+            receipt = self._commit_reservation_abort_records_guard_held(
+                backlink=backlink,
+                abort_intent=abort_intent,
+                candidate_absence=candidate_absence,
+                cleanup_evidence=cleanup_evidence,
+                runtime_cleanup=effective_runtime_cleanup,
+                empty_claim=None,
+                claim_revalidate=None,
+                expected_lock_bytes=expected_lock_bytes,
+            )
+        if effective_empty_claim is not None:
+            self._retire_empty_abort_claim(
+                claim=effective_empty_claim,
+                receipt=receipt,
+            )
+        terminal = self.inspect_abort_receipt()
+        if terminal is None:
+            raise _fail("project_update_transaction_state_transition_invalid")
+        return terminal
 
-    def inspect_abort_receipt(self) -> dict[str, Any] | None:
-        """Validate an already-terminal reservation abort without mutating it."""
+    def _inspect_abort_receipt_core(
+        self,
+        *,
+        require_claim_retirement: bool,
+        tolerate_retirement_prefix: bool = False,
+    ) -> dict[str, Any] | None:
+        """Validate a receipt and optionally require claim retirement proof."""
 
         intent_path = self._transaction_root / RESERVATION_ABORT_INTENT_NAME
         receipt_path = self._transaction_root / RESERVATION_ABORT_RECEIPT_NAME
@@ -4532,20 +6350,12 @@ class ReservedProjectUpdateTransaction:
             _read_regular(intent_path, within=self._transaction_root),
             code="project_update_transaction_state_transition_invalid",
         )
-        expected_intent_keys = {
-            "candidate_absence_observation_sha256",
-            "candidate_cleanup_evidence_sha256",
-            "lock_sha256",
-            "reservation_lock_backlink_sha256",
-            "reservation_sha256",
-            "schema",
-            "transaction_logical_ref",
-            "transaction_ref",
-        }
+        runtime_cleanup, empty_claim = _reservation_abort_authority_bindings(
+            abort_intent,
+            record_kind="intent",
+        )
         if (
-            set(abort_intent) != expected_intent_keys
-            or abort_intent.get("schema") != RESERVATION_ABORT_INTENT_SCHEMA
-            or abort_intent.get("transaction_ref") != self.transaction_ref
+            abort_intent.get("transaction_ref") != self.transaction_ref
             or abort_intent.get("transaction_logical_ref")
             != self.transaction_logical_ref
             or abort_intent.get("reservation_sha256") != self.reservation.sha256
@@ -4576,30 +6386,125 @@ class ReservedProjectUpdateTransaction:
             _read_regular(receipt_path, within=self._transaction_root),
             code="project_update_transaction_state_transition_invalid",
         )
-        expected_receipt = {
+        receipt_runtime_cleanup, receipt_empty_claim = (
+            _reservation_abort_authority_bindings(
+                receipt,
+                record_kind="receipt",
+            )
+        )
+        if (
+            receipt_runtime_cleanup != runtime_cleanup
+            or receipt_empty_claim != empty_claim
+        ):
+            raise _fail("project_update_transaction_state_transition_invalid")
+        expected_receipt: dict[str, Any] = {
             "abort_intent_sha256": sha256_document(abort_intent),
             "candidate_absence_observation_sha256": candidate_absence,
             "candidate_cleanup_evidence_sha256": cleanup_evidence,
             "lock_absence_observation_sha256": lock_absence,
             "lock_parent_durability": lock_parent_durability.public_document(),
             "reservation_sha256": self.reservation.sha256,
-            "schema": RESERVATION_ABORT_RECEIPT_SCHEMA,
+            "schema": (
+                RESERVATION_ABORT_RECEIPT_SCHEMA_V0419
+                if runtime_cleanup is not None or empty_claim is not None
+                else RESERVATION_ABORT_RECEIPT_SCHEMA
+            ),
             "state": "aborted_before_intent_seal",
             "transaction_logical_ref": self.transaction_logical_ref,
             "transaction_ref": self.transaction_ref,
         }
+        if runtime_cleanup is not None:
+            expected_receipt.update(
+                {
+                    "runtime_cleanup_terminal_evidence_sha256": (
+                        runtime_cleanup.terminal_evidence_sha256
+                    ),
+                    "runtime_cleanup_capsule_sha256": (
+                        runtime_cleanup.capsule_sha256
+                    ),
+                    "runtime_cleanup_capsule_identity_sha256": (
+                        runtime_cleanup.capsule_identity_sha256
+                    ),
+                }
+            )
+        elif empty_claim is not None:
+            expected_receipt.update(
+                {
+                    "empty_abort_claim_intent_sha256": (
+                        empty_claim.claim_intent_sha256
+                    ),
+                    "empty_abort_claim_sha256": empty_claim.claim_sha256,
+                    "empty_abort_claim_identity_sha256": (
+                        empty_claim.claim_identity_sha256
+                    ),
+                }
+            )
         if not hmac.compare_digest(
             canonical_json_bytes(receipt), canonical_json_bytes(expected_receipt)
         ):
             raise _fail("project_update_transaction_state_transition_invalid")
-        return {
+        result = {
             "candidate_cleanup_evidence_sha256": cleanup_evidence,
             "receipt_sha256": sha256_document(receipt),
-            "schema": RESERVATION_ABORT_RECEIPT_SCHEMA,
+            "schema": str(receipt["schema"]),
             "state": "aborted_before_intent_seal",
             "transaction_logical_ref": self.transaction_logical_ref,
             "transaction_ref": self.transaction_ref,
         }
+        if runtime_cleanup is not None:
+            result.update(
+                {
+                    "runtime_cleanup_terminal_evidence_sha256": (
+                        runtime_cleanup.terminal_evidence_sha256
+                    ),
+                    "runtime_cleanup_capsule_sha256": (
+                        runtime_cleanup.capsule_sha256
+                    ),
+                    "runtime_cleanup_capsule_identity_sha256": (
+                        runtime_cleanup.capsule_identity_sha256
+                    ),
+                }
+            )
+        elif empty_claim is not None:
+            self._read_empty_abort_claim(
+                expected_binding=empty_claim,
+                allow_retired_link=True,
+            )
+            try:
+                retirement = self._read_empty_abort_claim_retirement(
+                    claim=empty_claim,
+                    receipt=receipt,
+                )
+            except ProjectUpdateTransactionError:
+                if not tolerate_retirement_prefix:
+                    raise
+                retirement = None
+            if retirement is None and require_claim_retirement:
+                raise _fail("project_update_transaction_state_transition_invalid")
+            result.update(
+                {
+                    "empty_abort_claim_intent_sha256": (
+                        empty_claim.claim_intent_sha256
+                    ),
+                    "empty_abort_claim_sha256": empty_claim.claim_sha256,
+                    "empty_abort_claim_identity_sha256": (
+                        empty_claim.claim_identity_sha256
+                    ),
+                    "empty_abort_claim_retirement_sha256": (
+                        sha256_document(retirement)
+                        if retirement is not None
+                        else None
+                    ),
+                }
+            )
+        return result
+
+    def inspect_abort_receipt(self) -> dict[str, Any] | None:
+        """Validate an already-terminal reservation abort without mutating it."""
+
+        return self._inspect_abort_receipt_core(
+            require_claim_retirement=True,
+        )
 
     @staticmethod
     def _abort_cleanup_paths(
@@ -4612,14 +6517,26 @@ class ReservedProjectUpdateTransaction:
         )
 
     @staticmethod
-    def _abort_cleanup_expected_files() -> tuple[str, ...]:
-        return (
+    def _abort_cleanup_expected_files(
+        *,
+        include_empty_claim: bool = False,
+    ) -> tuple[str, ...]:
+        files = [
             "append.guard",
             "marker.json",
             RESERVATION_ABORT_INTENT_NAME,
             RESERVATION_ABORT_RECEIPT_NAME,
             RESERVATION_LOCK_BACKLINK_NAME,
-        )
+        ]
+        if include_empty_claim:
+            files.extend(
+                (
+                    EMPTY_ABORT_CLAIM_INTENT_NAME,
+                    EMPTY_ABORT_CLAIM_ANCHOR_NAME,
+                    EMPTY_ABORT_CLAIM_RETIREMENT_NAME,
+                )
+            )
+        return tuple(sorted(files))
 
     @staticmethod
     def _abort_cleanup_root_identity(
@@ -4722,7 +6639,6 @@ class ReservedProjectUpdateTransaction:
         ):
             raise _fail("project_update_transaction_cleanup_refused")
 
-        expected_files = cls._abort_cleanup_expected_files()
         observed_files: list[str] = []
         for item in value["files"]:
             identity = item.get("identity") if type(item) is dict else None
@@ -4748,7 +6664,10 @@ class ReservedProjectUpdateTransaction:
                 code="project_update_transaction_cleanup_refused",
             )
             observed_files.append(item["relative_path"])
-        if tuple(observed_files) != expected_files:
+        if tuple(observed_files) not in {
+            cls._abort_cleanup_expected_files(),
+            cls._abort_cleanup_expected_files(include_empty_claim=True),
+        }:
             raise _fail("project_update_transaction_cleanup_refused")
         return value
 
@@ -4769,7 +6688,12 @@ class ReservedProjectUpdateTransaction:
             self._transaction_root,
             exclude={RESERVATION_ABORT_CLEANUP_PLAN_NAME},
         )
-        if directories or tuple(sorted(files)) != self._abort_cleanup_expected_files():
+        include_empty_claim = (
+            terminal.get("empty_abort_claim_retirement_sha256") is not None
+        )
+        if directories or tuple(sorted(files)) != self._abort_cleanup_expected_files(
+            include_empty_claim=include_empty_claim,
+        ):
             raise _fail("project_update_transaction_cleanup_refused")
         if os.path.lexists(self._lock_path):
             raise _fail("project_update_transaction_cleanup_refused")
@@ -5393,6 +7317,9 @@ class ReservedProjectUpdateTransaction:
             SEALED_LOCK_BACKLINK_NAME,
             RESERVATION_ABORT_INTENT_NAME,
             RESERVATION_ABORT_RECEIPT_NAME,
+            EMPTY_ABORT_CLAIM_INTENT_NAME,
+            EMPTY_ABORT_CLAIM_ANCHOR_NAME,
+            EMPTY_ABORT_CLAIM_RETIREMENT_NAME,
         ):
             if os.path.lexists(self._transaction_root / reserved_name):
                 raise _fail("project_update_transaction_exists")
@@ -6392,6 +8319,7 @@ class ProjectUpdateTransaction:
         cancellation_plan_sha256: str | None = None,
         candidate_cleanup_receipt_sha256: str | None = None,
         candidate_absence_observation_sha256: str | None = None,
+        runtime_cleanup_terminal_evidence: Mapping[str, Any] | None = None,
         lock_release_result: LockReleaseResult | None = None,
     ) -> ProjectUpdateCheckpoint:
         if phase not in ALLOWED_CHECKPOINT_PHASES or stage not in {"intent", "verified"}:
@@ -6422,6 +8350,29 @@ class ProjectUpdateTransaction:
             if len(matches) != 1:
                 raise _fail("project_update_transaction_state_transition_invalid")
             event = matches[0]
+            runtime_cleanup_binding: (
+                _RuntimeCleanupEvidenceBinding | None
+            ) = None
+            if (
+                (phase == "runtime" and stage == "verified")
+                or phase == "preapproval_cancelled"
+            ):
+                if runtime_cleanup_terminal_evidence is None:
+                    raise _fail(
+                        "project_update_transaction_state_transition_invalid"
+                    )
+                runtime_cleanup_binding = (
+                    _runtime_cleanup_terminal_evidence_binding(
+                        runtime_cleanup_terminal_evidence,
+                        transaction_ref=intent.transaction_ref,
+                        target_tag=intent.requested_target_tag,
+                        runtime_candidate=intent.runtime_candidate,
+                    )
+                )
+            elif runtime_cleanup_terminal_evidence is not None:
+                raise _fail(
+                    "project_update_transaction_state_transition_invalid"
+                )
             classification = self.classify_live_components(live_component_sha256)
             self._validate_live_for_event(event, checkpoints, classification)
             approval_ref, approval_mac, claim_receipt, claim_mac = self._authority_for_append(
@@ -6540,6 +8491,16 @@ class ProjectUpdateTransaction:
             if cleanup_receipt is not None:
                 row["candidate_cleanup_receipt_sha256"] = cleanup_receipt
                 row["candidate_absence_observation_sha256"] = candidate_absence
+            if runtime_cleanup_binding is not None:
+                row["runtime_cleanup_terminal_evidence_sha256"] = (
+                    runtime_cleanup_binding.terminal_evidence_sha256
+                )
+                row["runtime_cleanup_capsule_sha256"] = (
+                    runtime_cleanup_binding.capsule_sha256
+                )
+                row["runtime_cleanup_capsule_identity_sha256"] = (
+                    runtime_cleanup_binding.capsule_identity_sha256
+                )
             line = canonical_json_bytes(row) + b"\n"
             path = self._transaction_root / "checkpoints.jsonl"
             try:
@@ -6654,6 +8615,7 @@ class ProjectUpdateTransaction:
         cancellation_plan_sha256: str | None = None,
         candidate_cleanup_receipt_sha256: str | None = None,
         candidate_absence_observation_sha256: str | None = None,
+        runtime_cleanup_terminal_evidence: Mapping[str, Any] | None = None,
         lock_release_result: LockReleaseResult | None = None,
     ) -> ProjectUpdateCheckpoint:
         with self.append_guard_nonblocking():
@@ -6673,6 +8635,9 @@ class ProjectUpdateTransaction:
                 ),
                 candidate_absence_observation_sha256=(
                     candidate_absence_observation_sha256
+                ),
+                runtime_cleanup_terminal_evidence=(
+                    runtime_cleanup_terminal_evidence
                 ),
                 lock_release_result=lock_release_result,
             )
@@ -6830,6 +8795,7 @@ class ProjectUpdateTransaction:
         *,
         expected_lock_bytes: bytes,
         live_component_sha256: Mapping[str, str],
+        runtime_cleanup_terminal_evidence: Mapping[str, Any],
         candidate_cleanup_plan_sha256: str | None = None,
         candidate_cleanup_receipt_sha256: str | None = None,
     ) -> ProjectUpdateCheckpoint:
@@ -6842,6 +8808,14 @@ class ProjectUpdateTransaction:
         """
 
         _parse_lock_bytes(expected_lock_bytes, intent=self.intent)
+        supplied_runtime_cleanup = (
+            _runtime_cleanup_terminal_evidence_binding(
+                runtime_cleanup_terminal_evidence,
+                transaction_ref=self.intent.transaction_ref,
+                target_tag=self.intent.requested_target_tag,
+                runtime_candidate=self.intent.runtime_candidate,
+            )
+        )
         exact_plan = self.candidate_cleanup_plan_sha256()
         if candidate_cleanup_plan_sha256 is None:
             plan = exact_plan
@@ -6918,6 +8892,18 @@ class ProjectUpdateTransaction:
                 or verified.runtime_candidate_binding_sha256
                 != requested.runtime_candidate_binding_sha256
                 or verified.candidate_cleanup_receipt_sha256 != cleanup_receipt
+                or (
+                    verified.runtime_cleanup_terminal_evidence_sha256
+                    is not None
+                    and (
+                        verified.runtime_cleanup_terminal_evidence_sha256
+                        != supplied_runtime_cleanup.terminal_evidence_sha256
+                        or verified.runtime_cleanup_capsule_sha256
+                        != supplied_runtime_cleanup.capsule_sha256
+                        or verified.runtime_cleanup_capsule_identity_sha256
+                        != supplied_runtime_cleanup.capsule_identity_sha256
+                    )
+                )
             ):
                 raise _fail("project_update_transaction_state_transition_invalid")
             tail = journal.verified_prefix[-1]
@@ -6947,6 +8933,9 @@ class ProjectUpdateTransaction:
                     cancellation_plan_sha256=plan,
                     candidate_cleanup_receipt_sha256=cleanup_receipt,
                     candidate_absence_observation_sha256=absence,
+                    runtime_cleanup_terminal_evidence=(
+                        runtime_cleanup_terminal_evidence
+                    ),
                 )
                 continue
             if tail.phase == "preapproval_cancelled":
@@ -8176,7 +10165,11 @@ class ProjectUpdateTransaction:
         return value
 
     @staticmethod
-    def _descendant_names(root: Path) -> tuple[set[str], set[str]]:
+    def _descendant_names(
+        root: Path,
+        *,
+        allowed_two_link_files: frozenset[str] = frozenset(),
+    ) -> tuple[set[str], set[str]]:
         files: set[str] = set()
         directories: set[str] = set()
         stack = [root]
@@ -8212,7 +10205,13 @@ class ProjectUpdateTransaction:
                         if stat.S_ISDIR(info.st_mode):
                             directories.add(relative)
                             stack.append(path)
-                        elif stat.S_ISREG(info.st_mode) and info.st_nlink == 1:
+                        elif stat.S_ISREG(info.st_mode) and (
+                            info.st_nlink == 1
+                            or (
+                                info.st_nlink == 2
+                                and relative in allowed_two_link_files
+                            )
+                        ):
                             files.add(relative)
                         else:
                             raise _fail(
@@ -8886,6 +10885,9 @@ class ProjectUpdateTransaction:
             "claim_evidence_digests",
             "claim_receipt_sha256",
             "component_ref",
+            "runtime_cleanup_capsule_identity_sha256",
+            "runtime_cleanup_capsule_sha256",
+            "runtime_cleanup_terminal_evidence_sha256",
             "runtime_candidate_binding_sha256",
         }
         expected_previous = (
@@ -8919,6 +10921,9 @@ class ProjectUpdateTransaction:
                     "cancellation_plan_sha256",
                     "claim_mac_sha256",
                     "claim_receipt_sha256",
+                    "runtime_cleanup_capsule_identity_sha256",
+                    "runtime_cleanup_capsule_sha256",
+                    "runtime_cleanup_terminal_evidence_sha256",
                     "runtime_candidate_binding_sha256",
                 )
                 if key in value
@@ -8948,6 +10953,25 @@ class ProjectUpdateTransaction:
         candidate_binding = value.get("runtime_candidate_binding_sha256")
         cleanup_receipt = value.get("candidate_cleanup_receipt_sha256")
         candidate_absence = value.get("candidate_absence_observation_sha256")
+        runtime_cleanup_values = (
+            value.get("runtime_cleanup_terminal_evidence_sha256"),
+            value.get("runtime_cleanup_capsule_sha256"),
+            value.get("runtime_cleanup_capsule_identity_sha256"),
+        )
+        if (
+            any(item is not None for item in runtime_cleanup_values)
+            and (
+                not all(item is not None for item in runtime_cleanup_values)
+                or not (
+                    (
+                        value.get("phase") == "runtime"
+                        and value.get("stage") == "verified"
+                    )
+                    or value.get("phase") == "preapproval_cancelled"
+                )
+            )
+        ):
+            raise _fail("project_update_transaction_checkpoint_invalid")
         if value.get("phase") == "preapproval_cancel_requested":
             if (
                 cancellation_plan is None
@@ -8995,6 +11019,13 @@ class ProjectUpdateTransaction:
             runtime_candidate_binding_sha256=candidate_binding,
             candidate_cleanup_receipt_sha256=cleanup_receipt,
             candidate_absence_observation_sha256=candidate_absence,
+            runtime_cleanup_terminal_evidence_sha256=(
+                runtime_cleanup_values[0]
+            ),
+            runtime_cleanup_capsule_sha256=runtime_cleanup_values[1],
+            runtime_cleanup_capsule_identity_sha256=(
+                runtime_cleanup_values[2]
+            ),
         )
 
 
@@ -9061,7 +11092,10 @@ def inspect_prelock_orphans(project_root: Path | str) -> tuple[OrphanInspection,
             try:
                 reserved = ReservedProjectUpdateTransaction.open(project, ref)
                 files, directories = ProjectUpdateTransaction._descendant_names(
-                    Path(entry_path)
+                    Path(entry_path),
+                    allowed_two_link_files=frozenset(
+                        {EMPTY_ABORT_CLAIM_ANCHOR_NAME}
+                    ),
                 )
                 candidate_present = RUNTIME_CANDIDATE_NAME in directories
                 candidate_seal_present = RUNTIME_CANDIDATE_SEAL_NAME in files
@@ -9099,6 +11133,9 @@ def inspect_prelock_orphans(project_root: Path | str) -> tuple[OrphanInspection,
                     RESERVATION_LOCK_BACKLINK_NAME,
                     RESERVATION_ABORT_INTENT_NAME,
                     RESERVATION_ABORT_RECEIPT_NAME,
+                    EMPTY_ABORT_CLAIM_INTENT_NAME,
+                    EMPTY_ABORT_CLAIM_ANCHOR_NAME,
+                    EMPTY_ABORT_CLAIM_RETIREMENT_NAME,
                     RUNTIME_CANDIDATE_SEAL_NAME,
                     "intent.json",
                     "intent-seal.json",
@@ -9122,6 +11159,7 @@ def inspect_prelock_orphans(project_root: Path | str) -> tuple[OrphanInspection,
                 )
                 abort_receipt = None
                 abort_receipt_pending = False
+                abort_claim_before_lock_release = False
                 if (
                     RESERVATION_ABORT_INTENT_NAME in files
                     or RESERVATION_ABORT_RECEIPT_NAME in files
@@ -9133,7 +11171,6 @@ def inspect_prelock_orphans(project_root: Path | str) -> tuple[OrphanInspection,
                         if (
                             lock_state == "absent"
                             and RESERVATION_ABORT_INTENT_NAME in files
-                            and RESERVATION_ABORT_RECEIPT_NAME not in files
                         ):
                             try:
                                 abort_receipt_pending = (
@@ -9142,12 +11179,30 @@ def inspect_prelock_orphans(project_root: Path | str) -> tuple[OrphanInspection,
                                 )
                             except ProjectUpdateTransactionError:
                                 abort_receipt_pending = False
-                        if not abort_receipt_pending:
+                        elif (
+                            lock_state == "exact"
+                            and backlink_exact
+                            and RESERVATION_ABORT_INTENT_NAME in files
+                            and RESERVATION_ABORT_RECEIPT_NAME not in files
+                        ):
+                            try:
+                                reserved._validate_empty_claim_abort_intent_before_lock_release(
+                                    reserved.existing_lock_bytes_read_only()
+                                )
+                                abort_claim_before_lock_release = True
+                            except ProjectUpdateTransactionError:
+                                abort_claim_before_lock_release = False
+                        if not (
+                            abort_receipt_pending
+                            or abort_claim_before_lock_release
+                        ):
                             unexpected = True
                 if abort_receipt is not None:
                     classification = "reserved_aborted_before_intent_seal"
                 elif abort_receipt_pending:
                     classification = "reserved_abort_receipt_pending"
+                elif abort_claim_before_lock_release:
+                    classification = "reserved_locked_unsealed"
                 elif unexpected or lock_state == "conflict_or_unsafe":
                     classification = "manual_review_incomplete_or_unsafe"
                 elif intent_material_present:
@@ -9322,7 +11377,14 @@ def discover_exact_reservation_abort_cleanup_read_only(
         terminal = reserved.inspect_abort_receipt()
         if terminal is None:
             raise _fail("project_update_transaction_cleanup_refused")
-        expected_files = set(reserved._abort_cleanup_expected_files())
+        expected_files = set(
+            reserved._abort_cleanup_expected_files(
+                include_empty_claim=(
+                    terminal.get("empty_abort_claim_retirement_sha256")
+                    is not None
+                ),
+            )
+        )
         plan_present = RESERVATION_ABORT_CLEANUP_PLAN_NAME in files
         if plan_present:
             expected_files.add(RESERVATION_ABORT_CLEANUP_PLAN_NAME)
@@ -9603,6 +11665,370 @@ def compact_exact_reservation_abort_histories(
     }
 
 
+def _runtime_cleanup_transaction_identity_sha256(
+    transaction_root: Path,
+    *,
+    project_root: Path,
+    transaction_ref: str,
+) -> str:
+    info = _safe_directory(transaction_root, within=project_root)
+    device, inode, birthtime_ns = _cleanup_directory_identity(info)
+    return sha256_document(
+        {
+            "birthtime_ns": birthtime_ns,
+            "device": device,
+            "inode": inode,
+            "schema": (
+                "wom-kit/project-update-runtime-cleanup-transaction-identity/"
+                "v0.4.19"
+            ),
+            "transaction_ref": transaction_ref,
+        }
+    )
+
+
+def _runtime_cleanup_record_identity_sha256(
+    *,
+    transaction_ref: str,
+    authority_kind: str,
+    records: Sequence[tuple[str, bytes, os.stat_result]],
+) -> str:
+    rows: list[dict[str, Any]] = []
+    for logical_name, raw, info in records:
+        rows.append(
+            {
+                "identity": _identity_document(info),
+                "logical_name": logical_name,
+                "sha256": sha256_bytes(raw),
+            }
+        )
+    return sha256_document(
+        {
+            "authority_kind": authority_kind,
+            "records": rows,
+            "schema": (
+                "wom-kit/project-update-runtime-cleanup-authority-records/"
+                "v0.4.19"
+            ),
+            "transaction_ref": transaction_ref,
+        }
+    )
+
+
+@contextmanager
+def runtime_cleanup_sidecar_creation_guard(
+    project_root: Path | str,
+    transaction_ref: str,
+) -> Iterator[Callable[[], None]]:
+    """Serialize runtime sidecar creation against reservation abort.
+
+    This guard is deliberately not cleanup authority.  The runtime owner must
+    still validate its candidate, seal, and transaction bindings inside the
+    context.  The yielded callback revalidates the exact transaction namespace
+    and rejects any durable abort intent or receipt before and after the
+    sidecar's create-only publication.
+    """
+
+    project = _absolute(project_root)
+    _safe_existing_chain(project, directory=True)
+    ref = _transaction_ref(transaction_ref)
+    transaction_root = project / PurePosixPath(TRANSACTION_ROOT_LOGICAL) / ref
+    _within(transaction_root, project)
+    try:
+        root_info = _safe_directory(transaction_root, within=project)
+        root_identity = _cleanup_directory_identity(root_info)
+    except (OSError, ProjectUpdateTransactionError):
+        raise _fail("project_update_transaction_checkpoint_write_failed") from None
+    guard = transaction_root / "append.guard"
+
+    with _exclusive_guard(guard, within=transaction_root):
+
+        def revalidate_creation_allowed() -> None:
+            try:
+                current = _safe_directory(transaction_root, within=project)
+                if _cleanup_directory_identity(current) != root_identity:
+                    raise OSError("transaction namespace changed")
+                abort_intent_present = _runtime_cleanup_sidecar_present(
+                    transaction_root / RESERVATION_ABORT_INTENT_NAME,
+                    code="project_update_transaction_checkpoint_write_failed",
+                )
+                abort_receipt_present = _runtime_cleanup_sidecar_present(
+                    transaction_root / RESERVATION_ABORT_RECEIPT_NAME,
+                    code="project_update_transaction_checkpoint_write_failed",
+                )
+                claim_state_present = any(
+                    _runtime_cleanup_sidecar_present(
+                        transaction_root / name,
+                        code="project_update_transaction_checkpoint_write_failed",
+                    )
+                    for name in (
+                        EMPTY_ABORT_CLAIM_INTENT_NAME,
+                        EMPTY_ABORT_CLAIM_ANCHOR_NAME,
+                        EMPTY_ABORT_CLAIM_RETIREMENT_NAME,
+                    )
+                )
+            except ProjectUpdateTransactionError:
+                raise
+            except OSError:
+                raise _fail(
+                    "project_update_transaction_checkpoint_write_failed"
+                ) from None
+            if abort_intent_present or abort_receipt_present or claim_state_present:
+                raise _fail(
+                    "project_update_transaction_state_transition_invalid"
+                )
+
+        revalidate_creation_allowed()
+        yield revalidate_creation_allowed
+        revalidate_creation_allowed()
+
+
+def load_runtime_cleanup_durable_ack(
+    project_root: Path | str,
+    transaction_ref: str,
+) -> RuntimeCleanupDurableAck | None:
+    """Load one runtime-cleanup authority only from exact durable records.
+
+    Old checkpoint and reservation-abort documents remain readable, but they
+    deliberately return ``None`` because they never bound a runtime capsule.
+    """
+
+    project = _absolute(project_root)
+    _safe_existing_chain(project, directory=True)
+    ref = _transaction_ref(transaction_ref)
+    transaction_root = project / PurePosixPath(TRANSACTION_ROOT_LOGICAL) / ref
+    _within(transaction_root, project)
+    root_identity = _runtime_cleanup_transaction_identity_sha256(
+        transaction_root,
+        project_root=project,
+        transaction_ref=ref,
+    )
+    intent_path = transaction_root / "intent.json"
+    abort_intent_path = transaction_root / RESERVATION_ABORT_INTENT_NAME
+    abort_receipt_path = transaction_root / RESERVATION_ABORT_RECEIPT_NAME
+    sealed = os.path.lexists(intent_path)
+    abort_intent_present = os.path.lexists(abort_intent_path)
+    abort_receipt_present = os.path.lexists(abort_receipt_path)
+    if sealed and (abort_intent_present or abort_receipt_present):
+        raise _fail("project_update_transaction_state_transition_invalid")
+    if not sealed:
+        if not abort_intent_present and not abort_receipt_present:
+            return None
+        if not abort_intent_present and abort_receipt_present:
+            raise _fail("project_update_transaction_state_transition_invalid")
+        # The abort intent is deliberately durable before lock unlink and the
+        # terminal receipt.  It is a resumable crash boundary, never deletion
+        # authority, so the ack loader reports no authority until the exact
+        # receipt exists.  The abort resumer performs the strict intent check.
+        if not abort_receipt_present:
+            return None
+
+    if sealed:
+        transaction = ProjectUpdateTransaction.open(
+            project,
+            ref,
+            verify_candidate_content=False,
+        )
+        intent, journal, _backlink, cleanup = transaction._load_exact_state(
+            verify_candidate_content=False,
+        )
+        if journal.state != "exact" or cleanup is not None:
+            raise _fail("project_update_transaction_state_transition_invalid")
+        authorities: list[
+            tuple[
+                ProjectUpdateCheckpoint,
+                _RuntimeCleanupEvidenceBinding,
+                str,
+            ]
+        ] = []
+        for checkpoint in journal.verified_prefix:
+            binding = _runtime_cleanup_binding_from_record(
+                checkpoint.__dict__,
+                required=False,
+                code="project_update_transaction_checkpoint_invalid",
+            )
+            if binding is None:
+                continue
+            if checkpoint.phase == "runtime" and checkpoint.stage == "verified":
+                authority_kind = "runtime_verified"
+            elif checkpoint.phase == "preapproval_cancelled":
+                authority_kind = "preapproval_cancelled"
+            else:
+                raise _fail("project_update_transaction_checkpoint_invalid")
+            authorities.append((checkpoint, binding, authority_kind))
+        if not authorities:
+            return None
+        if len(authorities) != 1 or not _matching_candidates(
+            journal.verified_prefix,
+            intent,
+        ):
+            raise _fail("project_update_transaction_checkpoint_invalid")
+        checkpoint, binding, authority_kind = authorities[0]
+        journal_path = transaction_root / "checkpoints.jsonl"
+        journal_raw, journal_info = _read_regular_with_info(
+            journal_path,
+            within=transaction_root,
+            maximum=MAX_JOURNAL_BYTES,
+        )
+        matching_rows = 0
+        for physical in journal_raw.splitlines(keepends=True):
+            if not physical.endswith(b"\n"):
+                raise _fail("project_update_transaction_checkpoint_invalid")
+            if sha256_bytes(physical[:-1]) == checkpoint.checkpoint_sha256:
+                matching_rows += 1
+        if matching_rows != 1:
+            raise _fail("project_update_transaction_checkpoint_invalid")
+        record_identity = _runtime_cleanup_record_identity_sha256(
+            transaction_ref=ref,
+            authority_kind=authority_kind,
+            records=(("checkpoints.jsonl", journal_raw, journal_info),),
+        )
+        target_tag = intent.requested_target_tag
+        authority_record_sha256 = checkpoint.checkpoint_sha256
+        # Reopen and re-read after deriving every value so a namespace or row
+        # replacement cannot be attributed to the returned capability.
+        if (
+            _runtime_cleanup_transaction_identity_sha256(
+                transaction_root,
+                project_root=project,
+                transaction_ref=ref,
+            )
+            != root_identity
+            or _runtime_cleanup_record_identity_sha256(
+                transaction_ref=ref,
+                authority_kind=authority_kind,
+                records=(
+                    (
+                        "checkpoints.jsonl",
+                        *_read_regular_with_info(
+                            journal_path,
+                            within=transaction_root,
+                            maximum=MAX_JOURNAL_BYTES,
+                        ),
+                    ),
+                ),
+            )
+            != record_identity
+        ):
+            raise _fail("project_update_transaction_state_transition_invalid")
+    else:
+        reserved = ReservedProjectUpdateTransaction.open(project, ref)
+        terminal = reserved.inspect_abort_receipt()
+        if terminal is None:
+            return None
+        binding = _runtime_cleanup_binding_from_record(
+            terminal,
+            required=False,
+            code="project_update_transaction_state_transition_invalid",
+        )
+        if binding is None:
+            return None
+        intent_raw, intent_info = _read_regular_with_info(
+            abort_intent_path,
+            within=transaction_root,
+            maximum=MAX_DOCUMENT_BYTES + 1,
+        )
+        receipt_raw, receipt_info = _read_regular_with_info(
+            abort_receipt_path,
+            within=transaction_root,
+            maximum=MAX_DOCUMENT_BYTES + 1,
+        )
+        intent_document = _parse_document(
+            intent_raw,
+            code="project_update_transaction_state_transition_invalid",
+        )
+        receipt_document = _parse_document(
+            receipt_raw,
+            code="project_update_transaction_state_transition_invalid",
+        )
+        intent_binding = _reservation_abort_runtime_cleanup_binding(
+            intent_document,
+            record_kind="intent",
+        )
+        receipt_binding = _reservation_abort_runtime_cleanup_binding(
+            receipt_document,
+            record_kind="receipt",
+        )
+        if (
+            intent_binding != binding
+            or receipt_binding != binding
+            or sha256_document(receipt_document) != terminal["receipt_sha256"]
+            or receipt_document.get("abort_intent_sha256")
+            != sha256_document(intent_document)
+        ):
+            raise _fail("project_update_transaction_state_transition_invalid")
+        authority_kind = "unsealed_abort"
+        authority_record_sha256 = str(terminal["receipt_sha256"])
+        record_identity = _runtime_cleanup_record_identity_sha256(
+            transaction_ref=ref,
+            authority_kind=authority_kind,
+            records=(
+                (RESERVATION_ABORT_INTENT_NAME, intent_raw, intent_info),
+                (RESERVATION_ABORT_RECEIPT_NAME, receipt_raw, receipt_info),
+            ),
+        )
+        target_tag = reserved.reservation.requested_target_tag
+        reread_intent = _read_regular_with_info(
+            abort_intent_path,
+            within=transaction_root,
+            maximum=MAX_DOCUMENT_BYTES + 1,
+        )
+        reread_receipt = _read_regular_with_info(
+            abort_receipt_path,
+            within=transaction_root,
+            maximum=MAX_DOCUMENT_BYTES + 1,
+        )
+        if (
+            _runtime_cleanup_transaction_identity_sha256(
+                transaction_root,
+                project_root=project,
+                transaction_ref=ref,
+            )
+            != root_identity
+            or _runtime_cleanup_record_identity_sha256(
+                transaction_ref=ref,
+                authority_kind=authority_kind,
+                records=(
+                    (RESERVATION_ABORT_INTENT_NAME, *reread_intent),
+                    (RESERVATION_ABORT_RECEIPT_NAME, *reread_receipt),
+                ),
+            )
+            != record_identity
+        ):
+            raise _fail("project_update_transaction_state_transition_invalid")
+
+    return _issue_runtime_cleanup_durable_ack(
+        project_root=project,
+        transaction_ref=ref,
+        target_tag=target_tag,
+        authority_kind=authority_kind,
+        authority_record_sha256=authority_record_sha256,
+        authority_record_identity_sha256=record_identity,
+        transaction_identity_sha256=root_identity,
+        binding=binding,
+    )
+
+
+def revalidate_runtime_cleanup_durable_ack(value: object) -> bool:
+    """Re-read the issuing transaction before accepting an opaque ack."""
+
+    issued = _ISSUED_RUNTIME_CLEANUP_ACKS.get(id(value))
+    if (
+        type(value) is not RuntimeCleanupDurableAck
+        or issued is None
+        or issued() is not value
+    ):
+        return False
+    try:
+        current = load_runtime_cleanup_durable_ack(
+            value._project_root,
+            value.transaction_ref,
+        )
+    except (OSError, ProjectUpdateTransactionError, AttributeError, TypeError):
+        return False
+    return bool(current is not None and current == value)
+
+
 __all__ = [
     "ABSENT_COMPONENT_SHA256",
     "ALLOWED_CHECKPOINT_PHASES",
@@ -9631,6 +12057,8 @@ __all__ = [
     "ReservedProjectUpdateTransaction",
     "RuntimeCandidateBinding",
     "RuntimeCandidateTreeInventory",
+    "RuntimeCleanupDurableAck",
+    "RUNTIME_CLEANUP_TERMINAL_EVIDENCE_SCHEMA",
     "TerminalCleanupArtifactState",
     "build_lock_document",
     "active_transaction_ref_for_resume_read_only",
@@ -9644,7 +12072,10 @@ __all__ = [
     "inspect_prelock_orphans",
     "inspect_terminal_cleanup_artifacts_for_resume_read_only",
     "lock_document_bytes",
+    "load_runtime_cleanup_durable_ack",
+    "revalidate_runtime_cleanup_durable_ack",
     "runtime_bundle_inventory_sha256",
+    "runtime_cleanup_sidecar_creation_guard",
     "sha256_bytes",
     "sha256_document",
 ]
