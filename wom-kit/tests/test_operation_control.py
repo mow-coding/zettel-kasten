@@ -208,6 +208,85 @@ class OperationControlTests(unittest.TestCase):
             display_pending.write_bytes(capsule_bytes)
         return journal, output, handoff_sha256
 
+    def prepare_pending_project_cancellation_delivery(
+        self,
+        root: Path,
+        *,
+        relative: str,
+        capsule_bytes: bytes,
+    ) -> tuple[operation_control.OperationRunJournal, Path, str]:
+        journal, output = self.start_journal(
+            root,
+            command="project-version-update",
+            relative=relative,
+        )
+        domain = (
+            archive_cli.archive_services
+            ._project_update_legacy_unapproved_restored_result()
+        )
+        self.write_result(
+            journal,
+            output,
+            ok=False,
+            exit_code=1,
+            payload_fields={
+                key: value for key, value in domain.items() if key != "ok"
+            },
+        )
+        document = json.loads(output.read_text(encoding="utf-8"))
+        handoff_sha256 = "sha256:" + hashlib.sha256(capsule_bytes).hexdigest()
+        output_relative = output.relative_to(root).as_posix()
+        delivery_binding = {
+            "schema": (
+                "wom-kit/project-version-update-terminal-delivery-binding/v0.4.16"
+            ),
+            "terminal_handoff_sha256": handoff_sha256,
+            "result_payload_sha256": (
+                operation_control._canonical_document_sha256(domain)
+            ),
+            "output_relative_sha256": (
+                "sha256:"
+                + hashlib.sha256(output_relative.encode("utf-8")).hexdigest()
+            ),
+            "run_id": journal.run_id,
+            "operation_ref": journal.operation_ref,
+        }
+        delivery_proof = "hmac-sha256:" + hmac.new(
+            TEST_TERMINAL_DELIVERY_CAPABILITY.encode("ascii"),
+            b"wom-kit/project-version-update-terminal-delivery-proof/v0.4.16\x00"
+            + operation_control.project_update_transaction.canonical_json_bytes(
+                delivery_binding
+            ),
+            hashlib.sha256,
+        ).hexdigest()
+        document["cli_execution"]["terminal_delivery"] = {
+            **delivery_binding,
+            "proof": delivery_proof,
+        }
+        output.write_text(
+            json.dumps(document, ensure_ascii=False, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        self.assertTrue(
+            journal.complete(
+                exit_code=1,
+                result_available=True,
+                result_ok=False,
+                result_path=output,
+                terminal_delivery_acknowledged=False,
+                terminal_handoff_sha256=handoff_sha256,
+            )
+        )
+        guard = root / operation_control.PROJECT_UPDATE_TERMINAL_GUARD_RELATIVE
+        guard.parent.mkdir(parents=True, exist_ok=True)
+        if not guard.exists():
+            guard.write_bytes(b"\x00")
+        display_pending = root / (
+            operation_control.PROJECT_UPDATE_TERMINAL_DISPLAY_PENDING_RELATIVE
+        )
+        display_pending.write_bytes(capsule_bytes)
+        return journal, output, handoff_sha256
+
     def test_terminal_status_revalidates_complete_output(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "archive"
@@ -697,6 +776,81 @@ class OperationControlTests(unittest.TestCase):
                 .discover_pending_project_update_terminal_delivery(
                     root,
                     allow_active_handoff=True,
+                )
+            )
+
+    def test_fixed_cancellation_terminal_delivery_is_distinct_from_failures(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            _journal, _output, _handoff = (
+                self.prepare_pending_project_cancellation_delivery(
+                    root,
+                    relative=(
+                        ".zettel-kasten/diagnostics/unapproved.json"
+                    ),
+                    capsule_bytes=b'{"terminal":"unapproved"}\n',
+                )
+            )
+            candidate = (
+                operation_control
+                .discover_pending_project_update_terminal_delivery(root)
+            )
+            self.assertIsNotNone(candidate)
+            assert candidate is not None
+            self.assertFalse(candidate.result_document["ok"])
+            inspected = operation_control.inspect_operation(
+                root,
+                candidate.operation_ref,
+            )
+            self.assertTrue(inspected["ok"], inspected)
+            self.assertTrue(
+                inspected["result"]["domain"]["attention_required"]
+            )
+            verified = (
+                operation_control
+                .verify_pending_project_update_terminal_delivery(
+                    candidate,
+                    delivery_capability=(
+                        TEST_TERMINAL_DELIVERY_CAPABILITY
+                    ),
+                )
+            )
+            self.assertEqual(verified, candidate)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "arbitrary-failure"
+            journal, output = self.start_journal(
+                root,
+                command="project-version-update",
+                relative=".zettel-kasten/diagnostics/failure.json",
+            )
+            capsule = b'{"terminal":"not-authoritative"}\n'
+            handoff_sha256 = (
+                "sha256:" + hashlib.sha256(capsule).hexdigest()
+            )
+            self.write_result(
+                journal,
+                output,
+                ok=False,
+                exit_code=1,
+                payload_fields={
+                    "status": "blocked",
+                    "terminal_finalization": {
+                        "durable_terminal_handoff_ready": True,
+                        "durable_result_delivery_acknowledged": False,
+                    },
+                },
+            )
+            self.assertFalse(
+                journal.complete(
+                    exit_code=1,
+                    result_available=True,
+                    result_ok=False,
+                    result_path=output,
+                    terminal_delivery_acknowledged=False,
+                    terminal_handoff_sha256=handoff_sha256,
                 )
             )
 

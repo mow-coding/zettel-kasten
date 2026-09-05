@@ -132,6 +132,31 @@ COMPOUND_APPROVAL_FIXED_CLOSED_PLAN_WRITERS = {
     "zet-revision-plan": "zet-revision-write",
 }
 
+# These top-level launchers deliberately hand their remaining argv to bounded
+# parsers that do not use argparse. Keep that exceptional surface explicit so
+# the shared inventory reports the mode the real dispatcher accepts instead of
+# mistaking argparse.REMAINDER for no dry-run. Structural checks below make the
+# declaration fail closed if a launcher changes.
+_DELEGATED_DRY_RUN_COMMANDS = {
+    "source-reference-coverage-audit": (
+        "coverage_audit_argv",
+        "command_source_reference_coverage_audit",
+    ),
+}
+
+# A parser leaf with ``argparse.REMAINDER`` may bind one content-free callback
+# under this private attribute.  The callback is the delegated command's real
+# grammar authority and returns only syntax validity, requested mode, and a
+# fixed reason code.  Both generated suggestions and live dispatch consume the
+# same callback; neither path treats a successfully collected remainder as a
+# successfully parsed delegated invocation.
+_DELEGATED_ARGUMENT_SYNTAX_ATTRIBUTE = (
+    "_wom_delegated_argument_syntax_status"
+)
+_DELEGATED_ARGUMENT_SYNTAX_KEYS = frozenset(
+    {"valid", "requested_mode", "reason_code"}
+)
+
 
 def compound_approval_fixed_closed_contract(command: str) -> dict[str, Any]:
     """Return the shared content-free approval truth for one closed writer."""
@@ -201,6 +226,31 @@ def _option_exposed(
 
 def _invocation_surface_available(parser: argparse.ArgumentParser) -> bool:
     return callable(parser._defaults.get("func"))
+
+
+def _dry_run_exposed(
+    canonical_path: str,
+    parser: argparse.ArgumentParser,
+) -> bool:
+    if _option_exposed(parser, "--dry-run"):
+        return True
+    delegated = _DELEGATED_DRY_RUN_COMMANDS.get(canonical_path)
+    if delegated is None:
+        return False
+    remainder_dest, expected_handler_name = delegated
+    handler = parser._defaults.get("func")
+    positional_actions = [
+        action
+        for action in parser._actions
+        if not action.option_strings
+        and not isinstance(action, argparse._SubParsersAction)
+    ]
+    return (
+        getattr(handler, "__name__", None) == expected_handler_name
+        and len(positional_actions) == 1
+        and positional_actions[0].dest == remainder_dest
+        and positional_actions[0].nargs == argparse.REMAINDER
+    )
 
 
 def _parser_approval_scope(
@@ -387,9 +437,9 @@ def build_command_status_inventory(
                             "approval_status": approval_status,
                             "approval_reason_code": approval_reason_code,
                             "approval_scope": approval_scope,
-                            "dry_run_exposed": _option_exposed(
+                            "dry_run_exposed": _dry_run_exposed(
+                                canonical_path_text,
                                 command_parser,
-                                "--dry-run",
                             ),
                             "invocation_surface_available": True,
                         }
@@ -740,7 +790,17 @@ def _syntax_projection(parser: argparse.ArgumentParser) -> argparse.ArgumentPars
                 "default": argparse.SUPPRESS,
                 "required": bool(action.required),
             }
-            if action.nargs == 0:
+            if isinstance(action, argparse._StoreTrueAction):
+                kwargs["action"] = "store_true"
+            elif isinstance(action, argparse._StoreFalseAction):
+                kwargs["action"] = "store_false"
+            elif isinstance(action, argparse._AppendAction):
+                kwargs["action"] = "append"
+                if action.nargs is not None:
+                    kwargs["nargs"] = action.nargs
+            elif action.nargs == 0:
+                # Preserve zero-arity syntax for count/store-const and custom
+                # flag actions without invoking their original behavior.
                 kwargs["action"] = "store_true"
             elif action.nargs is not None:
                 kwargs["nargs"] = action.nargs
@@ -753,17 +813,95 @@ def _syntax_projection(parser: argparse.ArgumentParser) -> argparse.ArgumentPars
     return projection
 
 
+def _delegated_argument_syntax_status(
+    parser: argparse.ArgumentParser,
+    argument_tokens: tuple[str, ...],
+) -> dict[str, Any] | None:
+    callback = getattr(parser, _DELEGATED_ARGUMENT_SYNTAX_ATTRIBUTE, None)
+    if callback is None:
+        return None
+    if not callable(callback):
+        raise ValueError("delegated_argument_syntax_contract_invalid")
+    try:
+        raw = callback(argument_tokens)
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except BaseException:
+        raise ValueError("delegated_argument_syntax_unavailable") from None
+    if type(raw) is not dict or set(raw) != _DELEGATED_ARGUMENT_SYNTAX_KEYS:
+        raise ValueError("delegated_argument_syntax_contract_invalid")
+    valid = raw.get("valid")
+    requested_mode = raw.get("requested_mode")
+    reason_code = raw.get("reason_code")
+    if (
+        type(valid) is not bool
+        or requested_mode
+        not in {"dry_run", "approve", "conflicting", "unspecified"}
+        or (
+            reason_code is not None
+            and (
+                type(reason_code) is not str
+                or re.fullmatch(r"[a-z][a-z0-9_]{0,95}", reason_code) is None
+            )
+        )
+        or (valid and reason_code is not None)
+        or (not valid and reason_code is None)
+    ):
+        raise ValueError("delegated_argument_syntax_contract_invalid")
+    return {
+        "valid": valid,
+        "requested_mode": requested_mode,
+        "reason_code": reason_code,
+    }
+
+
 def _evaluate_argument_syntax(
     trusted_parser: argparse.ArgumentParser,
     matched_path: tuple[str, ...],
     argument_tokens: tuple[str, ...],
-) -> tuple[bool, bool | None, str | None]:
+) -> tuple[
+    bool,
+    bool | None,
+    str | None,
+    argparse.ArgumentParser | None,
+    argparse.Namespace | None,
+]:
     leaf = _trusted_parser_for_path(trusted_parser, matched_path)
     if leaf is None:
         return (
             False,
             None,
             "suggested_command_trusted_parser_path_mismatch",
+            None,
+            None,
+        )
+    try:
+        delegated = _delegated_argument_syntax_status(leaf, argument_tokens)
+    except ValueError:
+        return (
+            False,
+            None,
+            "suggested_command_argument_syntax_not_evaluated",
+            None,
+            None,
+        )
+    if delegated is not None:
+        if delegated["valid"] is not True:
+            return (
+                True,
+                False,
+                str(delegated["reason_code"]),
+                None,
+                None,
+            )
+        return (
+            True,
+            True,
+            None,
+            leaf,
+            argparse.Namespace(
+                _wom_delegated_requested_mode=delegated["requested_mode"]
+            ),
         )
     try:
         projection = _syntax_projection(leaf)
@@ -772,13 +910,56 @@ def _evaluate_argument_syntax(
             False,
             None,
             "suggested_command_argument_syntax_not_evaluated",
+            None,
+            None,
         )
     try:
         with redirect_stderr(io.StringIO()):
-            projection.parse_args(argument_tokens)
+            namespace = projection.parse_args(argument_tokens)
     except (SystemExit, argparse.ArgumentError):
-        return True, False, "suggested_command_argument_syntax_invalid"
-    return True, True, None
+        return (
+            True,
+            False,
+            "suggested_command_argument_syntax_invalid",
+            None,
+            None,
+        )
+    return True, True, None, leaf, namespace
+
+
+def _namespace_requested_mode(namespace: argparse.Namespace) -> str:
+    delegated = getattr(namespace, "_wom_delegated_requested_mode", None)
+    if delegated in {"dry_run", "approve", "conflicting", "unspecified"}:
+        return str(delegated)
+    dry_run = getattr(namespace, "dry_run", False) is True
+    approve = getattr(namespace, "approve", False) is True
+    return (
+        "conflicting"
+        if dry_run and approve
+        else "dry_run"
+        if dry_run
+        else "approve"
+        if approve
+        else "unspecified"
+    )
+
+
+def _argument_syntax_unavailable(
+    command: Mapping[str, Any],
+    *,
+    requested_mode: str,
+) -> dict[str, Any]:
+    availability = _capability_availability_for_command(
+        command,
+        requested_mode=requested_mode,
+    )
+    return {
+        **availability,
+        "state": CAPABILITY_MODE_UNAVAILABLE,
+        "available": False,
+        "reason_code": "capability_argument_syntax_invalid",
+        "detail_reason_code": "capability_argument_syntax_invalid",
+    }
 
 
 def _option_tokens(tokens: tuple[str, ...]) -> tuple[str, ...]:
@@ -1074,7 +1255,20 @@ def _namespace_approval_scope_tokens(
             action = option_actions.get(option)
             if action is None:
                 raise ValueError("command_approval_scope_invalid")
-            if getattr(namespace, action.dest, False) is True:
+            value = getattr(namespace, action.dest, None)
+            if isinstance(action, argparse._StoreTrueAction):
+                selected = value is True
+            elif isinstance(action, argparse._StoreFalseAction):
+                selected = value is False
+            elif isinstance(action, argparse._AppendAction):
+                selected = isinstance(value, list) and bool(value)
+            else:
+                # Value-taking options such as --source-mirror and repeated
+                # --markup-receipt are still scope selectors.  Their private
+                # values are inspected only for presence and are never copied
+                # into the content-free token set or availability record.
+                selected = value is not None
+            if selected:
                 tokens.append(option)
         return tuple(tokens)
     raise ValueError("command_approval_scope_invalid")
@@ -1102,17 +1296,36 @@ def resolve_namespace_capability_availability(
     )
     if command is None:
         raise ValueError("capability_namespace_path_unresolved")
-    dry_run = getattr(namespace, "dry_run", False) is True
-    approve = getattr(namespace, "approve", False) is True
-    requested_mode = (
-        "conflicting"
-        if dry_run and approve
-        else "dry_run"
-        if dry_run
-        else "approve"
-        if approve
-        else "unspecified"
-    )
+    requested_mode = _namespace_requested_mode(namespace)
+    remainder_actions = [
+        action
+        for action in leaf_parser._actions
+        if not action.option_strings and action.nargs == argparse.REMAINDER
+    ]
+    if getattr(
+        leaf_parser,
+        _DELEGATED_ARGUMENT_SYNTAX_ATTRIBUTE,
+        None,
+    ) is not None:
+        if len(remainder_actions) != 1:
+            raise ValueError("delegated_argument_syntax_contract_invalid")
+        raw_tokens = getattr(namespace, remainder_actions[0].dest, None)
+        if type(raw_tokens) is not list or any(
+            type(token) is not str for token in raw_tokens
+        ):
+            raise ValueError("delegated_argument_syntax_contract_invalid")
+        delegated = _delegated_argument_syntax_status(
+            leaf_parser,
+            tuple(raw_tokens),
+        )
+        if delegated is None:
+            raise ValueError("delegated_argument_syntax_contract_invalid")
+        requested_mode = str(delegated["requested_mode"])
+        if delegated["valid"] is not True:
+            return _argument_syntax_unavailable(
+                command,
+                requested_mode=requested_mode,
+            )
     argument_tokens = _namespace_approval_scope_tokens(
         leaf_parser,
         namespace,
@@ -1188,7 +1401,9 @@ def resolve_suggested_command_mode(
     prerequisites, template substitution, shell parsing, or full command
     execution have passed.  When ``trusted_parser`` is supplied, a sanitized
     argparse projection checks only option/positional arity and requiredness;
-    it never calls original argument types, actions, handlers, or help output.
+    a leaf that delegates ``argparse.REMAINDER`` instead uses its explicitly
+    bound content-free grammar projection.  Neither path calls original
+    argument types, actions, handlers, or help output.
     The separate
     ``approval_mode_available_for_arguments`` field evaluates the suggestion's
     argument-level approval scope even when the requested mode is dry-run.
@@ -1275,6 +1490,8 @@ def resolve_suggested_command_mode(
     matched_path, command = max(matches, key=lambda item: len(item[0]))
     raw_argument_tokens = command_tokens[len(matched_path) :]
     argument_tokens = _option_tokens(raw_argument_tokens)
+    parsed_leaf: argparse.ArgumentParser | None = None
+    parsed_namespace: argparse.Namespace | None = None
     if trusted_parser is None:
         argument_syntax_evaluated = False
         argument_syntax_valid = None
@@ -1284,13 +1501,15 @@ def resolve_suggested_command_mode(
             argument_syntax_evaluated,
             argument_syntax_valid,
             argument_syntax_reason_code,
+            parsed_leaf,
+            parsed_namespace,
         ) = _evaluate_argument_syntax(
             trusted_parser,
             matched_path,
             raw_argument_tokens,
         )
         if argument_syntax_valid is not True:
-            return _unresolved_suggested_command_status(
+            unresolved = _unresolved_suggested_command_status(
                 reason_code=(
                     argument_syntax_reason_code
                     or "suggested_command_argument_syntax_not_evaluated"
@@ -1302,12 +1521,68 @@ def resolve_suggested_command_mode(
                 argument_syntax_valid=argument_syntax_valid,
                 argument_syntax_reason_code=argument_syntax_reason_code,
             )
+            if argument_syntax_valid is False:
+                unavailable = _argument_syntax_unavailable(
+                    command,
+                    requested_mode=requested_mode,
+                )
+                unresolved.update(
+                    {
+                        "resolution_scope": "inventory_path_and_argument_syntax",
+                        "canonical_path": command["canonical_path"],
+                        "matched_invocation_path": " ".join(matched_path),
+                        "invocation_surface_available": command.get(
+                            "invocation_surface_available"
+                        )
+                        is True,
+                        "requested_mode_available": False,
+                        "requested_mode_reason_code": unavailable[
+                            "reason_code"
+                        ],
+                        "dry_run_exposed": command.get("dry_run_exposed")
+                        is True,
+                        "approval_status": command.get("approval_status"),
+                        "approval_reason_code": command.get(
+                            "approval_reason_code"
+                        ),
+                        "approval_scope": _approval_scope_summary(
+                            command.get("approval_scope")
+                        ),
+                        "approval_mode_available_for_arguments": False,
+                        "approval_mode_reason_code_for_arguments": unavailable[
+                            "reason_code"
+                        ],
+                        "capability_availability": unavailable,
+                    }
+                )
+            return unresolved
+        if parsed_leaf is not None and parsed_namespace is not None:
+            parsed_mode = _namespace_requested_mode(parsed_namespace)
+            # Delegated parsers intentionally receive argparse.REMAINDER, so
+            # their mode remains visible only in the validated raw token list.
+            # Normal argparse commands use their sanitized parsed namespace,
+            # including --option=value and duplicate-option last-wins rules.
+            if not any(
+                action.nargs == argparse.REMAINDER
+                for action in parsed_leaf._actions
+            ):
+                requested_mode = parsed_mode
     invocation_available = command.get("invocation_surface_available") is True
     dry_run_exposed = command.get("dry_run_exposed") is True
     approval_status = command.get("approval_status")
     approval_reason_code = command.get("approval_reason_code")
     raw_scope = command.get("approval_scope")
     approval_scope = dict(raw_scope) if isinstance(raw_scope, Mapping) else None
+    if (
+        approval_scope is not None
+        and parsed_leaf is not None
+        and parsed_namespace is not None
+    ):
+        argument_tokens = _namespace_approval_scope_tokens(
+            parsed_leaf,
+            parsed_namespace,
+            approval_scope,
+        )
 
     approval_availability = _capability_availability_for_command(
         command,

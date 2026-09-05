@@ -374,12 +374,14 @@ from __future__ import annotations
 import argparse
 import codecs
 import copy
-from concurrent.futures import ThreadPoolExecutor
+from collections import deque
+from concurrent.futures import Future
 import io
 import getpass
 import hashlib
 import json
 import os
+import queue
 import re
 import secrets
 import shutil
@@ -400,7 +402,7 @@ from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timezone
 from fnmatch import fnmatchcase
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable, Iterable, Mapping
+from typing import Any, Callable, Iterable, Iterator, Mapping
 from uuid import UUID
 
 from . import (
@@ -637,6 +639,9 @@ SECRET_SAFETY_PROGRESS_EVERY_FILES = 250
 SECRET_SAFETY_PROGRESS_SECONDS = 30.0
 SECRET_SAFETY_READ_CHUNK_SIZE = 1024 * 1024
 DOCTOR_ZETTEL_TEXT_MAX_BYTES = 64 * 1024 * 1024
+DOCTOR_PARALLEL_IN_FLIGHT_FACTOR = 2
+DOCTOR_ARCHIVE_TREE_INVENTORY_MAX_ENTRIES = 1_000_000
+DOCTOR_RUN_CACHE_SNAPSHOT_MAX_ENTRIES = 250_000
 DIAGNOSTIC_SEVERITIES = ("ERROR", "WARN", "INFO")
 DIAGNOSTIC_LEVEL_ALIASES = {
     "ERROR": "ERROR",
@@ -647,6 +652,95 @@ DIAGNOSTIC_LEVEL_ALIASES = {
     "INFO": "INFO",
     "INFOS": "INFO",
 }
+
+
+class _DoctorBoundedDaemonExecutor:
+    """Tiny observation-only pool whose blocked workers cannot hold process exit.
+
+    ``ThreadPoolExecutor`` registers every worker for an interpreter-exit join.
+    That is desirable for ordinary application work but violates Doctor's
+    Ctrl-C contract when a filesystem read is indefinitely blocked.  These
+    workers are daemon threads, accept only a bounded queue, and never mutate
+    Doctor state.  A failed/interrupting caller cancels queued futures and may
+    return without joining the currently blocked observations.
+    """
+
+    def __init__(self, *, max_workers: int, thread_name_prefix: str) -> None:
+        if max_workers < 1:
+            raise ValueError("doctor_parallel_max_workers_invalid")
+        self._stop = threading.Event()
+        # Linearize the transition from queued to running with shutdown.
+        # Draining the queue alone is insufficient: a worker can dequeue one
+        # future immediately before shutdown and enter the user function only
+        # after cancellation has returned.  The gate makes every task either
+        # already running before shutdown, or cancelled without calling the
+        # observation function.
+        self._start_gate = threading.Lock()
+        # The producer-side submission window is the memory bound.  A
+        # SimpleQueue avoids the second layer of condition-variable contention
+        # that made metadata observation materially slower while never holding
+        # more than that fixed window of tasks.
+        self._tasks: queue.SimpleQueue[
+            tuple[Future[Any], Callable[[Any], Any], Any] | None
+        ] = queue.SimpleQueue()
+        self._threads = [
+            threading.Thread(
+                target=self._worker,
+                name=f"{thread_name_prefix}-{index}",
+                daemon=True,
+            )
+            for index in range(max_workers)
+        ]
+        for worker in self._threads:
+            worker.start()
+
+    def _worker(self) -> None:
+        while True:
+            task = self._tasks.get()
+            if task is None:
+                return
+            future, function, value = task
+            with self._start_gate:
+                if self._stop.is_set():
+                    future.cancel()
+                    continue
+                should_run = future.set_running_or_notify_cancel()
+            if should_run:
+                try:
+                    result = function(value)
+                except BaseException as exc:
+                    future.set_exception(exc)
+                else:
+                    future.set_result(result)
+
+    def submit(
+        self,
+        function: Callable[[Any], Any],
+        value: Any,
+    ) -> Future[Any]:
+        if self._stop.is_set():
+            raise RuntimeError("doctor_parallel_executor_shutdown")
+        future: Future[Any] = Future()
+        self._tasks.put((future, function, value))
+        return future
+
+    def shutdown(self, *, wait: bool, cancel_futures: bool) -> None:
+        with self._start_gate:
+            self._stop.set()
+        if cancel_futures:
+            while True:
+                try:
+                    task = self._tasks.get_nowait()
+                except queue.Empty:
+                    break
+                if task is not None:
+                    future, _function, _value = task
+                    future.cancel()
+        for _worker in self._threads:
+            self._tasks.put(None)
+        if wait:
+            for worker in self._threads:
+                worker.join()
 
 
 def contains_secret_value(text: str) -> bool:
@@ -1805,8 +1899,16 @@ class Doctor:
         self._object_manifest_raw: bytes | None = None
         self._object_manifest_records_loaded = False
         self._archive_relative_path_cache: dict[str, str] = {}
+        # Lexical projection is pure for the lifetime of this Doctor: both
+        # accepted root spellings are captured in ``__init__`` and neither
+        # filesystem state nor symlink resolution participates.  Hot receipt
+        # validation asks for the same projections tens of thousands of times,
+        # so keep positive and negative results separately from file-cache
+        # keys (which may fall back to a resolved external path).
+        self._lexical_archive_relative_cache: dict[str, str | None] = {}
         self._archive_tree_file_identities: dict[str, tuple[int, ...]] = {}
         self._archive_tree_directory_identities: dict[str, tuple[int, ...]] = {}
+        self._archive_tree_directory_entry_digests: dict[str, str] = {}
         self._archive_tree_unsafe_entries: list[tuple[Path, bool]] = []
         self._archive_tree_inventory_complete = False
         self._archive_root_boundary_failure_reported = False
@@ -1838,6 +1940,7 @@ class Doctor:
             str, tuple[tuple[int, ...], bool]
         ] = {}
         self._run_cache_snapshot_active = False
+        self._run_cache_snapshot_capacity_reported = False
         self._run_file_generation_snapshots: dict[
             str, tuple[str, Path, tuple[int, ...]]
         ] = {}
@@ -1845,6 +1948,7 @@ class Doctor:
             str, tuple[Path, tuple[int, ...]]
         ] = {}
         self._stage_directory_cache_active = False
+        self._stage_root_boundary_verified = False
         self._file_sha256_cache_hits = 0
         self._file_sha256_cache_misses = 0
         self._zettel_frontmatter_cache_hits = 0
@@ -1893,6 +1997,7 @@ class Doctor:
         return dict(self._read_observations)
 
     def run(self) -> list[Diagnostic]:
+        aborted_by_exception = False
         try:
             if not self.archive_root.exists():
                 self.error("archive_root_missing", "Archive root does not exist.", self.archive_root)
@@ -1940,16 +2045,31 @@ class Doctor:
             for stage_name, stage_func in stages:
                 self._run_stage(stage_name, stage_func)
             return self.diagnostics
+        except BaseException:
+            aborted_by_exception = True
+            raise
         finally:
             self._finish_edge_receipt_source_load_progress()
-            self._record_archive_root_boundary_failure()
-            self._finalize_run_file_generation_snapshots()
-            self._record_archive_root_boundary_failure()
-            self._finalize_object_byte_observations()
-            self._finalize_object_manifest_snapshot()
-            self._record_archive_root_boundary_failure()
-            self._attach_suggested_command_statuses()
-            self._record_archive_root_boundary_failure()
+            if aborted_by_exception:
+                # A stage-level Ctrl-C or unexpected failure is not a request
+                # to begin expensive completion work.  In particular, never
+                # start queued deep hashes after the operator interrupted the
+                # stage that collected them.
+                self._run_cache_snapshot_active = False
+                self._stage_directory_cache_active = False
+                self._stage_root_boundary_verified = False
+            else:
+                self._record_archive_root_boundary_failure()
+                self._finalize_object_byte_observations()
+                self._finalize_object_manifest_snapshot()
+                self._record_archive_root_boundary_failure()
+                self._attach_suggested_command_statuses()
+                self._record_archive_root_boundary_failure()
+                # This must be the last archive-reading completion operation.
+                # It validates every cached input after object-byte, manifest,
+                # and command-status finalizers have finished.  No later clean
+                # claim may be invalidated by another archive read.
+                self._finalize_run_file_generation_snapshots()
 
     def _finalize_object_byte_observations(self) -> None:
         observations = sorted(
@@ -1984,17 +2104,16 @@ class Doctor:
         # not pay thread-pool startup cost.  CommandProgressReporter supplies an
         # independent content-free heartbeat while workers are inside os.read.
         if total >= 32:
-            worker_count = min(16, total)
-            executor = ThreadPoolExecutor(
-                max_workers=worker_count,
+            observed_context = self._bounded_parallel_map(
+                observe_one,
+                observations,
+                max_workers=min(16, total),
                 thread_name_prefix="wom-doctor-objet-hash",
             )
-            observed = executor.map(observe_one, observations)
         else:
-            executor = None
-            observed = map(observe_one, observations)
+            observed_context = nullcontext(map(observe_one, observations))
 
-        try:
+        with observed_context as observed:
             for index, (path, expected_sha256, result) in enumerate(
                 observed,
                 start=1,
@@ -2027,9 +2146,6 @@ class Doctor:
                     index,
                     total,
                 )
-        finally:
-            if executor is not None:
-                executor.shutdown(wait=True, cancel_futures=False)
         self._object_byte_completion_revalidated_count = revalidated
         if self.object_byte_verification_mode != "deep":
             self._object_byte_completion_revalidation_state = "not_run"
@@ -2217,11 +2333,26 @@ class Doctor:
             self._progress(stage_name, "done", None, None)
             return
         self._stage_directory_cache_active = True
+        # The root was just checked for this stage.  Descriptor-bound readers
+        # still prove it before and after consuming bytes, and the stage plus
+        # run completion passes revalidate it.  Repeating the same root lstat
+        # around every in-memory cache comparison adds no stronger proof.
+        self._stage_root_boundary_verified = True
+        stage_aborted_by_exception = False
         try:
             stage_func()
+        except BaseException:
+            stage_aborted_by_exception = True
+            raise
         finally:
+            self._stage_root_boundary_verified = False
             self._stage_directory_cache_active = False
-            self._finalize_stage_directory_generations(stage_name)
+            if stage_aborted_by_exception:
+                self._archive_tree_inventory_complete = False
+                self._run_cache_snapshot_active = False
+                self._stage_directory_generation_snapshots.clear()
+            else:
+                self._finalize_stage_directory_generations(stage_name)
         if (
             stage_name == "symlink-boundaries"
             and self._archive_tree_inventory_complete
@@ -2249,6 +2380,12 @@ class Doctor:
             ):
                 changed += 1
         if changed:
+            # Once any directory generation used by a stage has drifted, the
+            # inventory is no longer a safe projection for later cache or
+            # secret-scan work.  Force later stages onto their live,
+            # descriptor-bound fallback paths.
+            self._archive_tree_inventory_complete = False
+            self._run_cache_snapshot_active = False
             self.error(
                 "archive_stage_directory_boundary_changed",
                 (
@@ -2296,6 +2433,107 @@ class Doctor:
     def _progress(self, stage: str, message: str, current: int | None, total: int | None) -> None:
         if self.progress_callback is not None:
             self.progress_callback(stage, message, current, total)
+
+    @staticmethod
+    def _bounded_executor_results(
+        executor: _DoctorBoundedDaemonExecutor,
+        function: Callable[[Any], Any],
+        values: Iterable[Any],
+        *,
+        max_in_flight: int,
+    ) -> Iterator[Any]:
+        """Submit only a small ordered window instead of eager ``map`` work."""
+
+        if max_in_flight < 1:
+            raise ValueError("doctor_parallel_max_in_flight_invalid")
+        source = iter(values)
+        pending: deque[Any] = deque()
+        exhausted = False
+
+        while len(pending) < max_in_flight:
+            try:
+                value = next(source)
+            except StopIteration:
+                exhausted = True
+                break
+            pending.append(executor.submit(function, value))
+
+        while pending:
+            future = pending.popleft()
+            yield future.result()
+            if exhausted:
+                continue
+            try:
+                value = next(source)
+            except StopIteration:
+                exhausted = True
+            else:
+                pending.append(executor.submit(function, value))
+
+    @staticmethod
+    @contextmanager
+    def _bounded_parallel_map(
+        function: Callable[[Any], Any],
+        values: Iterable[Any],
+        *,
+        max_workers: int,
+        thread_name_prefix: str,
+    ) -> Iterator[Iterable[Any]]:
+        """Yield an ordered executor map with prompt failure cancellation.
+
+        Worker functions used by Doctor are observation-only.  On an executor
+        failure or Ctrl-C, queued observations are cancelled and the caller is
+        released without waiting for unrelated pending I/O.  Already-running
+        descriptor reads may finish safely in the background and cannot mutate
+        Doctor state.
+        """
+
+        executor = _DoctorBoundedDaemonExecutor(
+            max_workers=max_workers,
+            thread_name_prefix=thread_name_prefix,
+        )
+        try:
+            yield Doctor._bounded_executor_results(
+                executor,
+                function,
+                values,
+                max_in_flight=max_workers * DOCTOR_PARALLEL_IN_FLIGHT_FACTOR,
+            )
+        except BaseException:
+            try:
+                executor.shutdown(wait=False, cancel_futures=True)
+            except Exception:
+                pass
+            raise
+        else:
+            executor.shutdown(wait=True, cancel_futures=False)
+
+    @staticmethod
+    @contextmanager
+    def _retained_inventory_directory(
+        guard: Any,
+        path: Path,
+    ) -> Iterator[bool]:
+        """Hold a Windows directory against rename/delete for one scan.
+
+        The existing Windows guard opens the directory itself with
+        ``OPEN_REPARSE_POINT`` and deliberately omits ``FILE_SHARE_DELETE``.
+        Thus an exact identity check plus scandir and entry lstat observations
+        occur while another process cannot replace that directory pathname.
+        Non-Windows Doctor retains the exact lstat checks but has no equivalent
+        rename-denying primitive.
+        """
+
+        if guard is None:
+            yield True
+            return
+        if not guard.hold(path):
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            guard.release(path)
 
     def _edge_receipt_source_load_summary(self, prefix: str) -> str:
         return (
@@ -2393,6 +2631,7 @@ class Doctor:
             int(getattr(value, "st_mtime_ns", 0)),
             int(getattr(value, "st_ctime_ns", 0)),
             int(getattr(value, "st_file_attributes", 0)),
+            int(getattr(value, "st_nlink", 0) or 0),
         )
 
     @staticmethod
@@ -2408,6 +2647,7 @@ class Doctor:
             int(getattr(value, "st_mtime_ns", 0)),
             int(getattr(value, "st_ctime_ns", 0)),
             int(getattr(value, "st_file_attributes", 0)),
+            int(getattr(value, "st_nlink", 0) or 0),
         )
 
     @staticmethod
@@ -2426,6 +2666,46 @@ class Doctor:
             int(getattr(value, "st_file_attributes", 0)),
         )
 
+    @classmethod
+    def _inventory_directory_entry_digest(
+        cls,
+        observations: Iterable[tuple[Path, os.stat_result]],
+    ) -> str:
+        """Bind one directory's exact names, kinds, and entry identities.
+
+        Directory timestamps alone are not a tree-membership proof: an entry
+        can be added and the timestamp restored.  Only the SHA-256 is retained,
+        so private basenames never enter diagnostics or completion metadata.
+        """
+
+        signatures: list[tuple[Any, ...]] = []
+        for path, observed in observations:
+            if (
+                not stat.S_ISLNK(observed.st_mode)
+                and not archive_doctor._is_reparse_point(observed)
+                and stat.S_ISDIR(observed.st_mode)
+            ):
+                kind = "directory"
+                identity = cls._inventory_directory_identity(observed)
+            elif (
+                not stat.S_ISLNK(observed.st_mode)
+                and not archive_doctor._is_reparse_point(observed)
+                and stat.S_ISREG(observed.st_mode)
+            ):
+                kind = "file"
+                identity = cls._inventory_stat_identity(observed)
+            else:
+                kind = "unsafe"
+                identity = cls._inventory_stat_identity(observed)
+            signatures.append((path.name, kind, *identity))
+        signatures.sort(key=lambda item: (str(item[0]).casefold(), item))
+        payload = json.dumps(
+            signatures,
+            ensure_ascii=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()
+
     @staticmethod
     def _archive_tree_key(relative: str) -> str:
         return os.path.normcase(relative.replace("/", os.sep))
@@ -2435,6 +2715,9 @@ class Doctor:
             absolute = Path(os.path.abspath(os.fspath(path)))
         except (OSError, RuntimeError, ValueError):
             return None
+        lexical_key = os.path.normcase(os.fspath(absolute))
+        if lexical_key in self._lexical_archive_relative_cache:
+            return self._lexical_archive_relative_cache[lexical_key]
         for root in (
             self.archive_root,
             self._archive_root_input_absolute,
@@ -2444,8 +2727,12 @@ class Doctor:
             except (OSError, RuntimeError, ValueError):
                 continue
             if not relative.parts:
-                return "."
-            return PurePosixPath(*relative.parts).as_posix()
+                result = "."
+            else:
+                result = PurePosixPath(*relative.parts).as_posix()
+            self._lexical_archive_relative_cache[lexical_key] = result
+            return result
+        self._lexical_archive_relative_cache[lexical_key] = None
         return None
 
     def _inventory_identity_matches(
@@ -2587,6 +2874,15 @@ class Doctor:
                         require_directory=False,
                     )
                 ):
+                    # Bind every successful reference observation to the run
+                    # completion snapshot.  Consumers may now project size or
+                    # existence from this exact identity without a duplicate
+                    # immediate stat, while a later replacement still makes
+                    # the complete Doctor result stale.
+                    self._remember_run_file_generation(
+                        unresolved,
+                        expected_file,
+                    )
                     return unresolved
                 raise ArchivePathError(
                     "Archive-relative file changed after the boundary inventory."
@@ -2629,9 +2925,21 @@ class Doctor:
                         require_directory=True,
                     )
                 ):
-                    # A lexically safe missing final entry remains a missing entry;
-                    # callers retain their existing missing-file diagnostic.
-                    return unresolved
+                    # A lexically safe *still missing* final entry remains a
+                    # missing entry; callers retain their existing diagnostic.
+                    # Never return a file that appeared after the inventory,
+                    # even if a platform lets the parent timestamp be restored.
+                    try:
+                        os.lstat(unresolved)
+                    except FileNotFoundError:
+                        return unresolved
+                    except OSError as exc:
+                        raise ArchivePathError(
+                            "Archive-relative final entry could not be proven missing."
+                        ) from exc
+                    raise ArchivePathError(
+                        "Archive-relative final entry appeared after the boundary inventory."
+                    )
             raise ArchivePathError(
                 "Archive-relative path was not present in the safe boundary inventory."
             )
@@ -2642,6 +2950,29 @@ class Doctor:
             if attempt < 4:
                 time.sleep(0.001)
         raise ArchivePathError("Archive-relative path escapes archive root.")
+
+    def _resolved_inventory_file_identity(
+        self,
+        path: Path,
+    ) -> tuple[int, ...] | None:
+        """Return the exact inventoried identity after a successful resolve.
+
+        ``_resolve_archive_relative_path`` already compares the live final
+        entry and every parent with this identity.  Consumers immediately
+        following that resolve can project regular-file existence and size
+        from the same generation instead of issuing a second racy ``stat``.
+        Outside a completed inventory callers retain their historical live
+        probe.
+        """
+
+        if not self._archive_tree_inventory_complete:
+            return None
+        relative = self._lexical_archive_relative(path)
+        if relative is None:
+            return None
+        return self._archive_tree_file_identities.get(
+            self._archive_tree_key(relative)
+        )
 
     def _path_is_currently_within_archive(self, path: Path) -> bool:
         if self._archive_tree_inventory_complete:
@@ -2778,8 +3109,11 @@ class Doctor:
                 or self._inventory_stat_identity(value) != expected
             ):
                 raise OSError("doctor_archive_cache_boundary_changed")
-        if not archive_doctor.doctor_archive_root_boundary_is_current(
-            self._archive_root_boundary
+        if (
+            not self._stage_root_boundary_verified
+            and not archive_doctor.doctor_archive_root_boundary_is_current(
+                self._archive_root_boundary
+            )
         ):
             raise OSError("doctor_archive_cache_boundary_changed")
         return self._stat_identity(value)
@@ -2799,12 +3133,40 @@ class Doctor:
         )
         if expected is None or expected != identity:
             return
+        snapshot_key = self._archive_tree_key(relative)
+        if (
+            snapshot_key not in self._run_file_generation_snapshots
+            and len(self._run_file_generation_snapshots)
+            >= DOCTOR_RUN_CACHE_SNAPSHOT_MAX_ENTRIES
+        ):
+            self._run_cache_snapshot_active = False
+            self._run_file_generation_snapshots.clear()
+            if not self._run_cache_snapshot_capacity_reported:
+                self._run_cache_snapshot_capacity_reported = True
+                self.error(
+                    "doctor_cache_snapshot_capacity_exceeded",
+                    (
+                        "Doctor stopped reusing run-wide cached archive inputs "
+                        "because the bounded generation snapshot reached its capacity."
+                    ),
+                    details={
+                        "state": "unavailable",
+                        "maximum_entry_count": (
+                            DOCTOR_RUN_CACHE_SNAPSHOT_MAX_ENTRIES
+                        ),
+                        "private_values_echoed": False,
+                        "paths_echoed": False,
+                    },
+                )
+            return
         canonical = self.archive_root
         if relative != ".":
             canonical = self.archive_root.joinpath(*PurePosixPath(relative).parts)
-        self._run_file_generation_snapshots[
-            self._archive_tree_key(relative)
-        ] = (relative, canonical, identity)
+        self._run_file_generation_snapshots[snapshot_key] = (
+            relative,
+            canonical,
+            identity,
+        )
 
     def _run_file_generation_is_trusted(
         self,
@@ -2820,6 +3182,99 @@ class Doctor:
             self._archive_tree_key(relative)
         )
         return bool(remembered is not None and remembered[2] == identity)
+
+    def _observe_inventory_directory_generation(
+        self,
+        relative: str,
+        *,
+        expected_identity: tuple[int, ...],
+        executor: _DoctorBoundedDaemonExecutor,
+        guard: Any,
+    ) -> tuple[tuple[int, ...], str] | None:
+        """Re-observe one exact directory without exposing member names."""
+
+        path = self.archive_root
+        if relative != ".":
+            path = self.archive_root.joinpath(*PurePosixPath(relative).parts)
+        quarantine_names = {
+            name.casefold() for name in SECRET_SAFETY_QUARANTINED_ROOT_DIRS
+        }
+        try:
+            with self._retained_inventory_directory(guard, path) as retained:
+                if not retained:
+                    return None
+                before = os.lstat(path)
+                if (
+                    stat.S_ISLNK(before.st_mode)
+                    or archive_doctor._is_reparse_point(before)
+                    or not stat.S_ISDIR(before.st_mode)
+                    or self._inventory_directory_identity(before)
+                    != expected_identity
+                ):
+                    # Never enumerate a directory whose exact queued identity
+                    # is no longer present.
+                    return None
+                with os.scandir(path) as iterator:
+                    entries = []
+                    for entry in iterator:
+                        if (
+                            relative == "."
+                            and entry.name.casefold() in quarantine_names
+                        ):
+                            continue
+                        if (
+                            len(entries)
+                            >= DOCTOR_ARCHIVE_TREE_INVENTORY_MAX_ENTRIES
+                        ):
+                            return None
+                        entries.append(entry)
+                    entries.sort(
+                        key=lambda item: (item.name.casefold(), item.name)
+                    )
+
+                def observe_entry(
+                    entry: os.DirEntry[str],
+                ) -> tuple[Path, os.stat_result | None]:
+                    child_path = Path(entry.path)
+                    try:
+                        observed = os.lstat(child_path)
+                    except OSError:
+                        observed = None
+                    return child_path, observed
+
+                if len(entries) >= 32:
+                    observed_entries = self._bounded_executor_results(
+                        executor,
+                        observe_entry,
+                        entries,
+                        max_in_flight=(
+                            16 * DOCTOR_PARALLEL_IN_FLIGHT_FACTOR
+                        ),
+                    )
+                else:
+                    observed_entries = map(observe_entry, entries)
+                observations = tuple(observed_entries)
+                if any(observed is None for _child, observed in observations):
+                    return None
+                after = os.lstat(path)
+                if (
+                    stat.S_ISLNK(after.st_mode)
+                    or archive_doctor._is_reparse_point(after)
+                    or not stat.S_ISDIR(after.st_mode)
+                    or self._inventory_directory_identity(after)
+                    != expected_identity
+                ):
+                    return None
+                return (
+                    expected_identity,
+                    self._inventory_directory_entry_digest(
+                        (child, observed)
+                        for child, observed in observations
+                        if observed is not None
+                    ),
+                )
+        except OSError:
+            return None
 
     def _finalize_run_file_generation_snapshots(self) -> None:
         """Revalidate every descriptor-proven cache generation once at completion."""
@@ -2850,43 +3305,172 @@ class Doctor:
             )
             return
 
-        changed_files = 0
         parent_relatives: set[str] = {"."}
-        for relative, path, expected in snapshots:
+        for relative, _path, _expected in snapshots:
             parts = PurePosixPath(relative).parts
             for depth in range(1, len(parts)):
                 parent_relatives.add(PurePosixPath(*parts[:depth]).as_posix())
+
+        def file_generation_changed(
+            snapshot: tuple[str, Path, tuple[int, ...]],
+        ) -> bool:
+            _relative, path, expected = snapshot
             try:
                 observed = os.lstat(path)
             except OSError:
-                changed_files += 1
-                continue
-            if (
+                return True
+            return bool(
                 stat.S_ISLNK(observed.st_mode)
                 or archive_doctor._is_reparse_point(observed)
                 or not stat.S_ISREG(observed.st_mode)
                 or self._stat_identity(observed) != expected
-            ):
-                changed_files += 1
-
-        changed_directories = 0
-        for relative in sorted(
-            parent_relatives,
-            key=lambda value: (len(PurePosixPath(value).parts), value),
-            reverse=True,
-        ):
-            expected = self._archive_tree_directory_identities.get(
-                self._archive_tree_key(relative)
             )
-            path = self.archive_root
-            if relative != ".":
-                path = self.archive_root.joinpath(*PurePosixPath(relative).parts)
-            if expected is None or not self._inventory_identity_matches(
-                path,
-                expected,
-                require_directory=True,
-            ):
-                changed_directories += 1
+
+        def file_change_pass(pass_number: int) -> tuple[bool, ...]:
+            self._progress(
+                "doctor-cache-snapshot-revalidation",
+                f"file generation barrier pass {pass_number}",
+                0,
+                len(snapshots),
+            )
+            if len(snapshots) >= 32:
+                with self._bounded_parallel_map(
+                    file_generation_changed,
+                    snapshots,
+                    max_workers=min(16, len(snapshots)),
+                    thread_name_prefix="wom-doctor-file-revalidate",
+                ) as observations:
+                    result = tuple(bool(item) for item in observations)
+            else:
+                result = tuple(
+                    file_generation_changed(snapshot)
+                    for snapshot in snapshots
+                )
+            self._progress(
+                "doctor-cache-snapshot-revalidation",
+                f"file generation barrier pass {pass_number} done",
+                len(snapshots),
+                len(snapshots),
+            )
+            return result
+
+        # A worker can finish before another worker has even observed its
+        # file.  A complete second pass starts only after every first-pass
+        # observation has crossed the barrier, closing that early-worker gap.
+        first_file_pass = file_change_pass(1)
+        second_file_pass = file_change_pass(2)
+        changed_files = sum(
+            1
+            for first_changed, second_changed in zip(
+                first_file_pass,
+                second_file_pass,
+                strict=True,
+            )
+            if first_changed or second_changed
+        )
+
+        # The frozen projection powers whole-tree checks such as secret safety,
+        # including directories that contain no later cached file.  Revalidate
+        # every inventoried directory and its exact child-name/kind/identity
+        # digest, not only parents of cache hits.  Two complete passes close the
+        # same early-worker barrier as the file generation checks above.
+        all_directory_relatives = {
+            key.replace(os.sep, "/")
+            for key in self._archive_tree_directory_identities
+        }
+        all_directory_relatives.update(parent_relatives)
+        directory_relatives = tuple(
+            sorted(
+                all_directory_relatives,
+                key=lambda value: (len(PurePosixPath(value).parts), value),
+                reverse=True,
+            )
+        )
+
+        def directory_change_pass(pass_number: int) -> tuple[bool, ...]:
+            self._progress(
+                "doctor-cache-snapshot-revalidation",
+                f"directory membership barrier pass {pass_number}",
+                0,
+                len(directory_relatives),
+            )
+            executor = _DoctorBoundedDaemonExecutor(
+                # Workers parallelize child-entry observations within each
+                # directory, so a flat archive still needs the fixed pool even
+                # when ``directory_relatives`` contains only the root.
+                max_workers=16,
+                thread_name_prefix="wom-doctor-directory-entry-revalidate",
+            )
+            guard = (
+                archive_services._WomKitProjectUpdateDirectoryGuard(
+                    self.archive_root
+                )
+                if os.name == "nt"
+                else None
+            )
+            results: list[bool] = []
+            aborted = False
+            close_failed = False
+            try:
+                for index, relative in enumerate(directory_relatives, start=1):
+                    key = self._archive_tree_key(relative)
+                    expected_identity = (
+                        self._archive_tree_directory_identities.get(key)
+                    )
+                    expected_entry_digest = (
+                        self._archive_tree_directory_entry_digests.get(key)
+                    )
+                    observed = (
+                        self._observe_inventory_directory_generation(
+                            relative,
+                            expected_identity=expected_identity,
+                            executor=executor,
+                            guard=guard,
+                        )
+                        if expected_identity is not None
+                        and expected_entry_digest is not None
+                        else None
+                    )
+                    results.append(
+                        observed is None
+                        or observed[0] != expected_identity
+                        or observed[1] != expected_entry_digest
+                    )
+                    if index == len(directory_relatives) or index % 250 == 0:
+                        self._progress(
+                            "doctor-cache-snapshot-revalidation",
+                            f"directory membership barrier pass {pass_number}",
+                            index,
+                            len(directory_relatives),
+                        )
+            except BaseException:
+                aborted = True
+                raise
+            finally:
+                executor.shutdown(
+                    wait=not aborted,
+                    cancel_futures=aborted,
+                )
+                if guard is not None:
+                    try:
+                        guard.close()
+                    except OSError:
+                        close_failed = True
+            if close_failed:
+                return (True,) * len(directory_relatives)
+            return tuple(results)
+
+        first_directory_pass = directory_change_pass(1)
+        second_directory_pass = directory_change_pass(2)
+        changed_directories = sum(
+            1
+            for first_changed, second_changed in zip(
+                first_directory_pass,
+                second_directory_pass,
+                strict=True,
+            )
+            if first_changed or second_changed
+        )
 
         root_current = archive_doctor.doctor_archive_root_boundary_is_current(
             boundary
@@ -2915,7 +3499,7 @@ class Doctor:
                 details={
                     "state": "current",
                     "revalidated_file_count": len(snapshots),
-                    "revalidated_directory_count": len(parent_relatives),
+                    "revalidated_directory_count": len(directory_relatives),
                     "private_values_echoed": False,
                     "paths_echoed": False,
                 },
@@ -4336,15 +4920,37 @@ class Doctor:
                 self._object_byte_unresolved_reference_count += 1
                 self.error("local_object_path_unsafe", f"Local objet location has an unsafe path: {relative_path} ({exc})", manifest_path)
                 continue
-            try:
-                local_stat = local_path.stat()
-            except OSError:
-                local_stat = None
-            if local_stat is None or not stat.S_ISREG(local_stat.st_mode):
+            inventory_identity = self._resolved_inventory_file_identity(
+                local_path
+            )
+            if self._archive_tree_inventory_complete:
+                local_is_regular = inventory_identity is not None
+                local_size = (
+                    int(inventory_identity[3])
+                    if inventory_identity is not None
+                    else None
+                )
+            else:
+                try:
+                    local_stat = os.lstat(local_path)
+                except OSError:
+                    local_stat = None
+                local_is_regular = bool(
+                    local_stat is not None
+                    and stat.S_ISREG(local_stat.st_mode)
+                    and not stat.S_ISLNK(local_stat.st_mode)
+                    and not archive_doctor._is_reparse_point(local_stat)
+                )
+                local_size = (
+                    int(local_stat.st_size)
+                    if local_stat is not None
+                    else None
+                )
+            if not local_is_regular:
                 self._object_byte_unresolved_reference_count += 1
                 self.warn("local_object_missing", f"Local objet file is missing: {relative_path}", local_path)
                 continue
-            if isinstance(expected_size, int) and local_stat.st_size != expected_size:
+            if isinstance(expected_size, int) and local_size != expected_size:
                 self.error("local_object_size_mismatch", f"Local objet size mismatch: {relative_path}", local_path)
             if isinstance(expected_sha, str):
                 if self.object_byte_verification_mode == "deep":
@@ -4429,6 +5035,64 @@ class Doctor:
         )
 
     def _check_zettels(self) -> None:
+        # Canonical zets commonly point at one mint receipt each.  Read those
+        # independent, bounded JSON generations alongside one another before
+        # sequential zettel validation.  The validator still owns diagnostics
+        # and ordering on the main thread; workers only return immutable bytes,
+        # identity and secret-presence observations.
+        mint_receipt_root = self.archive_root / "receipts" / "mint"
+        if mint_receipt_root.is_dir():
+            def safe_prefetch_candidate(path: Path) -> bool:
+                # Prefetch is deliberately silent.  Unsafe or missing inputs
+                # remain for the canonical mint-receipt stage to diagnose in
+                # its established order.
+                if self._archive_tree_inventory_complete:
+                    relative = self._lexical_archive_relative(path)
+                    return bool(
+                        relative is not None
+                        and self._archive_tree_file_identities.get(
+                            self._archive_tree_key(relative)
+                        )
+                        is not None
+                    )
+                return self._path_is_currently_within_archive(path)
+
+            mint_receipt_paths = [
+                path
+                for path in sorted(mint_receipt_root.glob("*.mint.json"))
+                if safe_prefetch_candidate(path)
+            ]
+            if len(mint_receipt_paths) >= 16:
+                self._progress(
+                    "zettels",
+                    "prefetching referenced mint receipt generations",
+                    0,
+                    len(mint_receipt_paths),
+                )
+                with self._bounded_parallel_map(
+                    lambda item: self._observe_stable_text_for_prefetch(
+                        item,
+                        encoding="utf-8-sig",
+                    ),
+                    mint_receipt_paths,
+                    max_workers=min(16, len(mint_receipt_paths)),
+                    thread_name_prefix="wom-doctor-mint-receipt-read",
+                ) as observations:
+                    for index, (path, observation) in enumerate(
+                        zip(mint_receipt_paths, observations, strict=True),
+                        start=1,
+                    ):
+                        self._cache_prefetched_json_text(path, observation)
+                        if (
+                            index == len(mint_receipt_paths)
+                            or index % 250 == 0
+                        ):
+                            self._progress(
+                                "zettels",
+                                "prefetched referenced mint receipt generations",
+                                index,
+                                len(mint_receipt_paths),
+                            )
         for folder, expected_status in [("zettels", "canonical"), ("inbox", "draft")]:
             root = self.archive_root / folder
             if not root.is_dir():
@@ -4450,17 +5114,15 @@ class Doctor:
                     0,
                     len(paths),
                 )
-                with ThreadPoolExecutor(
-                    max_workers=min(8, len(paths)),
+                with self._bounded_parallel_map(
+                    lambda item: self._observe_stable_text_for_prefetch(
+                        item,
+                        encoding="utf-8",
+                    ),
+                    paths,
+                    max_workers=min(16, len(paths)),
                     thread_name_prefix="wom-doctor-zet-read",
-                ) as executor:
-                    observations = executor.map(
-                        lambda item: self._observe_stable_text_for_prefetch(
-                            item,
-                            encoding="utf-8",
-                        ),
-                        paths,
-                    )
+                ) as observations:
                     for prefetch_index, (path, observation) in enumerate(
                         zip(paths, observations, strict=True),
                         start=1,
@@ -4672,7 +5334,9 @@ class Doctor:
         )
         if receipt_path and receipt_path.suffix != ".json":
             self.error("mint_receipt_path_invalid", "Zettel mint.receipt_path must point to a JSON receipt.", path)
-        if receipt_path and receipt_path.is_file():
+        # ``_resolve_archive_file_ref`` returns only a currently inventoried
+        # regular file.  Avoid probing the same final entry a second time.
+        if receipt_path:
             receipt = self._load_json_file(receipt_path)
             if isinstance(receipt, dict):
                 expected_target = self._display_path(path)
@@ -5072,8 +5736,23 @@ class Doctor:
         zettel_id = zettel.get("id")
         if not isinstance(zettel_id, str) or not zettel_id:
             return False
-        retire_path = self.archive_root / archive_services.MINT_RETIRED_DRAFT_RECEIPTS_DIR / f"{zettel_id}.retire-draft.json"
-        if not retire_path.is_file() or not self._path_stays_inside_archive(retire_path):
+        retire_relative = (
+            PurePosixPath(archive_services.MINT_RETIRED_DRAFT_RECEIPTS_DIR)
+            / f"{zettel_id}.retire-draft.json"
+        ).as_posix()
+        try:
+            retire_path = self._resolve_archive_relative_path(retire_relative)
+        except ArchivePathError:
+            return False
+        if (
+            self._archive_tree_inventory_complete
+            and self._resolved_inventory_file_identity(retire_path) is None
+        ):
+            return False
+        if (
+            not self._archive_tree_inventory_complete
+            and not retire_path.is_file()
+        ):
             return False
         receipt = self._load_json_file(retire_path)
         if not isinstance(receipt, dict):
@@ -5101,17 +5780,15 @@ class Doctor:
                 0,
                 total,
             )
-            with ThreadPoolExecutor(
-                max_workers=min(8, total),
+            with self._bounded_parallel_map(
+                lambda item: self._observe_stable_text_for_prefetch(
+                    item,
+                    encoding="utf-8-sig",
+                ),
+                paths,
+                max_workers=min(16, total),
                 thread_name_prefix="wom-doctor-retired-receipt",
-            ) as executor:
-                observations = executor.map(
-                    lambda item: self._observe_stable_text_for_prefetch(
-                        item,
-                        encoding="utf-8-sig",
-                    ),
-                    paths,
-                )
+            ) as observations:
                 for index, (path, observation) in enumerate(
                     zip(paths, observations, strict=True),
                     start=1,
@@ -5878,7 +6555,11 @@ class Doctor:
             return None
         if progress_callback is not None:
             progress_callback(f"checking {progress_label} file exists")
-        if not resolved.is_file():
+        if self._archive_tree_inventory_complete:
+            exists = self._resolved_inventory_file_identity(resolved) is not None
+        else:
+            exists = resolved.is_file()
+        if not exists:
             self.error(f"{code_prefix}_path_missing", f"{label} points to a missing file: {value}", path)
             return None
         if progress_callback is not None:
@@ -6484,11 +7165,25 @@ class Doctor:
     def _check_symlink_boundaries(self) -> None:
         self._archive_tree_file_identities.clear()
         self._archive_tree_directory_identities.clear()
+        self._archive_tree_directory_entry_digests.clear()
         self._archive_tree_unsafe_entries.clear()
         self._archive_tree_inventory_complete = False
         quarantine_names = {
             name.casefold() for name in SECRET_SAFETY_QUARANTINED_ROOT_DIRS
         }
+        inventory_executor: _DoctorBoundedDaemonExecutor | None = None
+        inventory_directory_guard = (
+            archive_services._WomKitProjectUpdateDirectoryGuard(
+                self.archive_root
+            )
+            if os.name == "nt"
+            else None
+        )
+        inventory_succeeded = False
+        inventory_unavailable_count = 0
+        inventory_boundary_changed_count = 0
+        inventory_capacity_exceeded = False
+        inventoried_entry_count = 0
         try:
             if (
                 self._archive_root_boundary is None
@@ -6505,45 +7200,149 @@ class Doctor:
                     self.archive_root,
                 )
                 return
-            root_observed = os.lstat(self.archive_root)
+            try:
+                root_observed = os.lstat(self.archive_root)
+            except OSError:
+                inventory_unavailable_count += 1
+                return
             if (
                 stat.S_ISLNK(root_observed.st_mode)
                 or archive_doctor._is_reparse_point(root_observed)
                 or not stat.S_ISDIR(root_observed.st_mode)
             ):
                 return
+            root_identity = self._inventory_directory_identity(root_observed)
             self._archive_tree_directory_identities[
                 self._archive_tree_key(".")
-            ] = self._inventory_directory_identity(root_observed)
-            pending: list[tuple[Path, bool]] = [(self.archive_root, True)]
+            ] = root_identity
+            inventoried_entry_count = 1
+            if self._stage_directory_cache_active:
+                self._stage_directory_generation_snapshots["."] = (
+                    self.archive_root,
+                    root_identity,
+                )
+            inventory_executor = _DoctorBoundedDaemonExecutor(
+                max_workers=16,
+                thread_name_prefix="wom-doctor-tree-inventory",
+            )
+            pending: list[tuple[Path, bool, tuple[int, ...]]] = [
+                (self.archive_root, True, root_identity)
+            ]
             while pending:
-                dir_path, is_archive_root = pending.pop()
+                dir_path, is_archive_root, queued_identity = pending.pop()
                 try:
-                    with os.scandir(dir_path) as iterator:
-                        entries = sorted(
-                            iterator,
-                            key=lambda item: item.name.casefold(),
-                        )
+                    # A child may have been replaced after its parent was
+                    # listed.  Classify obvious drift before attempting the
+                    # retained handle, then keep a no-share-delete Windows
+                    # directory handle across exact revalidation, scandir, and
+                    # every entry lstat observation.
+                    before_hold = os.lstat(dir_path)
                 except OSError:
+                    inventory_unavailable_count += 1
                     continue
-                child_directories: list[Path] = []
-                for entry in entries:
-                    if (
-                        is_archive_root
-                        and entry.name.casefold() in quarantine_names
-                    ):
+                if (
+                    stat.S_ISLNK(before_hold.st_mode)
+                    or archive_doctor._is_reparse_point(before_hold)
+                    or not stat.S_ISDIR(before_hold.st_mode)
+                    or self._inventory_directory_identity(before_hold)
+                    != queued_identity
+                ):
+                    inventory_boundary_changed_count += 1
+                    continue
+                try:
+                    with self._retained_inventory_directory(
+                        inventory_directory_guard,
+                        dir_path,
+                    ) as retained:
+                        if not retained:
+                            inventory_unavailable_count += 1
+                            continue
+                        current_directory = os.lstat(dir_path)
+                        if (
+                            stat.S_ISLNK(current_directory.st_mode)
+                            or archive_doctor._is_reparse_point(
+                                current_directory
+                            )
+                            or not stat.S_ISDIR(current_directory.st_mode)
+                            or self._inventory_directory_identity(
+                                current_directory
+                            )
+                            != queued_identity
+                        ):
+                            inventory_boundary_changed_count += 1
+                            continue
+                        with os.scandir(dir_path) as iterator:
+                            entries = []
+                            for entry in iterator:
+                                if (
+                                    is_archive_root
+                                    and entry.name.casefold()
+                                    in quarantine_names
+                                ):
+                                    continue
+                                if (
+                                    inventoried_entry_count + len(entries)
+                                    >= DOCTOR_ARCHIVE_TREE_INVENTORY_MAX_ENTRIES
+                                ):
+                                    inventory_capacity_exceeded = True
+                                    break
+                                entries.append(entry)
+                            entries.sort(
+                                key=lambda item: item.name.casefold()
+                            )
+
+                        def observe_entry(
+                            entry: os.DirEntry[str],
+                        ) -> tuple[Path, os.stat_result | None]:
+                            path = Path(entry.path)
+                            try:
+                                # The retained parent handle keeps this
+                                # pathname from being redirected through a
+                                # directory replacement during observation.
+                                observed = os.lstat(path)
+                            except OSError:
+                                observed = None
+                            return path, observed
+
+                        if len(entries) >= 32:
+                            observed_entries = self._bounded_executor_results(
+                                inventory_executor,
+                                observe_entry,
+                                entries,
+                                max_in_flight=(
+                                    16 * DOCTOR_PARALLEL_IN_FLIGHT_FACTOR
+                                ),
+                            )
+                        else:
+                            observed_entries = map(observe_entry, entries)
+                        retained_observations = tuple(observed_entries)
+                except OSError:
+                    inventory_unavailable_count += 1
+                    continue
+                if inventory_capacity_exceeded:
+                    pending.clear()
+                    break
+                directory_relative = self._lexical_archive_relative(dir_path)
+                if directory_relative is None:
+                    inventory_boundary_changed_count += 1
+                    continue
+                self._archive_tree_directory_entry_digests[
+                    self._archive_tree_key(directory_relative)
+                ] = self._inventory_directory_entry_digest(
+                    (path, observed)
+                    for path, observed in retained_observations
+                    if observed is not None
+                )
+                child_directories: list[tuple[Path, tuple[int, ...]]] = []
+                for path, observed in retained_observations:
+                    if observed is None:
+                        inventory_unavailable_count += 1
                         continue
-                    path = Path(entry.path)
-                    try:
-                        # Capture one lstat generation and project both type and
-                        # identity from it.  The previous entry.stat + lstat
-                        # pair doubled the dominant full-tree metadata work
-                        # without producing a stronger generation: later
-                        # descriptor reads and completion revalidation already
-                        # reject replacements against this exact identity.
-                        observed = os.lstat(path)
-                    except OSError:
-                        continue
+                    inventoried_entry_count += 1
+                    # Capture one lstat generation and project both type and
+                    # identity from it.  Later descriptor reads and completion
+                    # revalidation reject replacements against this exact
+                    # identity.
                     if (
                         not stat.S_ISLNK(observed.st_mode)
                         and not archive_doctor._is_reparse_point(observed)
@@ -6551,12 +7350,18 @@ class Doctor:
                     ):
                         relative = self._lexical_archive_relative(path)
                         if relative is not None:
-                            self._archive_tree_directory_identities[
-                                self._archive_tree_key(relative)
-                            ] = self._inventory_directory_identity(
+                            identity = self._inventory_directory_identity(
                                 observed
                             )
-                            child_directories.append(path)
+                            key = self._archive_tree_key(relative)
+                            self._archive_tree_directory_identities[key] = (
+                                identity
+                            )
+                            if self._stage_directory_cache_active:
+                                self._stage_directory_generation_snapshots[
+                                    key
+                                ] = (path, identity)
+                            child_directories.append((path, identity))
                         continue
                     if (
                         not stat.S_ISLNK(observed.st_mode)
@@ -6586,11 +7391,92 @@ class Doctor:
                         (path, stat.S_ISDIR(observed.st_mode))
                     )
                 pending.extend(
-                    (child_path, False)
-                    for child_path in reversed(child_directories)
+                    (child_path, False, child_identity)
+                    for child_path, child_identity in reversed(
+                        child_directories
+                    )
                 )
+            inventory_succeeded = True
+        except BaseException:
+            if inventory_executor is not None:
+                try:
+                    inventory_executor.shutdown(
+                        wait=False,
+                        cancel_futures=True,
+                    )
+                except Exception:
+                    pass
+                inventory_executor = None
+            raise
         finally:
-            self._archive_tree_inventory_complete = True
+            if inventory_executor is not None:
+                inventory_executor.shutdown(
+                    wait=True,
+                    cancel_futures=False,
+                )
+            if inventory_directory_guard is not None:
+                try:
+                    inventory_directory_guard.close()
+                except OSError:
+                    inventory_unavailable_count += 1
+            self._archive_tree_inventory_complete = bool(
+                inventory_succeeded
+                and inventory_unavailable_count == 0
+                and inventory_boundary_changed_count == 0
+                and not inventory_capacity_exceeded
+            )
+            if inventory_unavailable_count:
+                self.error(
+                    "doctor_archive_inventory_unavailable",
+                    (
+                        "Doctor could not observe every archive tree entry; "
+                        "the boundary inventory is incomplete and cannot support "
+                        "a clean archive result."
+                    ),
+                    details={
+                        "state": "unavailable",
+                        "unavailable_observation_count": (
+                            inventory_unavailable_count
+                        ),
+                        "inventory_complete": False,
+                        "private_values_echoed": False,
+                        "paths_echoed": False,
+                    },
+                )
+            if inventory_boundary_changed_count:
+                self.error(
+                    "doctor_archive_inventory_boundary_changed",
+                    (
+                        "An archive directory changed after it was queued for "
+                        "inventory; Doctor did not enumerate the replacement."
+                    ),
+                    details={
+                        "state": "unavailable",
+                        "changed_directory_count": (
+                            inventory_boundary_changed_count
+                        ),
+                        "inventory_complete": False,
+                        "private_values_echoed": False,
+                        "paths_echoed": False,
+                    },
+                )
+            if inventory_capacity_exceeded:
+                self.error(
+                    "doctor_archive_inventory_capacity_exceeded",
+                    (
+                        "Doctor stopped the archive boundary inventory at its "
+                        "fixed entry capacity; no run-wide cache may use the partial inventory."
+                    ),
+                    details={
+                        "state": "unavailable",
+                        "maximum_entry_count": (
+                            DOCTOR_ARCHIVE_TREE_INVENTORY_MAX_ENTRIES
+                        ),
+                        "inventory_complete": False,
+                        "private_values_echoed": False,
+                        "paths_echoed": False,
+                    },
+                )
 
     def _path_stays_inside_archive(self, path: Path) -> bool:
         if self._path_is_currently_within_archive(path):
@@ -8198,6 +9084,20 @@ def _project_version_update_resume_boundary(root: Path):
         yield canonical_root, claims_binding
 
 
+def _project_version_update_legacy_recovery_key_provider() -> Any:
+    """Create the production provider once for one resume/reapproval chain.
+
+    This private factory is also the bounded fixture seam.  Constructing a
+    provider does not read or create a credential; every recovery access still
+    explicitly uses ``create_if_missing=False`` until the already-existing key
+    has authenticated the predecessor claim.
+    """
+
+    from .exact_human_approval_workflow import _production_key_provider
+
+    return _production_key_provider()
+
+
 def _execute_project_version_update_exact_human_approved_write(
     approval_root: Path,
     context: ExactHumanApprovalContext,
@@ -8207,6 +9107,7 @@ def _execute_project_version_update_exact_human_approved_write(
         Callable[[], AbstractContextManager[Any]] | None
     ) = None,
     claim_succeeded_finalizer: Callable[[Any], None],
+    _key_provider: Any | None = None,
 ) -> dict[str, Any]:
     """Run project update through its non-injectable bound claim workflow."""
 
@@ -8215,7 +9116,7 @@ def _execute_project_version_update_exact_human_approved_write(
         context,
         writer,
         native=None,
-        key_provider=None,
+        key_provider=_key_provider,
         post_decision_boundary=lambda: (
             _project_version_update_post_decision_boundary(approval_root)
         ),
@@ -8415,6 +9316,16 @@ _PROJECT_VERSION_UPDATE_TERMINAL_CLEANUP_FAILURE_KINDS = {
     "project_version_update_terminal_cleanup_outcome_unknown": "unknown",
 }
 
+_PROJECT_VERSION_UPDATE_LEGACY_RECOVERY_FAILURE_CODES = frozenset(
+    archive_services.project_update_legacy_recovery.PUBLIC_FAILURE_CODES
+    | {
+        "project_version_update_legacy_recovery_binding_invalid",
+        "project_version_update_legacy_recovery_lock_ambiguous",
+        "project_version_update_legacy_recovery_state_ambiguous",
+        "project_version_update_legacy_recovery_state_changed",
+    }
+)
+
 # v0.4.18: fixed inner reason codes that an ``exact_human_approval_state_unknown``
 # wrapper may carry into the redacted failure artifact.  Each literal names a
 # service gate, never a path, value, identifier, or free text.  The stage set
@@ -8469,6 +9380,44 @@ def _project_version_update_privacy_safe_failure_result(
     failure_kind = _PROJECT_VERSION_UPDATE_TERMINAL_CLEANUP_FAILURE_KINDS.get(
         private_code
     )
+    if (
+        failure_kind is None
+        and private_code
+        in _PROJECT_VERSION_UPDATE_LEGACY_RECOVERY_FAILURE_CODES
+    ):
+        return {
+            "schema": "wom-kit/project-version-update-cli-failure/v0.4.19",
+            "ok": False,
+            "status": "legacy_prewrite_recovery_blocked",
+            "lifecycle_action": "project_version_update",
+            "error_class": "reconciliation",
+            "reason_code": private_code,
+            "reason_codes": [private_code],
+            "blocker_codes": [private_code],
+            "blockers": [private_code],
+            "effects_state": "unknown",
+            "reconciliation_required": True,
+            "automatic_retry_authorized": False,
+            "fresh_approval_authorized": False,
+            "cleanup_authorized": False,
+            "details": {
+                "current_invocation_domain_writer_entered": None,
+                "authenticated_identifier_free_resume_required": True,
+                "manual_cleanup_authorized": False,
+                "private_identifiers_required": False,
+            },
+            "project_domain_files_written": None,
+            "files_written": None,
+            "private_paths_echoed": False,
+            "absolute_paths_echoed": False,
+            "private_identifiers_echoed": False,
+            "private_values_echoed": False,
+            "raw_errors_echoed": False,
+            "next_safe_actions": [
+                "Preserve all project-update and recovery control evidence; do not delete or rename it.",
+                "Retry only the identifier-free project-version-update --resume path after the blocking condition is corrected.",
+            ],
+        }
     if failure_kind is None:
         return None
 
@@ -8763,6 +9712,11 @@ def _command_project_version_update_core(
             with _project_version_update_approval_read_boundary(
                 inspection_root
             ) as (approval_root, held_archive_id):
+                legacy_recovery_key_provider = (
+                    _project_version_update_legacy_recovery_key_provider()
+                    if getattr(args, "resume", False)
+                    else None
+                )
 
                 def _execute_project_version_update_approval(
                     prepared_preview: Mapping[str, Any],
@@ -8779,6 +9733,8 @@ def _command_project_version_update_core(
                     claim_publication_boundary: (
                         Callable[[], AbstractContextManager[Any]] | None
                     ) = None,
+                    recovery_key_provider: Any | None = None,
+                    resume_existing_composite: bool = False,
                 ) -> Mapping[str, Any]:
                     binding = (
                         operation_approval_binding
@@ -8806,7 +9762,24 @@ def _command_project_version_update_core(
                             )
                         )
 
-                    if getattr(args, "resume", False):
+                    recovery_preparation = (
+                        prepared_preview.get("approval_preparation", {})
+                        if isinstance(
+                            prepared_preview.get("approval_preparation"),
+                            Mapping,
+                        )
+                        else {}
+                    )
+                    composite_recovery = isinstance(
+                        recovery_preparation.get(
+                            "legacy_prewrite_recovery"
+                        ),
+                        Mapping,
+                    )
+                    if getattr(args, "resume", False) and (
+                        not composite_recovery
+                        or resume_existing_composite
+                    ):
                         supplied_approval_id = str(
                             getattr(args, "approval_id", "") or ""
                         ).strip()
@@ -8829,7 +9802,7 @@ def _command_project_version_update_core(
                                 candidate_missing_handler=(
                                     candidate_missing_handler
                                 ),
-                                key_provider=None,
+                                key_provider=legacy_recovery_key_provider,
                                 resume_boundary=resume_boundary,
                             )
                         )
@@ -8842,6 +9815,13 @@ def _command_project_version_update_core(
                                 "approval_id",
                             )
                         )
+                        if (
+                            archive_services
+                            ._project_update_is_legacy_unapproved_terminal_result(
+                                resume_result
+                            )
+                        ):
+                            return dict(resume_result)
                         return {
                             **dict(resume_result),
                             "operator_resume_identifiers_supplied": (
@@ -8861,6 +9841,11 @@ def _command_project_version_update_core(
                         ),
                         claim_succeeded_finalizer=(
                             claim_succeeded_finalizer
+                        ),
+                        _key_provider=(
+                            recovery_key_provider
+                            if composite_recovery
+                            else None
                         ),
                     )
 
@@ -8884,28 +9869,61 @@ def _command_project_version_update_core(
                             if key
                             not in {"cli_execution", "cli_output_artifact"}
                         }
-                        consumed_capability = (
+                        if (
                             archive_services
-                            ._project_update_reauthenticate_consumed_terminal_delivery(
-                                inspection_root,
-                                capsule_bytes=(
-                                    consumed_terminal_candidate.capsule_bytes
-                                ),
-                                expected_handoff_sha256=(
-                                    consumed_terminal_candidate
-                                    .terminal_handoff_sha256
-                                ),
-                                expected_result=consumed_result,
-                                target=args.target,
-                                reviewed_by=resume_reviewer,
-                                transaction_ref=resume_transaction_ref,
-                                approval_executor=(
-                                    _execute_project_version_update_approval
-                                ),
-                                expected_approval_root=approval_root,
-                                expected_archive_id=held_archive_id,
+                            ._project_update_is_legacy_unapproved_terminal_result(
+                                consumed_result
                             )
-                        )
+                        ):
+                            if (
+                                str(args.target or "").strip()
+                                or resume_reviewer is not None
+                                or resume_transaction_ref is not None
+                                or str(args.approval_id or "").strip()
+                            ):
+                                raise ValueError(
+                                    "project_version_update_terminal_delivery_unverified"
+                                )
+                            consumed_capability = (
+                                archive_services
+                                ._project_update_reauthenticate_cancellation_terminal_delivery(
+                                    inspection_root,
+                                    capsule_bytes=(
+                                        consumed_terminal_candidate.capsule_bytes
+                                    ),
+                                    expected_handoff_sha256=(
+                                        consumed_terminal_candidate
+                                        .terminal_handoff_sha256
+                                    ),
+                                    expected_result=consumed_result,
+                                    key_provider=recovery_key_provider,
+                                    expected_approval_root=approval_root,
+                                    expected_archive_id=held_archive_id,
+                                )
+                            )
+                        else:
+                            consumed_capability = (
+                                archive_services
+                                ._project_update_reauthenticate_consumed_terminal_delivery(
+                                    inspection_root,
+                                    capsule_bytes=(
+                                        consumed_terminal_candidate.capsule_bytes
+                                    ),
+                                    expected_handoff_sha256=(
+                                        consumed_terminal_candidate
+                                        .terminal_handoff_sha256
+                                    ),
+                                    expected_result=consumed_result,
+                                    target=args.target,
+                                    reviewed_by=resume_reviewer,
+                                    transaction_ref=resume_transaction_ref,
+                                    approval_executor=(
+                                        _execute_project_version_update_approval
+                                    ),
+                                    expected_approval_root=approval_root,
+                                    expected_archive_id=held_archive_id,
+                                )
+                            )
                         verified_consumed = (
                             operation_control
                             .verify_pending_project_update_terminal_delivery(
@@ -8941,6 +9959,14 @@ def _command_project_version_update_core(
                             _archive_identity_metadata_read=True,
                             _expected_approval_root=approval_root,
                             _expected_archive_id=held_archive_id,
+                            _legacy_recovery_key_provider=(
+                                legacy_recovery_key_provider
+                            ),
+                            _legacy_recovery_resume_boundary=(
+                                lambda: _project_version_update_resume_boundary(
+                                    approval_root
+                                )
+                            ),
                             )
                         )
                         if active_terminal_candidate is not None:
@@ -9128,6 +10154,18 @@ def _command_project_version_update_core(
 
     exit_code = 0 if result.get("ok") else 1
     display_result = copy.deepcopy(result)
+    cancellation_terminal = (
+        archive_services
+        ._project_update_is_legacy_unapproved_terminal_result(result)
+    )
+    if cancellation_terminal and capture is None:
+        print(
+            "Project version update cancellation result requires "
+            "authenticated terminal recovery before delivery "
+            "(project_version_update_legacy_recovery_terminal_delivery_required).",
+            file=sys.stderr,
+        )
+        return 1
     if capture is not None:
         terminal_delivery_authority = (
             archive_services
@@ -9136,16 +10174,15 @@ def _command_project_version_update_core(
                 result,
             )
             if (
-                exit_code == 0
+                cancellation_terminal
+                or exit_code == 0
                 and result.get("ok") is True
                 and isinstance(
-                    result.get("terminal_finalization"),
-                    Mapping,
+                    result.get("terminal_finalization"), Mapping
                 )
                 and result["terminal_finalization"].get(
                     "transaction_cleanup_completed"
-                )
-                is True
+                ) is True
             )
             else None
         )
@@ -9165,6 +10202,31 @@ def _command_project_version_update_core(
             )
             else None
         )
+        if cancellation_terminal and (
+            terminal_delivery_authority is None
+            or operation_journal is None
+            or terminal_delivery is None
+        ):
+            # A restored predecessor is not an ordinary command failure.  Its
+            # fixed result may be emitted only while it is bound to the exact
+            # authenticated cancellation capsule and operation journal.  Keep
+            # the output path unused so a later resume can publish that one
+            # result after re-authentication instead of creating an untracked
+            # duplicate.
+            complete_operation_tracking(
+                operation_journal,
+                capture,
+                exit_code=1,
+                result_available=False,
+                result_ok=None,
+            )
+            print(
+                "Project version update cancellation result requires "
+                "authenticated terminal recovery before delivery "
+                "(project_version_update_legacy_recovery_terminal_delivery_required).",
+                file=sys.stderr,
+            )
+            return 1
         try:
             capture.write_completed(
                 exit_code=exit_code,
@@ -9206,10 +10268,12 @@ def _command_project_version_update_core(
         )
         delivery_acknowledged = False
         if (
-            exit_code == 0
-            and result.get("ok") is True
-            and journal_terminal_published
+            journal_terminal_published
             and terminal_delivery is not None
+            and (
+                cancellation_terminal
+                or exit_code == 0 and result.get("ok") is True
+            )
         ):
             try:
                 delivery_acknowledged = (
@@ -9283,16 +10347,17 @@ def _command_project_version_update_core(
             terminal["durable_result_delivery_acknowledged"] = bool(
                 delivery_acknowledged
             )
-            terminal["attention_required"] = not (
-                terminal.get("transaction_cleanup_completed") is True
-                and terminal.get("service_resource_close_verified") is True
-                and terminal.get("git_runner_close_verified") is True
-                and delivery_acknowledged
-            )
-            display_result["post_update_attention_required"] = terminal[
-                "attention_required"
-            ]
-            if delivery_acknowledged:
+            if not cancellation_terminal:
+                terminal["attention_required"] = not (
+                    terminal.get("transaction_cleanup_completed") is True
+                    and terminal.get("service_resource_close_verified") is True
+                    and terminal.get("git_runner_close_verified") is True
+                    and delivery_acknowledged
+                )
+                display_result["post_update_attention_required"] = terminal[
+                    "attention_required"
+                ]
+            if delivery_acknowledged and not cancellation_terminal:
                 warnings = display_result.get("warnings")
                 if isinstance(warnings, list):
                     display_result["warnings"] = [
@@ -9320,32 +10385,38 @@ def _command_project_version_update_core(
         terminal = display_result.get("terminal_finalization")
         if isinstance(terminal, dict):
             terminal["durable_result_delivery_acknowledged"] = True
-            terminal["attention_required"] = not (
-                terminal.get("transaction_cleanup_completed") is True
-                and terminal.get("service_resource_close_verified") is True
-                and terminal.get("git_runner_close_verified") is True
+            consumed_cancellation = (
+                terminal.get("schema")
+                == archive_services
+                ._PROJECT_UPDATE_CANCELLATION_TERMINAL_FINALIZATION_SCHEMA
             )
-            display_result["post_update_attention_required"] = terminal[
-                "attention_required"
-            ]
-            warnings = display_result.get("warnings")
-            if isinstance(warnings, list):
-                display_result["warnings"] = [
-                    warning
-                    for warning in warnings
-                    if warning
-                    != archive_services
-                    ._PROJECT_UPDATE_TERMINAL_DELIVERY_WARNING
+            if not consumed_cancellation:
+                terminal["attention_required"] = not (
+                    terminal.get("transaction_cleanup_completed") is True
+                    and terminal.get("service_resource_close_verified") is True
+                    and terminal.get("git_runner_close_verified") is True
+                )
+                display_result["post_update_attention_required"] = terminal[
+                    "attention_required"
                 ]
-            actions = display_result.get("next_safe_actions")
-            if isinstance(actions, list):
-                display_result["next_safe_actions"] = [
-                    action
-                    for action in actions
-                    if action
-                    != archive_services
-                    ._PROJECT_UPDATE_TERMINAL_DELIVERY_ACTION
-                ]
+                warnings = display_result.get("warnings")
+                if isinstance(warnings, list):
+                    display_result["warnings"] = [
+                        warning
+                        for warning in warnings
+                        if warning
+                        != archive_services
+                        ._PROJECT_UPDATE_TERMINAL_DELIVERY_WARNING
+                    ]
+                actions = display_result.get("next_safe_actions")
+                if isinstance(actions, list):
+                    display_result["next_safe_actions"] = [
+                        action
+                        for action in actions
+                        if action
+                        != archive_services
+                        ._PROJECT_UPDATE_TERMINAL_DELIVERY_ACTION
+                    ]
 
     terminal_output_observed = True
     if args.format == "json":
@@ -9498,72 +10569,99 @@ def subparser_action(parser: argparse.ArgumentParser) -> argparse._SubParsersAct
 
 
 def parser_command_manifest(parser: argparse.ArgumentParser) -> list[dict[str, Any]]:
-    action = subparser_action(parser)
-    if action is None:
-        return []
-    help_by_name = {choice.dest: choice.help for choice in action._choices_actions}
-    grouped: dict[int, dict[str, Any]] = {}
-    for name, command_parser in action.choices.items():
-        parser_id = id(command_parser)
-        group = grouped.setdefault(
-            parser_id,
-            {
-                "names": [],
-                "help": None,
-                "required_positionals": [],
-                "options": [],
-                "subcommands": [],
-            },
-        )
-        group["names"].append(name)
-        if group["help"] is None and name in help_by_name:
-            group["help"] = help_by_name[name]
+    """Return every executable parser leaf, including nested command paths.
+
+    The command-status inventory already walks the complete argparse tree and
+    admits a row only when that exact parser has a callable handler.  Reusing
+    those canonical paths keeps the human/agent command manifest from calling
+    a grouping parser (for example ``derive-text``) runnable while omitting its
+    actual executable children.
+    """
+
+    inventory = _parser_capability_inventory(parser)
+    commands: list[dict[str, Any]] = []
+    for inventory_row in inventory["commands"]:
+        canonical_path = str(inventory_row["canonical_path"])
+        canonical_segments = canonical_path.split()
+        current = parser
+        leaf_help = ""
+        selected_leaf_action: argparse._SubParsersAction | None = None
+        for segment in canonical_segments:
+            matches: list[tuple[argparse._SubParsersAction, argparse.ArgumentParser]] = []
+            for action in command_status._subparser_actions(current):
+                selected = action.choices.get(segment)
+                if selected is not None:
+                    matches.append((action, selected))
+            if len(matches) != 1:
+                raise RuntimeError("capabilities_parser_path_unresolved")
+            selected_action, current = matches[0]
+            selected_leaf_action = selected_action
+            choice_help = next(
+                (
+                    choice.help
+                    for choice in selected_action._choices_actions
+                    if choice.dest == segment
+                ),
+                None,
+            )
+            if isinstance(choice_help, str):
+                leaf_help = choice_help
+
         required_positionals: list[str] = []
         options: list[str] = []
-        nested_subcommands: list[str] = []
-        for command_action in command_parser._actions:
+        for command_action in current._actions:
             if command_action.help == argparse.SUPPRESS:
                 continue
             if isinstance(command_action, argparse._SubParsersAction):
-                nested_subcommands.extend(sorted(command_action.choices.keys()))
                 continue
             if command_action.option_strings:
                 options.extend(command_action.option_strings)
-            elif command_action.dest not in {"help", argparse.SUPPRESS} and getattr(command_action, "nargs", None) not in {"?", "*"}:
+            elif (
+                command_action.dest not in {"help", argparse.SUPPRESS}
+                and getattr(command_action, "nargs", None) not in {"?", "*"}
+            ):
                 required_positionals.append(command_action.dest)
-        group["required_positionals"] = sorted(set(required_positionals))
-        group["options"] = sorted(set(options))
-        group["subcommands"] = nested_subcommands
 
-    commands: list[dict[str, Any]] = []
-    for group in grouped.values():
-        names = group["names"]
-        primary = names[0]
+        aliases = list(inventory_row["alias_paths"])
+        if len(canonical_segments) == 1 and selected_leaf_action is not None:
+            aliases = [
+                name
+                for name, candidate in selected_leaf_action.choices.items()
+                if candidate is current and name != canonical_path
+            ]
         commands.append(
             {
-                "name": primary,
-                "aliases": names[1:],
-                "help": group["help"] or "",
+                "name": canonical_path,
+                "canonical_path": canonical_path,
+                "aliases": aliases,
+                "help": leaf_help,
                 "runnable": True,
-                "required_positionals": group["required_positionals"],
-                "options": group["options"],
-                "nested_subcommands": group["subcommands"],
+                "required_positionals": sorted(set(required_positionals)),
+                "options": sorted(set(options)),
+                "nested_subcommands": [],
             }
         )
-    return sorted(commands, key=lambda item: item["name"])
+    return commands
 
 
-def command_capabilities(args: argparse.Namespace) -> int:
+def capabilities_result(*, no_commands: bool = False) -> dict[str, Any]:
+    """Build the shared, read-only CLI/MCP capabilities result."""
+
     parser = build_parser()
     commands = parser_command_manifest(parser)
     approval_inventory = _parser_capability_inventory(parser)
+    expected_command_count = approval_inventory["counts"][
+        "canonical_executable_command_count"
+    ]
+    if len(commands) != expected_command_count:
+        raise RuntimeError("capabilities_command_inventory_count_mismatch")
     capability_availability = (
         command_status.build_capability_availability_projection(
             approval_inventory
         )
     )
     approval_counts = approval_inventory["counts"]
-    if args.no_commands:
+    if no_commands:
         approval_inventory = {
             **approval_inventory,
             "commands": [],
@@ -9575,7 +10673,7 @@ def command_capabilities(args: argparse.Namespace) -> int:
     release = release_identity_probe()
     data = {
         "command_count": len(commands),
-        "commands": [] if args.no_commands else commands,
+        "commands": [] if no_commands else commands,
         "approval_status_inventory": approval_inventory,
         "capability_availability": capability_availability,
         "agent_operator_notes": [
@@ -9592,7 +10690,7 @@ def command_capabilities(args: argparse.Namespace) -> int:
             "Prefer JSON commands that expose ok, blockers, warnings, and privacy_guards when available.",
         ],
     }
-    result = {
+    return {
         "ok": True,
         "state": release["release_state"],
         "summary": {
@@ -9624,6 +10722,10 @@ def command_capabilities(args: argparse.Namespace) -> int:
             "writes": False,
         },
     }
+
+
+def command_capabilities(args: argparse.Namespace) -> int:
+    result = capabilities_result(no_commands=bool(args.no_commands))
     if args.machine or args.format == "json":
         print_json(result)
     else:
@@ -9908,6 +11010,12 @@ def command_operator_feedback_compose(args: argparse.Namespace) -> int:
                 ),
                 "project_runtime_alignment_required": (
                     emergency_trigger_reason == "project_runtime_mismatch"
+                ),
+                "project_runtime_verification_required": (
+                    emergency_trigger_reason == "project_runtime_unavailable"
+                ),
+                "project_runtime_inspection_unavailable": (
+                    emergency_trigger_reason == "project_runtime_unavailable"
                 ),
                 "feedback_metadata_registered": False,
                 "feedback_delivered": False,
@@ -32137,7 +33245,14 @@ class _CommandRunResultCapture:
         if terminal_delivery is not None:
             if (
                 result is None
-                or result.get("ok") is not True
+                or not (
+                    result.get("ok") is True
+                    or self.command == "project-version-update"
+                    and archive_services
+                    ._project_update_is_legacy_unapproved_terminal_result(
+                        result
+                    )
+                )
                 or not isinstance(terminal_delivery, Mapping)
             ):
                 raise ValueError(
@@ -33534,6 +34649,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     find_objet_parser.add_argument("finder_argv", nargs=argparse.REMAINDER)
     find_objet_parser.set_defaults(func=command_find_objet)
+    setattr(
+        find_objet_parser,
+        command_status._DELEGATED_ARGUMENT_SYNTAX_ATTRIBUTE,
+        _find_objet_delegated_argument_syntax_status,
+    )
 
     source_reference_coverage_parser = subcommands.add_parser(
         "source-reference-coverage-audit",
@@ -33549,6 +34669,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     source_reference_coverage_parser.set_defaults(
         func=command_source_reference_coverage_audit
+    )
+    setattr(
+        source_reference_coverage_parser,
+        command_status._DELEGATED_ARGUMENT_SYNTAX_ATTRIBUTE,
+        _source_reference_coverage_delegated_argument_syntax_status,
     )
 
     version = subcommands.add_parser("version", help="Print the running WOM-kit version and optional project pin status.")
@@ -44511,7 +45636,7 @@ def _harden_std_streams() -> None:
 
 
 def command_find_objet(args: argparse.Namespace) -> int:
-    """Fallback parser dispatch; ``main`` uses the private-safe raw route."""
+    """Run the private-safe grammar after the shared capability gate."""
 
     from .private_objet_finder import command_find_objet_argv
 
@@ -44521,7 +45646,7 @@ def command_find_objet(args: argparse.Namespace) -> int:
 def command_source_reference_coverage_audit(
     args: argparse.Namespace,
 ) -> int:
-    """Fallback dispatch; ``main`` uses the raw privacy-safe route."""
+    """Run the bounded audit grammar after the shared capability gate."""
 
     from .source_reference_coverage_audit import (
         command_source_reference_coverage_audit_argv,
@@ -44530,6 +45655,67 @@ def command_source_reference_coverage_audit(
     return command_source_reference_coverage_audit_argv(
         args.coverage_audit_argv
     )
+
+
+def _delegated_requested_mode(argument_tokens: tuple[str, ...]) -> str:
+    option_tokens = (
+        argument_tokens[: argument_tokens.index("--")]
+        if "--" in argument_tokens
+        else argument_tokens
+    )
+    dry_run = "--dry-run" in option_tokens
+    approve = "--approve" in option_tokens
+    return (
+        "conflicting"
+        if dry_run and approve
+        else "dry_run"
+        if dry_run
+        else "approve"
+        if approve
+        else "unspecified"
+    )
+
+
+def _find_objet_delegated_argument_syntax_status(
+    argument_tokens: tuple[str, ...],
+) -> dict[str, object]:
+    """Project the private finder grammar without echoing its arguments."""
+
+    try:
+        from .private_objet_finder import _scan_invocation
+
+        parsed = _scan_invocation(argument_tokens)
+        valid = parsed.first_failure is None
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except BaseException:
+        valid = False
+    return {
+        "valid": valid,
+        "requested_mode": _delegated_requested_mode(argument_tokens),
+        "reason_code": None if valid else "capability_argument_syntax_invalid",
+    }
+
+
+def _source_reference_coverage_delegated_argument_syntax_status(
+    argument_tokens: tuple[str, ...],
+) -> dict[str, object]:
+    """Project the audit's real bounded grammar without returning argv."""
+
+    try:
+        from .source_reference_coverage_audit import _parse_request
+
+        request = _parse_request(argument_tokens)
+        valid = request.invalid is not True
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except BaseException:
+        valid = False
+    return {
+        "valid": valid,
+        "requested_mode": _delegated_requested_mode(argument_tokens),
+        "reason_code": None if valid else "capability_argument_syntax_invalid",
+    }
 
 
 def _selected_cli_argument_parser(
@@ -44604,15 +45790,50 @@ def _project_write_runtime_guard(
             continue
         candidate = Path(value).expanduser()
         try:
-            if candidate.is_file():
-                candidate = candidate.parent
+            candidate_stat = candidate.lstat()
+        except FileNotFoundError:
+            candidate_stat = None
         except OSError:
-            continue
-        result = project_runtime.project_write_guard(
-            candidate,
-            running_version=__version__,
-            running_module_path=Path(__file__),
-        )
+            candidate_stat = object()
+            result = {
+                "blocked": True,
+                "reason_code": "project_runtime_unavailable",
+                "detail_reason_code": "project_root_observation_unavailable",
+                "runtime_inspection_state": "unavailable",
+                "project_runtime_argv": project_runtime.project_runtime_argv(),
+                "private_values_echoed": False,
+                "absolute_paths_echoed": False,
+            }
+        else:
+            if stat.S_ISREG(candidate_stat.st_mode):
+                candidate = candidate.parent
+                result = project_runtime.project_write_guard(
+                    candidate,
+                    running_version=__version__,
+                    running_module_path=Path(__file__),
+                )
+            elif not stat.S_ISDIR(candidate_stat.st_mode):
+                result = {
+                    "blocked": True,
+                    "reason_code": "project_runtime_mismatch",
+                    "detail_reason_code": "project_root_binding_unsafe",
+                    "runtime_inspection_state": "failed",
+                    "project_runtime_argv": project_runtime.project_runtime_argv(),
+                    "private_values_echoed": False,
+                    "absolute_paths_echoed": False,
+                }
+            else:
+                result = project_runtime.project_write_guard(
+                    candidate,
+                    running_version=__version__,
+                    running_module_path=Path(__file__),
+                )
+        if candidate_stat is None:
+            result = project_runtime.project_write_guard(
+                candidate,
+                running_version=__version__,
+                running_module_path=Path(__file__),
+            )
         if result.get("reason_code") == "project_runtime_pin_not_found":
             continue
         if result.get("blocked"):
@@ -44625,6 +45846,7 @@ def _project_write_runtime_guard(
                 in {
                     "project_update_recovery_required",
                     "project_runtime_mismatch",
+                    "project_runtime_unavailable",
                 }
                 and runtime_effect == "append_only_emergency_feedback"
                 and getattr(args, "func", None)
@@ -44655,6 +45877,8 @@ def _project_write_runtime_guard(
                 "schema": (
                     "wom-kit/project-update-recovery-required/v0.1"
                     if recovery_required
+                    else "wom-kit/project-runtime-unavailable/v0.1"
+                    if guard_reason_code == "project_runtime_unavailable"
                     else "wom-kit/project-runtime-mismatch/v0.1"
                 ),
                 "ok": False,
@@ -44674,6 +45898,11 @@ def _project_write_runtime_guard(
                         "Use read-only inspection or the project-version-update recovery path before any new approved write.",
                     ]
                     if recovery_required
+                    else [
+                        "The project runtime could not be safely inspected; do not authorize repair from this observation.",
+                        r"Retry the read-only check with .\.zettel-kasten\bin\archive.cmd after resolving the temporary filesystem or access failure.",
+                    ]
+                    if guard_reason_code == "project_runtime_unavailable"
                     else [
                         r"Run .\.zettel-kasten\bin\archive.cmd with the same command from the project root.",
                         "If that launcher is missing or invalid, run an exact approved project-version-update from the public target wheel first.",
@@ -44755,19 +45984,82 @@ def _writer_unavailable_dispatch_error(
     return 1
 
 
+def _capability_mode_unavailable_dispatch_error(
+    args: argparse.Namespace,
+    availability: Mapping[str, Any],
+    *,
+    json_requested: bool,
+) -> int:
+    """Refuse any parser-known unavailable requested mode before dispatch."""
+
+    canonical_path = str(availability.get("canonical_path") or "")
+    top_level_command = canonical_path.split(" ", 1)[0]
+    reason_code = str(
+        availability.get("detail_reason_code")
+        or availability.get("reason_code")
+        or "capability_mode_unavailable"
+    )
+    lifecycle_action = str(
+        getattr(getattr(args, "func", None), "__name__", "command_dispatch")
+    )
+    if lifecycle_action.startswith("command_"):
+        lifecycle_action = lifecycle_action[len("command_") :]
+    if not re.fullmatch(r"[a-z][a-z0-9_]{0,95}", lifecycle_action):
+        lifecycle_action = "capability_availability_dispatch"
+    if json_requested:
+        print_json(
+            {
+                "schema": "wom-kit/cli-error/v0.1",
+                "ok": False,
+                "state": "blocked",
+                "status_class": "blocked",
+                "capability_state": str(
+                    availability.get("state")
+                    or command_status.CAPABILITY_MODE_UNAVAILABLE
+                ),
+                "command": (
+                    top_level_command
+                    if re.fullmatch(
+                        r"[a-z0-9][a-z0-9-]*",
+                        top_level_command,
+                    )
+                    else None
+                ),
+                "canonical_command_path": canonical_path,
+                "lifecycle_action": lifecycle_action,
+                "error_class": (
+                    "usage"
+                    if reason_code == "capability_mode_conflicting"
+                    else "policy"
+                ),
+                "reason_codes": [reason_code],
+                "capability_reason_codes": [reason_code],
+                "capability_availability": dict(availability),
+                "exit_code": 1,
+                "effects_state": "none",
+                "files_written": [],
+                "private_values_echoed": False,
+            }
+        )
+    elif reason_code == "capability_mode_conflicting":
+        print(
+            "Choose exactly one execution mode: --dry-run or --approve. "
+            "The command did not start.",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            "The requested command mode is unavailable in this installed WOM "
+            "version. The command did not start; check `archive capabilities "
+            "--machine`.",
+            file=sys.stderr,
+        )
+    return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     _harden_std_streams()
     raw_argv = sys.argv[1:] if argv is None else list(argv)
-    if raw_argv[:1] == ["find-objet"]:
-        from .private_objet_finder import command_find_objet_argv
-
-        return command_find_objet_argv(raw_argv[1:])
-    if raw_argv[:1] == ["source-reference-coverage-audit"]:
-        from .source_reference_coverage_audit import (
-            command_source_reference_coverage_audit_argv,
-        )
-
-        return command_source_reference_coverage_audit_argv(raw_argv[1:])
     parser = build_parser()
     json_requested = any(
         item == "--format=json"
@@ -44796,6 +46088,19 @@ def main(argv: list[str] | None = None) -> int:
             "migrate",
         }
     )
+    delegated_args: argparse.Namespace | None = None
+    if raw_argv[:1] == ["find-objet"]:
+        delegated_args = argparse.Namespace(
+            command="find-objet",
+            finder_argv=raw_argv[1:],
+            func=command_find_objet,
+        )
+    elif raw_argv[:1] == ["source-reference-coverage-audit"]:
+        delegated_args = argparse.Namespace(
+            command="source-reference-coverage-audit",
+            coverage_audit_argv=raw_argv[1:],
+            func=command_source_reference_coverage_audit,
+        )
     if raw_argv[:1] == ["credential-adopt"] and any(
         isinstance(item, str)
         and re.match(
@@ -44830,8 +46135,11 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     parser_stderr = io.StringIO()
     try:
-        with redirect_stderr(parser_stderr):
-            args = parser.parse_args(raw_argv)
+        if delegated_args is not None:
+            args = delegated_args
+        else:
+            with redirect_stderr(parser_stderr):
+                args = parser.parse_args(raw_argv)
     except SystemExit as exc:
         exit_code = int(exc.code or 0)
         if not exit_code:
@@ -44939,6 +46247,12 @@ def main(argv: list[str] | None = None) -> int:
                 capability_availability,
                 json_requested=json_requested,
             )
+        if capability_availability.get("available") is False:
+            return _capability_mode_unavailable_dispatch_error(
+                args,
+                capability_availability,
+                json_requested=json_requested,
+            )
 
     runtime_blocker = _project_write_runtime_guard(args, raw_argv)
     if runtime_blocker is not None:
@@ -44954,6 +46268,17 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 print(
                     "Preserve the project update lock and use read-only inspection or the project-version-update recovery path.",
+                    file=sys.stderr,
+                )
+            elif "project_runtime_unavailable" in runtime_blocker.get(
+                "reason_codes", []
+            ):
+                print(
+                    "This write is blocked because WOM could not safely inspect the project runtime.",
+                    file=sys.stderr,
+                )
+                print(
+                    r"Retry the read-only check through .\.zettel-kasten\bin\archive.cmd after resolving the temporary filesystem or access failure; do not infer that repair is required.",
                     file=sys.stderr,
                 )
             else:
