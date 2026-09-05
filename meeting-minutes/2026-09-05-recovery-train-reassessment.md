@@ -437,3 +437,65 @@ not complete at this checkpoint.
   and the final whitespace check passed before this consolidated candidate
   checkpoint. The draft PR remains unmerged until the full matrix and extended
   installed journey are independently green at the same candidate head.
+- Candidate `2e42aa99eee5e0a8d1d1978d9c4134f5e5637dfb` was committed and
+  pushed cleanly. Full CI run `33953444526` retained the earlier failed run;
+  it is not a retry that erases that evidence.
+- Its Windows installed gate `101272360210` passed the extended actual-wheel
+  journey, including real corruption repair, the durable-intent process exit,
+  fresh-process identifier-free resume with the same approval, independent
+  post-repair no-op and real source/ref drift refusals. Candidate wheel SHA-256
+  was `4f9e5f45523b3407278bd99084a36cf6e9a19267e90715691af6b978264b0e38`.
+  This is installed candidate evidence, not a public release or client result.
+- Measured seconds in that gate were update 189.469, healthy no-op 71.875,
+  source drift 71.844, ref drift 70.984, repair until interruption 124.890,
+  fresh resume 193.875, and independent repaired no-op 70.609. Doctor's first
+  status was approximately 0.047 seconds with a maximum progress gap of 5.093
+  seconds. The complete checker passed with its original limits and removed
+  its temporary environment; neither failed local run was retroactively passed.
+- This candidate still failed current-inventory count assertions in two
+  historical test modules. Their current-parser sections and three current
+  capability documents now describe 46 available, 68 fixed-closed and 201
+  approval-unexposed paths, including ten conditional scopes. Tests additionally
+  prove the separately unsupported cancel reason and preserved read-only
+  control routes. Historical release counts are unchanged. Sixty-three focused
+  tests and 307 subtests passed, followed by the additional Notion inventory
+  assertion. Resource synchronization passed with no additional packaged diff.
+- Windows shard four also reported two live-runtime observations as unavailable
+  where its synthetic no-op tests expected passed/failed. Those observations
+  did not authorize reuse or repair. Their cause is being investigated separately
+  from the successful full installed journey; passing that gate does not waive
+  the failures. Remaining jobs are preserved through completion before another
+  consolidated candidate is pushed.
+
+- The final no-op test observer preserves original calls/results/exceptions
+  while recording only fixed verifier boundaries and bounded OS error numbers.
+  Named `lstat`, `open` and `fstat` exception observations are limited to the
+  verifier's owner thread; no additional reads, retry, global trace/profile or
+  raw path/exception text is introduced. Unknown identity or stream-read causes
+  remain unknown. The final actual eight-case Windows fixture passed once in
+  123.35 seconds (eleven subtests); its earlier CI cause is still unconfirmed.
+  Root's combined observer/current-inventory/control cohort passed 74 tests
+  in 13.911 seconds. Neither result replaces the required next full CI.
+- Python's [Windows stat changes](https://github.com/python/cpython/blob/main/Doc/whatsnew/3.12.rst)
+  and historical [filesystem observation issue](https://github.com/python/cpython/issues/111856)
+  were checked as diagnostic context. They do not establish the cause of this
+  candidate's failures, and no identity guard was removed on that assumption.
+- Windows shard one finished its 1,469 unittest cases and 113 native/authority
+  pytest cases successfully, but its next cross-platform lane exposed an actual
+  delegated-grammar regression (98 passed, one failed). Root reproduced that
+  failure unchanged: the shared availability gate replaced the established
+  private finder's usage error with a generic mode-denial response.
+- The narrow correction preserves unavailable syntax in the shared capability
+  record while allowing only the two existing trusted raw delegates to render
+  their own content-free usage error before any archive execution. Other denial
+  reasons, approval checks and the runtime guard are unchanged. The original
+  failing historical test is unchanged; two new tests that had accidentally
+  specified the incompatible behavior were corrected. Independent root review
+  found no additional blocker. Eighty focused tests and 82 subtests passed in
+  68.90 seconds, including actual synthetic finder and source-coverage behavior.
+- The exact five-module cross-platform pytest lane that exposed the regression
+  then passed all 99 tests in 34.90 seconds. Independent final review of the
+  bounded OS observer found no additional blocker. All four release-readiness
+  gates and the 169-resource synchronization check passed. This candidate is
+  recorded locally while the preceding run's final Windows shard completes;
+  pushing early would cancel evidence that is still being collected.
