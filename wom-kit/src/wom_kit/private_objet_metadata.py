@@ -12,7 +12,7 @@ import re
 from datetime import date
 from typing import Any
 
-import unicodedata2
+from ._unicode_runtime import load_unicode
 
 from ._unicode17_tables import (
     BIDI_CONTROL_CODE_POINTS,
@@ -20,6 +20,8 @@ from ._unicode17_tables import (
     EFFECTIVE_SEPARATOR_WHITESPACE_CODE_POINTS,
     UNICODE_VERSION,
 )
+
+unicodedata2 = load_unicode()
 
 
 PRIVATE_METADATA_SCHEMA = "wom-kit/private-objet-source-metadata/v0.1"

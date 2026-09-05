@@ -7,9 +7,7 @@ import sys
 import tempfile
 import unittest
 from contextlib import ExitStack
-from functools import wraps
 from pathlib import Path
-from types import CodeType
 from unittest import mock
 
 
@@ -41,142 +39,14 @@ class _MemoryOnlyApprovalKey:
             key[:] = b"\0" * len(key)
 
 
-class _FirstUpdateObservation:
-    """Test-only bounded observations; never substitute an operation result."""
-
-    _BOUNDARIES = ("runtime_prepare", "approval_broker")
-    _LITERAL_CODES = frozenset({
-        "project_version_update_archive_identity_unavailable",
-        "project_version_update_approval_archive_identity_changed",
-        "project_version_update_live_approval_executor_required",
-        "project_version_update_preflight_invalid",
-        "project_runtime_candidate_binding_invalid",
-        "project_runtime_candidate_preparation_incomplete",
-        "project_runtime_candidate_preimage_observation_unavailable",
-        "project_runtime_prepared_bundle_cleanup_unverified",
-        "project_runtime_tree_changed", "project_runtime_tree_unsafe",
-        "project_runtime_parent_identity_drift", "project_runtime_receipt_schema_invalid",
-    })
-
-    def __init__(self):
-        self.boundaries = {name: {"entered": False, "returned": False} for name in self._BOUNDARIES}
-        self.failures = {}
-        self._source_codes = {}
-        source_functions = (
-            (archive_cli, "archive_cli.py", (
-                "_command_project_version_update_core", "_project_version_update_approval_read_boundary",
-                "_execute_project_version_update_exact_human_approved_write",
-                "_project_version_update_privacy_safe_failure_result",
-                "prepare_operation_tracking", "complete_operation_tracking",
-            )),
-            (archive_services, "archive_services.py", (
-                "_wom_kit_project_version_update_live_approval_transaction",
-                "_wom_kit_project_version_update_legacy_core",
-                "_wom_kit_project_version_update_legacy_core_generator",
-                "_project_update_close_after_service_failure",
-            )),
-            (project_runtime, "project_runtime.py", (
-                "prepare_runtime_candidate", "_initialize_runtime_payload", "_candidate_inventory_snapshot",
-                "_path_identity", "_runtime_payload_sha256", "_verify_retained_artifacts", "_run_bounded",
-            )),
-            (exact_human_approval_workflow, "exact_human_approval_workflow.py", (
-                "_execute_exact_human_approved_write_core", "_run_started_claim_writer",
-            )),
-        )
-        for module, basename, names in source_functions:
-            expected_file = os.path.normcase(os.path.abspath(module.__file__))
-            for name in names:
-                code = getattr(getattr(module, name, None), "__code__", None)
-                if isinstance(code, CodeType):
-                    self._register_code(code, expected_file, "wom-kit/src/wom_kit/" + basename)
-
-    def _register_code(self, code, expected_file, relative_file):
-        if os.path.normcase(os.path.abspath(code.co_filename)) != expected_file:
-            return
-        self._source_codes[id(code)] = (code, relative_file, code.co_name)
-        # Nested functions belong to these exact, checked-in code objects;
-        # no frame globals/locals or arbitrary module members are inspected.
-        for constant in code.co_consts:
-            if isinstance(constant, CodeType):
-                self._register_code(constant, expected_file, relative_file)
-
-    def _source_frame(self, error):
-        selected = None
-        trace = error.__traceback__
-        while trace is not None:
-            code = trace.tb_frame.f_code
-            known = self._source_codes.get(id(code))
-            if known is not None and known[0] is code:
-                selected = {"file": known[1], "line": trace.tb_lineno, "function": known[2]}
-            trace = trace.tb_next
-        return selected
-
-    def _error(self, error):
-        kinds = {TypeError: "type_error", IndexError: "index_error", KeyError: "key_error",
-                 ValueError: "value_error", PermissionError: "permission_error",
-                 FileNotFoundError: "file_not_found", OSError: "os_error"}
-        kind, code = kinds.get(type(error), "unclassified_exception"), "unclassified_failure"
-        typed_codes = (
-            (exact_human_approval_workflow.ExactHumanApprovalWorkflowError, "approval_workflow_error"),
-            (archive_services.project_update_transaction.ProjectUpdateTransactionError, "transaction_error"),
-            (archive_services.project_update_git_runner.ProjectUpdateGitRunnerError, "git_runner_error"),
-        )
-        for error_type, fixed_kind in typed_codes:
-            if type(error) is error_type:
-                kind = fixed_kind
-                candidate = error.code
-                if type(candidate) is str and candidate in error_type._CODES:
-                    code = candidate
-                break
-        else:
-            if type(error) in {archive_services.ArchiveServiceError, project_runtime.ProjectRuntimeError,
-                               project_runtime.PreparedRuntimeBundleCleanupError,
-                               project_runtime.PreparedRuntimeCandidateIncompleteError}:
-                kind = "domain_error"
-                if len(error.args) == 1 and type(error.args[0]) is str and error.args[0] in self._LITERAL_CODES:
-                    code = error.args[0]
-        return {"kind": kind, "code": code, "source": self._source_frame(error)}
-
-    def record(self, stage, error):
-        if stage not in {*self._BOUNDARIES, "cli_failure_projection", "first_cli_call"}:
-            raise ValueError("unknown_observation_stage")
-        if stage in self.failures:
-            return
-        chain, seen = [], set()
-        while isinstance(error, BaseException) and id(error) not in seen and len(chain) < 8:
-            seen.add(id(error))
-            chain.append(self._error(error))
-            error = error.__cause__ if error.__cause__ is not None else error.__context__
-        self.failures[stage] = chain
-
-    def boundary(self, stage, original):
-        if stage not in self._BOUNDARIES:
-            raise ValueError("unknown_observation_stage")
-
-        @wraps(original)
-        def observe(*args, **kwargs):
-            self.boundaries[stage]["entered"] = True
-            try:
-                result = original(*args, **kwargs)
-            except Exception as error:
-                self.record(stage, error)
-                raise
-            self.boundaries[stage]["returned"] = True
-            return result
-        return observe
-
-    def failure_projector(self, original):
-        @wraps(original)
-        def observe(error):
-            self.record("cli_failure_projection", error)
-            return original(error)
-        return observe
-
-    def diagnostic(self, *, native_observed):
-        return json.dumps({"stage": "first_update", "boundaries": self.boundaries,
-                           "failures": self.failures, "native_observed": bool(native_observed)},
-                          sort_keys=True)
-
+# The installed-only driver is stdlib-only until this observer is constructed.
+# Reuse its exact privacy/forwarding contract instead of maintaining two copies.
+import importlib.util
+_observation_spec = importlib.util.spec_from_file_location(
+    "wom_runtime_journey_observation", TESTS_ROOT.parent / "tools" / "check_project_runtime_wheel_journey.py")
+_observation_module = importlib.util.module_from_spec(_observation_spec)
+_observation_spec.loader.exec_module(_observation_module)
+_FirstUpdateObservation = _observation_module.FirstUpdateObservation
 
 @unittest.skipUnless(WINDOWS_RUNTIME, "Real Windows CPython 3.12 runtime")
 class UpdateNoopJourneyTests(unittest.TestCase):

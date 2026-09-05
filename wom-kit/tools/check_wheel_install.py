@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -3279,6 +3280,12 @@ class WheelPartialEvidence:
     def __init__(self) -> None:
         self._runtime: dict[str, Any] | None = None
         self._phases: dict[str, Any] | None = None
+        self._runtime_failure: dict[str, Any] | None = None
+
+    def record_runtime_failure(self, value: dict[str, Any]) -> None:
+        if type(value) is not dict:
+            raise WheelCheckError("Installed runtime failure observation has invalid type.")
+        self._runtime_failure = _parse_runtime_failure_output(json.dumps(value, allow_nan=False))
 
     def record_phases(self, observation: RuntimePhaseObservation) -> None:
         # Do not accept arbitrary mappings, subclasses, or raw event payloads.
@@ -3306,6 +3313,8 @@ class WheelPartialEvidence:
             result["installed_v0419_runtime_journey"] = self._runtime
         if self._phases is not None:
             result["installed_runtime_harness_observation"] = self._phases
+        if self._runtime_failure is not None:
+            result["installed_runtime_failure_observation"] = self._runtime_failure
         return json.loads(json.dumps(result))
 
 
@@ -3931,6 +3940,7 @@ def _run_installed_entrypoint(
     input_text: str | None = None,
     timeout_seconds: float | None = None,
     stderr_observer: RuntimePhaseObservation | None = None,
+    nonzero_stdout_observer=None,
 ) -> str:
     deadline = time.monotonic() + (
         ENTRYPOINT_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
@@ -4177,6 +4187,10 @@ def _run_installed_entrypoint(
             f"{label} output was not valid UTF-8."
         ) from exc
     if returncode != 0:
+        if nonzero_stdout_observer is not None:
+            # Runtime-only hook sees bounded output only after containment,
+            # timeout, reader and UTF-8 checks. It cannot accept a nonzero exit.
+            nonzero_stdout_observer(stdout)
         raise WheelCheckError(
             f"{label} failed with a nonzero exit status."
         )
@@ -4821,6 +4835,27 @@ def _wheel_install_success_result(
     }
 
 
+_RUNTIME_FAILURE_CONTRACT = None
+
+
+def _parse_runtime_failure_output(stdout: str) -> dict[str, Any]:
+    """Shared stdlib-only contract; never import product code into the parent."""
+    global _RUNTIME_FAILURE_CONTRACT
+    result = None
+    try:
+        if _RUNTIME_FAILURE_CONTRACT is None:
+            spec = importlib.util.spec_from_file_location("wom_installed_failure_contract", RUNTIME_JOURNEY_TOOL)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            _RUNTIME_FAILURE_CONTRACT = module
+        result = _RUNTIME_FAILURE_CONTRACT.parse_failure_output(stdout)
+    except Exception:
+        pass
+    if result is None:
+        raise WheelCheckError("Installed runtime failure observation is invalid.")
+    return result
+
+
 def _check_installed_v0419_runtime_journey(
     python: Path, wheel: Path, source_copy: Path, fixture_root: Path, *,
     cwd: Path, expected_package_version: str,
@@ -4846,6 +4881,11 @@ def _check_installed_v0419_runtime_journey(
     worker.start()
     observation = RuntimePhaseObservation()
     succeeded = False
+    def observe_nonzero(stdout):
+        failure = _parse_runtime_failure_output(stdout)
+        if partial_evidence is not None:
+            partial_evidence.record_runtime_failure(failure)
+
     try:
         stdout = _run_installed_entrypoint(
             [str(python), "-I", "-B", str(RUNTIME_JOURNEY_TOOL), str(wheel),
@@ -4853,6 +4893,7 @@ def _check_installed_v0419_runtime_journey(
              str(fixture_root), expected_package_version],
             cwd=cwd, label="installed v0.4.19 real runtime journey", timeout_seconds=1200,
             stderr_observer=observation,
+            nonzero_stdout_observer=observe_nonzero,
         )
         evidence = _parse_entrypoint_json_object(stdout, label="installed runtime journey")
         try:
