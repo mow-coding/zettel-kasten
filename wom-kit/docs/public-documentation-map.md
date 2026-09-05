@@ -2,11 +2,22 @@
 
 Status: public navigation baseline
 Date: 2026-06-02
-Updated: 2026-09-01
+Updated: 2026-09-04
 Philosophy clarified: 2026-07-15
 Harness compatibility clarified: 2026-07-16
 
-Current v0.4.18 delta: identifier-free `--resume` finishes one completed
+Current v0.4.19 delta: runtime and updater checks distinguish `passed`,
+`failed`, `not_reached`, and `unavailable`, while legacy booleans remain
+readable. Approved preparation is revalidated by privacy-safe dimension rather
+than one opaque boolean. Help, capabilities, Doctor suggestions, dry-run
+interpretation, and actual dispatch share one `CapabilityAvailability`
+decision, and fixed-closed approval is rejected before private work begins.
+Noninteractive Windows children use one no-console policy while native human
+approval and credential interaction stay visible. Publishing or installing
+the release changes no client archive or project runtime; the client separately
+chooses one reviewed update and verifies it from a new process.
+
+Historical v0.4.18 delta: identifier-free `--resume` finishes one completed
 project-update original that outlived its own cleanup after the project moved
 to another version, re-authenticating the original approval claim from the
 archive as the cleanup authority; dry-run, approval, and resume classify it

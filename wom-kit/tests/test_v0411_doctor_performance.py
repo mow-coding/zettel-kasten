@@ -1,16 +1,21 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from concurrent.futures import CancelledError, ThreadPoolExecutor, TimeoutError
 from contextlib import redirect_stderr, redirect_stdout
+import ctypes
 import hashlib
 import io
 import json
 import os
 from pathlib import Path
+import queue
 import stat
+import struct
 import subprocess
+import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest import mock
 
@@ -410,6 +415,271 @@ class DoctorObjectByteModeTests(unittest.TestCase):
 
 
 class DoctorReadCacheTests(unittest.TestCase):
+    @staticmethod
+    def _windows_directory_generation_record(
+        name: str,
+        *,
+        file_id: bytes = bytes(range(1, 17)),
+        attributes: int = 0x20,
+        creation_time: int = 11,
+        last_write_time: int = 13,
+        change_time: int = 17,
+        size: int = 19,
+        reparse_tag: int = 0,
+        next_offset: int = 0,
+    ) -> bytes:
+        encoded_name = name.encode("utf-16-le")
+        header = struct.pack(
+            "<IIqqqqqqIIII16s",
+            next_offset,
+            0,
+            creation_time,
+            0,
+            last_write_time,
+            change_time,
+            size,
+            size,
+            attributes,
+            len(encoded_name),
+            0,
+            reparse_tag,
+            file_id,
+        )
+        record = header + encoded_name
+        if next_offset:
+            if next_offset < len(record):
+                raise ValueError("test_directory_record_offset_too_small")
+            record += b"\0" * (next_offset - len(record))
+        return record
+
+    def test_windows_directory_generation_parser_binds_exact_utf16_fields(
+        self,
+    ) -> None:
+        first_name = "정확한-이름.json"
+        first_unpadded = self._windows_directory_generation_record(first_name)
+        first_offset = (len(first_unpadded) + 7) // 8 * 8
+        raw = self._windows_directory_generation_record(
+            first_name,
+            change_time=101,
+            reparse_tag=0xA000000C,
+            next_offset=first_offset,
+        ) + self._windows_directory_generation_record(
+            "second.bin",
+            file_id=bytes(range(17, 33)),
+            change_time=202,
+            size=23,
+        )
+
+        parsed = (
+            archive_cli._doctor_parse_windows_directory_generation_buffer(
+                raw
+            )
+        )
+
+        self.assertEqual(set(parsed), {first_name, "second.bin"})
+        self.assertEqual(parsed[first_name][5], 101)
+        self.assertEqual(parsed[first_name][6], 19)
+        # ReparsePointTag is undefined for a non-reparse entry and therefore
+        # must not create false drift or a false unsafe classification.
+        self.assertEqual(parsed[first_name][7], 0)
+        self.assertEqual(parsed["second.bin"][5], 202)
+        self.assertEqual(parsed["second.bin"][6], 23)
+
+    def test_windows_directory_generation_parser_rejects_malformed_batches(
+        self,
+    ) -> None:
+        duplicate_name = "same.json"
+        first_unpadded = self._windows_directory_generation_record(
+            duplicate_name
+        )
+        first_offset = (len(first_unpadded) + 7) // 8 * 8
+        malformed = {
+            "short_header": b"\0" * 87,
+            "misaligned_next_offset": (
+                self._windows_directory_generation_record(
+                    "one.json",
+                    next_offset=105,
+                )
+            ),
+            "zero_file_id": self._windows_directory_generation_record(
+                "zero.json",
+                file_id=b"\0" * 16,
+            ),
+            "separator_in_name": self._windows_directory_generation_record(
+                "bad/name.json"
+            ),
+            "duplicate_name": (
+                self._windows_directory_generation_record(
+                    duplicate_name,
+                    next_offset=first_offset,
+                )
+                + self._windows_directory_generation_record(
+                    duplicate_name,
+                    file_id=bytes(range(17, 33)),
+                )
+            ),
+        }
+        odd_name_length = bytearray(
+            self._windows_directory_generation_record("odd.json")
+        )
+        struct.pack_into("<I", odd_name_length, 60, 3)
+        malformed["odd_name_bytes"] = bytes(odd_name_length)
+        overlapping_name = "offset-inside-name.json".encode("utf-16-le")
+        overlapping_header = struct.pack(
+            "<IIqqqqqqIIII16s",
+            96,  # aligned and forward, but inside the filename payload
+            0,
+            11,
+            0,
+            13,
+            17,
+            19,
+            19,
+            0x20,
+            len(overlapping_name),
+            0,
+            0,
+            bytes(range(1, 17)),
+        )
+        malformed["aligned_next_offset_inside_name"] = (
+            overlapping_header + overlapping_name
+        )
+
+        for label, raw in malformed.items():
+            with self.subTest(label=label), self.assertRaises(OSError):
+                archive_cli._doctor_parse_windows_directory_generation_buffer(
+                    raw
+                )
+
+    @unittest.skipUnless(os.name == "nt", "Windows generation observation")
+    def test_windows_directory_generation_observation_marks_links_and_duplicates(
+        self,
+    ) -> None:
+        observed = mock.Mock(
+            st_mode=stat.S_IFREG | 0o600,
+            st_size=19,
+            st_file_attributes=0x20,
+            st_nlink=1,
+            st_dev=1,
+            st_ino=2,
+            st_mtime_ns=3,
+            st_ctime_ns=4,
+        )
+        token = (
+            "windows_directory_generation_observation_v1",
+            101,
+            bytes(range(1, 17)).hex(),
+            0x20,
+            11,
+            13,
+            17,
+            19,
+            0,
+            True,
+        )
+        self.assertEqual(
+            archive_cli.Doctor._file_generation_token_from_directory_observation(
+                observed,
+                token,
+            ),
+            token,
+        )
+        linked = mock.Mock(
+            st_mode=observed.st_mode,
+            st_size=observed.st_size,
+            st_file_attributes=observed.st_file_attributes,
+            st_nlink=2,
+            st_dev=observed.st_dev,
+            st_ino=observed.st_ino,
+            st_mtime_ns=observed.st_mtime_ns,
+            st_ctime_ns=observed.st_ctime_ns,
+        )
+        self.assertEqual(
+            archive_cli.Doctor._file_generation_token_from_directory_observation(
+                linked,
+                token,
+            ),
+            token,
+        )
+        duplicate_token = (*token[:-1], False)
+        self.assertEqual(
+            archive_cli.Doctor._file_generation_token_from_directory_observation(
+                observed,
+                duplicate_token,
+            ),
+            duplicate_token,
+        )
+
+    @unittest.skipUnless(os.name == "nt", "Windows hardlink fallback")
+    def test_hardlink_generation_uses_descriptor_hash_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "archive"
+            path = root / "nested" / "cached.json"
+            outside_link = base / "outside.json"
+            path.parent.mkdir(parents=True)
+            path.write_text('{"value":"first"}\n', encoding="utf-8")
+            try:
+                os.link(path, outside_link)
+            except OSError as exc:
+                self.skipTest(f"hardlink unavailable: {exc}")
+            doctor = archive_cli.Doctor(root)
+            doctor._run_stage(
+                "symlink-boundaries",
+                doctor._check_symlink_boundaries,
+            )
+            self.assertTrue(doctor._archive_tree_inventory_complete)
+            doctor._load_json_file(path)
+            relative = doctor._lexical_archive_relative(path)
+            self.assertIsNotNone(relative)
+            snapshot_key = doctor._archive_tree_key(relative or ".")
+            self.assertIn(
+                snapshot_key,
+                doctor._archive_tree_file_generation_hash_required,
+            )
+            real_sha256_file = archive_cli.sha256_file
+
+            with mock.patch.object(
+                archive_cli,
+                "sha256_file",
+                wraps=real_sha256_file,
+            ) as hash_file:
+                doctor._finalize_run_file_generation_snapshots()
+
+            self.assertEqual(hash_file.call_count, 2)
+            self.assertIn(
+                "doctor_cache_snapshot_current",
+                {item.code for item in doctor.diagnostics},
+            )
+
+    def test_lexical_projection_caches_positive_and_negative_results(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "archive"
+            root.mkdir()
+            inside = root / "nested" / "data.json"
+            outside = base / "outside.json"
+            doctor = archive_cli.Doctor(root)
+
+            self.assertEqual(
+                doctor._lexical_archive_relative(inside),
+                "nested/data.json",
+            )
+            self.assertIsNone(doctor._lexical_archive_relative(outside))
+
+            with mock.patch.object(
+                type(inside),
+                "relative_to",
+                side_effect=AssertionError("lexical_projection_recomputed"),
+            ):
+                self.assertEqual(
+                    doctor._lexical_archive_relative(inside),
+                    "nested/data.json",
+                )
+                self.assertIsNone(
+                    doctor._lexical_archive_relative(outside)
+                )
+
     def test_live_file_cache_identity_uses_one_file_and_one_root_lstat(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "archive"
@@ -448,6 +718,1554 @@ class DoctorReadCacheTests(unittest.TestCase):
                 "doctor_archive_cache_boundary_changed",
             ):
                 doctor._file_cache_identity(path)
+
+    def test_stage_reuses_root_observation_but_keeps_boundary_checks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "archive"
+            path = root / "nested" / "data.json"
+            path.parent.mkdir(parents=True)
+            path.write_text('{"value":"first"}\n', encoding="utf-8")
+            doctor = archive_cli.Doctor(root)
+            doctor._run_stage(
+                "symlink-boundaries",
+                doctor._check_symlink_boundaries,
+            )
+            original_lstat = os.lstat
+            observed_paths: list[Path] = []
+
+            def counted_lstat(candidate: object) -> os.stat_result:
+                observed_paths.append(Path(candidate))
+                return original_lstat(candidate)
+
+            with mock.patch.object(
+                archive_cli.os,
+                "lstat",
+                side_effect=counted_lstat,
+            ):
+                doctor._run_stage(
+                    "identity",
+                    lambda: doctor._file_cache_identity(path),
+                )
+
+            # Stage entry and exit still observe the root.  The cache identity
+            # itself performs only the exact file lstat inside that bracket.
+            self.assertEqual(observed_paths.count(doctor.archive_root), 2)
+            canonical_path = doctor.archive_root / "nested" / "data.json"
+            self.assertEqual(observed_paths.count(canonical_path), 1)
+
+    def test_resolved_reference_is_revalidated_at_run_completion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "archive"
+            path = root / "nested" / "data.json"
+            path.parent.mkdir(parents=True)
+            path.write_text('{"value":"first"}\n', encoding="utf-8")
+            doctor = archive_cli.Doctor(root)
+            doctor._run_stage(
+                "symlink-boundaries",
+                doctor._check_symlink_boundaries,
+            )
+
+            resolved = doctor._resolve_archive_relative_path(
+                "nested/data.json"
+            )
+            self.assertTrue(os.path.samefile(resolved, path))
+            self.assertTrue(doctor._run_file_generation_snapshots)
+
+            path.write_text(
+                '{"value":"changed-generation"}\n',
+                encoding="utf-8",
+            )
+            doctor._finalize_run_file_generation_snapshots()
+
+            stale = next(
+                item
+                for item in doctor.diagnostics
+                if item.code == "doctor_cache_snapshot_stale"
+            )
+            self.assertEqual(stale.details["changed_file_count"], 1)
+
+    def test_file_created_after_inventory_is_not_adopted_mid_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "archive"
+            parent = root / "nested"
+            parent.mkdir(parents=True)
+            doctor = archive_cli.Doctor(root)
+            doctor._run_stage(
+                "symlink-boundaries",
+                doctor._check_symlink_boundaries,
+            )
+
+            (parent / "created.json").write_text(
+                "{}\n",
+                encoding="utf-8",
+            )
+
+            # Even if a platform's directory metadata were made to look
+            # unchanged, the newly present final entry is not adopted into
+            # the frozen generation.
+            with (
+                mock.patch.object(
+                    doctor,
+                    "_inventory_ancestor_chain_matches",
+                    return_value=True,
+                ),
+                mock.patch.object(
+                    doctor,
+                    "_inventory_identity_matches",
+                    return_value=True,
+                ),
+                self.assertRaisesRegex(
+                    ArchivePathError,
+                    "appeared after",
+                ),
+            ):
+                doctor._resolve_archive_relative_path("nested/created.json")
+
+    def test_final_entry_still_missing_after_inventory_stays_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "archive"
+            (root / "nested").mkdir(parents=True)
+            doctor = archive_cli.Doctor(root)
+            doctor._run_stage(
+                "symlink-boundaries",
+                doctor._check_symlink_boundaries,
+            )
+
+            resolved = doctor._resolve_archive_relative_path(
+                "nested/missing.json"
+            )
+
+            self.assertFalse(resolved.exists())
+            self.assertEqual(
+                doctor._lexical_archive_relative(resolved),
+                "nested/missing.json",
+            )
+
+    def test_inventory_stage_revalidation_detects_concurrent_tree_change(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "archive"
+            parent = root / "nested"
+            parent.mkdir(parents=True)
+            (parent / "existing.json").write_text(
+                "{}\n",
+                encoding="utf-8",
+            )
+            doctor = archive_cli.Doctor(root)
+
+            def inventory_then_change() -> None:
+                doctor._check_symlink_boundaries()
+                (parent / "created-during-stage.json").write_text(
+                    "{}\n",
+                    encoding="utf-8",
+                )
+
+            doctor._run_stage(
+                "symlink-boundaries",
+                inventory_then_change,
+            )
+
+            self.assertIn(
+                "archive_stage_directory_boundary_changed",
+                {item.code for item in doctor.diagnostics},
+            )
+            self.assertFalse(doctor._archive_tree_inventory_complete)
+            self.assertFalse(doctor._run_cache_snapshot_active)
+
+            secret = parent / "created-after-invalid-inventory.json"
+            secret.write_text(
+                json.dumps({"value": "token=" + "B" * 24}) + "\n",
+                encoding="utf-8",
+            )
+            with mock.patch.object(
+                doctor,
+                "_check_local_profile_and_secret_safety_from_inventory",
+                side_effect=AssertionError("invalid_inventory_was_reused"),
+            ):
+                doctor._check_local_profile_and_secret_safety()
+            self.assertIn(
+                "secret_value_detected",
+                {item.code for item in doctor.diagnostics},
+            )
+
+    def test_parallel_tree_inventory_captures_each_file_generation_once(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "archive"
+            files = root / "many"
+            files.mkdir(parents=True)
+            expected_paths = []
+            for index in range(64):
+                path = files / f"item-{index:03d}.json"
+                path.write_text("{}\n", encoding="utf-8")
+                expected_paths.append(path)
+            doctor = archive_cli.Doctor(root)
+            original_lstat = os.lstat
+            counts: dict[Path, int] = {}
+            counts_lock = threading.Lock()
+
+            def counted_lstat(candidate: object) -> os.stat_result:
+                path = Path(candidate)
+                with counts_lock:
+                    counts[path] = counts.get(path, 0) + 1
+                return original_lstat(candidate)
+
+            with mock.patch.object(
+                archive_cli.os,
+                "lstat",
+                side_effect=counted_lstat,
+            ):
+                doctor._check_symlink_boundaries()
+
+            self.assertTrue(doctor._archive_tree_inventory_complete)
+            self.assertEqual(
+                len(doctor._archive_tree_file_identities),
+                len(expected_paths),
+            )
+            canonical_paths = [
+                doctor.archive_root / "many" / path.name
+                for path in expected_paths
+            ]
+            self.assertTrue(
+                all(counts.get(path) == 1 for path in canonical_paths)
+            )
+
+    def test_inventory_lstat_unavailable_is_nonclean_and_secret_scan_falls_back(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "archive"
+            files = root / "many"
+            files.mkdir(parents=True)
+            target = files / "target.json"
+            target.write_text(
+                json.dumps({"value": "token=" + "A" * 24}) + "\n",
+                encoding="utf-8",
+            )
+            for index in range(63):
+                (files / f"item-{index:03d}.json").write_text(
+                    "{}\n",
+                    encoding="utf-8",
+                )
+            doctor = archive_cli.Doctor(root)
+            canonical_target = doctor.archive_root / "many" / "target.json"
+            original_lstat = os.lstat
+            failed_once = False
+            failure_lock = threading.Lock()
+
+            def transient_lstat(candidate: object) -> os.stat_result:
+                nonlocal failed_once
+                path = Path(candidate)
+                with failure_lock:
+                    should_fail = path == canonical_target and not failed_once
+                    if should_fail:
+                        failed_once = True
+                if should_fail:
+                    raise PermissionError("synthetic_inventory_unavailable")
+                return original_lstat(candidate)
+
+            with (
+                mock.patch.object(
+                    doctor,
+                    "_full_stages",
+                    return_value=[
+                        (
+                            "symlink-boundaries",
+                            doctor._check_symlink_boundaries,
+                        ),
+                        (
+                            "local-profile-secret-safety",
+                            doctor._check_local_profile_and_secret_safety,
+                        ),
+                    ],
+                ),
+                mock.patch.object(
+                    archive_cli.os,
+                    "lstat",
+                    side_effect=transient_lstat,
+                ),
+            ):
+                diagnostics = doctor.run()
+
+            self.assertFalse(doctor._archive_tree_inventory_complete)
+            unavailable = next(
+                item
+                for item in diagnostics
+                if item.code == "doctor_archive_inventory_unavailable"
+            )
+            self.assertEqual(unavailable.severity, "ERROR")
+            self.assertIsNone(unavailable.path)
+            self.assertFalse(unavailable.details["paths_echoed"])
+            self.assertIn(
+                "secret_value_detected",
+                {item.code for item in diagnostics},
+            )
+
+    @unittest.skipUnless(os.name == "nt", "Windows junction regression")
+    def test_queued_inventory_directory_junction_swap_is_never_enumerated(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "archive"
+            queued = root / "queued-private-child"
+            queued.mkdir(parents=True)
+            (queued / "ordinary.json").write_text("{}\n", encoding="utf-8")
+            outside = base / "outside-private-root"
+            outside.mkdir()
+            external_basename = "HIGHLY-PRIVATE-EXTERNAL-BASENAME.env"
+            (outside / external_basename).write_text(
+                "token=" + "C" * 24 + "\n",
+                encoding="utf-8",
+            )
+            saved = root / "queued-original"
+            doctor = archive_cli.Doctor(root)
+            canonical_queued = doctor.archive_root / queued.name
+            original_lstat = os.lstat
+            queued_observations = 0
+            swapped = False
+
+            def swap_before_scandir(candidate: object) -> os.stat_result:
+                nonlocal queued_observations, swapped
+                path = Path(candidate)
+                if path == canonical_queued:
+                    queued_observations += 1
+                    if queued_observations == 2:
+                        canonical_queued.rename(saved)
+                        created = subprocess.run(
+                            [
+                                "cmd",
+                                "/c",
+                                "mklink",
+                                "/J",
+                                str(canonical_queued),
+                                str(outside),
+                            ],
+                            capture_output=True,
+                            text=True,
+                            check=False,
+                        )
+                        if created.returncode != 0:
+                            saved.rename(canonical_queued)
+                            self.skipTest(
+                                "Windows directory junction creation unavailable"
+                            )
+                        swapped = True
+                return original_lstat(candidate)
+
+            try:
+                with mock.patch.object(
+                    archive_cli.os,
+                    "lstat",
+                    side_effect=swap_before_scandir,
+                ):
+                    doctor._run_stage(
+                        "symlink-boundaries",
+                        doctor._check_symlink_boundaries,
+                    )
+
+                # An incomplete inventory forces the live secret-scan path.
+                # It may report the lexical in-archive junction but must not
+                # enumerate or echo the external directory's member names.
+                doctor._check_local_profile_and_secret_safety()
+
+                self.assertTrue(swapped)
+                self.assertFalse(doctor._archive_tree_inventory_complete)
+                self.assertFalse(doctor._run_cache_snapshot_active)
+                boundary = next(
+                    item
+                    for item in doctor.diagnostics
+                    if item.code
+                    == "doctor_archive_inventory_boundary_changed"
+                )
+                self.assertEqual(boundary.severity, "ERROR")
+                self.assertIsNone(boundary.path)
+                self.assertFalse(boundary.details["paths_echoed"])
+                serialized = json.dumps(
+                    [item.as_dict() for item in doctor.diagnostics],
+                    sort_keys=True,
+                )
+                self.assertNotIn(external_basename, serialized)
+                self.assertNotIn(str(outside), serialized)
+            finally:
+                if swapped and canonical_queued.exists():
+                    canonical_queued.rmdir()
+                if saved.exists():
+                    saved.rename(canonical_queued)
+
+    @unittest.skipUnless(os.name == "nt", "Windows retained handle regression")
+    def test_retained_directory_handle_blocks_junction_swap_during_scandir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "archive"
+            queued = root / "queued-child"
+            queued.mkdir(parents=True)
+            (queued / "inside.json").write_text("{}\n", encoding="utf-8")
+            outside = base / "outside-private-root"
+            outside.mkdir()
+            external_basename = "PRIVATE-SCAN-TARGET.env"
+            (outside / external_basename).write_text(
+                "token=" + "D" * 24 + "\n",
+                encoding="utf-8",
+            )
+            saved = root / "queued-saved"
+            doctor = archive_cli.Doctor(root)
+            canonical_queued = doctor.archive_root / queued.name
+            original_scandir = os.scandir
+            attempted = False
+            rename_blocked = False
+            unexpected_swap = False
+
+            def attempt_swap_during_scan(path: object) -> object:
+                nonlocal attempted, rename_blocked, unexpected_swap
+                candidate = Path(path)
+                if candidate == canonical_queued and not attempted:
+                    attempted = True
+                    try:
+                        canonical_queued.rename(saved)
+                    except OSError:
+                        rename_blocked = True
+                    else:
+                        unexpected_swap = True
+                        subprocess.run(
+                            [
+                                "cmd",
+                                "/c",
+                                "mklink",
+                                "/J",
+                                str(canonical_queued),
+                                str(outside),
+                            ],
+                            capture_output=True,
+                            text=True,
+                            check=False,
+                        )
+                        raise OSError("retained_directory_handle_failed")
+                return original_scandir(path)
+
+            try:
+                with mock.patch.object(
+                    archive_cli.os,
+                    "scandir",
+                    side_effect=attempt_swap_during_scan,
+                ):
+                    doctor._run_stage(
+                        "symlink-boundaries",
+                        doctor._check_symlink_boundaries,
+                    )
+
+                self.assertTrue(attempted)
+                self.assertTrue(rename_blocked)
+                self.assertFalse(unexpected_swap)
+                self.assertTrue(doctor._archive_tree_inventory_complete)
+                inventoried_keys = set(doctor._archive_tree_file_identities)
+                self.assertFalse(
+                    any(external_basename.casefold() in key.casefold() for key in inventoried_keys)
+                )
+            finally:
+                if unexpected_swap and canonical_queued.exists():
+                    canonical_queued.rmdir()
+                if saved.exists():
+                    saved.rename(canonical_queued)
+
+    def test_archive_inventory_capacity_fails_closed_without_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "archive"
+            root.mkdir()
+            for index in range(8):
+                (root / f"item-{index}.json").write_text(
+                    "{}\n",
+                    encoding="utf-8",
+                )
+            doctor = archive_cli.Doctor(root)
+
+            with mock.patch.object(
+                archive_cli,
+                "DOCTOR_ARCHIVE_TREE_INVENTORY_MAX_ENTRIES",
+                4,
+            ):
+                doctor._run_stage(
+                    "symlink-boundaries",
+                    doctor._check_symlink_boundaries,
+                )
+
+            self.assertFalse(doctor._archive_tree_inventory_complete)
+            self.assertFalse(doctor._run_cache_snapshot_active)
+            capacity = next(
+                item
+                for item in doctor.diagnostics
+                if item.code == "doctor_archive_inventory_capacity_exceeded"
+            )
+            self.assertIsNone(capacity.path)
+            self.assertFalse(capacity.details["paths_echoed"])
+
+    def test_run_cache_snapshot_capacity_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "archive"
+            root.mkdir()
+            paths = []
+            for index in range(4):
+                path = root / f"item-{index}.json"
+                path.write_text("{}\n", encoding="utf-8")
+                paths.append(path)
+            doctor = archive_cli.Doctor(root)
+            doctor._run_stage(
+                "symlink-boundaries",
+                doctor._check_symlink_boundaries,
+            )
+
+            with mock.patch.object(
+                archive_cli,
+                "DOCTOR_RUN_CACHE_SNAPSHOT_MAX_ENTRIES",
+                2,
+            ):
+                for path in paths:
+                    doctor._load_json_file(path)
+
+            self.assertFalse(doctor._run_cache_snapshot_active)
+            self.assertEqual(doctor._run_file_generation_snapshots, {})
+            capacity = [
+                item
+                for item in doctor.diagnostics
+                if item.code == "doctor_cache_snapshot_capacity_exceeded"
+            ]
+            self.assertEqual(len(capacity), 1)
+            self.assertIsNone(capacity[0].path)
+            self.assertFalse(capacity[0].details["paths_echoed"])
+
+    def test_clean_directory_projection_replaces_duplicate_file_barriers(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "archive"
+            path = root / "nested" / "cached.json"
+            path.parent.mkdir(parents=True)
+            path.write_text('{"value":"first"}\n', encoding="utf-8")
+            doctor = archive_cli.Doctor(root)
+            doctor._run_stage(
+                "symlink-boundaries",
+                doctor._check_symlink_boundaries,
+            )
+            doctor._load_json_file(path)
+            canonical_path = doctor.archive_root / "nested" / "cached.json"
+            original_lstat = os.lstat
+            target_observations = 0
+
+            def counted_lstat(candidate: object) -> os.stat_result:
+                nonlocal target_observations
+                if Path(candidate) == canonical_path:
+                    target_observations += 1
+                return original_lstat(candidate)
+
+            with mock.patch.object(
+                archive_cli.os,
+                "lstat",
+                side_effect=counted_lstat,
+            ):
+                doctor._finalize_run_file_generation_snapshots()
+
+            # Windows pass 1 compares the exact native directory digest.  The
+            # child receives one lstat in the full pass 2; a separate pair of
+            # file lstat calls would duplicate that clean projection.
+            self.assertEqual(
+                target_observations,
+                1 if os.name == "nt" else 2,
+            )
+            self.assertIn(
+                "doctor_cache_snapshot_current",
+                {item.code for item in doctor.diagnostics},
+            )
+
+    @unittest.skipUnless(os.name == "nt", "Windows ChangeTime regression")
+    def test_fast_projection_detects_same_inode_write_with_mtime_restored(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "archive"
+            path = root / "nested" / "cached.json"
+            path.parent.mkdir(parents=True)
+            original = b'{"value":"first"}\n'
+            changed = b'{"value":"other"}\n'
+            self.assertEqual(len(original), len(changed))
+            path.write_bytes(original)
+            doctor = archive_cli.Doctor(root)
+            doctor._run_stage(
+                "symlink-boundaries",
+                doctor._check_symlink_boundaries,
+            )
+            doctor._load_json_file(path)
+            before = os.lstat(path)
+            relative = doctor._lexical_archive_relative(path)
+            self.assertIsNotNone(relative)
+            snapshot_key = doctor._archive_tree_key(relative or ".")
+            self.assertIn(
+                snapshot_key,
+                doctor._archive_tree_file_generation_tokens,
+            )
+            frozen_token = doctor._archive_tree_file_generation_tokens[
+                snapshot_key
+            ]
+            self.assertEqual(
+                frozen_token[0],
+                "windows_directory_generation_observation_v1",
+            )
+            self.assertIsInstance(frozen_token[1], int)
+            self.assertEqual(len(frozen_token), 10)
+
+            time.sleep(0.02)
+            with path.open("r+b") as stream:
+                stream.write(changed)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.utime(
+                path,
+                ns=(int(before.st_atime_ns), int(before.st_mtime_ns)),
+            )
+            after = os.lstat(path)
+            self.assertEqual(before.st_ino, after.st_ino)
+            self.assertEqual(
+                doctor._stat_identity(before),
+                doctor._stat_identity(after),
+            )
+
+            doctor._finalize_run_file_generation_snapshots()
+
+            stale = next(
+                item
+                for item in doctor.diagnostics
+                if item.code == "doctor_cache_snapshot_stale"
+            )
+            self.assertGreaterEqual(stale.details["changed_directory_count"], 1)
+            self.assertEqual(stale.details["changed_file_count"], 1)
+            self.assertIsNone(stale.path)
+            self.assertFalse(stale.details["paths_echoed"])
+            self.assertFalse(stale.details["private_values_echoed"])
+
+    @unittest.skipUnless(os.name == "nt", "Windows ChangeTime regression")
+    def test_file_fallback_detects_same_inode_write_with_mtime_restored(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "archive"
+            path = root / "nested" / "cached.json"
+            path.parent.mkdir(parents=True)
+            original = b'{"value":"first"}\n'
+            changed = b'{"value":"other"}\n'
+            path.write_bytes(original)
+            doctor = archive_cli.Doctor(root)
+            doctor._run_stage(
+                "symlink-boundaries",
+                doctor._check_symlink_boundaries,
+            )
+            doctor._load_json_file(path)
+            relative = doctor._lexical_archive_relative(path)
+            self.assertIsNotNone(relative)
+            snapshot_key = doctor._archive_tree_key(relative or ".")
+            self.assertIn(
+                snapshot_key,
+                doctor._archive_tree_file_generation_tokens,
+            )
+            # Remove only the stat projection so completion must exercise the
+            # historical file-pass fallback while retaining its frozen native
+            # generation token.
+            doctor._archive_tree_file_identities.pop(snapshot_key)
+            before = os.lstat(path)
+
+            time.sleep(0.02)
+            with path.open("r+b") as stream:
+                stream.write(changed)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.utime(
+                path,
+                ns=(int(before.st_atime_ns), int(before.st_mtime_ns)),
+            )
+            after = os.lstat(path)
+            self.assertEqual(before.st_ino, after.st_ino)
+            self.assertEqual(
+                doctor._stat_identity(before),
+                doctor._stat_identity(after),
+            )
+
+            doctor._finalize_run_file_generation_snapshots()
+
+            stale = next(
+                item
+                for item in doctor.diagnostics
+                if item.code == "doctor_cache_snapshot_stale"
+            )
+            self.assertEqual(stale.details["changed_file_count"], 1)
+            self.assertNotIn(
+                "doctor_cache_snapshot_current",
+                {item.code for item in doctor.diagnostics},
+            )
+
+    @unittest.skipUnless(os.name == "nt", "Windows ChangeTime regression")
+    def test_native_generation_unavailable_never_reports_current(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "archive"
+            path = root / "nested" / "cached.json"
+            path.parent.mkdir(parents=True)
+            path.write_text('{"value":"first"}\n', encoding="utf-8")
+            doctor = archive_cli.Doctor(root)
+            doctor._run_stage(
+                "symlink-boundaries",
+                doctor._check_symlink_boundaries,
+            )
+            doctor._load_json_file(path)
+
+            with mock.patch.object(
+                archive_cli.Doctor,
+                "_retained_windows_directory_generations",
+                return_value=None,
+            ):
+                doctor._finalize_run_file_generation_snapshots()
+
+            codes = {item.code for item in doctor.diagnostics}
+            self.assertIn("doctor_cache_snapshot_stale", codes)
+            self.assertNotIn("doctor_cache_snapshot_current", codes)
+            stale = next(
+                item
+                for item in doctor.diagnostics
+                if item.code == "doctor_cache_snapshot_stale"
+            )
+            self.assertIsNone(stale.path)
+            self.assertFalse(stale.details["paths_echoed"])
+            self.assertFalse(stale.details["private_values_echoed"])
+
+    def test_directory_projection_binds_full_file_generation_shape(self) -> None:
+        def observed_stat(
+            *,
+            mode: int = stat.S_IFREG | 0o600,
+            inode: int = 11,
+            size: int = 5,
+            modified: int = 13,
+            changed: int = 17,
+            attributes: int = 0,
+            links: int = 1,
+        ) -> mock.Mock:
+            return mock.Mock(
+                st_dev=7,
+                st_ino=inode,
+                st_mode=mode,
+                st_size=size,
+                st_mtime_ns=modified,
+                st_ctime_ns=changed,
+                st_file_attributes=attributes,
+                st_nlink=links,
+            )
+
+        regular = observed_stat()
+        self.assertEqual(
+            archive_cli.Doctor._inventory_stat_identity(regular),
+            archive_cli.Doctor._stat_identity(regular),
+        )
+        variants = (
+            regular,
+            observed_stat(inode=12),
+            observed_stat(size=6),
+            observed_stat(modified=14),
+            observed_stat(changed=18),
+            observed_stat(links=2),
+            observed_stat(mode=stat.S_IFLNK | 0o600),
+            observed_stat(attributes=0x00000400),
+        )
+        digests = {
+            archive_cli.Doctor._inventory_directory_entry_digest(
+                [(Path("entry"), value)]
+            )
+            for value in variants
+        }
+        self.assertEqual(len(digests), len(variants))
+
+    def test_same_size_mtime_restored_replacement_uses_file_fallback(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "archive"
+            path = root / "nested" / "cached.json"
+            path.parent.mkdir(parents=True)
+            path.write_text('{"value":"first"}\n', encoding="utf-8")
+            doctor = archive_cli.Doctor(root)
+            doctor._run_stage(
+                "symlink-boundaries",
+                doctor._check_symlink_boundaries,
+            )
+            doctor._load_json_file(path)
+            before = os.lstat(path)
+            time.sleep(0.01)
+            replacement = path.with_name("replacement.json")
+            replacement.write_text(
+                '{"value":"other"}\n',
+                encoding="utf-8",
+            )
+            os.utime(
+                replacement,
+                ns=(int(before.st_atime_ns), int(before.st_mtime_ns)),
+            )
+            os.replace(replacement, path)
+
+            doctor._finalize_run_file_generation_snapshots()
+
+            stale = next(
+                item
+                for item in doctor.diagnostics
+                if item.code == "doctor_cache_snapshot_stale"
+            )
+            self.assertEqual(stale.details["changed_file_count"], 1)
+            self.assertGreaterEqual(
+                stale.details["changed_directory_count"],
+                1,
+            )
+
+    def test_missing_parent_projection_keeps_file_and_final_directory_barriers(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "archive"
+            path = root / "nested" / "cached.json"
+            path.parent.mkdir(parents=True)
+            path.write_text('{"value":"first"}\n', encoding="utf-8")
+            doctor = archive_cli.Doctor(root)
+            doctor._run_stage(
+                "symlink-boundaries",
+                doctor._check_symlink_boundaries,
+            )
+            doctor._load_json_file(path)
+            parent_relative = doctor._lexical_archive_relative(path.parent)
+            self.assertIsNotNone(parent_relative)
+            parent_key = doctor._archive_tree_key(parent_relative or ".")
+            doctor._archive_tree_directory_entry_digests.pop(parent_key)
+            canonical_path = doctor.archive_root / "nested" / "cached.json"
+            original_lstat = os.lstat
+            target_observations = 0
+            directory_passes: list[int] = []
+
+            def counted_lstat(candidate: object) -> os.stat_result:
+                nonlocal target_observations
+                if Path(candidate) == canonical_path:
+                    target_observations += 1
+                return original_lstat(candidate)
+
+            def record_progress(
+                stage: str,
+                message: str,
+                _current: int | None,
+                _total: int | None,
+            ) -> None:
+                if (
+                    stage == "doctor-cache-snapshot-revalidation"
+                    and message.startswith("directory membership barrier pass ")
+                    and not message.endswith(" done")
+                ):
+                    pass_number = int(message.rsplit(" ", 1)[1])
+                    if not directory_passes or directory_passes[-1] != pass_number:
+                        directory_passes.append(pass_number)
+
+            doctor.progress_callback = record_progress
+            with mock.patch.object(
+                archive_cli.os,
+                "lstat",
+                side_effect=counted_lstat,
+            ):
+                doctor._finalize_run_file_generation_snapshots()
+
+            self.assertEqual(target_observations, 2)
+            self.assertEqual(
+                directory_passes,
+                [2, 3] if os.name == "nt" else [1, 2, 3],
+            )
+            self.assertIn(
+                "doctor_cache_snapshot_stale",
+                {item.code for item in doctor.diagnostics},
+            )
+
+    def test_fallback_file_read_is_followed_by_final_directory_barrier(
+        self,
+    ) -> None:
+        from types import SimpleNamespace
+
+        for observer_kind in ("host", "posix"):
+            observer = (
+                os if observer_kind == "host"
+                else SimpleNamespace(**(vars(os) | {"name": "posix"}))
+            )
+            with self.subTest(observer_kind=observer_kind), mock.patch.object(
+                archive_cli, "os", observer,
+            ):
+                self._assert_fallback_read_then_final_directory_barrier()
+
+    def _assert_fallback_read_then_final_directory_barrier(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "archive"
+            path = root / "nested" / "cached.json"
+            late_parent = root / "late-parent"
+            path.parent.mkdir(parents=True)
+            late_parent.mkdir()
+            path.write_text('{"value":"first"}\n', encoding="utf-8")
+            doctor = archive_cli.Doctor(root)
+            doctor._run_stage(
+                "symlink-boundaries",
+                doctor._check_symlink_boundaries,
+            )
+            doctor._load_json_file(path)
+            canonical_path = doctor.archive_root / "nested" / "cached.json"
+
+            # Make only this file ineligible for projection reuse.  Its parent
+            # digest remains complete and current, so the first two directory
+            # passes are clean and the historical file fallback is exercised.
+            relative = doctor._lexical_archive_relative(path)
+            self.assertIsNotNone(relative)
+            doctor._archive_tree_file_identities.pop(
+                doctor._archive_tree_key(relative or ".")
+            )
+            original_lstat = archive_cli.os.lstat
+            original_progress = doctor._progress
+            original_directory_observation = doctor._observe_inventory_directory_generation
+            phase = "initial"
+            file_read_phases: list[str] = []
+            late_parent_observations: list[tuple[str, bool]] = []
+            mutation_count = 0
+
+            def observe_file_read(
+                candidate: object,
+            ) -> os.stat_result:
+                observed = original_lstat(candidate)
+                if Path(candidate) == canonical_path:
+                    file_read_phases.append(phase)
+                return observed
+
+            def mutate_after_second_file_barrier(stage, message, current, total):
+                nonlocal phase, mutation_count
+                original_progress(stage, message, current, total)
+                phase = message
+                if (
+                    stage == "doctor-cache-snapshot-revalidation"
+                    and message == "file generation barrier pass 2 done"
+                ):
+                    # Trigger at the real completed fallback barrier, not an
+                    # OS-dependent lstat ordinal. POSIX descriptor-bound SHA
+                    # verification legitimately adds path observations here.
+                    self.assertEqual((current, total), (1, 1))
+                    mutation_count += 1
+                    (late_parent / "late.json").write_text("{}\n", encoding="utf-8")
+
+            def observe_directory(relative, **kwargs):
+                result = original_directory_observation(relative, **kwargs)
+                if relative == "late-parent":
+                    late_parent_observations.append((phase, result is None))
+                return result
+
+            with mock.patch.object(
+                archive_cli.os,
+                "lstat",
+                side_effect=observe_file_read,
+            ), mock.patch.object(
+                doctor,
+                "_progress",
+                side_effect=mutate_after_second_file_barrier,
+            ), mock.patch.object(
+                doctor,
+                "_observe_inventory_directory_generation",
+                side_effect=observe_directory,
+            ):
+                doctor._finalize_run_file_generation_snapshots()
+
+            stale = next(
+                item
+                for item in doctor.diagnostics
+                if item.code == "doctor_cache_snapshot_stale"
+            )
+            self.assertEqual(mutation_count, 1)
+            self.assertIn("file generation barrier pass 1", file_read_phases)
+            self.assertIn("file generation barrier pass 2", file_read_phases)
+            self.assertIn(
+                ("directory membership barrier pass 2", False),
+                late_parent_observations,
+            )
+            self.assertIn(
+                ("directory membership barrier pass 3", True),
+                late_parent_observations,
+            )
+            self.assertEqual(stale.details["changed_file_count"], 0)
+            self.assertGreaterEqual(
+                stale.details["changed_directory_count"],
+                1,
+            )
+
+    def test_file_identity_detects_hardlink_count_change(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "archive"
+            outside = base / "outside"
+            path = root / "nested" / "data.json"
+            path.parent.mkdir(parents=True)
+            outside.mkdir()
+            path.write_text('{"value":"first"}\n', encoding="utf-8")
+            doctor = archive_cli.Doctor(root)
+            doctor._run_stage(
+                "symlink-boundaries",
+                doctor._check_symlink_boundaries,
+            )
+            doctor._load_json_file(path)
+            before = os.lstat(path)
+            link = outside / "linked.json"
+            try:
+                os.link(path, link)
+            except OSError as exc:
+                self.skipTest(f"hardlink unavailable: {exc}")
+            self.assertGreater(os.lstat(path).st_nlink, before.st_nlink)
+
+            doctor._finalize_run_file_generation_snapshots()
+
+            stale = next(
+                item
+                for item in doctor.diagnostics
+                if item.code == "doctor_cache_snapshot_stale"
+            )
+            self.assertEqual(stale.details["changed_file_count"], 1)
+
+    def test_second_revalidation_barrier_detects_post_worker_byte_change(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "archive"
+            files = root / "many"
+            files.mkdir(parents=True)
+            paths = []
+            for index in range(64):
+                path = files / f"item-{index:03d}.json"
+                path.write_text('{"v":1}\n', encoding="utf-8")
+                paths.append(path)
+            doctor = archive_cli.Doctor(root)
+            doctor._run_stage(
+                "symlink-boundaries",
+                doctor._check_symlink_boundaries,
+            )
+            for path in paths:
+                doctor._load_json_file(path)
+            target = doctor.archive_root / "many" / paths[0].name
+            original_lstat = os.lstat
+            target_observations = 0
+            observation_lock = threading.Lock()
+
+            def mutate_after_first_observation(
+                candidate: object,
+            ) -> os.stat_result:
+                nonlocal target_observations
+                path = Path(candidate)
+                observed = original_lstat(candidate)
+                if path == target:
+                    with observation_lock:
+                        target_observations += 1
+                        mutate = target_observations == 1
+                    if mutate:
+                        target.write_text('{"v":2}\n', encoding="utf-8")
+                return observed
+
+            with mock.patch.object(
+                archive_cli.os,
+                "lstat",
+                side_effect=mutate_after_first_observation,
+            ):
+                doctor._finalize_run_file_generation_snapshots()
+
+            self.assertGreaterEqual(target_observations, 2)
+            stale = next(
+                item
+                for item in doctor.diagnostics
+                if item.code == "doctor_cache_snapshot_stale"
+            )
+            self.assertEqual(stale.details["changed_file_count"], 1)
+
+    def test_cache_clean_claim_runs_after_late_command_status_finalizer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "archive"
+            path = root / "nested" / "data.json"
+            path.parent.mkdir(parents=True)
+            path.write_text('{"v":1}\n', encoding="utf-8")
+            doctor = archive_cli.Doctor(root)
+
+            def load_cached_input() -> None:
+                self.assertEqual(doctor._load_json_file(path), {"v": 1})
+
+            def late_command_status_read_and_mutation() -> None:
+                path.write_text('{"v":2}\n', encoding="utf-8")
+
+            with (
+                mock.patch.object(
+                    doctor,
+                    "_full_stages",
+                    return_value=[
+                        (
+                            "symlink-boundaries",
+                            doctor._check_symlink_boundaries,
+                        ),
+                        ("cached-input", load_cached_input),
+                    ],
+                ),
+                mock.patch.object(
+                    doctor,
+                    "_attach_suggested_command_statuses",
+                    side_effect=late_command_status_read_and_mutation,
+                ),
+            ):
+                diagnostics = doctor.run()
+
+            codes = [item.code for item in diagnostics]
+            self.assertIn("doctor_cache_snapshot_stale", codes)
+            self.assertNotIn("doctor_cache_snapshot_current", codes)
+
+    def test_late_new_member_in_uncached_directory_makes_snapshot_stale(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "archive"
+            empty = root / "initially-empty"
+            empty.mkdir(parents=True)
+            stable = root / "stable.json"
+            stable.write_text("{}\n", encoding="utf-8")
+            doctor = archive_cli.Doctor(root)
+            private_basename = "PRIVATE-LATE-SECRET.env"
+            private_value = "token=" + "Z" * 24
+            empty_before = os.stat(empty)
+
+            def load_cached_input() -> None:
+                self.assertEqual(doctor._load_json_file(stable), {})
+
+            def create_after_inventory() -> None:
+                (empty / private_basename).write_text(
+                    private_value + "\n",
+                    encoding="utf-8",
+                )
+                os.utime(
+                    empty,
+                    ns=(empty_before.st_atime_ns, empty_before.st_mtime_ns),
+                )
+
+            with mock.patch.object(
+                doctor,
+                "_full_stages",
+                return_value=[
+                    (
+                        "symlink-boundaries",
+                        doctor._check_symlink_boundaries,
+                    ),
+                    ("cached-input", load_cached_input),
+                    ("late-member", create_after_inventory),
+                    (
+                        "local-profile-secret-safety",
+                        doctor._check_local_profile_and_secret_safety,
+                    ),
+                ],
+            ):
+                diagnostics = doctor.run()
+
+            codes = [item.code for item in diagnostics]
+            self.assertIn("doctor_cache_snapshot_stale", codes)
+            self.assertNotIn("doctor_cache_snapshot_current", codes)
+            stale = next(
+                item
+                for item in diagnostics
+                if item.code == "doctor_cache_snapshot_stale"
+            )
+            self.assertGreaterEqual(stale.details["changed_directory_count"], 1)
+            serialized = json.dumps(
+                [item.as_dict() for item in diagnostics],
+                sort_keys=True,
+            )
+            self.assertNotIn(private_basename, serialized)
+            self.assertNotIn(private_value, serialized)
+
+    def test_stage_interrupt_never_starts_queued_deep_hash_finalizer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "archive"
+            objects = root / "objects"
+            objects.mkdir(parents=True)
+            doctor = archive_cli.Doctor(
+                root,
+                object_byte_verification_mode="deep",
+            )
+
+            def queue_then_interrupt() -> None:
+                for index in range(32):
+                    path = objects / f"queued-{index:02d}.bin"
+                    path.write_bytes(b"queued")
+                    doctor._object_byte_observations_by_path[str(path)] = (
+                        path,
+                        len(b"queued"),
+                        hashlib.sha256(b"queued").hexdigest(),
+                    )
+                raise KeyboardInterrupt()
+
+            with (
+                mock.patch.object(
+                    doctor,
+                    "_full_stages",
+                    return_value=[("interrupted-stage", queue_then_interrupt)],
+                ),
+                mock.patch.object(
+                    archive_doctor,
+                    "observe_stable_regular_file_sha256",
+                    side_effect=AssertionError("deep_hash_started_after_interrupt"),
+                ) as stable_hash,
+                mock.patch.object(
+                    doctor,
+                    "_finalize_stage_directory_generations",
+                    side_effect=AssertionError("stage_finalizer_started_after_interrupt"),
+                ) as stage_finalizer,
+                self.assertRaises(KeyboardInterrupt),
+            ):
+                doctor.run()
+
+            stable_hash.assert_not_called()
+            stage_finalizer.assert_not_called()
+            self.assertFalse(doctor._run_cache_snapshot_active)
+            self.assertEqual(
+                doctor._object_byte_completion_revalidation_state,
+                "not_run",
+            )
+
+    def test_stage_runtime_failure_never_starts_completion_finalizers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "archive"
+            root.mkdir()
+            doctor = archive_cli.Doctor(
+                root,
+                object_byte_verification_mode="deep",
+            )
+
+            def fail_stage() -> None:
+                raise RuntimeError("synthetic_stage_failure")
+
+            with (
+                mock.patch.object(
+                    doctor,
+                    "_full_stages",
+                    return_value=[("failed-stage", fail_stage)],
+                ),
+                mock.patch.object(
+                    doctor,
+                    "_finalize_object_byte_observations",
+                    side_effect=AssertionError("object_finalizer_started"),
+                ) as object_finalizer,
+                mock.patch.object(
+                    doctor,
+                    "_finalize_object_manifest_snapshot",
+                    side_effect=AssertionError("manifest_finalizer_started"),
+                ) as manifest_finalizer,
+                mock.patch.object(
+                    doctor,
+                    "_attach_suggested_command_statuses",
+                    side_effect=AssertionError("command_status_finalizer_started"),
+                ) as status_finalizer,
+                mock.patch.object(
+                    doctor,
+                    "_finalize_run_file_generation_snapshots",
+                    side_effect=AssertionError("cache_finalizer_started"),
+                ) as cache_finalizer,
+                self.assertRaisesRegex(
+                    RuntimeError,
+                    "synthetic_stage_failure",
+                ),
+            ):
+                doctor.run()
+
+            object_finalizer.assert_not_called()
+            manifest_finalizer.assert_not_called()
+            status_finalizer.assert_not_called()
+            cache_finalizer.assert_not_called()
+
+    def test_parallel_map_interrupt_cancels_pending_io_and_keeps_heartbeat(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "archive"
+            root.mkdir()
+            reporter = archive_cli.CommandProgressReporter(
+                True,
+                label="doctor-test",
+                heartbeat_interval_seconds=0.01,
+            )
+            doctor = archive_cli.Doctor(
+                root,
+                progress_callback=reporter.progress,
+            )
+            shutdown_calls: list[tuple[bool, bool]] = []
+
+            class InterruptingExecutor:
+                def __init__(self, **_kwargs: object) -> None:
+                    pass
+
+                def submit(
+                    self,
+                    _function: object,
+                    _value: object,
+                ) -> object:
+                    class InterruptingFuture:
+                        def result(self) -> object:
+                            time.sleep(0.06)
+                            raise KeyboardInterrupt()
+
+                    return InterruptingFuture()
+
+                def shutdown(
+                    self,
+                    *,
+                    wait: bool,
+                    cancel_futures: bool,
+                ) -> None:
+                    shutdown_calls.append((wait, cancel_futures))
+
+            stderr = io.StringIO()
+            started = time.monotonic()
+            try:
+                with (
+                    redirect_stderr(stderr),
+                    mock.patch.object(
+                        archive_cli,
+                        "_DoctorBoundedDaemonExecutor",
+                        InterruptingExecutor,
+                    ),
+                    self.assertRaises(KeyboardInterrupt),
+                    doctor._bounded_parallel_map(
+                        lambda value: value,
+                        range(64),
+                        max_workers=16,
+                        thread_name_prefix="synthetic-interrupt",
+                    ) as observations,
+                ):
+                    reporter.progress(
+                        "doctor-cache-snapshot-revalidation",
+                        "start",
+                        0,
+                        64,
+                    )
+                    tuple(observations)
+            finally:
+                reporter.close()
+            elapsed = time.monotonic() - started
+
+            self.assertLess(elapsed, 0.5)
+            self.assertEqual(shutdown_calls, [(False, True)])
+            self.assertIn("heartbeat", stderr.getvalue())
+
+    def test_parallel_map_executor_failure_cancels_and_propagates(self) -> None:
+        shutdown_calls: list[tuple[bool, bool]] = []
+
+        class FailingExecutor:
+            def __init__(self, **_kwargs: object) -> None:
+                pass
+
+            def submit(
+                self,
+                _function: object,
+                _value: object,
+            ) -> object:
+                class FailingFuture:
+                    def result(self) -> object:
+                        raise RuntimeError("synthetic_executor_failure")
+
+                return FailingFuture()
+
+            def shutdown(
+                self,
+                *,
+                wait: bool,
+                cancel_futures: bool,
+            ) -> None:
+                shutdown_calls.append((wait, cancel_futures))
+
+        with (
+            mock.patch.object(
+                archive_cli,
+                "_DoctorBoundedDaemonExecutor",
+                FailingExecutor,
+            ),
+            self.assertRaisesRegex(
+                RuntimeError,
+                "synthetic_executor_failure",
+            ),
+            archive_cli.Doctor._bounded_parallel_map(
+                lambda value: value,
+                range(64),
+                max_workers=16,
+                thread_name_prefix="synthetic-failure",
+            ) as observations,
+        ):
+            tuple(observations)
+
+        self.assertEqual(shutdown_calls, [(False, True)])
+
+    def test_parallel_map_keeps_submission_window_bounded(self) -> None:
+        instances: list[object] = []
+
+        class CountingExecutor:
+            def __init__(self, **_kwargs: object) -> None:
+                self.outstanding = 0
+                self.peak = 0
+                self.submitted = 0
+                self.shutdown_calls: list[tuple[bool, bool]] = []
+                instances.append(self)
+
+            def submit(
+                self,
+                function: object,
+                value: object,
+            ) -> object:
+                self.outstanding += 1
+                self.submitted += 1
+                self.peak = max(self.peak, self.outstanding)
+                owner = self
+
+                class CountingFuture:
+                    def result(self) -> object:
+                        try:
+                            return function(value)
+                        finally:
+                            owner.outstanding -= 1
+
+                return CountingFuture()
+
+            def shutdown(
+                self,
+                *,
+                wait: bool,
+                cancel_futures: bool,
+            ) -> None:
+                self.shutdown_calls.append((wait, cancel_futures))
+
+        with (
+            mock.patch.object(
+                archive_cli,
+                "_DoctorBoundedDaemonExecutor",
+                CountingExecutor,
+            ),
+            archive_cli.Doctor._bounded_parallel_map(
+                lambda value: value * 2,
+                range(10_000),
+                max_workers=16,
+                thread_name_prefix="synthetic-bounded",
+            ) as observations,
+        ):
+            results = tuple(observations)
+
+        self.assertEqual(results[0], 0)
+        self.assertEqual(results[-1], 19_998)
+        executor = instances[0]
+        self.assertEqual(executor.submitted, 10_000)
+        self.assertLessEqual(executor.peak, 32)
+        self.assertEqual(executor.shutdown_calls, [(True, False)])
+
+    def test_shutdown_cancels_dequeued_not_started_observation(self) -> None:
+        """Cancellation linearizes before a dequeued worker calls user code."""
+
+        real_queue_type = queue.Queue
+
+        class ControlledQueue:
+            def __init__(self) -> None:
+                self._queue = real_queue_type()
+                self._get_count = 0
+                self.second_dequeued = threading.Event()
+                self.allow_second_get_to_return = threading.Event()
+
+            def put(self, value: object) -> None:
+                self._queue.put(value)
+
+            def get(self) -> object:
+                value = self._queue.get()
+                self._get_count += 1
+                if self._get_count == 2:
+                    self.second_dequeued.set()
+                    self.allow_second_get_to_return.wait(timeout=5.0)
+                return value
+
+            def get_nowait(self) -> object:
+                return self._queue.get_nowait()
+
+        first_release = threading.Event()
+        second_called = threading.Event()
+
+        def observe(value: int) -> int:
+            if value == 0:
+                first_release.wait(timeout=5.0)
+            else:
+                second_called.set()
+            return value
+
+        with mock.patch.object(
+            archive_cli.queue,
+            "SimpleQueue",
+            ControlledQueue,
+        ):
+            executor = archive_cli._DoctorBoundedDaemonExecutor(
+                max_workers=1,
+                thread_name_prefix="synthetic-start-gate",
+            )
+            first = executor.submit(observe, 0)
+            second = executor.submit(observe, 1)
+            first_release.set()
+            self.assertTrue(executor._tasks.second_dequeued.wait(timeout=5.0))
+
+            executor.shutdown(wait=False, cancel_futures=True)
+            executor._tasks.allow_second_get_to_return.set()
+
+            self.assertEqual(first.result(timeout=5.0), 0)
+            with self.assertRaises(CancelledError):
+                second.result(timeout=5.0)
+            self.assertTrue(second.cancelled())
+            self.assertFalse(second_called.wait(timeout=0.1))
+
+    def test_interrupt_with_blocked_worker_does_not_hold_process_exit(self) -> None:
+        source_root = Path(archive_cli.__file__).resolve().parents[1]
+        environment = os.environ.copy()
+        previous_pythonpath = environment.get("PYTHONPATH", "")
+        environment["PYTHONPATH"] = os.pathsep.join(
+            value
+            for value in (str(source_root), previous_pythonpath)
+            if value
+        )
+        script = "\n".join(
+            [
+                "import time",
+                "import sys",
+                "from wom_kit.archive_cli import Doctor",
+                "print('doctor-ready', flush=True)",
+                "sys.stdin.readline()",
+                "def blocked(value):",
+                "    if value == 0:",
+                "        time.sleep(0.1)",
+                "        raise KeyboardInterrupt()",
+                "    time.sleep(30)",
+                "try:",
+                "    with Doctor._bounded_parallel_map(",
+                "        blocked, range(32), max_workers=16,",
+                "        thread_name_prefix='blocked-doctor-test',",
+                "    ) as observations:",
+                "        tuple(observations)",
+                "except KeyboardInterrupt:",
+                "    print('interrupt-returned', flush=True)",
+            ]
+        )
+        # Import readiness and interrupted-worker exit are separate contracts.
+        # A slow cold import must not spend the worker's unchanged exit budget.
+        completed = subprocess.Popen(
+            [sys.executable, "-c", script],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=environment,
+        )
+        assert completed.stdout is not None
+        ready: queue.Queue[str] = queue.Queue()
+        reader = threading.Thread(
+            target=lambda: ready.put(completed.stdout.readline()), daemon=True
+        )
+        reader.start()
+        try:
+            self.assertEqual(ready.get(timeout=30), "doctor-ready\n")
+            reader.join(timeout=1)
+            started = time.monotonic()
+            stdout, stderr = completed.communicate(input="continue\n", timeout=5)
+            elapsed = time.monotonic() - started
+        finally:
+            if completed.poll() is None:
+                completed.kill()
+                completed.communicate(timeout=5)
+            reader.join(timeout=1)
+
+        self.assertEqual(completed.returncode, 0, stderr)
+        self.assertIn("interrupt-returned", stdout)
+        self.assertLess(elapsed, 3.0)
 
     def test_managed_run_reuses_prefetched_secret_observation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -627,6 +2445,60 @@ class DoctorReadCacheTests(unittest.TestCase):
             self.assertEqual(
                 validation,
                 [(name, main_thread) for name in expected],
+            )
+
+    def test_zettel_and_mint_prefetch_never_validate_in_workers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "archive"
+            zettel_root = root / "zettels"
+            mint_root = root / "receipts" / "mint"
+            zettel_root.mkdir(parents=True)
+            mint_root.mkdir(parents=True)
+            expected_zettels = []
+            for index in range(16):
+                zettel = zettel_root / f"zet-{index:03d}.md"
+                receipt = mint_root / f"zet-{index:03d}.mint.json"
+                zettel.write_text("body\n", encoding="utf-8")
+                receipt.write_text("{}\n", encoding="utf-8")
+                expected_zettels.append(zettel.name)
+            doctor = archive_cli.Doctor(root)
+            main_thread = threading.get_ident()
+            prefetch_threads: set[int] = set()
+            prefetch_lock = threading.Lock()
+            validation: list[tuple[str, int]] = []
+
+            def observe(
+                _path: Path,
+                *,
+                encoding: str,
+            ) -> None:
+                self.assertIn(encoding, {"utf-8", "utf-8-sig"})
+                with prefetch_lock:
+                    prefetch_threads.add(threading.get_ident())
+                return None
+
+            def validate(path: Path, _status: str) -> None:
+                validation.append((path.name, threading.get_ident()))
+
+            with (
+                mock.patch.object(
+                    doctor,
+                    "_observe_stable_text_for_prefetch",
+                    side_effect=observe,
+                ),
+                mock.patch.object(
+                    doctor,
+                    "_check_zettel_file",
+                    side_effect=validate,
+                ),
+            ):
+                doctor._check_zettels()
+
+            self.assertTrue(prefetch_threads)
+            self.assertNotIn(main_thread, prefetch_threads)
+            self.assertEqual(
+                validation,
+                [(name, main_thread) for name in expected_zettels],
             )
 
     def test_direct_transition_index_is_not_observed_half_initialized(self) -> None:
@@ -1246,6 +3118,196 @@ class DoctorStableFileHashTests(unittest.TestCase):
             finally:
                 archive_root.rmdir()
                 saved_root.rename(archive_root)
+
+    @unittest.skipUnless(os.name == "nt", "Windows root alias regression")
+    def test_real_83_root_alias_cache_is_unverified_after_root_swap(self) -> None:
+        from ctypes import wintypes
+
+        with tempfile.TemporaryDirectory(
+            prefix="doctor-long-root-parent-name-"
+        ) as tmp:
+            base = Path(tmp)
+            archive_root = base / "archive-root-with-long-name"
+            original_file = archive_root / "objects" / "queued.bin"
+            original_file.parent.mkdir(parents=True)
+            original_file.write_bytes(b"original-root-bytes")
+
+            get_short_path = ctypes.WinDLL(
+                "kernel32",
+                use_last_error=True,
+            ).GetShortPathNameW
+            get_short_path.argtypes = (
+                wintypes.LPCWSTR,
+                wintypes.LPWSTR,
+                wintypes.DWORD,
+            )
+            get_short_path.restype = wintypes.DWORD
+            required = int(get_short_path(str(archive_root), None, 0))
+            if required <= 0:
+                self.skipTest("Windows 8.3 path aliases are unavailable")
+            buffer = ctypes.create_unicode_buffer(required + 1)
+            written = int(
+                get_short_path(str(archive_root), buffer, len(buffer))
+            )
+            if written <= 0 or written >= len(buffer):
+                self.skipTest("Windows 8.3 path alias could not be read")
+            short_root = Path(buffer.value)
+            if os.path.normcase(str(short_root)) == os.path.normcase(
+                str(archive_root)
+            ):
+                self.skipTest("The test volume did not assign an 8.3 alias")
+
+            doctor = archive_cli.Doctor(short_root)
+            self.assertNotEqual(
+                os.path.normcase(str(doctor._archive_root_input_absolute)),
+                os.path.normcase(str(doctor.archive_root)),
+            )
+            doctor._run_stage(
+                "symlink-boundaries",
+                doctor._check_symlink_boundaries,
+            )
+            short_file = (
+                doctor._archive_root_input_absolute / "objects" / "queued.bin"
+            )
+            expected_digest = hashlib.sha256(
+                b"original-root-bytes"
+            ).hexdigest()
+            self.assertEqual(
+                doctor._sha256_file_cached(short_file),
+                expected_digest,
+            )
+
+            outside = base / "outside-root"
+            outside_file = outside / "objects" / "queued.bin"
+            outside_file.parent.mkdir(parents=True)
+            os.link(original_file, outside_file)
+            saved_root = base / "saved-original-root"
+            doctor.archive_root.rename(saved_root)
+            created = subprocess.run(
+                [
+                    "cmd",
+                    "/c",
+                    "mklink",
+                    "/J",
+                    str(doctor.archive_root),
+                    str(outside.resolve()),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if created.returncode != 0:
+                saved_root.rename(doctor.archive_root)
+                self.skipTest("Windows directory junction creation unavailable")
+            try:
+                # The alias spelling still selects only the already-proven
+                # in-memory generation; completion rejects the replaced root.
+                self.assertEqual(
+                    doctor._sha256_file_cached(short_file),
+                    expected_digest,
+                )
+                doctor._finalize_run_file_generation_snapshots()
+                self.assertIn(
+                    "doctor_cache_snapshot_unverified",
+                    {item.code for item in doctor.diagnostics},
+                )
+                self.assertNotIn(
+                    "doctor_cache_snapshot_current",
+                    {item.code for item in doctor.diagnostics},
+                )
+            finally:
+                doctor.archive_root.rmdir()
+                saved_root.rename(doctor.archive_root)
+
+    @unittest.skipUnless(os.name == "nt", "Windows root alias regression")
+    def test_third_root_spelling_cache_hit_is_unverified_after_root_swap(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            archive_root = base / "archive"
+            original_file = archive_root / "objects" / "queued.bin"
+            original_file.parent.mkdir(parents=True)
+            original_file.write_bytes(b"original-root-bytes")
+            outside = base / "outside"
+            outside_file = outside / "objects" / "queued.bin"
+            outside_file.parent.mkdir(parents=True)
+            os.link(original_file, outside_file)
+            doctor = archive_cli.Doctor(archive_root)
+            doctor._run_stage(
+                "symlink-boundaries",
+                doctor._check_symlink_boundaries,
+            )
+            input_spelling = (
+                doctor._archive_root_input_absolute
+                / "objects"
+                / "queued.bin"
+            )
+            canonical_spelling = (
+                doctor.archive_root / "objects" / "queued.bin"
+            )
+            third_spelling = Path(
+                str(doctor.archive_root).upper()
+            ) / "OBJECTS" / "QUEUED.BIN"
+            expected_digest = hashlib.sha256(
+                b"original-root-bytes"
+            ).hexdigest()
+            real_sha256_file = archive_cli.sha256_file
+            with mock.patch.object(
+                archive_cli,
+                "sha256_file",
+                wraps=real_sha256_file,
+            ) as hash_file:
+                self.assertEqual(
+                    doctor._sha256_file_cached(input_spelling),
+                    expected_digest,
+                )
+                self.assertEqual(
+                    doctor._sha256_file_cached(canonical_spelling),
+                    expected_digest,
+                )
+                self.assertEqual(
+                    doctor._sha256_file_cached(third_spelling),
+                    expected_digest,
+                )
+                self.assertEqual(hash_file.call_count, 1)
+
+                saved_root = doctor.archive_root.with_name(
+                    "saved-archive-root"
+                )
+                doctor.archive_root.rename(saved_root)
+                created = subprocess.run(
+                    [
+                        "cmd",
+                        "/c",
+                        "mklink",
+                        "/J",
+                        str(doctor.archive_root),
+                        str(outside.resolve()),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if created.returncode != 0:
+                    saved_root.rename(doctor.archive_root)
+                    self.skipTest(
+                        "Windows directory junction creation unavailable"
+                    )
+                try:
+                    # Returning already-proven cached bytes does not read the
+                    # replacement.  Completion still rejects the whole result.
+                    self.assertEqual(
+                        doctor._sha256_file_cached(third_spelling),
+                        expected_digest,
+                    )
+                    self.assertEqual(hash_file.call_count, 1)
+                    doctor._finalize_run_file_generation_snapshots()
+                    self.assertIn(
+                        "doctor_cache_snapshot_unverified",
+                        {item.code for item in doctor.diagnostics},
+                    )
+                finally:
+                    doctor.archive_root.rmdir()
+                    saved_root.rename(doctor.archive_root)
 
     @unittest.skipUnless(os.name == "nt", "Windows replacement regression")
     def test_inventory_rejects_same_path_directory_replacement(self) -> None:

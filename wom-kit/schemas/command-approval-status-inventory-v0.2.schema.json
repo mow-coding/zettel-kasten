@@ -168,11 +168,58 @@
         }
       }
     },
+    "namespacePredicateApprovalScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "predicate_ref",
+        "outside_scope_status",
+        "outside_scope_reason_code"
+      ],
+      "properties": {
+        "kind": {"const": "namespace_predicate"},
+        "predicate_ref": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "outside_scope_status": {"const": "approval_fixed_closed"},
+        "outside_scope_reason_code": {
+          "const": "compound_exact_human_approval_binding_required"
+        }
+      }
+    },
     "approvalScope": {
       "oneOf": [
         {"$ref": "#/$defs/argumentValueApprovalScope"},
         {"$ref": "#/$defs/argumentFlagApprovalScope"},
-        {"$ref": "#/$defs/argumentFlagAnyApprovalScope"}
+        {"$ref": "#/$defs/argumentFlagAnyApprovalScope"},
+        {"$ref": "#/$defs/namespacePredicateApprovalScope"}
+      ]
+    },
+    "approvalExposureHistory": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state", "successful_use_verified"],
+          "properties": {
+            "state": {"const": "history_not_audited"},
+            "successful_use_verified": {"const": false}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "state", "exposed_at_tag", "restricted_at_tag",
+            "evidence_basis", "successful_use_verified"
+          ],
+          "properties": {
+            "state": {"const": "previously_exposed_now_restricted"},
+            "exposed_at_tag": {"const": "v0.3.320"},
+            "restricted_at_tag": {"const": "v0.4.0"},
+            "evidence_basis": {"const": "public_tag_parser_and_dispatch"},
+            "successful_use_verified": {"const": false}
+          }
+        }
       ]
     },
     "commandBase": {
@@ -204,6 +251,7 @@
         "approval_reason_code": {
           "oneOf": [
             {"const": "compound_exact_human_approval_binding_required"},
+            {"const": "operation_cancel_not_supported"},
             {"type": "null"}
           ]
         },
@@ -213,6 +261,7 @@
             {"type": "null"}
           ]
         },
+        "approval_exposure_history": {"$ref": "#/$defs/approvalExposureHistory"},
         "dry_run_exposed": {"type": "boolean"},
         "invocation_surface_available": {"const": true}
       }
@@ -228,6 +277,19 @@
                 "approval_reason_code": {
                   "const": "compound_exact_human_approval_binding_required"
                 },
+                "approval_scope": {"type": "null"}
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/commandBase"},
+            {
+              "properties": {
+                "canonical_path": {"const": "operation-control"},
+                "approval_status": {"const": "approval_fixed_closed"},
+                "approval_reason_code": {"const": "operation_cancel_not_supported"},
                 "approval_scope": {"type": "null"}
               }
             }

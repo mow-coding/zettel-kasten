@@ -1767,13 +1767,18 @@ class ActivityGroupMembershipRemovalWriteTests(unittest.TestCase):
                                 blocked["lifecycle_action"],
                                 "activity_group_membership_removal_write",
                             )
+                            expected_reason = (
+                                "capability_mode_conflicting"
+                                if "--dry-run" in approval_args
+                                and "--approve" in approval_args
+                                else "compound_exact_human_approval_binding_required"
+                            )
                             self.assertEqual(
                                 blocked["reason_codes"],
-                                [
-                                    "compound_exact_human_approval_"
-                                    "binding_required"
-                                ],
+                                [expected_reason],
                             )
+                            self.assertEqual(blocked["effects_state"], "none")
+                            self.assertEqual(blocked["files_written"], [])
                             self.assertFalse(
                                 blocked["private_values_echoed"]
                             )

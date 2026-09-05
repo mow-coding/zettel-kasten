@@ -1,6 +1,8 @@
 # Runtime Canonical Entry Points
 
-Status: v0.4.18 terminal-original cleanup and claim-reference cleanup authority
+Status: v0.4.19 runtime, updater, capability, and Windows child-process truth
+
+Previous checkpoint: Status: v0.4.18 terminal-original cleanup and claim-reference cleanup authority
 
 Previous checkpoint: Status: v0.4.17 terminal-cleanup recovery and dry-run/approval parity
 
@@ -44,7 +46,24 @@ The underlying raw context packet remains available through:
 archive runtime-context <archive-root> --format json
 ```
 
-## v0.4.18 Current Runtime Delta
+## v0.4.19 Current Runtime Delta
+
+Runtime evidence now gives every check one of four states: `passed`, `failed`,
+`not_reached`, or `unavailable`. The legacy boolean projection remains for
+older readers, but agents must use the four-state `checks` map when deciding
+whether WOM actually observed a contradiction. The project updater applies
+the same rule before approval and again before mutation. Its preparation
+revalidation reports only fixed dimension names and states for Git, refs,
+pins, policy, supply, launcher, materialization, and the candidate payload; it
+does not expose compared values.
+
+Parser help, `capabilities`, Doctor suggestions, dry-run interpretation, and
+actual dispatch consume one `CapabilityAvailability` decision. A fixed-closed
+approval is therefore `writer_unavailable` before a handler or private target
+read. Noninteractive Windows child processes use the common no-console policy;
+native exact-human approval and the interactive credential route stay visible.
+
+## v0.4.18 Historical Runtime Delta
 
 Identifier-free `project-version-update --resume` now finishes one completed
 original that outlived its own cleanup after the project moved to another
@@ -287,11 +306,11 @@ archive capabilities --machine --format json
 
 Its `data.approval_status_inventory` distinguishes
 `approval_available`, `approval_fixed_closed`, and `approval_not_exposed` for
-every canonical executable command path and its aliases. The current v0.4.18
+every canonical executable command path and its aliases. The current v0.4.19
 working-tree parser reports 315 canonical executable paths, 259 alias paths,
 and 574 total invocation paths: 47 operation-specific approval routes, 67
 fixed-closed routes, and 201 routes without an approval mode. Nine paths have
-conditional approval scope, 271 expose dry-run, and zero supplied fixed-close
+conditional approval scope, 272 expose dry-run, and zero supplied fixed-close
 entries are unmatched. The generated inventory, rather than a copied
 historical number, is authoritative. The v0.4.10-v0.4.11 historical split
 remains 49 approval-available and 65 fixed-closed paths; v0.4.12 moves only
@@ -324,23 +343,23 @@ documented plans, previews, and audits remain available; a closed approval still
 `compound_exact_human_approval_binding_required`. `project-version-update`
 itself is separately reopened with an exact target/tag/source/rollback binding.
 
-When an updater bootstrap is needed and the exact public v0.4.18 GitHub Release
+When an updater bootstrap is needed and the exact public v0.4.19 GitHub Release
 wheel has been independently confirmed, use a dedicated external CPython 3.12
 environment:
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0418-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0419-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.18/wom_kit-0.4.18-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.19/wom_kit-0.4.19-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-Require exactly `archive 0.4.18` from a new process. This does not update the
+Require exactly `archive 0.4.19` from a new process. This does not update the
 project-local WOM-kit source mirror or change a project pin. Those effects
 require the separate reviewed `project-version-update` plan and native
 approval, or its authenticated same-context resume after interruption.

@@ -1,6 +1,6 @@
 # Project Version Update
 
-Status: v0.4.18 exact-human project update with recoverable terminal control history; collision and bytecode repair writers remain closed
+Status: v0.4.19 four-state preflight and field-level approved-runtime revalidation; collision and bytecode repair writers remain closed
 
 Current boundary: `project-version-update` is reopened only through the native
 exact-human approval broker. The CLI derives a content-free dry-run digest and
@@ -9,6 +9,33 @@ the preview again and authenticates the one-use claim before the existing
 locked updater may fetch or write. Direct unbound service calls fail before a
 private project read. Collision preserve-relocate and `project-bytecode-repair`
 approval remain fixed closed.
+
+## v0.4.19 Runtime And Preparation Truth
+
+Every updater preflight and approved preparation check now distinguishes four
+states: `passed`, `failed`, `not_reached`, and `unavailable`. A check that did
+not run because an earlier prerequisite stopped the plan is not reported as a
+failure. An unreadable path, Git query, policy, supply lock, runtime receipt,
+or candidate is unavailable rather than silently treated as absent or
+different. The legacy nullable/boolean fields remain for older readers, but
+the `checks` and observation states are authoritative for new decisions.
+
+Immediately before mutation, the approved update re-observes Git snapshot and
+configuration, metadata, pins, refs, target evidence, policy, supply,
+bootstrap, runtime plan, launcher, materialization, prepared candidate, and
+source branch as independent dimensions. Expected transaction changes—the
+durable reservation, update lock, private candidate, and progress output—are
+not mistaken for source drift. Confirmed drift and unavailable evidence have
+different fixed reason codes. Either stops before activation and preserves the
+previous runtime and pin.
+
+A healthy same-version runtime remains an exact no-op. A damaged same-version
+runtime remains a checkpointed atomic repair; interrupted preparation and
+resume do not replace the active runtime or pin until the verified activation
+checkpoint. Help, capabilities, dry-run interpretation, Doctor suggestions,
+and actual dispatch consume the shared `CapabilityAvailability` result, so a
+fixed-closed approval cannot look runnable in one surface and fail only after
+private work begins.
 
 ## v0.4.18 Terminal Original Cleanup Boundary
 

@@ -18,9 +18,9 @@ import re
 import stat
 import threading
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
-from . import project_update_transaction
+from . import project_update_legacy_recovery, project_update_transaction
 
 
 OPERATION_JOURNAL_SCHEMA = "wom-kit/operation-journal/v0.2"
@@ -228,6 +228,9 @@ PROJECT_UPDATE_TERMINAL_GUARD_RELATIVE = (
     ".zettel-kasten/private/version-update-terminal/.handoff.guard"
 )
 PROJECT_UPDATE_TERMINAL_CAPSULE_MAX_BYTES = 4 * 1024 * 1024
+PROJECT_UPDATE_CANCELLATION_TERMINAL_SCHEMA = (
+    project_update_legacy_recovery.CANCELLATION_TERMINAL_FINALIZATION_SCHEMA
+)
 
 
 class OperationControlError(RuntimeError):
@@ -768,6 +771,58 @@ def _safe_domain_projection(
                 for field in terminal_boolean_fields
             },
         }
+    cancellation_boolean_fields = (
+        "claim_succeeded_verified",
+        "fresh_approval_granted",
+        "domain_writer_entered",
+        "old_transaction_restored",
+        "old_lock_preserved",
+        "fresh_transaction_retired",
+        "durable_terminal_handoff_ready",
+        "durable_result_delivery_acknowledged",
+        "automatic_retry_allowed",
+        "private_paths_echoed",
+        "private_identifiers_echoed",
+    )
+    cancellation_keys = {
+        "schema",
+        "outcome",
+        *cancellation_boolean_fields,
+    }
+    if (
+        type(terminal) is dict
+        and set(terminal) == cancellation_keys
+        and terminal.get("schema")
+        == PROJECT_UPDATE_CANCELLATION_TERMINAL_SCHEMA
+        and terminal.get("outcome") == "unapproved_restored"
+        and all(
+            type(terminal.get(field)) is bool
+            for field in cancellation_boolean_fields
+        )
+        and terminal["claim_succeeded_verified"] is False
+        and terminal["fresh_approval_granted"] is False
+        and terminal["domain_writer_entered"] is False
+        and terminal["old_transaction_restored"] is True
+        and terminal["old_lock_preserved"] is True
+        and terminal["fresh_transaction_retired"] is True
+        and terminal["durable_terminal_handoff_ready"] is True
+        and terminal["durable_result_delivery_acknowledged"] is False
+        and terminal["automatic_retry_allowed"] is False
+        and terminal["private_paths_echoed"] is False
+        and terminal["private_identifiers_echoed"] is False
+        and result_ok is False
+        and status == "unapproved_restored"
+        and blocker_codes
+        == ["project_version_update_legacy_recovery_unapproved_restored"]
+    ):
+        terminal_projection = {
+            "schema": terminal["schema"],
+            "outcome": terminal["outcome"],
+            **{
+                field: terminal[field]
+                for field in cancellation_boolean_fields
+            },
+        }
     materialization_plan_sha256 = (
         materialization_plan_digests[0]
         if len(materialization_plan_digests) == 1
@@ -785,7 +840,11 @@ def _safe_domain_projection(
             or terminal_finalization_invalid
             or (
                 terminal_projection is not None
-                and terminal_projection["attention_required"] is True
+                and (
+                    terminal_projection.get("attention_required") is True
+                    or terminal_projection.get("outcome")
+                    == "unapproved_restored"
+                )
             )
         ),
         "terminal_finalization": terminal_projection,
@@ -812,6 +871,37 @@ def _canonical_document_sha256(value: Any) -> str:
     except (TypeError, ValueError, UnicodeError):
         return ""
     return "sha256:" + hashlib.sha256(raw).hexdigest()
+
+
+def _is_project_update_cancellation_terminal_domain(
+    domain: Mapping[str, Any] | None,
+) -> bool:
+    """Recognize only the safe projection of the fixed cancellation result."""
+
+    if not isinstance(domain, Mapping):
+        return False
+    terminal = domain.get("terminal_finalization")
+    return bool(
+        domain.get("command") == "project-version-update"
+        and domain.get("status") == "unapproved_restored"
+        and domain.get("completion_ok") is False
+        and domain.get("terminal_finalization_invalid") is False
+        and isinstance(terminal, Mapping)
+        and terminal.get("schema")
+        == PROJECT_UPDATE_CANCELLATION_TERMINAL_SCHEMA
+        and terminal.get("outcome") == "unapproved_restored"
+        and terminal.get("claim_succeeded_verified") is False
+        and terminal.get("fresh_approval_granted") is False
+        and terminal.get("domain_writer_entered") is False
+        and terminal.get("old_transaction_restored") is True
+        and terminal.get("old_lock_preserved") is True
+        and terminal.get("fresh_transaction_retired") is True
+        and terminal.get("durable_terminal_handoff_ready") is True
+        and terminal.get("durable_result_delivery_acknowledged") is False
+        and terminal.get("automatic_retry_allowed") is False
+        and terminal.get("private_paths_echoed") is False
+        and terminal.get("private_identifiers_echoed") is False
+    )
 
 
 def _project_update_private_file_sha256(
@@ -1067,6 +1157,15 @@ def _apply_project_update_delivery_projection(
         if type(domain) is dict
         else None
     )
+    cancellation_terminal = (
+        _is_project_update_cancellation_terminal_domain(domain)
+    )
+    successful_terminal = bool(
+        type(domain) is dict
+        and type(terminal) is dict
+        and artifact.get("result_ok") is True
+        and artifact.get("exit_code") == 0
+    )
     delivery = artifact.get("terminal_delivery")
     artifact["terminal_delivery_durability_flush_attempted"] = False
     artifact["terminal_delivery_durability_flush_verified"] = False
@@ -1076,8 +1175,12 @@ def _apply_project_update_delivery_projection(
         or type(terminal) is not dict
         or terminal.get("durable_result_delivery_acknowledged") is not False
         or artifact.get("command_result_available") is not True
-        or artifact.get("result_ok") is not True
-        or artifact.get("exit_code") != 0
+        or not (
+            successful_terminal
+            or cancellation_terminal
+            and artifact.get("result_ok") is False
+            and artifact.get("exit_code") == 1
+        )
         or type(delivery) is not dict
         or set(delivery)
         != {
@@ -1128,17 +1231,18 @@ def _apply_project_update_delivery_projection(
         return False
     projected_terminal = dict(terminal)
     projected_terminal["durable_result_delivery_acknowledged"] = True
-    projected_terminal["attention_required"] = not (
-        projected_terminal.get("transaction_cleanup_completed") is True
-        and projected_terminal.get("service_resource_close_verified")
-        is True
-        and projected_terminal.get("git_runner_close_verified") is True
-    )
     projected_domain = dict(domain)
     projected_domain["terminal_finalization"] = projected_terminal
-    projected_domain["post_update_attention_required"] = projected_terminal[
-        "attention_required"
-    ]
+    if successful_terminal:
+        projected_terminal["attention_required"] = not (
+            projected_terminal.get("transaction_cleanup_completed") is True
+            and projected_terminal.get("service_resource_close_verified")
+            is True
+            and projected_terminal.get("git_runner_close_verified") is True
+        )
+        projected_domain["post_update_attention_required"] = (
+            projected_terminal["attention_required"]
+        )
     artifact["domain"] = projected_domain
     artifact["terminal_delivery_consumed_verified"] = True
     artifact["terminal_delivery_journal_pending"] = (
@@ -2325,8 +2429,12 @@ def _pending_project_update_delivery_records(
             latest["event"] == "completed"
             and latest["terminal"] is True
             and latest["result_available"] is True
-            and latest["result_ok"] is True
-            and latest["exit_code"] == 0
+            and (
+                latest["result_ok"] is True
+                and latest["exit_code"] == 0
+                or latest["result_ok"] is False
+                and latest["exit_code"] == 1
+            )
             and latest["recovery_required"] is False
             and latest["terminal_delivery_acknowledged"] is False
         ):
@@ -2370,8 +2478,8 @@ def _project_update_delivery_candidate(
             command="project-version-update",
             expected_sha256=str(latest["result_sha256"]),
             expected_bytes=int(latest["result_bytes"]),
-            expected_exit_code=0,
-            expected_result_ok=True,
+            expected_exit_code=int(latest["exit_code"]),
+            expected_result_ok=bool(latest["result_ok"]),
             _include_private=True,
         )
     except OperationControlError:
@@ -2385,11 +2493,21 @@ def _project_update_delivery_candidate(
         else None
     )
     delivery = artifact.get("terminal_delivery")
+    successful_terminal = bool(
+        type(terminal) is dict
+        and terminal.get("transaction_cleanup_completed") is True
+        and terminal.get("durable_terminal_handoff_ready") is True
+        and terminal.get("durable_result_delivery_acknowledged") is False
+        and artifact.get("result_ok") is True
+        and artifact.get("exit_code") == 0
+    )
+    cancellation_terminal = bool(
+        _is_project_update_cancellation_terminal_domain(domain)
+        and artifact.get("result_ok") is False
+        and artifact.get("exit_code") == 1
+    )
     if (
-        type(terminal) is not dict
-        or terminal.get("transaction_cleanup_completed") is not True
-        or terminal.get("durable_terminal_handoff_ready") is not True
-        or terminal.get("durable_result_delivery_acknowledged") is not False
+        not (successful_terminal or cancellation_terminal)
         or artifact.get("command_result_available") is not True
         or type(delivery) is not dict
     ):

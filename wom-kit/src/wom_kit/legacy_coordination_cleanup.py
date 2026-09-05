@@ -40,6 +40,7 @@ from .legacy_cleanup_bound_delete import (
     _delete_exact_approved_empty_directory,
     _delete_exact_approved_file,
 )
+from .process_launch import noninteractive_creationflags
 
 
 DEFAULT_LEGACY_COORDINATION_CLEANUP_MAX_FILES = 10_000
@@ -1001,6 +1002,7 @@ def _git_tracking_blockers(workspace_root: Path, target_present: bool) -> list[s
                 env=environment,
                 timeout=10,
                 check=False,
+                creationflags=noninteractive_creationflags(),
             )
             top_level = subprocess.run(
                 [
@@ -1016,6 +1018,7 @@ def _git_tracking_blockers(workspace_root: Path, target_present: bool) -> list[s
                 env=environment,
                 timeout=10,
                 check=False,
+                creationflags=noninteractive_creationflags(),
             )
         except (OSError, subprocess.SubprocessError):
             return ["git_tracking_check_failed"]
@@ -1056,6 +1059,7 @@ def _git_tracking_blockers(workspace_root: Path, target_present: bool) -> list[s
                 env=environment,
                 timeout=10,
                 check=False,
+                creationflags=noninteractive_creationflags(),
             )
         except (OSError, subprocess.SubprocessError):
             return ["git_tracking_check_failed"]

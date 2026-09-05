@@ -34,10 +34,9 @@ from typing import Any
 
 import yaml
 
-try:  # Keep normalization aligned with the project-pinned Unicode database.
-    import unicodedata2 as unicodedata
-except ImportError:  # pragma: no cover - packaging declares unicodedata2.
-    import unicodedata
+from ._unicode_runtime import load_unicode
+
+unicodedata = load_unicode()
 
 
 LOCAL_CATALOG_RELATIVE = "profiles/local/credential-refs.local.yml"

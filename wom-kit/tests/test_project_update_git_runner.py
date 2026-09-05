@@ -145,6 +145,7 @@ class TrustedProjectUpdateGitRunnerTests(unittest.TestCase):
             ["hash-object", "--no-filters", "--", "wom-kit/src/example.py"],
             ["describe", "--tags", "--exact-match", "HEAD"],
             ["tag", "--list", "v*"],
+            ["tag", "--points-at", "HEAD"],
             ["show", "-s", "--format=%s", "HEAD"],
             ["read-tree", "a" * 40],
             ["update-ref", "--no-deref", "HEAD", "a" * 40],

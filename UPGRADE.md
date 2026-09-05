@@ -24,6 +24,49 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.4.19 Runtime And Capability Truth
+
+Install the exact public wheel only after the matching release and asset exist.
+Use a new external CPython 3.12 environment so the real `python.exe -m pip`
+records the wheel hash in installed PEP 610 metadata.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0419-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.19/wom_kit-0.4.19-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+Require exactly `archive 0.4.19` from a new process. Publishing or installing
+the wheel changes no client archive, project runtime, or version pin. A client
+separately chooses and approves any project update.
+
+Before approval, inspect the fresh dry-run. Runtime integrity now reports a
+state for each check. `not_reached` means WOM did not perform that check because
+an earlier prerequisite stopped it; `unavailable` means the attempted check
+could not obtain trustworthy evidence. Neither is an observed mismatch.
+
+Project-update preparation now lists only the names of failed or unavailable
+dimensions under `runtime_preparation_revalidation`. It never returns their
+private compared values. If any dimension is not `passed`, preserve the result
+and stop rather than deleting a runtime, pin, lock, or transaction directory.
+An exact healthy same-version runtime remains a no-op; a damaged same-version
+runtime follows the existing atomic repair and resume contract.
+
+A command marked `writer_unavailable` is closed before its handler or private
+target access. Do not try a different spelling to bypass it. Noninteractive
+Windows helper processes now run without a transient console, while native
+approval and credential interaction remain visible.
+
+After one reviewed project update, start the project launcher in a new process
+and verify its pin, source, launcher, and runtime evidence. Only that client-run
+result can show that the project was repaired.
+
 ## v0.4.18 Terminal Original Cleanup
 
 Install the exact public wheel only after the matching release and asset exist.

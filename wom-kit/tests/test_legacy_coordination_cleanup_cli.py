@@ -187,25 +187,25 @@ class LegacyCoordinationCleanupCliTests(unittest.TestCase):
             )
 
         self.assertEqual(code, 1, output)
+        blocked = json.loads(output)
+        self.assertEqual(blocked["schema"], "wom-kit/cli-error/v0.1")
+        self.assertFalse(blocked["ok"])
+        self.assertEqual(blocked["state"], "blocked")
+        self.assertEqual(blocked["status_class"], "blocked")
+        self.assertEqual(blocked["command"], "legacy-coordination-cleanup")
+        self.assertEqual(blocked["canonical_command_path"], "legacy-coordination-cleanup")
+        self.assertEqual(blocked["error_class"], "policy")
+        self.assertEqual(blocked["effects_state"], "none")
+        self.assertEqual(blocked["exit_code"], 1)
+        self.assertEqual(blocked["lifecycle_action"], "legacy_coordination_cleanup")
         self.assertEqual(
-            json.loads(output),
-            {
-                "schema": "wom-kit/cli-error/v0.1",
-                "ok": False,
-                "state": "blocked",
-                "command": "legacy-coordination-cleanup",
-                "error_class": "policy",
-                "status_class": "blocked",
-                "effects_state": "none",
-                "exit_code": 1,
-                "lifecycle_action": "legacy_coordination_cleanup",
-                "reason_codes": [
-                    "compound_exact_human_approval_binding_required"
-                ],
-                "files_written": [],
-                "private_values_echoed": False,
-            },
+            blocked["reason_codes"],
+            ["compound_exact_human_approval_binding_required"],
         )
+        self.assertEqual(blocked["files_written"], [])
+        self.assertFalse(blocked["private_values_echoed"])
+        self.assertEqual(blocked["capability_state"], "writer_unavailable")
+        self.assertFalse(blocked["capability_availability"]["available"])
         apply.assert_not_called()
         plan.assert_not_called()
 

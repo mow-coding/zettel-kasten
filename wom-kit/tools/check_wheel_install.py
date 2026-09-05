@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -24,6 +25,20 @@ import zipfile
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
 SYNC_TOOL = KIT_ROOT / "tools" / "sync_package_resources.py"
+RUNTIME_JOURNEY_TOOL = KIT_ROOT / "tools" / "check_project_runtime_wheel_journey.py"
+INSTALLED_V0419_RUNTIME_SCHEMA = "wom-kit/installed-v0419-runtime-journey/v0.1"
+RUNTIME_PHASE_SCHEMA = "wom-kit/installed-runtime-phase-event/v0.1"
+RUNTIME_PHASE_PREFIX = b"WOM_RUNTIME_PHASE_V1 "
+RUNTIME_PHASES = (
+    "bootstrap_import", "synthetic_project", "initial_update", "healthy_noop",
+    "next_preview", "source_drift", "ref_drift", "repair_preimage",
+    "repair_prepare_to_cut", "repair_cut_validation", "repair_fresh_resume",
+    "repair_result_validation", "repair_independent_noop", "terminal_control_check",
+    "runtime_process_origin", "project_launcher_version", "doctor_startup", "final_claim_check",
+)
+RUNTIME_PHASE_LIMIT_MS = 1_200_000
+RUNTIME_PHASE_LINE_BYTES = 512
+RUNTIME_PHASE_STREAM_BYTES = 32 * 1024
 RESOURCE_PREFIX = "wom_kit/_resources/"
 RESOURCE_MANIFEST_MEMBER = f"{RESOURCE_PREFIX}resource-manifest.json"
 RESOURCE_PACKAGE_INIT_MEMBER = f"{RESOURCE_PREFIX}__init__.py"
@@ -3123,6 +3138,186 @@ class WheelCheckError(RuntimeError):
     pass
 
 
+class RuntimePhaseObservation:
+    """Keep a bounded, validated prefix, never raw child diagnostic material.
+
+    A timed-out active stage is a *harness* failure with product completion
+    unknown. Neither these timings nor a passed phase replace final gate proof.
+    Parsing happens as bytes arrive, including before the child/pipe exits.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._buffer = b""
+        self._total = 0
+        self._events = 0
+        self._last_ms = 0
+        self._index = 0
+        self._active: str | None = None
+        self._explicit_failure = False
+        self._invalid = False
+        self._timeout = False
+        self._frozen = False
+        self._success = False
+        self._rows = [{"stage": stage, "state": "not_reached", "started_at_ms": None,
+                       "completed_at_ms": None, "duration_ms": None} for stage in RUNTIME_PHASES]
+
+    @staticmethod
+    def _strict_object(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError("duplicate_field")
+            value[key] = item
+        return value
+
+    def _line(self, line: bytes) -> None:
+        if len(line) > RUNTIME_PHASE_LINE_BYTES or not line.startswith(RUNTIME_PHASE_PREFIX):
+            raise ValueError("invalid_phase_line")
+        item = json.loads(line[len(RUNTIME_PHASE_PREFIX):].decode("ascii"),
+                          object_pairs_hook=self._strict_object)
+        if (not isinstance(item, dict)
+                or set(item) != {"schema", "sequence", "stage", "event", "elapsed_ms"}
+                or item["schema"] != RUNTIME_PHASE_SCHEMA
+                or type(item["sequence"]) is not int or item["sequence"] != self._events + 1
+                or type(item["elapsed_ms"]) is not int
+                or not self._last_ms <= item["elapsed_ms"] <= RUNTIME_PHASE_LIMIT_MS
+                or self._events >= len(RUNTIME_PHASES) * 2 or self._explicit_failure
+                or self._index >= len(RUNTIME_PHASES)
+                or item["stage"] != RUNTIME_PHASES[self._index]):
+            raise ValueError("invalid_phase_event")
+        event = item["event"]
+        row = self._rows[self._index]
+        if event == "begin" and self._active is None:
+            self._active = item["stage"]
+            row["started_at_ms"] = item["elapsed_ms"]
+        elif event in ("passed", "failed") and self._active == item["stage"]:
+            row.update(state=event, completed_at_ms=item["elapsed_ms"],
+                       duration_ms=item["elapsed_ms"] - row["started_at_ms"])
+            self._explicit_failure = event == "failed"
+            self._active = None
+            self._index += 1
+        else:
+            raise ValueError("invalid_phase_sequence")
+        self._events += 1
+        self._last_ms = item["elapsed_ms"]
+
+    def feed(self, chunk: bytes) -> None:
+        with self._lock:
+            if self._frozen:
+                return
+            if self._invalid:
+                raise WheelCheckError("Installed runtime phase protocol is invalid.")
+            # Parse valid complete lines before rejecting an over-budget tail.
+            remaining = max(0, RUNTIME_PHASE_STREAM_BYTES - self._total)
+            accepted = chunk[:remaining]
+            self._total += len(accepted)
+            self._buffer += accepted
+            try:
+                while b"\n" in self._buffer:
+                    line, self._buffer = self._buffer.split(b"\n", 1)
+                    self._line(line)
+                if len(chunk) > remaining or len(self._buffer) > RUNTIME_PHASE_LINE_BYTES:
+                    raise ValueError("phase_bound_exceeded")
+            except (ValueError, TypeError, KeyError, UnicodeError):
+                self._invalid = True
+                self._buffer = b""
+                raise WheelCheckError("Installed runtime phase protocol is invalid.") from None
+
+    def end_stream(self) -> None:
+        with self._lock:
+            if not self._frozen and self._buffer:
+                self._invalid = True
+                self._buffer = b""
+
+    def mark_timeout(self) -> None:
+        with self._lock:
+            self._timeout = True
+
+    def require_complete(self) -> None:
+        with self._lock:
+            if (self._invalid or self._buffer or self._timeout or self._explicit_failure
+                    or self._active is not None or self._index != len(RUNTIME_PHASES)):
+                raise WheelCheckError("Installed runtime phase observations are incomplete or invalid.")
+
+    def finish(self, *, success: bool) -> None:
+        with self._lock:
+            # Freeze after containment closes; a late reader cannot revise proof.
+            if self._buffer:
+                self._invalid = True
+                self._buffer = b""
+            self._success = (success is True and not self._invalid and not self._timeout
+                             and not self._explicit_failure and self._index == len(RUNTIME_PHASES))
+            self._frozen = True
+
+    def public_payload(self) -> dict[str, Any]:
+        with self._lock:
+            if not self._frozen:
+                raise WheelCheckError("Installed runtime phase observations are not final.")
+            rows = [dict(row) for row in self._rows]
+            if self._active is not None:
+                # The finish time is not known: never invent a duration at timeout.
+                rows[self._index]["state"] = "failed"
+            reason = ("harness_timeout" if self._timeout else "protocol_invalid" if self._invalid
+                      else "none" if self._success else "harness_failed")
+            return {
+                "schema": "wom-kit/installed-runtime-phase-observation/v0.1",
+                "scope": "synthetic_harness_only", "product_recovery_evidence": False,
+                "product_completion_unknown": not self._success,
+                "observation_status": "complete" if self._success else "incomplete",
+                "reason_code": reason, "protocol_invalid": self._invalid,
+                "execution_limit_ms": RUNTIME_PHASE_LIMIT_MS, "validated_event_count": self._events,
+                "unfinished_stage": self._active,
+                "last_completed_stage": next((row["stage"] for row in reversed(rows)
+                                               if row["state"] == "passed"), None),
+                "stages": rows,
+            }
+
+
+class WheelPartialEvidence:
+    """Retain only independently validated, content-free completed proof."""
+
+    def __init__(self) -> None:
+        self._runtime: dict[str, Any] | None = None
+        self._phases: dict[str, Any] | None = None
+        self._runtime_failure: dict[str, Any] | None = None
+
+    def record_runtime_failure(self, value: dict[str, Any]) -> None:
+        if type(value) is not dict:
+            raise WheelCheckError("Installed runtime failure observation has invalid type.")
+        self._runtime_failure = _parse_runtime_failure_output(json.dumps(value, allow_nan=False))
+
+    def record_phases(self, observation: RuntimePhaseObservation) -> None:
+        # Do not accept arbitrary mappings, subclasses, or raw event payloads.
+        if type(observation) is not RuntimePhaseObservation:
+            raise WheelCheckError("Partial runtime phase observation has invalid type.")
+        self._phases = observation.public_payload()
+
+    def record_runtime(self, evidence: dict[str, Any]) -> None:
+        if evidence == {"state": "not_applicable", "reason_code": "windows_cpython312_runtime_required"}:
+            return
+        version = evidence.get("package_version")
+        wheel_hash = evidence.get("wheel_sha256")
+        if (
+            not isinstance(version, str) or re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version) is None
+            or not isinstance(wheel_hash, str) or SHA256_RE.fullmatch(wheel_hash) is None
+        ):
+            raise WheelCheckError("Partial runtime evidence has invalid public bindings.")
+        _validate_v0419_runtime_evidence(evidence, expected_version=version, expected_wheel_hash=wheel_hash)
+        # Do not retain a mutable caller-owned mapping or arbitrary extensions.
+        self._runtime = json.loads(json.dumps(evidence))
+
+    def public_payload(self) -> dict[str, Any]:
+        result = {}
+        if self._runtime is not None:
+            result["installed_v0419_runtime_journey"] = self._runtime
+        if self._phases is not None:
+            result["installed_runtime_harness_observation"] = self._phases
+        if self._runtime_failure is not None:
+            result["installed_runtime_failure_observation"] = self._runtime_failure
+        return json.loads(json.dumps(result))
+
+
 def run(
     command: list[str],
     *,
@@ -3743,8 +3938,13 @@ def _run_installed_entrypoint(
     cwd: Path,
     label: str,
     input_text: str | None = None,
+    timeout_seconds: float | None = None,
+    stderr_observer: RuntimePhaseObservation | None = None,
+    nonzero_stdout_observer=None,
 ) -> str:
-    deadline = time.monotonic() + ENTRYPOINT_TIMEOUT_SECONDS
+    deadline = time.monotonic() + (
+        ENTRYPOINT_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
+    )
     environment = dict(os.environ)
     environment["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
     environment.pop("PYTHONHOME", None)
@@ -3780,6 +3980,8 @@ def _run_installed_entrypoint(
             **process_options,
         )
     except OSError as exc:
+        if stderr_observer is not None:
+            raise WheelCheckError("Installed runtime journey process could not start.") from None
         raise WheelCheckError(f"{label} could not complete: {exc}.") from exc
     windows_job = _assign_windows_kill_on_close_job(process)
     if os.name == "nt" and windows_job is None:
@@ -3830,9 +4032,13 @@ def _run_installed_entrypoint(
         total = 0
         try:
             while True:
-                chunk = stream.read(ENTRYPOINT_READ_CHUNK_BYTES)
+                # read1 exposes short progress lines before EOF/full-buffer fill.
+                reader = stream.read1 if name == "stderr" and stderr_observer is not None else stream.read
+                chunk = reader(ENTRYPOINT_READ_CHUNK_BYTES)
                 if not chunk:
                     break
+                if name == "stderr" and stderr_observer is not None:
+                    stderr_observer.feed(chunk)
                 remaining = ENTRYPOINT_OUTPUT_LIMIT_BYTES - total
                 if len(chunk) > remaining:
                     if remaining > 0:
@@ -3937,7 +4143,11 @@ def _run_installed_entrypoint(
         _terminate_installed_process_tree(process)
 
     if timed_out or readers_still_running:
+        if stderr_observer is not None:
+            stderr_observer.mark_timeout()
         raise WheelCheckError(f"{label} exceeded the execution timeout.")
+    if stderr_observer is not None:
+        stderr_observer.end_stream()
     if os.name == "nt" and not windows_job_closed:
         raise WheelCheckError(
             f"{label} descendant containment could not close safely."
@@ -3977,10 +4187,14 @@ def _run_installed_entrypoint(
             f"{label} output was not valid UTF-8."
         ) from exc
     if returncode != 0:
+        if nonzero_stdout_observer is not None:
+            # Runtime-only hook sees bounded output only after containment,
+            # timeout, reader and UTF-8 checks. It cannot accept a nonzero exit.
+            nonzero_stdout_observer(stdout)
         raise WheelCheckError(
             f"{label} failed with a nonzero exit status."
         )
-    if stderr != "":
+    if stderr != "" and stderr_observer is None:
         raise WheelCheckError(f"{label} wrote to stderr.")
     return stdout
 
@@ -4589,6 +4803,7 @@ def _wheel_install_success_result(
     wheel_filename: str,
     wheel_sha256: str,
     artifact_preserved: bool,
+    v0419_runtime_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Assemble the versioned public success contract in one tested boundary."""
 
@@ -4604,6 +4819,8 @@ def _wheel_install_success_result(
         "installed_v0410_batch_workflow": v0410_batch_workflow_evidence,
         "installed_v0411_truth_contracts": v0411_truth_evidence,
         "installed_v0414_recovery_contracts": v0414_recovery_evidence,
+        **({"installed_v0419_runtime_journey": v0419_runtime_evidence}
+           if v0419_runtime_evidence is not None else {}),
         "runtime_skill_lifecycle": "passed",
         "onboarding_preview": "passed",
         "onboarding_write": "fixed_closed",
@@ -4615,6 +4832,154 @@ def _wheel_install_success_result(
         "wheel_sha256": wheel_sha256,
         "wheel_artifact_preserved": artifact_preserved,
         "temporary_environment_removed_on_exit": True,
+    }
+
+
+_RUNTIME_FAILURE_CONTRACT = None
+
+
+def _parse_runtime_failure_output(stdout: str) -> dict[str, Any]:
+    """Shared stdlib-only contract; never import product code into the parent."""
+    global _RUNTIME_FAILURE_CONTRACT
+    result = None
+    try:
+        if _RUNTIME_FAILURE_CONTRACT is None:
+            spec = importlib.util.spec_from_file_location("wom_installed_failure_contract", RUNTIME_JOURNEY_TOOL)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            _RUNTIME_FAILURE_CONTRACT = module
+        result = _RUNTIME_FAILURE_CONTRACT.parse_failure_output(stdout)
+    except Exception:
+        pass
+    if result is None:
+        raise WheelCheckError("Installed runtime failure observation is invalid.")
+    return result
+
+
+def _check_installed_v0419_runtime_journey(
+    python: Path, wheel: Path, source_copy: Path, fixture_root: Path, *,
+    cwd: Path, expected_package_version: str,
+    partial_evidence: WheelPartialEvidence | None = None,
+) -> dict[str, Any]:
+    """Exercise the actual candidate wheel through the project-local runtime.
+
+    The Windows runtime is deliberately not emulated on the Ubuntu lanes.
+    Existing bounded process-tree containment is retained for this longer test.
+    Product CLI progress stays private. A separate strict harness-only stderr
+    stream survives a timeout as partial observations, never as final proof.
+    """
+    if os.name != "nt" or sys.version_info[:2] != (3, 12):
+        return {"state": "not_applicable", "reason_code": "windows_cpython312_runtime_required"}
+    stopped = threading.Event()
+
+    def heartbeat() -> None:
+        while not stopped.wait(10):
+            print("Installed project runtime journey: still verifying real wheel/CLI/runtime.", file=sys.stderr, flush=True)
+
+    print("Installed project runtime journey: starting real wheel/CLI/runtime verification.", file=sys.stderr, flush=True)
+    worker = threading.Thread(target=heartbeat, daemon=True)
+    worker.start()
+    observation = RuntimePhaseObservation()
+    succeeded = False
+    def observe_nonzero(stdout):
+        failure = _parse_runtime_failure_output(stdout)
+        if partial_evidence is not None:
+            partial_evidence.record_runtime_failure(failure)
+
+    try:
+        stdout = _run_installed_entrypoint(
+            [str(python), "-I", "-B", str(RUNTIME_JOURNEY_TOOL), str(wheel),
+             str(source_copy), str(KIT_ROOT.parent / "wom_kit" / "__init__.py"),
+             str(fixture_root), expected_package_version],
+            cwd=cwd, label="installed v0.4.19 real runtime journey", timeout_seconds=1200,
+            stderr_observer=observation,
+            nonzero_stdout_observer=observe_nonzero,
+        )
+        evidence = _parse_entrypoint_json_object(stdout, label="installed runtime journey")
+        try:
+            expected_wheel_hash = hashlib.sha256(wheel.read_bytes()).hexdigest()
+        except OSError:
+            raise WheelCheckError("Installed runtime journey wheel evidence could not be read.") from None
+        _validate_v0419_runtime_evidence(
+            evidence, expected_version=expected_package_version,
+            expected_wheel_hash=expected_wheel_hash,
+        )
+        observation.require_complete()
+        succeeded = True
+        return evidence
+    finally:
+        stopped.set()
+        worker.join(timeout=1)
+        observation.finish(success=succeeded)
+        if partial_evidence is not None:
+            partial_evidence.record_phases(observation)
+
+
+def _validate_v0419_runtime_evidence(
+    evidence: dict[str, Any], *, expected_version: str, expected_wheel_hash: str,
+) -> None:
+    expected_true = {
+        "ok", "candidate_wheel_not_public_release_proof", "isolated_bootstrap_origins",
+        "isolated_runtime_origins", "real_locked_dependencies", "real_public_cli_broker_writer",
+        "update_then_noop_then_preview", "no_candidate_download_or_approval_on_noop",
+        "pin_launcher_domain_receipts_unchanged_on_noop", "no_active_update_residue",
+        "new_process_launcher_version",
+        "public_launcher_doctor_startup_verified",
+        "real_source_and_ref_drift_blocked_before_approval",
+        "real_candidate_repair_and_process_loss_resume",
+        "pre_switch_damaged_preimage_and_active_pin_preserved",
+        "same_approval_identifier_free_resume_without_rebuild",
+        "repaired_runtime_independently_reverified",
+    }
+    seconds = evidence.get("seconds")
+    expected_seconds = {"bootstrap_import", "update", "noop", "fresh_runtime_import", "project_launcher_version",
+                        "doctor_first_status", "doctor_maximum_progress_gap", "doctor_terminal",
+                        "source_drift", "ref_drift", "repair_until_interruption", "repair_fresh_resume", "repair_independent_noop"}
+    if (
+        evidence.get("schema") != INSTALLED_V0419_RUNTIME_SCHEMA
+        or evidence.get("package_version") != expected_version
+        or evidence.get("wheel_sha256") != expected_wheel_hash
+        or any(evidence.get(key) is not True for key in expected_true)
+        or evidence.get("private_values_echoed") is not False
+        or not isinstance(seconds, dict) or set(seconds) != expected_seconds
+        or any(type(value) not in {int, float} or not 0 <= value <= 1200 for value in seconds.values())
+        or seconds.get("doctor_first_status", 3) > 2 or seconds.get("doctor_maximum_progress_gap", 11) > 10
+        or type(evidence.get("doctor_startup_status_event_count")) is not int
+        or evidence["doctor_startup_status_event_count"] < 1
+        or set(evidence) != expected_true | {"schema", "package_version", "wheel_sha256", "private_values_echoed", "seconds", "doctor_startup_status_event_count"}
+    ):
+        reason = evidence.get("reason_code")
+        safe_reasons = {
+            "public_update_failed", "public_noop_failed", "noop_blocks_next_command",
+            "bootstrap_wheel_hash_mismatch", "runtime_origin_or_version_mismatch",
+            "installed_runtime_journey_failed",
+        }
+        suffix = f" ({reason})" if isinstance(reason, str) and reason in safe_reasons else ""
+        raise WheelCheckError("Installed v0.4.19 runtime journey did not prove the complete contract" + suffix + ".")
+
+
+def _expected_fixed_closed_writer_result(command: str) -> dict[str, Any]:
+    """Exact v0.4.19 dispatch contract, including the shared availability gate."""
+    if command not in {"runtime-skill-install", "runtime-skill-uninstall", "onboard"}:
+        raise WheelCheckError("Unexpected fixed-closed smoke command.")
+    detail = "compound_exact_human_approval_binding_required"
+    return {
+        "schema": "wom-kit/cli-error/v0.1", "ok": False, "state": "blocked",
+        "status_class": "blocked", "capability_state": "writer_unavailable",
+        "command": command, "canonical_command_path": command,
+        "lifecycle_action": command.replace("-", "_"), "error_class": "policy",
+        "reason_codes": [detail], "capability_reason_codes": ["writer_unavailable", detail],
+        "capability_availability": {
+            "schema": "wom-kit/capability-availability/v0.1", "canonical_path": command,
+            "requested_mode": "approve", "state": "writer_unavailable", "available": False,
+            "reason_code": "writer_unavailable", "detail_reason_code": detail,
+            "approval_status": "approval_fixed_closed",
+            "approval_exposure_history": {"state": "history_not_audited", "successful_use_verified": False},
+            "dry_run_exposed": True, "parser_derived": True, "argument_scope_evaluated": True,
+            "prerequisites_evaluated": False, "private_values_echoed": False,
+            "external_effects_performed": False,
+        },
+        "exit_code": 1, "effects_state": "none", "files_written": [], "private_values_echoed": False,
     }
 
 
@@ -4965,7 +5330,9 @@ def _check_installed_v0414_recovery_contracts(
     return evidence
 
 
-def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
+def check_wheel(
+    output_dir: Path | None = None, *, partial_evidence: WheelPartialEvidence | None = None,
+) -> dict[str, Any]:
     run(
         [sys.executable, str(SYNC_TOOL), "--check"],
         cwd=KIT_ROOT,
@@ -5020,6 +5387,13 @@ def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
                 cwd=temp_root,
             )
         )
+        v0419_runtime_evidence = _check_installed_v0419_runtime_journey(
+            python, wheel, source_copy, temp_root / "v0419-runtime-journey",
+            cwd=temp_root, expected_package_version=package_version,
+            partial_evidence=partial_evidence,
+        )
+        if partial_evidence is not None:
+            partial_evidence.record_runtime(v0419_runtime_evidence)
 
         skills_root = temp_root / "host-skills"
         skill_target = skills_root / "wom-archive"
@@ -5077,22 +5451,9 @@ def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
             expected_returncode=1,
             require_empty_stderr=True,
         )
-        if blocked_skill_install != {
-            "schema": "wom-kit/cli-error/v0.1",
-            "ok": False,
-            "state": "blocked",
-            "status_class": "blocked",
-            "command": "runtime-skill-install",
-            "lifecycle_action": "runtime_skill_install",
-            "error_class": "policy",
-            "reason_codes": [
-                "compound_exact_human_approval_binding_required"
-            ],
-            "exit_code": 1,
-            "effects_state": "none",
-            "files_written": [],
-            "private_values_echoed": False,
-        } or skills_root.exists() or skill_target.exists():
+        if blocked_skill_install != _expected_fixed_closed_writer_result(
+            "runtime-skill-install"
+        ) or skills_root.exists() or skill_target.exists():
             raise WheelCheckError(
                 "Installed runtime skill write was not fixed-closed without effects."
             )
@@ -5143,22 +5504,9 @@ def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
             expected_returncode=1,
             require_empty_stderr=True,
         )
-        if blocked_skill_uninstall != {
-            "schema": "wom-kit/cli-error/v0.1",
-            "ok": False,
-            "state": "blocked",
-            "status_class": "blocked",
-            "command": "runtime-skill-uninstall",
-            "lifecycle_action": "runtime_skill_uninstall",
-            "error_class": "policy",
-            "reason_codes": [
-                "compound_exact_human_approval_binding_required"
-            ],
-            "exit_code": 1,
-            "effects_state": "none",
-            "files_written": [],
-            "private_values_echoed": False,
-        } or skills_root.exists() or skill_target.exists():
+        if blocked_skill_uninstall != _expected_fixed_closed_writer_result(
+            "runtime-skill-uninstall"
+        ) or skills_root.exists() or skill_target.exists():
             raise WheelCheckError(
                 "Installed runtime skill uninstall was not fixed-closed without effects."
             )
@@ -5195,22 +5543,7 @@ def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
             expected_returncode=1,
             require_empty_stderr=True,
         )
-        if blocked_write != {
-            "schema": "wom-kit/cli-error/v0.1",
-            "ok": False,
-            "state": "blocked",
-            "status_class": "blocked",
-            "command": "onboard",
-            "lifecycle_action": "onboard",
-            "error_class": "policy",
-            "reason_codes": [
-                "compound_exact_human_approval_binding_required"
-            ],
-            "exit_code": 1,
-            "effects_state": "none",
-            "files_written": [],
-            "private_values_echoed": False,
-        } or target.exists():
+        if blocked_write != _expected_fixed_closed_writer_result("onboard") or target.exists():
             raise WheelCheckError(
                 "Installed onboarding write was not fixed-closed without effects."
             )
@@ -5309,6 +5642,7 @@ def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
             wheel_filename=wheel.name,
             wheel_sha256=wheel_sha256,
             artifact_preserved=artifact_preserved,
+            v0419_runtime_evidence=v0419_runtime_evidence,
         )
 
 
@@ -5325,8 +5659,9 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    partial_evidence = WheelPartialEvidence()
     try:
-        result = check_wheel(args.wheel_output_dir)
+        result = check_wheel(args.wheel_output_dir, partial_evidence=partial_evidence)
     except (OSError, WheelCheckError, subprocess.SubprocessError) as exc:
         if args.format == "json":
             print(
@@ -5335,6 +5670,8 @@ def main() -> int:
                         "ok": False,
                         "schema": WHEEL_INSTALL_CHECK_SCHEMA,
                         "error": str(exc),
+                        **({"partial_evidence": partial_evidence.public_payload()}
+                           if partial_evidence.public_payload() else {}),
                     },
                     indent=2,
                 )

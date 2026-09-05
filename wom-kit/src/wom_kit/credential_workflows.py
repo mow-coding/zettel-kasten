@@ -91,6 +91,7 @@ from .notion_page_recovery import (
     parse_manifest,
     plan_recovery,
 )
+from . import process_launch
 
 
 WORKFLOW_PLAN_SCHEMA_VERSION = "wom-credential-workflow-plan/v0.2"
@@ -1706,7 +1707,9 @@ class _SpawnCredentialAdoptionWorkerSpawner:
                     ):
                         try:
                             start_invoked = True
-                            process.start()
+                            process_launch.start_multiprocessing_process_no_console(
+                                process
+                            )
                         except BaseException:
                             # CPython's Windows spawn can create/inherit the
                             # child pipe before Process.start publishes public
@@ -3082,7 +3085,7 @@ class _SpawnNotionRecoveryWorkerSpawner:
                 args=(send_connection, invocation),
                 daemon=False,
             )
-            process.start()
+            process_launch.start_multiprocessing_process_no_console(process)
             worker_started = True
             send_connection.close()
             try:

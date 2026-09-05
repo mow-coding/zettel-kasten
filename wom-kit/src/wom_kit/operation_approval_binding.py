@@ -170,6 +170,16 @@ _PROJECT_UPDATE_APPROVAL_PREPARATION_KEYS = frozenset(
         "static_receipt",
     }
 )
+_PROJECT_UPDATE_LEGACY_RECOVERY_KEYS = frozenset(
+    {
+        "schema",
+        "old_abandonment_sha256",
+        "prospective_fresh_plan_sha256",
+        "single_composite_approval",
+        "old_claim_reused",
+        "old_transaction_mutated",
+    }
+)
 _PROJECT_UPDATE_TRANSACTION_KEYS = frozenset(
     {
         "schema",
@@ -1318,6 +1328,16 @@ def project_version_update_approval_binding(
         set(runtime_candidate) == _RUNTIME_CANDIDATE_KEYS
     )
     static_receipt = _plain_mapping(preparation.get("static_receipt"))
+    legacy_recovery = _plain_mapping(
+        preparation.get("legacy_prewrite_recovery", {})
+    )
+    composite_legacy_recovery = bool(legacy_recovery)
+    expected_preparation_keys = (
+        _PROJECT_UPDATE_APPROVAL_PREPARATION_KEYS
+        | {"legacy_prewrite_recovery"}
+        if composite_legacy_recovery
+        else _PROJECT_UPDATE_APPROVAL_PREPARATION_KEYS
+    )
     write_boundary = _plain_mapping(plan.get("write_boundary"))
     target_tag = target_plan.get("tag")
     target_version = target_plan.get("version")
@@ -1357,7 +1377,7 @@ def project_version_update_approval_binding(
         or write_boundary.get("project_update_postapproval_local_git_allowed")
         is not True
         or write_boundary.get("postapproval_git_transport_allowed") is not False
-        or set(preparation) != _PROJECT_UPDATE_APPROVAL_PREPARATION_KEYS
+        or set(preparation) != expected_preparation_keys
         or preparation.get("lock_held") is not True
         or preparation.get("network_complete") is not True
         or preparation.get("post_approval_network_allowed") is not False
@@ -1428,8 +1448,35 @@ def project_version_update_approval_binding(
                 "static_receipt_domain_target_binding_sha256",
             )
         )
-        or transaction.get("lock_backlinked") is not True
+        or transaction.get("lock_backlinked")
+        is not (not composite_legacy_recovery)
         or transaction.get("directory_fsync_required") is not True
+        or (
+            composite_legacy_recovery
+            and (
+                set(legacy_recovery)
+                != _PROJECT_UPDATE_LEGACY_RECOVERY_KEYS
+                or legacy_recovery.get("schema")
+                != (
+                    "wom-kit/project-update-legacy-prewrite-approval/"
+                    "v0.4.19"
+                )
+                or any(
+                    re.fullmatch(
+                        r"sha256:[0-9a-f]{64}",
+                        str(legacy_recovery.get(key) or ""),
+                    )
+                    is None
+                    for key in (
+                        "old_abandonment_sha256",
+                        "prospective_fresh_plan_sha256",
+                    )
+                )
+                or legacy_recovery.get("single_composite_approval") is not True
+                or legacy_recovery.get("old_claim_reused") is not False
+                or legacy_recovery.get("old_transaction_mutated") is not False
+            )
+        )
         or set(static_receipt) != _PROJECT_UPDATE_STATIC_RECEIPT_KEYS
         or static_receipt.get("schema")
         != (
@@ -1474,6 +1521,19 @@ def project_version_update_approval_binding(
     if project_runtime.get("required") is True:
         wheel_sha256 = project_runtime_bootstrap.get("wheel_sha256")
         policy = _plain_mapping(project_runtime.get("policy"))
+        legacy_policy_keys = {
+            "state",
+            "required",
+            "schema",
+            "policy_sha256",
+            "source_path",
+            "supply_lock_path",
+            "supply_lock_sha256",
+        }
+        observed_policy_keys = legacy_policy_keys | {
+            "observation_state",
+            "observation_reason_code",
+        }
         supply_interpreter = _plain_mapping(
             project_runtime_supply.get("interpreter")
         )
@@ -1513,16 +1573,15 @@ def project_version_update_approval_binding(
         )
         if (
             project_runtime.get("policy_state") != "required"
-            or set(policy)
-            != {
-                "state",
-                "required",
-                "schema",
-                "policy_sha256",
-                "source_path",
-                "supply_lock_path",
-                "supply_lock_sha256",
-            }
+            or frozenset(policy)
+            not in {frozenset(legacy_policy_keys), frozenset(observed_policy_keys)}
+            or (
+                set(policy) == observed_policy_keys
+                and (
+                    policy.get("observation_state") != "passed"
+                    or policy.get("observation_reason_code") != "verified"
+                )
+            )
             or policy.get("state") != "required"
             or policy.get("required") is not True
             or policy.get("schema")
@@ -1825,6 +1884,14 @@ def project_version_update_approval_binding(
         "project_runtime_digest": _sha256(project_runtime),
         "would_change_digest": _sha256(plan.get("would_change")),
     }
+    # Preserve byte-for-byte normal approval binding compatibility.  This
+    # target member exists only for the new composite legacy transition; an
+    # unconditional ``None`` would silently change every current-operation
+    # plan digest and invalidate already-issued resumable claims.
+    if composite_legacy_recovery:
+        target["legacy_prewrite_recovery_digest"] = _sha256(
+            legacy_recovery
+        )
     basis = {
         "schema_version": BINDING_SCHEMA_VERSION,
         "operation": "project_version_update",
