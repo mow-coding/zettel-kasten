@@ -182,6 +182,21 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "archive_capabilities",
+        "description": "Return the same read-only parser-derived CLI command and CapabilityAvailability truth as archive capabilities --machine; no archive, provider, credential, or network access is performed.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "no_commands": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Omit the detailed command and availability rows while retaining full counts.",
+                },
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "prompt_boundary_check",
         "description": "Heuristic dry-run prompt-injection boundary check. Read-only; never executes inspected text, calls LLMs, calls providers, approves, mints, or mutates files.",
         "inputSchema": {
@@ -3446,6 +3461,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_archive_doctor(arguments)
     if name == "archive_runtime_context":
         return tool_archive_runtime_context(arguments)
+    if name == "archive_capabilities":
+        return tool_archive_capabilities(arguments)
     if name == "prompt_boundary_check":
         return tool_prompt_boundary_check(arguments)
     if name == "github_repository_setup_plan":
@@ -3805,6 +3822,22 @@ def tool_archive_runtime_context(arguments: dict[str, Any]) -> dict[str, Any]:
     add_mcp_redaction_warning(result, requested_redaction, redact_local_paths)
     state = "passed" if result["ok"] else "blocked"
     return tool_success_result(f"archive_runtime_context: {state}; mode={result['inspection']['mode']}.", result)
+
+
+def tool_archive_capabilities(arguments: dict[str, Any]) -> dict[str, Any]:
+    unexpected = set(arguments) - {"no_commands"}
+    if unexpected or (
+        "no_commands" in arguments
+        and type(arguments["no_commands"]) is not bool
+    ):
+        raise InvalidParamsError()
+    result = archive_cli.capabilities_result(
+        no_commands=bool(arguments.get("no_commands", False))
+    )
+    return tool_success_result(
+        "archive_capabilities: parser-derived availability returned.",
+        result,
+    )
 
 
 def tool_prompt_boundary_check(arguments: dict[str, Any]) -> dict[str, Any]:
