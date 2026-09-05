@@ -89,6 +89,14 @@ def startup_progress_requested(argv: list[str]) -> bool:
     # let the actual parser retain sole authority over their validity/order.
     if any(option in {"--no-progress", "--help", "-h", "--version"} for option in options):
         return False
+    if argv[0] == "git-backup-reconcile-plan" and any(
+        option.split("=", 1)[0] in {"--client-app-ref", "--task-route-ref", "--work-session-ref", "--resume"}
+        for option in options
+    ):
+        # The explicit session route owns progress by default, including the
+        # heavy CLI import. Inspect fixed option names only, never their values;
+        # actual parsing and the original unscoped mode remain unchanged.
+        return True
     return bool(STARTUP_PROGRESS_DEFAULTS[argv[0]] or "--progress" in options)
 
 

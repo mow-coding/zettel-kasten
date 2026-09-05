@@ -9,6 +9,68 @@ authenticated started approval after an interruption.
 
 ## The Short Version
 
+### Unreleased v0.4.20 session route: receipt-only, not all documents
+
+The v0.4.20 development branch extends this same command with explicit app,
+task-route and session selection. It currently selects only whole, newly
+created, authenticated session-completion receipts. Other sessions' receipts,
+mixed or unknown changes and ordinary document changes remain excluded. An
+`artifact_backup_complete: false` result is intentional: this lane does not yet
+prove authorship or backup of arbitrary zet, objet or work files. Do not use
+this development checkpoint as a completed client-recovery or release claim.
+
+The client AI obtains the project launcher and opaque references from its
+retained task context. It computes counts, hashes and the complete selected /
+excluded partition; a person is not asked to copy identifiers or write a JSON
+manifest. These are schematic AI-side inputs, not a manual checklist:
+
+```powershell
+& $projectArchive git-backup-reconcile-plan $archiveRoot `
+  --client-app-ref $clientAppRef --task-route-ref $taskRouteRef `
+  --work-session-ref $workSessionRef --credential-mode stored `
+  --dry-run --format json
+```
+
+Fresh `--approve --reviewed-by $reviewerClaim` uses the same inputs and the
+existing native broker once, after waiting for the existing archive lock and
+rechecking the loaded runtime and current ownership. The displayed approval,
+current source/selection and original establishment proofs are rechecked before
+claim publication. The ordinary unscoped modes below retain their old contract.
+
+If output was lost or the same operation was interrupted, the AI supplies only
+the retained app/task route; no newly copied approval hash or reviewer:
+
+```powershell
+& $projectArchive git-backup-reconcile-plan $archiveRoot `
+  --client-app-ref $clientAppRef --task-route-ref $taskRouteRef `
+  --resume --format json
+```
+
+An optional session ref may assert that original selection. Replacement plan,
+selection, reviewer, provider settings and approval identifiers are refused on
+this route. WOM verifies the retained original context, claim, checkpoints,
+signed final evidence and exact remote commit; it does not silently replan or
+sign a completed original again. Historical commit verification is reported
+separately if current ownership or actor completion cannot be established.
+
+A pending operation with no authenticated original claim currently reports
+`work_session_git_original_approval_missing`. It is preserved, never treated as
+approval and never silently replaced with a fresh review. An explicit original
+re-review path for that cut remains acceptance work; do not claim every
+interruption is already automatically resolved.
+
+The new scoped CLI route owns content-free progress by default, while keeping
+stdout for the final JSON. Its separate hidden observer receives only a closed
+stage/numeric projection, not archive paths, target names or credentials. It
+does not invoke arbitrary progress callbacks while Git is changing state.
+Unavailable live observation blocks before dispatch; non-fd embedded output is
+explicitly synchronous and does not claim live heartbeat timing. Observation
+success is not write authority, and losing observation does not erase already
+verified original commit evidence. Mutation settlement, observer cancellation,
+backpressure and full source-command tests remain distinct evidence categories.
+
+### Existing unscoped contract
+
 Run `git-backup-plan` to take a bounded, privacy-preserving observation of one
 Git worktree and its exact target branch. Run `git-backup-reconcile-plan
 --dry-run` to repeat that observation. Supplying a private selection manifest

@@ -224,3 +224,29 @@ separately; do not restore an old actor or manufacture present authority.
 Source/public/process-loss tests are recorded in the integration minutes.
 All-writer binding, session Git backup, installed acceptance and client outcomes
 remain separate unfinished gates.
+
+## Scoped Git original-operation composition checkpoint
+
+The existing Git reconciliation CLI now composes current app/task/session
+selection with the existing wait/runtime guard, native broker, exact writer,
+signed terminal storage and independent remote anchor checks. Fresh scope binds
+authenticated establishment context and the complete selected/excluded change
+partition. Original continuation selects the saved actor intent, never a new
+planner, reviewer, provider configuration or approval identifier. A completed
+original is verified without signing or committing it again. Verified historical
+commitment remains separate from current ownership and completion.
+
+This first lane admits only whole, newly created authenticated completion
+receipts. It does not grant whole-document Git authority from a field-scoped
+change, infer responsibility for legacy files, or prove all artifacts backed up.
+An absent original claim remains explicit pre-claim re-review acceptance work;
+corrupt claim evidence must not be interpreted as absence.
+
+Mutation workers retain the existing archive lock until actual settlement,
+including cancellation. Public progress uses a separate hidden, content-free
+observer with bounded startup and cleanup ownership; observation is never write
+authority. This avoids arbitrary callbacks while mutation is in flight without
+silencing progress. The integration minutes record source and actual synthetic
+Git tests, final observer cancellation regressions and their different source
+snapshots. Installed acceptance, full writer coverage and client results remain
+unfinished; no released or recovered-client claim follows from this checkpoint.

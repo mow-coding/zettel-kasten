@@ -26,6 +26,7 @@ from .exact_human_approval_windows import ExactHumanApprovalContext
 RECORD_SCHEMA = "wom-kit/work-session-git-terminal-record/v1"
 PAYLOAD_SCHEMA = "wom-kit/work-session-git-terminal-assertions/v1"
 MAX_RECORD_BYTES = min(1024 * 1024, approval.TERMINAL_RECORD_MAC_MAX_PAYLOAD_BYTES)
+_ORIGINAL_CLAIM_VERIFICATION_STATUSES = frozenset({"started", "succeeded"})
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _MAC = re.compile(r"hmac-sha256:[0-9a-f]{64}\Z")
 _OID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
@@ -256,35 +257,64 @@ def _build_git_terminal_record(prepared, *, context, claim, commit_oids) -> _Git
     return _safe_call(build)
 
 
+def _authenticate_record_core(prepared, context, record, *, key=None, claim=None):
+    if (type(record) is not _GitTerminalRecord or (key is None) == (claim is None)
+            or key is not None and type(key) is not memoryview
+            or claim is not None and type(claim) is not approval._ClaimedExactHumanApproval):
+        raise WorkSessionGitTerminalError()
+    # Freeze before any nested observation/audit callback, including the claim
+    # route. Neither result may retain the caller's mutable dataclass identity.
+    detached = _GitTerminalRecord(record._raw)
+    frozen = _original(prepared, context)
+    document = detached._document()
+    payload = document["payload"]
+    reference = payload["approval_reference"]
+    if claim is not None and reference != claim.public_reference():
+        raise WorkSessionGitTerminalError("work_session_git_terminal_authentication_invalid")
+    authority, receipt, common_payload = _common(frozen, context, reference)
+    expected = _basis(frozen, context, reference, tuple(payload["commit_oids"]), authority, receipt)
+
+    def audit(raw, mac):
+        if claim is None:
+            return _audit_with_key(frozen, context, reference, raw, mac, key)
+        # A claim can audit another claim in the archive, but this adapter must
+        # authenticate ONLY the exact original operation owned by this claim.
+        return reference == claim.public_reference() and claim.exact_terminal_record_matches(
+            reference, context.operation, context.plan_sha256, context.target_binding_sha256,
+            _ORIGINAL_CLAIM_VERIFICATION_STATUSES, None, raw, mac,
+        )
+
+    if (payload != expected or not audit(_canonical(payload), document["terminal_mac"])
+            or not audit(common_payload, receipt["result"]["completion_authentication"]["terminal_mac"])):
+        raise WorkSessionGitTerminalError("work_session_git_terminal_authentication_invalid")
+    if _common(frozen, context, reference)[1] != receipt:
+        raise WorkSessionGitTerminalError("work_session_git_terminal_common_evidence_invalid")
+    return _AuthenticatedGitTerminalRecord(detached)
+
+
 def _authenticate_git_terminal_record(
     prepared, *, context, record, receipt_authentication_key,
 ) -> _AuthenticatedGitTerminalRecord:
-    """Read-only historical authentication inside one existing key consumer.
+    """Read-only succeeded-claim authentication inside one key consumer.
 
     No provider is opened here, no key escapes, and no current Git state is
-    consulted. A succeeded claim can verify old assertions, never create new.
+    consulted. This original memoryview API remains succeeded-only.
     """
-    def authenticate():
-        if type(record) is not _GitTerminalRecord or type(receipt_authentication_key) is not memoryview:
-            raise WorkSessionGitTerminalError()
-        # Freeze the exact supplied bytes before nested audit callbacks. Even a
-        # frozen dataclass can be changed with object.__setattr__; retaining the
-        # caller's object would let a later replacement inherit our old proof.
-        detached = _GitTerminalRecord(record._raw)
-        frozen = _original(prepared, context)
-        document = detached._document()
-        payload = document["payload"]
-        reference = payload["approval_reference"]
-        authority, receipt, common_payload = _common(frozen, context, reference)
-        expected = _basis(frozen, context, reference, tuple(payload["commit_oids"]), authority, receipt)
-        if payload != expected or not _audit_with_key(
-            frozen, context, reference, _canonical(payload), document["terminal_mac"], receipt_authentication_key,
-        ) or not _audit_with_key(
-            frozen, context, reference, common_payload,
-            receipt["result"]["completion_authentication"]["terminal_mac"], receipt_authentication_key,
-        ):
-            raise WorkSessionGitTerminalError("work_session_git_terminal_authentication_invalid")
-        if _common(frozen, context, reference)[1] != receipt:
-            raise WorkSessionGitTerminalError("work_session_git_terminal_common_evidence_invalid")
-        return _AuthenticatedGitTerminalRecord(detached)
-    return _safe_call(authenticate)
+    return _safe_call(lambda: _authenticate_record_core(
+        prepared, context, record, key=receipt_authentication_key,
+    ))
+
+
+def _authenticate_git_terminal_record_with_claim(
+    prepared, *, context, record, claim,
+) -> _AuthenticatedGitTerminalRecord:
+    """Verify an existing record through its original started/succeeded claim.
+
+    The status set is closed internally, never caller-selected. This grants no
+    readiness or new-write authority: a writer still needs its separate exact
+    started-claim guard. Neither terminal nor common evidence is ever signed,
+    upgraded or published here; no nested key-provider consumer is opened.
+    """
+    return _safe_call(lambda: _authenticate_record_core(
+        prepared, context, record, claim=claim,
+    ))

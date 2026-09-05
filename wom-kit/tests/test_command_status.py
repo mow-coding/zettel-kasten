@@ -512,7 +512,16 @@ class CommandStatusArchiveParserTests(unittest.TestCase):
                 )
         self.assertEqual(
             exposed["counts"]["conditional_approval_command_count"],
-            10,
+            11,
+        )
+        self.assertEqual(
+            by_path["work-session"]["approval_scope"],
+            {
+                "kind": "namespace_predicate",
+                "predicate_ref": "work_session_original_human_decision",
+                "outside_scope_status": "approval_fixed_closed",
+                "outside_scope_reason_code": "compound_exact_human_approval_binding_required",
+            },
         )
         self.assertEqual(
             by_path["create-draft"]["approval_scope"],

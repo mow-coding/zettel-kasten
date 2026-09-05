@@ -39,9 +39,10 @@ class GitTerminalGrammarTests(unittest.TestCase):
             self.assertEqual(str(error), "work_session_git_terminal_invalid")
             self.assertIsNone(error.__context__)
             self.assertIsNone(error.__cause__)
-        for function in (terminal._build_git_terminal_record, terminal._authenticate_git_terminal_record):
+        for function in (terminal._build_git_terminal_record, terminal._authenticate_git_terminal_record,
+                         terminal._authenticate_git_terminal_record_with_claim):
             self.assertTrue({"approve", "native", "key_provider", "completed", "remote_verified",
-                             "actor", "scope", "approval_id"}.isdisjoint(inspect.signature(function).parameters))
+                             "actor", "scope", "approval_id", "allowed_statuses"}.isdisjoint(inspect.signature(function).parameters))
 
 
 class GitTerminalAuthenticationTests(unittest.TestCase):
@@ -108,6 +109,12 @@ class GitTerminalAuthenticationTests(unittest.TestCase):
                 record=record, receipt_authentication_key=key,
             ),
             create_if_missing=False,
+        )
+
+    def claim_audit(self, record, *, claim=None, context=None):
+        return terminal._authenticate_git_terminal_record_with_claim(
+            self.prepared, context=self.context if context is None else context, record=record,
+            claim=self.claim if claim is None else claim,
         )
 
     def assert_private_error(self, caught):
@@ -377,6 +384,102 @@ class GitTerminalAuthenticationTests(unittest.TestCase):
         self.assertEqual(self.evidence_bytes(), before)
         with self.assertRaises(terminal.WorkSessionGitTerminalError):
             self.audit(record)
+
+    def test_original_claim_verifies_started_and_succeeded_without_signing_or_key_provider(self):
+        self.common()
+        record = self.build()
+        for state in ("started", "succeeded"):
+            if state == "succeeded":
+                self.claim.finalize_succeeded()
+            before = self.evidence_bytes()
+            native_audit = self.claim.exact_terminal_record_matches
+            with self.subTest(state=state), mock.patch.object(
+                self.claim, "exact_terminal_record_matches", wraps=native_audit,
+            ) as audit, mock.patch.object(
+                self.claim, "exact_terminal_record_mac", side_effect=AssertionError("No signing"),
+            ), mock.patch.object(
+                self.claim, "assert_ready_for_context", side_effect=AssertionError("Separate writer guard"),
+            ), mock.patch.object(
+                git_fixtures._KeyProvider, "use_key", side_effect=AssertionError("No nested key consumer"),
+            ), mock.patch.object(
+                workflow, "_production_key_provider", side_effect=AssertionError("No provider"),
+            ):
+                verified = self.claim_audit(record)
+            self.assertEqual(audit.call_count, 2)
+            for call in audit.call_args_list:
+                self.assertEqual(call.args[0], self.claim.public_reference())
+                self.assertEqual(call.args[4], frozenset({"started", "succeeded"}))
+            self.assertEqual(self.claim.status, state)
+            self.assertTrue(verified.authentication_summary()["authentication_verified"])
+            self.assertFalse(verified.authentication_summary()["backup_completion_verified"])
+            self.assertEqual(self.evidence_bytes(), before)
+
+    def test_claim_verifier_rejects_wrong_claim_context_record_mac_and_terminal_claim_states(self):
+        self.common()
+        record = self.build()
+        other = self.new_claim()  # Same exact context, different original authority.
+        class ClaimSubclass(approval._ClaimedExactHumanApproval):
+            pass
+        for claim in (other, object(), object.__new__(ClaimSubclass)):
+            with self.assertRaises(terminal.WorkSessionGitTerminalError) as caught:
+                self.claim_audit(record, claim=claim)
+            self.assert_private_error(caught)
+        with self.assertRaises(terminal.WorkSessionGitTerminalError) as caught:
+            self.claim_audit(record, context=replace(self.context, reviewer_claim="person:wrong-" + PRIVATE))
+        self.assert_private_error(caught)
+        for name in ("terminal_mac", "common_final_receipt_sha256"):
+            changed = record._document()
+            if name == "terminal_mac":
+                changed[name] = "hmac-sha256:" + "0" * 64
+            else:
+                changed["payload"][name] = "sha256:" + "f" * 64
+            with self.assertRaises(terminal.WorkSessionGitTerminalError) as caught:
+                self.claim_audit(terminal._GitTerminalRecord(approval._canonical_bytes(changed)))
+            self.assert_private_error(caught)
+        self.claim.finalize_failed("synthetic_failure")
+        before = self.evidence_bytes()
+        with self.assertRaises(terminal.WorkSessionGitTerminalError) as caught:
+            self.claim_audit(record)
+        self.assert_private_error(caught)
+        self.assertEqual(self.evidence_bytes(), before)
+
+    def test_claim_verifier_detaches_before_claim_audit_callback_and_rejects_missing_claim(self):
+        self.common()
+        record = self.build()
+        original = record._raw
+        altered = record._document()
+        altered["payload"]["commit_oids"].reverse()
+        altered["payload"]["terminal_commit_oid"] = altered["payload"]["commit_oids"][-1]
+        replacement = approval._canonical_bytes(altered)
+        native_audit = self.claim.exact_terminal_record_matches
+        calls = 0
+
+        def mutate_caller(*args, **kwargs):
+            nonlocal calls
+            result = native_audit(*args, **kwargs)
+            calls += 1
+            if calls == 1:
+                object.__setattr__(record, "_raw", replacement)
+            return result
+
+        before = self.evidence_bytes()
+        with mock.patch.object(self.claim, "exact_terminal_record_matches", side_effect=mutate_caller):
+            verified = self.claim_audit(record)
+        self.assertEqual(calls, 2)
+        self.assertIsNot(verified._record, record)
+        self.assertEqual(verified._record._raw, original)
+        self.assertEqual(record._raw, replacement)
+        self.assertEqual(self.evidence_bytes(), before)
+        path = self.root / approval.CLAIMS_RELATIVE_ROOT / (self.claim.approval_id + ".json")
+        raw = path.read_bytes()
+        path.unlink()
+        try:
+            with self.assertRaises(terminal.WorkSessionGitTerminalError) as caught:
+                self.claim_audit(verified._record)
+            self.assert_private_error(caught)
+            self.assertFalse(path.exists())
+        finally:
+            path.write_bytes(raw)
 
 
 if __name__ == "__main__":

@@ -2840,39 +2840,13 @@ def _apply_prepared_with_claim(
 ) -> dict[str, Any]:
     _require_legacy_git_backup_scope(prepared)
     prepared = _freeze_validated_prepared(prepared)
-    expected_context = _git_backup_approval_context(
-        prepared, reviewer_claim=context.reviewer_claim,
+    result, backend = _run_git_backup_exact_operation(
+        prepared, context=context, claim=claim, writer_lock=writer_lock,
+        resume=resume, progress_hook=progress_hook,
     )
-    if not hmac.compare_digest(
-        exact_human_approval_context_sha256(context),
-        exact_human_approval_context_sha256(expected_context),
-    ):
-        raise _fail("git_backup_manifest_drifted")
-    reference = claim.assert_ready_for_context(context)
-    authority = ExactOperationApprovalAuthority.from_reference(reference)
-    _persist_private_bundle(prepared, writer_lock=writer_lock)
-    checkpoint_store = FileExactOperationCheckpointStore(
-        prepared.root,
-        writer_lock=writer_lock,
-    )
-    backend = _GitBackupBackend(prepared, resume=resume)
-    with _pinned_git_runtime(prepared):
-        result = apply_exact_operation(
-            prepared.manifest,
-            payloads=_GitBackupPayloads(prepared),
-            writer=_GitBackupWriter(backend),
-            verifier=_GitBackupVerifier(backend),
-            checkpoint_store=checkpoint_store,
-            approval_authority=authority,
-            resume=resume,
-            progress_hook=progress_hook,
-        )
+    authority = ExactOperationApprovalAuthority.from_reference(claim.assert_ready_for_context(context))
     git_receipt_sha256 = _persist_domain_receipt(
-        prepared,
-        writer_lock=writer_lock,
-        authority=authority,
-        result=result,
-        backend=backend,
+        prepared, writer_lock=writer_lock, authority=authority, result=result, backend=backend,
     )
     response = {
         **result,
@@ -2897,6 +2871,67 @@ def _apply_prepared_with_claim(
     if prepared.manifest.work_session_binding is not None:
         response["work_session_binding"] = prepared.manifest.work_session_binding.document()
     return response
+
+
+def _run_git_backup_exact_operation(
+    prepared: PreparedGitBackup, *, context: ExactHumanApprovalContext,
+    claim: _ClaimedExactHumanApproval, writer_lock: ExactOperationWriterLock,
+    resume: bool, progress_hook: Callable[[ExactOperationProgress], None] | None,
+):
+    """Shared exact backend, with concrete admission for the scoped lane.
+
+    No caller-supplied authority flag or guard can admit a scoped operation.
+    Its workflow rechecks actual pending/current ownership and original MACs.
+    Legacy callers retain their unsigned common result and domain receipt.
+    """
+    prepared = _freeze_validated_prepared(prepared)
+    _require_git_backup_held_lock(prepared, writer_lock)
+    expected_context = _git_backup_approval_context(
+        prepared, reviewer_claim=context.reviewer_claim,
+    )
+    if not hmac.compare_digest(
+        exact_human_approval_context_sha256(context),
+        exact_human_approval_context_sha256(expected_context),
+    ):
+        raise _fail("git_backup_manifest_drifted")
+    reference = claim.assert_ready_for_context(context)
+    authority = ExactOperationApprovalAuthority.from_reference(reference)
+    completion_options = {}
+    domain_writer = None
+    if prepared.session_scope is not None:
+        from .work_session_git_workflow import (
+            _require_pending_scope_held, _SessionGitBackupWriter, _SessionGitBackupVerifier,
+        )
+        _require_pending_scope_held(prepared, context=context, claim=claim, held=writer_lock)
+
+        def authenticate_completion(payload):
+            _require_pending_scope_held(prepared, context=context, claim=claim, held=writer_lock)
+            return {"approval_reference": claim.public_reference(),
+                    "terminal_mac": claim.exact_terminal_record_mac(payload)}
+
+        completion_options["completion_authenticator"] = authenticate_completion
+    _persist_private_bundle(prepared, writer_lock=writer_lock)
+    checkpoint_store = FileExactOperationCheckpointStore(
+        prepared.root,
+        writer_lock=writer_lock,
+    )
+    backend = _GitBackupBackend(prepared, resume=resume)
+    domain_writer = (_SessionGitBackupWriter(backend, context, claim, writer_lock)
+                     if prepared.session_scope is not None else _GitBackupWriter(backend))
+    with _pinned_git_runtime(prepared):
+        result = apply_exact_operation(
+            prepared.manifest,
+            payloads=_GitBackupPayloads(prepared),
+            writer=domain_writer,
+            verifier=(_SessionGitBackupVerifier(backend) if prepared.session_scope is not None
+                      else _GitBackupVerifier(backend)),
+            checkpoint_store=checkpoint_store,
+            approval_authority=authority,
+            resume=resume,
+            progress_hook=progress_hook,
+            **completion_options,
+        )
+    return result, backend
 
 
 def _git_backup_approval_context(

@@ -167,6 +167,28 @@ class ReceiptGitProvenanceTests(unittest.TestCase):
         self.assert_partition(snapshot, selection)
         self.assertEqual(selection.public_summary()["selected_receipt_count"], 1)
 
+    def test_explicit_private_provider_is_used_when_default_provider_is_forbidden(self):
+        before, native_calls = self.evidence_bytes(), self.native.calls
+        self.key.read_only = True
+        self.key.create_if_missing.clear()
+        with exact.ExactOperationWriterLock(self.root) as held, \
+             patch.object(workflow, "_production_key_provider",
+                          side_effect=AssertionError("default provider entered")) as default:
+            snapshot = provenance._capture_git_snapshot_held(self.root, held=held)
+            selection = provenance._select_receipt_changes_held(
+                self.root, held=held, snapshot=snapshot, selected_binding=self.owner,
+                key_provider=self.key,
+            )
+            default.assert_not_called()
+            held.verify_held()
+        self.assert_partition(snapshot, selection)
+        self.assertEqual(selection.public_summary()["selected_receipt_count"], 1)
+        self.assertEqual(selection.public_summary()["unverified_receipt_candidate_count"], 0)
+        self.assertEqual(self.key.create_if_missing, [False])
+        self.assertFalse(self.key.in_consumer)
+        self.assertEqual(self.native.calls, native_calls)
+        self.assertEqual(self.evidence_bytes(), before)
+
     def test_index_different_bytes_is_unknown_and_preserved(self):
         path = self.receipt_path()
         original = path.read_bytes()
@@ -286,8 +308,8 @@ class ReceiptGitProvenanceTests(unittest.TestCase):
             snapshot = provenance._capture_git_snapshot_held(self.root, held=held)
             original = provenance._authenticated_receipt
 
-            def drift(*args):
-                proof = original(*args)
+            def drift(*args, **kwargs):
+                proof = original(*args, **kwargs)
                 path.write_text("synthetic drift during\n", encoding="utf-8")
                 return proof
 
@@ -297,7 +319,7 @@ class ReceiptGitProvenanceTests(unittest.TestCase):
             self.assertEqual(caught.exception.code, "work_session_git_snapshot_changed")
             self.assertIsNone(caught.exception.__context__)
 
-    def test_lock_and_typed_data_not_public_approval_or_key_seams(self):
+    def test_lock_and_typed_data_not_public_approval_or_raw_key_seams(self):
         with self.assertRaises(provenance.WorkSessionGitProvenanceError) as caught:
             provenance._capture_git_snapshot_held(self.root, held=object())
         self.assertIsNone(caught.exception.__context__)
@@ -306,7 +328,9 @@ class ReceiptGitProvenanceTests(unittest.TestCase):
                 provenance._select_receipt_changes_held(self.root, held=held, snapshot={}, selected_binding=self.owner)
         for function in (provenance._capture_git_snapshot_held, provenance._select_receipt_changes_held):
             params = inspect.signature(function).parameters
-            self.assertTrue({"key", "key_provider", "native", "approve", "claim_ref", "context"}.isdisjoint(params))
+            self.assertTrue({"key", "native", "approve", "claim_ref", "context"}.isdisjoint(params))
+        self.assertNotIn("key_provider", inspect.signature(provenance._capture_git_snapshot_held).parameters)
+        self.assertIsNone(inspect.signature(provenance._select_receipt_changes_held).parameters["key_provider"].default)
 
 
 if __name__ == "__main__":

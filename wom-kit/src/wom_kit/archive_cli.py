@@ -12504,7 +12504,82 @@ def _git_backup_progress_printer(event: Any) -> None:
     )
 
 
+def _command_session_git_backup(args: argparse.Namespace) -> int:
+    from .git_backup_session_command import dispatch_session_git_backup, _failure as session_git_failure
+    from .work_session_git_progress import _git_command_progress_observer
+
+    original_resume = bool(getattr(args, "resume", False))
+    modes = int(bool(args.dry_run)) + int(bool(args.approve)) + int(original_resume)
+    forbidden = any(getattr(args, name, None) is not None for name in (
+        "expected_plan_sha256", "expected_hidden_effect_set_sha256", "expected_local_head_oid",
+        "expected_remote_oid", "selection_manifest", "resume_approval_id", "expected_manifest_sha256",
+    ))
+    if modes != 1 or forbidden:
+        return _git_backup_cli_error(
+            command="git-backup-reconcile-plan", dry_run=bool(args.dry_run),
+            reason_code="work_session_git_original_inputs_forbidden" if forbidden else "work_session_git_command_mode_required",
+        )
+    if original_resume and (
+        args.reviewed_by is not None or args.branch is not None or args.remote != "origin"
+        or args.max_changes != git_backup_planning.GIT_BACKUP_PLAN_DEFAULT_MAX_CHANGES
+        or args.max_changed_bytes != git_backup_planning.GIT_BACKUP_PLAN_DEFAULT_MAX_CHANGED_BYTES
+        or args.credential_mode != "anonymous"
+    ):
+        return _git_backup_cli_error(
+            command="git-backup-reconcile-plan", dry_run=False,
+            reason_code="work_session_git_original_inputs_forbidden",
+        )
+    mode = "resume" if original_resume else ("preview" if args.dry_run else "apply")
+    dispatch_entered, original_verified = False, False
+    try:
+        with _git_command_progress_observer() as observer:
+            if observer.status()["mode"] == "unavailable":
+                return _git_backup_cli_error(
+                    command="git-backup-reconcile-plan", dry_run=bool(args.dry_run),
+                    reason_code="work_session_git_progress_unavailable",
+                )
+            dispatch_entered = True
+            result = dispatch_session_git_backup(
+                Path(args.archive_root), mode=mode,
+                client_app_ref=getattr(args, "client_app_ref", None), task_route_ref=getattr(args, "task_route_ref", None),
+                work_session_ref=getattr(args, "work_session_ref", None), reviewer_claim=args.reviewed_by,
+                options=None if original_resume else {
+                    "remote_name": args.remote, "branch": args.branch, "credential_mode": args.credential_mode,
+                    "max_changes": args.max_changes, "max_changed_bytes": args.max_changed_bytes,
+                },
+                progress=observer,
+            )
+            original_verified = type(result) is dict and result.get("original_commit_verified") is True
+            observed_progress = observer.status()
+        result = {**result, "progress_observation": {
+            "mode": observed_progress["mode"],
+            "live_heartbeat_used": observed_progress["heartbeat_available"],
+            "observer_closed": observer.status()["closed"],
+            "private_values_echoed": False,
+        }}
+    except KeyboardInterrupt:
+        result = session_git_failure(
+            "work_session_wait_cancelled", mode=mode, effects_started=dispatch_entered,
+            original_commit_verified=original_verified,
+        )
+    except Exception:
+        result = session_git_failure(
+            "work_session_git_progress_unavailable", mode=mode, effects_started=dispatch_entered,
+            original_commit_verified=original_verified,
+        )
+    print_json(result)
+    return 0 if result.get("ok") is True else 1
+
+
 def command_git_backup_reconcile_plan(args: argparse.Namespace) -> int:
+    if (getattr(args, "resume", False) or any(getattr(args, name, None) is not None
+            for name in ("client_app_ref", "task_route_ref", "work_session_ref"))):
+        return _command_session_git_backup(args)
+    if args.expected_plan_sha256 is None:
+        return _git_backup_cli_error(
+            command="git-backup-reconcile-plan", reason_code="git_backup_expected_plan_required",
+            dry_run=bool(args.dry_run),
+        )
     resume_requested = bool(args.resume_approval_id)
     mode_count = int(bool(args.dry_run)) + int(bool(args.approve)) + int(
         resume_requested
@@ -36667,9 +36742,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     git_backup_reconcile.add_argument(
         "--expected-plan-sha256",
-        required=True,
-        help="Exact plan SHA-256 from the reviewed git-backup-plan result.",
+        help="Required for the legacy route; session-scoped work computes its exact plan internally.",
     )
+    git_backup_reconcile.add_argument("--client-app-ref", help="Explicit registered app for session-scoped Git work.")
+    git_backup_reconcile.add_argument("--task-route-ref", help="Retained opaque task route; never inferred from the latest task.")
+    git_backup_reconcile.add_argument("--work-session-ref", help="Explicit current session for preview/approve; optional assertion for original resume.")
+    git_backup_reconcile.add_argument("--resume", action="store_true",
+        help="Continue this route's original Git operation without new approval IDs, hashes or reviewer.")
     git_backup_reconcile.add_argument(
         "--expected-hidden-effect-set-sha256",
         help="Optional exact hidden-effect-set SHA-256 from the reviewed plan.",
@@ -47451,6 +47530,12 @@ def main(argv: list[str] | None = None) -> int:
         else:
             with redirect_stderr(parser_stderr):
                 args = parser.parse_args(raw_argv)
+                if (getattr(args, "func", None) is command_git_backup_reconcile_plan
+                        and args.expected_plan_sha256 is None
+                        and not getattr(args, "resume", False)
+                        and not any(getattr(args, name, None) is not None
+                                    for name in ("client_app_ref", "task_route_ref", "work_session_ref"))):
+                    parser.error("the following arguments are required: --expected-plan-sha256")
     except SystemExit as exc:
         exit_code = int(exc.code or 0)
         if not exit_code:

@@ -161,7 +161,7 @@ def _new_whole_receipt(row):
     )
 
 
-def _authenticated_receipt(store, held, row, execution_sha):
+def _authenticated_receipt(store, held, row, execution_sha, *, key_provider=None):
     """Prove canonical whole bytes, original context/MAC and immutable generation.
 
     completed_only rejects started/failed/missing/ambiguous evidence. It cannot
@@ -185,6 +185,7 @@ def _authenticated_receipt(store, held, row, execution_sha):
         return None
     verified = execution._resume_session_decision_held(
         store.root, held=held, manifest_sha256=manifest_sha, completed_only=True,
+        key_provider=key_provider,
     )
     if (verified.get("ok") is not True or verified.get("independent_post_verification") is not True
             or verified.get("execution_sha256") != execution_sha
@@ -219,12 +220,15 @@ def _session_identity(binding):
 
 def _select_receipt_changes_held(
     archive_root, *, held, snapshot: _GitChangeSnapshot, selected_binding: WorkSessionBinding,
+    key_provider=None,
 ) -> _ReceiptSelection:
     """Automatically partition *every* captured change; never authorize a write.
 
     selected_binding is an internal classification identity, not current claim
     authority. A future held facade must independently validate current actor
     ownership and obtain exact human approval for the resulting Git manifest.
+    The optional private provider only forwards the existing completed-proof
+    reader's injection seam; classification never acquires a second key itself.
     """
     def select():
         if type(snapshot) is not _GitChangeSnapshot or type(selected_binding) is not WorkSessionBinding:
@@ -249,7 +253,9 @@ def _select_receipt_changes_held(
             proof = None
             if match is not None and _new_whole_receipt(row):
                 try:
-                    proof = _authenticated_receipt(store, held, row, "sha256:" + match[1])
+                    proof = _authenticated_receipt(
+                        store, held, row, "sha256:" + match[1], key_provider=key_provider,
+                    )
                 except Exception:
                     # Invalid/unavailable proof is unknown, never absent or
                     # implicitly owned. The final snapshot recheck still fails

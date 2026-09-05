@@ -1295,6 +1295,151 @@ bump, PR, tag, wheel or client application has occurred.
   Public long operations must connect progress/cancellation to these bounded
   existing observers. No client or actual provider operation was performed.
 
+## Public scoped Git routing and cancellation review checkpoint
+
+- Extended the existing `git-backup-reconcile-plan` route with app/task/session
+  selectors and identifier-free original `--resume`. No additional top-level
+  command or duplicate backup action was added. Fresh scoped work computes its
+  selection internally; original continuation accepts neither a replacement
+  plan nor a reviewer, provider override or approval identifier. Explicit
+  stored-credential choice remains necessary for fresh authenticated backup.
+- The original unscoped missing-plan parser error still exits with status two
+  and redacted CLI JSON. An initial regression caught its accidental move to
+  handler validation; the parser condition was restored rather than weakening
+  the established test. Eleven conditional command paths are now asserted,
+  including the exact limited `work-session` namespace predicate; no writer
+  availability policy was broadened by changing the count.
+- The common public adapter enters the existing wait/runtime/held-lock path.
+  Errors disclose fixed codes and distinguish no domain entry from unknown
+  effects after entry. An independently verified historical original commit
+  remains a separate fact if current ownership or completion fails. Independent
+  review caught that this fact was initially discarded, and that keyboard
+  interruption could bypass fixed JSON. Both were corrected; arbitrary progress
+  callbacks cannot impersonate a trusted domain verification exception.
+- Final public/legacy/status/availability regression cohort: 55 tests passed in
+  23.735 seconds on Windows Python 3.12. Eight adapter/CLI tests in that cohort
+  exercise real shared locking with a stub domain; they are not proof of actual
+  Git execution through the installed public entrypoint. The actual held Git
+  workflow has separate synthetic execution tests still under final review.
+- Review of that workflow found a distinct outstanding issue: a heartbeat
+  worker could outlive cancellation and the archive lock. Mutation-worker
+  settlement and concrete scope checks must pass deterministic interruption
+  tests before the workflow is considered ready. Fixing public error text is
+  not sufficient. Progress during long mutations remains an explicit requirement.
+- This checkpoint is unmerged development work. No client archive, project
+  runtime, credential, provider or global PATH tool was changed. The separate
+  v0.4.19 candidate has passed its installed Windows workflow gate, but its
+  final platform CI is still running; release success is not assumed.
+
+### Follow-on observed results
+
+- All fourteen v0.4.19 candidate checks, including the required aggregate,
+  subsequently passed at exact head `344c37746ff3c3a11656bea75272ea03bb2dc2ef`.
+  PR #97 merged to `591bb3ce131d32d89c3e9e269da581e9c3aec5a8`; its first parent
+  is the expected preceding main and its second parent is that reviewed head.
+  Candidate and merge trees are identical. The main release gate also passed.
+  Exact-merge wheel reconstruction/installation is now running separately;
+  no tag, public v0.4.19 release or client success is asserted by this checkpoint.
+- The new source public workflow test passed once in 124.759 seconds: actual
+  CLI parsing, shared held runtime guard, session workflow, broker, signed
+  storage and Git commit/push all ran against an isolated synthetic archive.
+  Only native input, synthetic key, handoff and bare-remote transport seams
+  came from the established fixture. Independent local/remote OIDs match,
+  unselected document bytes remain untouched, and original `--resume` needs
+  neither an approval identifier nor another native review. Fresh planner,
+  writer, signature and actor rewrite are forbidden on that completed tail.
+  This closes the source adapter-to-domain seam, not installed-wheel, real
+  provider, full artifact attribution or remaining crash/progress coverage.
+
+## Exact-merge local installation budget and follow-on review
+
+- The unmodified v0.4.19 exact-merge wheel checker exhausted its local
+  1,200-second aggregate runtime-journey deadline. This attempt is incomplete,
+  not a passing installation or evidence that original resume failed in the
+  product. Initial update (432.780 s), healthy no-op (119.609 s), next preview,
+  both source/ref drift refusals, repair preparation (266.062 s), and the
+  interruption preimage/checkpoint checks passed. Original resume began at
+  1,084.655 s, leaving about 115 s; its same-tree hosted run alone took about
+  189 s, with independent revalidation and launcher/Doctor checks still after it.
+- Repeating the unchanged aggregate budget would discard another successful
+  prefix without testing the missing tail. Independent read review confirmed
+  there is no complete per-scenario substitute: the initial-only mode explicitly
+  denies full journey completion, and the private repair worker alone is not
+  the sequential contract. A local-only supplemental wrapper therefore runs
+  the full unmodified checker with a 2,400-second aggregate runtime-child and
+  matching cumulative phase-observation envelope. It intercepts exactly one
+  original 1,200-second call and restores both temporary overrides afterward.
+- All domain validators, original 600-second repair subprocess bounds,
+  Doctor's 180-second limit, first-status/tick bounds, named timing-field limits,
+  strict result shape, privacy, process containment and required CI remain
+  unchanged. The separate supplemental JSON records the prior failed attempt,
+  exact merge/tree/checker/journey identities, actual interpreter and new local
+  budget. Even a later supplemental success must not be described as passing
+  the original local 1,200-second gate. No product or released source was edited.
+  At this checkpoint the supplemental run is still active and no tag or release
+  has been published. Required candidate and exact-merge main CI already passed.
+- The scoped Git worker now defers console cancellation only while a real
+  worker may still run, settles against the explicit operation-done event, and
+  restores original handlers with bounded attempts. Definitely-unstarted work,
+  startup/return interruption, repeated cancellation and permanent restoration
+  failure have explicit tests. Nine focused cases passed in 0.054 seconds;
+  the final 26-case real-workflow cohort is still running. No independent
+  reviewer test run is falsely counted as an execution.
+- The CLI progress owner is being integrated separately from operation
+  authority: a fixed-data hidden child can report during mutation without
+  running arbitrary callbacks in that interval. Embedded non-fd output is
+  explicitly synchronous; unavailable live observation stops before dispatch.
+  Startup option-name detection gives only the new scoped route early status
+  without changing the unscoped default. Public observation lifecycle errors
+  preserve a verified historical original separately from current completion.
+  Public/legacy/startup-boundary cohort: 28 tests passed in 8.118 seconds.
+  Observer backpressure/cancellation review and the combined live-mutation
+  heartbeat test are not yet complete.
+
+## Frozen scoped workflow and observer checkpoint
+
+- The final unchanged scoped workflow passed all 26 tests in 1,194.320 seconds:
+  17 actual synthetic-Git cases, six worker settlement tests and three pure
+  scope/privacy tests. This includes explicit synthetic key-provider forwarding,
+  post-remote-observation terminal tampering, original completed continuation,
+  partial/common-final tails and two-session selection. The independent source
+  review is separate evidence, not another test execution.
+- The source public CLI workflow then passed in 135.987 seconds, including a
+  deliberately delayed 11.2-second push, live stderr observation, exact committed
+  receipt-only paths and independent local/bare-remote OID comparison. The warm
+  command emitted first status within two seconds and heartbeat gaps within ten;
+  this is not cold startup, installed-wheel or real provider credential proof.
+  The observer at that run preceded the final cancellation-only changes below.
+- A combined observer/public/startup/Windows-process/status/availability/legacy
+  cohort passed 99 tests in 83.466 seconds. This observer snapshot preceded the
+  final cleanup-window correction; it must not be relabeled as a rerun of that
+  newer source. The final observer's own complete 15-test cohort passed in
+  23.253 seconds, including actual Windows SIGINT and SIGBREAK at both child
+  publication and cleanup-thread-construction boundaries. Independent read
+  review closed the original cleanup-cancellation finding at that final source.
+- Observer setup and cleanup share one local, bounded signal lease. It restores
+  original handlers and settles owned child/sender/reader resources before
+  cancellation is propagated. It grants no write or completion authority.
+  Product files are `work_session_git_progress.py`,
+  `git_backup_session_command.py`, `work_session_git_workflow.py`, the existing
+  CLI routes and common Git writer, plus their focused tests. The existing
+  Git backup guide now explicitly describes this unreleased receipt-only lane,
+  original-resume contract, excluded document changes and remaining missing-claim
+  original re-review work. No full-document backup completion is claimed.
+- The completed v0.4.19 implementation worktree and local branch were removed
+  only after clean-status, exact merge ancestry and remote-branch deletion checks.
+  Its 171 ignored files were verified generated bytecode/test caches, with no
+  unclassified files; they are reproducible. All code remains in main and the
+  remote. The unfinished v0.4.20 worktree and exact-merge release verification
+  environment remain necessary and were preserved. The separate local release
+  supplement is still running at this record; there is still no public v0.4.19
+  success or client archive mutation implied by these source results.
+- The final checkpoint passed the four release-readiness/privacy gates and
+  169-resource synchronization. The first documentation pass caught a mixed-case
+  product noun in the new guide; it was corrected to the established `zet`
+  spelling without changing the naming gate. Python 3.10 runtime and the entire
+  v0.4.20 platform CI remain unrun; checkpoint commits are not release candidates.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)

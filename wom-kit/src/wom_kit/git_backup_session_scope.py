@@ -39,6 +39,7 @@ _PROOF_DIGESTS = ("whole_file_sha256", "execution_sha256", "receipt_sha256", "ma
                   "context_sha256", "registry_generation_sha256")
 _PROOF_KEYS = frozenset({"change_ref", "producer", "whole_file_bytes", "original_work_session_binding",
                          *_PROOF_DIGESTS})
+_ESTABLISHMENT_KEYS = frozenset({"manifest_sha256", "context_sha256", "execution_sha256", "receipt_sha256"})
 
 
 class GitBackupSessionScopeError(ValueError):
@@ -65,8 +66,14 @@ def _session_identity(binding):
 
 
 def _validate_document(value):
-    if type(value) is not dict or set(value) != _KEYS or value["schema"] != _SCHEMA:
+    if (type(value) is not dict or set(value) not in (_KEYS, _KEYS | {"establishment_proof"})
+            or value["schema"] != _SCHEMA):
         raise GitBackupSessionScopeError()
+    if "establishment_proof" in value:
+        origin = value["establishment_proof"]
+        if (type(origin) is not dict or set(origin) != _ESTABLISHMENT_KEYS
+                or any(not registry._is_digest(field) for field in origin.values())):
+            raise GitBackupSessionScopeError()
     if (not registry._ref(value["task_route_ref"], "task_route")
             or not registry._ref(value["claim_ref"], "claim")
             or any(not registry._is_digest(value[name]) for name in
@@ -140,7 +147,7 @@ class _GitBackupSessionScope:
     @classmethod
     def build(cls, *, task_route_ref, actor_sha256, registry_preimage_sha256, claim_ref,
               work_session_binding, selection_sha256, selected_change_count,
-              excluded_change_count, producer_proofs):
+              excluded_change_count, producer_proofs, establishment_proof=None):
         try:
             if type(work_session_binding) is not WorkSessionBinding or type(producer_proofs) is not list:
                 raise GitBackupSessionScopeError()
@@ -151,6 +158,8 @@ class _GitBackupSessionScope:
                 "selected_change_count": selected_change_count, "excluded_change_count": excluded_change_count,
                 "producer_proofs": producer_proofs,
             }
+            if establishment_proof is not None:
+                basis["establishment_proof"] = establishment_proof
             return cls.from_document({**basis, "scope_sha256": _sha(basis)})
         except Exception:
             pass
