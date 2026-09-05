@@ -995,6 +995,85 @@ bump, PR, tag, wheel or client application has occurred.
   journey remain open. Public v0.4.19 acceptance is separately blocked; no
   private client or global launcher was changed.
 
+## Session backup and artifact provenance: reuse before expansion
+
+- The user requested continuation after an apparent interruption. Work resumed
+  from the clean, remotely preserved `1ad9e489` checkpoint. Client data, runtime,
+  credentials and feedback state remain outside this development session.
+- Independent audits confirmed that both artifact inventories already paginate
+  their complete collections; the 1,000/2,000 values are page limits, not total
+  truncation. Existing tests cover 6,773 items. Actual scan/control budgets can
+  still produce incomplete coverage, which must not become a zero count.
+- Git selection v2 already enforces a complete disjoint selected/excluded
+  partition and preserves excluded changes while using non-force push and
+  remote-ref verification. These components will be reused, not recreated.
+- The missing link is authenticated producer provenance plus current actor
+  authority. A session digest in a caller's selection declaration is neither
+  proof of document creation nor a current claim. General source-record/mint
+  outputs still lack that connection. Artifact names, timestamps and historical
+  references must not be used to infer it.
+- The next bounded internal implementation verifies new work-session exact
+  completion receipts using their original contexts, immutable generations and
+  completion MACs. Only complete authenticated receipt bytes that are absent
+  from HEAD and absent or identical in the index may enter automatic selection.
+  Generic documents, malformed evidence and other sessions remain excluded.
+  This first adapter proves receipt provenance and selection eligibility only;
+  it has not executed a backup and proves no canonical document ownership.
+- Completion receipts belong under `receipts/ops/exact-operations`; private
+  checkpoints, actor context and labels stay ignored. Custom ignore rules are
+  respected without force-add. Historical bindings retain their own revision;
+  fresh writer entry will check the current actor/claim separately.
+- Public backup orchestration still needs the same held lock before approval,
+  post-click revalidation and durable original-operation discovery/resume.
+  Calling the existing post-approval-lock writer from a held facade would nest
+  locks, so a deliberate internal seam is required. The original v1 context and
+  approval contract must remain unchanged.
+- Later artifact scope will join explicit producer evidence into the existing
+  full projection and snapshot-bound cursor. Responsibility assignment remains
+  separate from creator provenance. No new artifact scanner or guessed
+  ownership index was authorized by these findings.
+
+## Authenticated receipt selection checkpoint
+
+- Added internal `work_session_git_provenance.py` with the existing Git planner's
+  complete private snapshot, completed-only original claim/MAC verification and
+  selection-v2 partition validator. It reads real whole receipt bytes and
+  preserves the original binding revision, even after the session later changes.
+  Current claimant authority is deliberately not supplied by that history.
+- Source classification never invokes the writer, repairs missing evidence or
+  creates a credential. Tests compare actual claim/checkpoint/receipt bytes
+  before and after classification. Other sessions and unknown changes remain
+  explicit exclusions; a zero eligible count is not an empty archive or a
+  completed backup. Custom ignored paths are not force-added.
+- Receipt verification has an explicit 128-candidate work budget. Exceeding it
+  rejects the entire classification; it does not truncate a page or hide a
+  remainder. This limit is not general artifact pagination or scale acceptance.
+- Ten actual synthetic Git/evidence tests passed in 251.100 seconds. Cases
+  include two sessions, later revision, forged/corrupt/noncanonical receipts,
+  changed MAC and started claims, index disagreement, existing HEAD paths,
+  ignore rules, and snapshot drift. An initial test assumed only two unknown
+  fixture files; its oracle now covers the full actual snapshot while separately
+  asserting the two generic document refs remain unknown. No product behavior
+  changed for that correction.
+- The fixed-code error constructor now accepts only exact strings before set
+  membership. Its separate hostile/invalid-input test passed. Eleven unique
+  tests passed in those focused runs; repeated tests are not added to the count.
+- Root review caught Python 3.10 incompatibility in the new fixture's use of
+  `TestCase.enterContext`. Explicit `ExitStack` plus `addCleanup` now preserves
+  LIFO cleanup without that Python 3.11 API. The two-session test passed again
+  in 22.442 seconds on Python 3.12. Independent rereview found no other such API
+  and both files passed 3.10 grammar parsing. Only Python 3.12 is locally
+  installed; this does not replace actual supported-version CI.
+- Independent source review found no remaining blocking issue. Readiness's
+  four gates, 169-resource synchronization and diff checks passed. Public
+  CLI/MCP backup, current actor guard, held writer/original resume and general
+  document producers remain separate integration work. No backup was performed
+  by this adapter and no client data was changed.
+- The next bounded change reuses an already held archive lock in the existing
+  Git exact writer while leaving its historical public route unchanged. That
+  seam alone will not be declared a complete session backup workflow; original
+  context discovery, actor authority and producer provenance must still meet.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)

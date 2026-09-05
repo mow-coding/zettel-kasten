@@ -123,3 +123,19 @@ reporter is reused; no custom UI or secondary approval system was introduced.
 Lifecycle writes and automatic private client-context attachment remain the
 next public integration slice. Read-only availability is not evidence that app
 registration, work creation, claims or original-operation resume are exposed.
+
+## Subsequent public lifecycle and provenance checkpoint
+
+At `1ad9e489`, the public CLI/MCP now expose registration, creation, claim,
+pause/resume, completion, exact human handoff/acceptance and same-app recovery,
+including original-operation continuation. The earlier paragraph records the
+preceding read-only milestone, not the current public lifecycle status.
+
+Session coverage of domain writers is still incomplete. Reuse the existing
+Git selection-v2 partition/writer and artifact pagination; add authenticated
+producer evidence rather than treating selection declarations or private actor
+context as document ownership. The first bounded adapter may select authentic
+new session completion receipts only. This is not general document backup.
+Preserve unknown/mixed/other-session changes and custom ignore rules. Current
+claim authority, historical producer identity and cleanup responsibility are
+three distinct concepts; none substitutes for another or for human approval.
