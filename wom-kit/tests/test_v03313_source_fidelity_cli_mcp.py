@@ -201,7 +201,7 @@ class SourceFidelityCliTests(unittest.TestCase):
             ([], ["compound_exact_human_approval_binding_required"]),
             (
                 ["--dry-run", "--approve"],
-                ["create_draft_ai_execution_mode_invalid"],
+                ["capability_mode_conflicting"],
             ),
         )
         for switches, expected_reason_codes in cases:
