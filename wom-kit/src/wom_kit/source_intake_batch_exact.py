@@ -1384,6 +1384,32 @@ class _Verifier:
         else:
             _item_by_target(self.plan, target_ref)
         target = _approved_lexical_target(self.plan, target_ref)
+        if self.plan.manifest is not None and self.plan.manifest.work_session_binding is not None:
+            from . import work_session_bundle as controls
+            from .exact_operation_manifest import _safe_regular_stat
+
+            failed = False
+            try:
+                with archive_services._hold_activity_group_evidence_file(
+                    self.plan.archive_root, target, max_bytes=_MAX_RECEIPT_BYTES,
+                ) as held:
+                    # The complete-chain lease permits hardlinks. Scoped
+                    # completion also requires one stable, single-link file.
+                    raw = controls._read_control(target, maximum=_MAX_RECEIPT_BYTES)
+                    named = os.lstat(target)
+                    failed = bool(
+                        raw != held["raw"]
+                        or not _safe_regular_stat(named, max_bytes=_MAX_RECEIPT_BYTES)
+                        or (int(named.st_dev), int(named.st_ino)) != held["identity"]
+                    )
+            except FileNotFoundError:
+                return None
+            except Exception:
+                failed = True
+            if failed:
+                raise _fail("source_intake_batch_target_collision")
+            heartbeat()
+            return raw
         try:
             with archive_services._hold_activity_group_evidence_file(
                 self.plan.archive_root,

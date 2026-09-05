@@ -2054,6 +2054,55 @@ bump, PR, tag, wheel or client application has occurred.
   exposure. Only the canonical root and this unfinished feature worktree are
   registered. No completed worktree was recreated and no client file was used.
 
+## Scoped batch output identity follow-up
+
+- Single-record checkpoint `0602abd1602ec337ab1e6b1faa0ce2b832d7f8b7`
+  was committed and pushed after the final four readiness gates; remote branch
+  ref matched and the feature worktree was clean. This was a development
+  checkpoint, not a merge/tag/release.
+- Continued the concrete verifier finding across the existing scoped batch
+  path instead of declaring the same class of problem closed globally. A tiny
+  temporary-file reproduction (1.455 seconds, exit 0) showed that both a source
+  receipt and a prepared capture request with two hardlinks still passed the
+  old batch postimage reader. Git's independent plain-file observer classified
+  those same files as hardlinked. This establishes a reader defect, not a
+  demonstrated Git push exploit or evidence of any client modification.
+- The shared verifier is used by scoped apply, preimage, started-final resume,
+  own succeeded proof and downstream historical completion. The minimal fix
+  is a strict single-link/stable read inside the already bound file lease when
+  the original manifest has a work-session binding. Preserve the unbound
+  legacy branch, approval/context/manifest bytes and all writer code. The
+  conditional check adds no approval source, new command or alternate engine.
+  Focused linked-output and authenticated-history tests are being prepared;
+  previous clean single-record results do not stand in for those new tests.
+- The frozen 26-line scoped branch passed the new four-test cohort together
+  with 25 legacy intake, ten held-execution and nine own-completion cases:
+  47 passed, one existing Windows directory-symlink privilege skip, 56.459
+  seconds. All new hardlink cases actually ran. One real completed batch was
+  checked through own succeeded proof, historical provider authentication,
+  data-only image and a distinct active Git claim, including a hardlink added
+  at provider entry. No caller request/source read, writer, signing, key
+  creation or repair was permitted by the historical fixture.
+- Independent review found no further issue in the scoped branch. The
+  existing nine historical-reader tests passed in 261.027 seconds, no skips.
+  These concurrent isolated Windows Python 3.12 fixtures are functional
+  regression evidence, not a performance acceptance claim. Python 3.10
+  grammar and diff checks passed; removing the new conditional branch makes
+  the source AST equal the previous committed version.
+- Frozen source SHA-256 is
+  `5d44da7dee3bc3b9124926cc1e51855128a029660fbe5d44ece39ae1bea3f3f2`;
+  new output-identity test SHA-256 is
+  `23acb20db78be585b88a51318caa527ed51009d9ae91825f904a493cdfef8548`.
+  The actual batch workflow regression and public readiness checks remain
+  pending at this record point. A prior root test output was interrupted;
+  absence of its process is not counted as a pass or completion receipt.
+- The actual batch workflow cohort subsequently passed all 15 tests in
+  327.295 seconds, exit 0, no skips. The four public readiness checks also
+  passed. Together with the recorded owner/reviewer results, this closes this
+  scoped reader correction at development-test level only; no release or
+  client repair is claimed. The next bounded slice is single-record historical
+  proof into the existing selective Git pipeline, not a new backup engine.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)
