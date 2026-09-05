@@ -23,6 +23,7 @@ _ERRORS = frozenset({
     "work_session_original_operation_pending", "work_session_original_operation_missing",
     "work_session_task_context_required", "work_session_task_context_mismatch",
     "work_session_task_context_changed", "work_session_lock_required",
+    "work_session_original_operation_kind_unsupported",
 }) | workflow.ExactHumanApprovalWorkflowError._CODES
 
 
@@ -200,10 +201,12 @@ def _review_original_session_decision_held(root, *, held, client_app_ref, task_r
         document = selected.document()
         if document.get("pending_registry_intent_plan_sha256") is not None:
             raise WorkSessionRereviewError("work_session_original_operation_pending")
-        pending = document["pending_manifest_sha256"] is not None
-        pointer = ({"manifest_sha256": document["pending_manifest_sha256"],
-                    "context_sha256": document["pending_context_sha256"]} if pending
+        pending_selector = selected.pending_operation()
+        pending = pending_selector is not None
+        pointer = (pending_selector.document() if pending
                    else document.get("last_completed_operation"))
+        if pointer is not None and pointer["kind"] == "git_backup":
+            raise WorkSessionRereviewError("work_session_original_operation_kind_unsupported")
         if pointer is None or (not pending and pointer["kind"] != "human_session_decision"):
             raise WorkSessionRereviewError("work_session_original_operation_missing")
         bound = lifecycle._bound_establishment(store, action=action, client_app_ref=client_app_ref, task_route_ref=task_route_ref,

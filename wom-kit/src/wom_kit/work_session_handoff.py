@@ -28,6 +28,7 @@ _ERRORS = frozenset({
     "work_session_original_operation_pending", "work_session_original_operation_missing",
     "work_session_original_operation_changed", "work_session_task_ownership_unavailable",
     "work_session_lock_required",
+    "work_session_original_operation_kind_unsupported",
 }) | workflow.ExactHumanApprovalWorkflowError._CODES
 
 
@@ -185,14 +186,18 @@ def _handoff_task_held(root, *, held, client_app_ref, task_route_ref, work_sessi
             raise WorkSessionHandoffError("work_session_task_context_mismatch")
         if document.get("pending_registry_intent_plan_sha256") is not None:
             raise WorkSessionHandoffError("work_session_original_operation_pending")
-        pending = document["pending_manifest_sha256"] is not None
+        pending_selector = selected.pending_operation()
+        pending = pending_selector is not None
+        if pending and pending_selector.document()["kind"] == "git_backup":
+            raise WorkSessionHandoffError("work_session_original_operation_kind_unsupported")
         scope = dict(app=client_app_ref, route=task_route_ref, session=work_session_ref, target=target_app_ref)
         if original_resume:
-            pointer = ({"kind": "human_session_decision", "manifest_sha256": document["pending_manifest_sha256"],
-                        "context_sha256": document["pending_context_sha256"]} if pending
+            pointer = (pending_selector.document() if pending
                        else document.get("last_completed_operation"))
             if pointer is None:
                 raise WorkSessionHandoffError("work_session_original_operation_missing")
+            if pointer["kind"] == "git_backup":
+                raise WorkSessionHandoffError("work_session_original_operation_kind_unsupported")
             bound = _bound_handoff(store, pointer, **scope)
             _verify_origin(root, store, routing, selected, held=held, app=client_app_ref,
                            route=task_route_ref, session=work_session_ref)
@@ -243,10 +248,10 @@ def _handoff_task_held(root, *, held, client_app_ref, task_route_ref, work_sessi
         selected = published.get("actor")
         if selected is None:
             raise WorkSessionHandoffError("work_session_original_operation_changed")
-        document = selected.document()
-        bound = _bound_handoff(store, {"kind": "human_session_decision",
-            "manifest_sha256": document["pending_manifest_sha256"],
-            "context_sha256": document["pending_context_sha256"]}, **scope)
+        pending_selector = selected.pending_operation()
+        if pending_selector is None or pending_selector.document()["kind"] != "human_session_decision":
+            raise WorkSessionHandoffError("work_session_original_operation_kind_unsupported")
+        bound = _bound_handoff(store, pending_selector.document(), **scope)
         return _finish(store, routing, selected, bound, result, held=held, publish=True, **scope)
     return _safe_call(run)
 
@@ -274,12 +279,14 @@ def _review_original_handoff_held(root, *, held, client_app_ref, task_route_ref,
             raise WorkSessionHandoffError("work_session_task_context_mismatch")
         if document.get("pending_registry_intent_plan_sha256") is not None:
             raise WorkSessionHandoffError("work_session_original_operation_pending")
-        pending = document["pending_manifest_sha256"] is not None
-        pointer = ({"kind": "human_session_decision", "manifest_sha256": document["pending_manifest_sha256"],
-                    "context_sha256": document["pending_context_sha256"]} if pending
+        pending_selector = selected.pending_operation()
+        pending = pending_selector is not None
+        pointer = (pending_selector.document() if pending
                    else document.get("last_completed_operation"))
         if pointer is None:
             raise WorkSessionHandoffError("work_session_original_operation_missing")
+        if pointer["kind"] == "git_backup":
+            raise WorkSessionHandoffError("work_session_original_operation_kind_unsupported")
         scope = dict(app=client_app_ref, route=task_route_ref, session=work_session_ref, target=target_app_ref)
         bound = _bound_handoff(store, pointer, **scope)
         origin = _verify_origin(root, store, routing, selected, held=held,

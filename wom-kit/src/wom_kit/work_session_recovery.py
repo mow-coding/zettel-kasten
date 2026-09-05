@@ -26,6 +26,7 @@ _ERRORS = frozenset({
     "work_session_task_context_mismatch", "work_session_task_context_changed",
     "work_session_original_operation_pending", "work_session_original_operation_missing",
     "work_session_original_operation_changed", "work_session_lock_required",
+    "work_session_original_operation_kind_unsupported",
 }) | workflow.ExactHumanApprovalWorkflowError._CODES
 
 
@@ -138,12 +139,14 @@ def _bound_original(store, pointer, *, held, app, route, session):
 
 def _pointer(selected):
     document = selected.document()
-    pending = document["pending_manifest_sha256"] is not None
-    pointer = ({"kind": "human_session_decision", "manifest_sha256": document["pending_manifest_sha256"],
-                "context_sha256": document["pending_context_sha256"]} if pending
+    pending_selector = selected.pending_operation()
+    pending = pending_selector is not None
+    pointer = (pending_selector.document() if pending
                else document.get("last_completed_operation"))
     if pointer is None:
         raise WorkSessionRecoveryError("work_session_original_operation_missing")
+    if pointer["kind"] == "git_backup":
+        raise WorkSessionRecoveryError("work_session_original_operation_kind_unsupported")
     return pointer, pending
 
 
@@ -200,6 +203,11 @@ def _recover_task_held(root, *, held, client_app_ref, task_route_ref, work_sessi
         scope = dict(app=client_app_ref, route=task_route_ref, session=work_session_ref)
         store, routing, selected = _selected(root, held=held, **scope)
         document = selected.document()
+        pending_selector = selected.pending_operation()
+        if ((pending_selector is not None and pending_selector.document()["kind"] == "git_backup")
+                or (original_resume and (document.get("last_completed_operation") or {}).get("kind") == "git_backup"
+                    and pending_selector is None)):
+            raise WorkSessionRecoveryError("work_session_original_operation_kind_unsupported")
         if not original_resume and document["pending_manifest_sha256"] is not None:
             raise WorkSessionRecoveryError("work_session_original_operation_pending")
         # Complete authentication before entering the next broker/key consumer.

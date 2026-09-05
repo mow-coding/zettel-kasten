@@ -23,6 +23,7 @@ _ERRORS = frozenset({
     "work_session_task_context_changed", "work_session_task_already_selected",
     "work_session_original_operation_pending", "work_session_original_operation_missing",
     "work_session_original_operation_changed", "work_session_lifecycle_unavailable",
+    "work_session_original_operation_kind_unsupported",
     "work_session_lock_required",
 }) | workflow.ExactHumanApprovalWorkflowError._CODES
 
@@ -184,10 +185,13 @@ def _establish_task_held(root, *, held, action, client_app_ref, task_route_ref, 
         pending = published.get("actor")
         if pending is None:
             raise WorkSessionLifecycleError("work_session_original_operation_changed")
-        values = pending.document()
+        pending_selector = pending.pending_operation()
+        if pending_selector is None or pending_selector.document()["kind"] != "human_session_decision":
+            raise WorkSessionLifecycleError("work_session_original_operation_kind_unsupported")
+        values = pending_selector.document()
         bound = _bound_establishment(store, action=action, client_app_ref=client_app_ref, task_route_ref=task_route_ref,
-                              manifest_sha256=values["pending_manifest_sha256"],
-                              context_sha256=values["pending_context_sha256"])
+                              manifest_sha256=values["manifest_sha256"],
+                              context_sha256=values["context_sha256"])
         return _finish_establishment(store, routing, pending, held=held, bound=bound, result=result)
     return _safe_call(run)
 
@@ -209,12 +213,14 @@ def _resume_task_establishment_held(root, *, held, action, client_app_ref, task_
         if document.get("pending_registry_intent_plan_sha256") is not None:
             # Never fall through another pending operation to an older success.
             raise WorkSessionLifecycleError("work_session_original_operation_pending")
-        pending = document["pending_manifest_sha256"] is not None
-        pointer = ({"kind": "human_session_decision", "manifest_sha256": document["pending_manifest_sha256"],
-                    "context_sha256": document["pending_context_sha256"]} if pending
+        pending_selector = selected.pending_operation()
+        pending = pending_selector is not None
+        pointer = (pending_selector.document() if pending
                    else document.get("last_completed_operation"))
         if pointer is None:
             raise WorkSessionLifecycleError("work_session_original_operation_missing")
+        if pointer["kind"] == "git_backup":
+            raise WorkSessionLifecycleError("work_session_original_operation_kind_unsupported")
         if pointer["kind"] != "human_session_decision":
             raise WorkSessionLifecycleError("work_session_original_operation_changed")
         bound = _bound_establishment(store, action=action, client_app_ref=client_app_ref, task_route_ref=task_route_ref,

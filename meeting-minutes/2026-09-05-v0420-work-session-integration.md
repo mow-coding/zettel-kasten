@@ -1198,6 +1198,33 @@ bump, PR, tag, wheel or client application has occurred.
   checkpoint. Session route evidence, original auto-resume and authenticated
   terminal Git receipts remain necessary before public workflow integration.
 
+## Typed original-operation routing checkpoint
+
+- Actor context now has a typed `PendingOperationSelector`; explicit Git
+  pending/completed selectors carry only kind and original manifest/context
+  digests. They are routing metadata, not approval or completion proof. An
+  omitted kind preserves the old human-session digest-pair meaning and exact
+  old JSON; clearing pending also clears its kind. The old untyped pair API
+  cannot silently relabel a saved Git pending operation as human.
+- Lifecycle, recovery, handoff and re-review now refuse explicit Git originals
+  before opening the human-session bundle, key consumer, approval or writer.
+  Post-callback paths also require the expected human kind. Claim/state/fresh
+  execution already block an outstanding digest pair and retain that behavior.
+  This change does not yet open a Git dispatch or automatic backup resume.
+- Seven new tests passed in 11.938 seconds, including eight original public
+  API paths for both pending and completed Git selectors. The final-source
+  lifecycle plus new tests passed seventeen cases in 65.351 seconds after the
+  final post-callback guard. Root independently reviewed all five source diffs
+  and found no blocking issue.
+- The nine-module existing regression cohort finished 111 tests in 804.172
+  seconds, with one skip and no failures. Together with the seven new tests:
+  118 distinct discovered, 117 passed and one skipped. The seventeen-test
+  rerun is overlapping evidence, not seventeen additional tests. Python 3.10
+  syntax and diff checks passed; actual runtime here is Windows Python 3.12.
+- Readiness's four checks and 169-resource synchronization passed for the
+  frozen source checkpoint. The branch remains unreleased, with final scope/
+  authenticated completion/auto-resume composition still outstanding.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)

@@ -39,7 +39,8 @@ _KEYS = frozenset({
     "pending_manifest_sha256", "pending_context_sha256", "actor_sha256",
 })
 _CONTINUATION_KEYS = frozenset({"pending_registry_intent_plan_sha256", "last_completed_operation"})
-_EXTENSION_KEYS = _CONTINUATION_KEYS | {"established_origin"}
+_EXTENSION_KEYS = _CONTINUATION_KEYS | {"established_origin", "pending_operation_kind"}
+_PENDING_OPERATION_KINDS = frozenset({"human_session_decision", "git_backup"})
 _UNSET = object()
 _ERRORS = frozenset({
     "work_session_actor_invalid", "work_session_actor_changed",
@@ -71,10 +72,49 @@ def new_task_route_ref():
     return registry._new_ref("task_route")
 
 
+def _pending_document(value):
+    if (type(value) is not dict or set(value) != {"kind", "manifest_sha256", "context_sha256"}
+            or type(value["kind"]) is not str or value["kind"] not in _PENDING_OPERATION_KINDS
+            or any(not registry._is_digest(value[field]) for field in ("manifest_sha256", "context_sha256"))):
+        raise _fail()
+    return {field: value[field] for field in ("kind", "manifest_sha256", "context_sha256")}
+
+
+@dataclass(frozen=True, repr=False)
+class PendingOperationSelector:
+    """Original private operation kind/digests, never approval or resume authority."""
+
+    _raw: bytes
+
+    def __post_init__(self):
+        try:
+            if type(self._raw) is not bytes or not self._raw or len(self._raw) > MAX_ACTOR_BYTES:
+                raise _fail()
+            _pending_document(bundle._strict_document(self._raw))
+            return
+        except Exception:
+            pass
+        raise _fail()
+
+    @classmethod
+    def from_document(cls, value):
+        try:
+            return cls(registry._canonical(_pending_document(value)))
+        except Exception:
+            pass
+        raise _fail()
+
+    def document(self):
+        return _pending_document(bundle._strict_document(self._raw))
+
+    def __repr__(self):
+        return "PendingOperationSelector(<private selector; no operation authority>)"
+
+
 def _completed_document(value):
     if type(value) is not dict or type(value.get("kind")) is not str:
         raise _fail()
-    if value["kind"] == "human_session_decision":
+    if value["kind"] in _PENDING_OPERATION_KINDS:
         fields = ("manifest_sha256", "context_sha256")
     elif value["kind"] == "registry_transition":
         # Registry-intent load/observe uses plan_sha256, not the distinct
@@ -151,6 +191,12 @@ def _decode(raw):
         item is not None and not registry._is_digest(item) for item in pending
     ):
         raise _fail()
+    if "pending_operation_kind" in document and (
+        type(document["pending_operation_kind"]) is not str
+        or document["pending_operation_kind"] not in _PENDING_OPERATION_KINDS
+        or pending[0] is None
+    ):
+        raise _fail()
     registry_pending = document.get("pending_registry_intent_plan_sha256")
     if registry_pending is not None and (
         not registry._is_digest(registry_pending) or pending[0] is not None
@@ -196,6 +242,17 @@ class ActorContext:
     def document(self):
         return _decode(self._raw)
 
+    def pending_operation(self):
+        """Interpret legacy digest pairs as human only when no explicit kind exists."""
+        value = self.document()
+        if value["pending_manifest_sha256"] is None:
+            return None
+        return PendingOperationSelector.from_document({
+            "kind": value.get("pending_operation_kind", "human_session_decision"),
+            "manifest_sha256": value["pending_manifest_sha256"],
+            "context_sha256": value["pending_context_sha256"],
+        })
+
     @property
     def sha256(self):
         return self.document()["actor_sha256"]
@@ -230,6 +287,9 @@ class ActorContext:
                 established_origin_selected=value["established_origin"] is not None,
                 establishment_selector_is_authority=False,
             )
+        if "pending_operation_kind" in value:
+            summary.update(pending_original_operation_kind=value["pending_operation_kind"],
+                           pending_selector_is_authority=False)
         return summary
 
 
@@ -409,7 +469,8 @@ class WorkSessionActorStore:
     def save(self, *, expected_sha256, work_session_ref=None, claim_ref=None,
              observed_binding=None, pending_manifest_sha256=None,
              pending_context_sha256=None, pending_registry_intent_plan_sha256=_UNSET,
-             last_completed_operation=_UNSET, established_origin=_UNSET, held_lock):
+             last_completed_operation=_UNSET, established_origin=_UNSET,
+             pending_operation=_UNSET, held_lock):
         """Replace routing selections by appending one full CAS image.
 
         Original selection fields retain their explicit full-image behavior.
@@ -422,13 +483,16 @@ class WorkSessionActorStore:
         immutable once recorded. Its first explicit recording requires the
         facade's source/route/MAC verification; this store cannot infer it.
         Unpublished .pending files are retained and never selected as context.
+        New operation kinds require an exact PendingOperationSelector. Legacy
+        digest pairs retain their old human meaning/bytes; an old caller cannot
+        relabel a saved Git pair as human. Clearing the pair also clears its kind.
         """
         code = "work_session_actor_invalid"
         try:
             return self._save(expected_sha256, work_session_ref, claim_ref,
                               observed_binding, pending_manifest_sha256,
                               pending_context_sha256, pending_registry_intent_plan_sha256,
-                              last_completed_operation, established_origin, held_lock)
+                              last_completed_operation, established_origin, pending_operation, held_lock)
         except WorkSessionActorError as error:
             code = error.code
         except Exception:
@@ -436,12 +500,22 @@ class WorkSessionActorStore:
         raise _fail(code)
 
     def _save(self, expected, session, claim, binding, manifest, context_sha,
-              registry_pending, completed, origin, held):
+              registry_pending, completed, origin, pending_operation, held):
         self._lock(held)
         if expected is not None and not registry._is_digest(expected):
             raise _fail()
         if binding is not None and type(binding) is not WorkSessionBinding:
             raise _fail()
+        pending_kind = None
+        if pending_operation is not _UNSET:
+            if manifest is not None or context_sha is not None:
+                raise _fail()
+            if pending_operation is not None:
+                if type(pending_operation) is not PendingOperationSelector:
+                    raise _fail()
+                selected = PendingOperationSelector.from_document(pending_operation.document()).document()
+                pending_kind, manifest, context_sha = (selected[field] for field in
+                                                       ("kind", "manifest_sha256", "context_sha256"))
         if registry_pending is not _UNSET and registry_pending is not None and not registry._is_digest(registry_pending):
             raise _fail()
         if completed is not _UNSET and completed is not None and type(completed) is not CompletedOperationSelector:
@@ -462,6 +536,9 @@ class WorkSessionActorStore:
         if expected != (previous.sha256 if previous is not None else None):
             raise _fail("work_session_actor_changed")
         previous_document = previous.document() if previous is not None else {}
+        if (previous_document.get("pending_operation_kind") == "git_backup"
+                and manifest is not None and pending_operation is _UNSET):
+            raise _fail("work_session_actor_changed")
         if completed is None and previous_document.get("last_completed_operation") is not None:
             raise _fail("work_session_actor_changed")
         basis = {
@@ -473,6 +550,8 @@ class WorkSessionActorStore:
             "claim_ref": claim, "pending_manifest_sha256": manifest,
             "pending_context_sha256": context_sha,
         }
+        if pending_kind is not None:
+            basis["pending_operation_kind"] = pending_kind
         for field, value in (
             ("pending_registry_intent_plan_sha256", registry_pending),
             ("last_completed_operation", completed),
