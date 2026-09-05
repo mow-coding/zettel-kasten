@@ -24,6 +24,7 @@ from . import project_update_transaction as durable
 from . import work_session_bundle as bundle
 from . import work_session_registry as registry
 from .work_session_binding import WorkSessionBinding
+from .work_session_establishment import EstablishmentSelector
 
 
 ACTOR_SCHEMA = "wom-kit/work-session-private-actor/v1"
@@ -37,7 +38,8 @@ _KEYS = frozenset({
     "previous_sha256", "work_session_ref", "observed_binding", "claim_ref",
     "pending_manifest_sha256", "pending_context_sha256", "actor_sha256",
 })
-_EXTENSION_KEYS = frozenset({"pending_registry_intent_plan_sha256", "last_completed_operation"})
+_CONTINUATION_KEYS = frozenset({"pending_registry_intent_plan_sha256", "last_completed_operation"})
+_EXTENSION_KEYS = _CONTINUATION_KEYS | {"established_origin"}
 _UNSET = object()
 _ERRORS = frozenset({
     "work_session_actor_invalid", "work_session_actor_changed",
@@ -157,6 +159,11 @@ def _decode(raw):
     completed = document.get("last_completed_operation")
     if completed is not None:
         _completed_document(completed)
+    origin = document.get("established_origin")
+    if origin is not None:
+        EstablishmentSelector.from_document(origin)
+        if session is None:
+            raise _fail()
     expected = _sha(registry._canonical({key: value for key, value in document.items()
                                        if key != "actor_sha256"}))
     if not registry._is_digest(document["actor_sha256"]) or not hmac.compare_digest(
@@ -210,7 +217,7 @@ class ActorContext:
         }
         # Keep the old summary shape for old raw images. Extended summaries
         # contain only booleans/kinds, never selector or approval digests.
-        if _EXTENSION_KEYS & set(value):
+        if _CONTINUATION_KEYS & set(value):
             completed = value.get("last_completed_operation")
             summary.update(
                 pending_registry_operation_selected=value.get("pending_registry_intent_plan_sha256") is not None,
@@ -218,7 +225,26 @@ class ActorContext:
                 last_completed_operation_kind=completed["kind"] if completed is not None else None,
                 completion_selector_is_authority=False,
             )
+        if "established_origin" in value:
+            summary.update(
+                established_origin_selected=value["established_origin"] is not None,
+                establishment_selector_is_authority=False,
+            )
         return summary
+
+
+def _require_establishment_continuity(previous, current):
+    """Keep a recorded per-session route origin, not infer proof from history.
+
+    A later accept may keep the workstream but has an explicit new actor/task
+    route for its successor session. It does not replace this route's origin.
+    """
+    origin = previous.get("established_origin")
+    if origin is not None and (
+        current.get("established_origin") != origin
+        or current["work_session_ref"] != previous["work_session_ref"]
+    ):
+        raise _fail("work_session_actor_changed")
 
 
 class WorkSessionActorStore:
@@ -359,6 +385,8 @@ class WorkSessionActorStore:
                 previous = contexts[-2].sha256 if len(contexts) == 2 else None
                 if contexts[-1].document()["previous_sha256"] != previous:
                     raise _fail("work_session_actor_changed")
+                if len(contexts) == 2:
+                    _require_establishment_continuity(contexts[-2].document(), contexts[-1].document())
             if parent is not None and names != self._names(parent):
                 raise _fail("work_session_actor_changed")
         final_snapshot = self._check_store()
@@ -381,7 +409,7 @@ class WorkSessionActorStore:
     def save(self, *, expected_sha256, work_session_ref=None, claim_ref=None,
              observed_binding=None, pending_manifest_sha256=None,
              pending_context_sha256=None, pending_registry_intent_plan_sha256=_UNSET,
-             last_completed_operation=_UNSET, held_lock):
+             last_completed_operation=_UNSET, established_origin=_UNSET, held_lock):
         """Replace routing selections by appending one full CAS image.
 
         Original selection fields retain their explicit full-image behavior.
@@ -390,6 +418,9 @@ class WorkSessionActorStore:
         clears registry pending, but never an existing completed selector.
         A completed selector is replaceable only with another typed selector;
         callers must independently verify completion before this CAS write.
+        An establishment selector is independent of the latest operation and
+        immutable once recorded. Its first explicit recording requires the
+        facade's source/route/MAC verification; this store cannot infer it.
         Unpublished .pending files are retained and never selected as context.
         """
         code = "work_session_actor_invalid"
@@ -397,7 +428,7 @@ class WorkSessionActorStore:
             return self._save(expected_sha256, work_session_ref, claim_ref,
                               observed_binding, pending_manifest_sha256,
                               pending_context_sha256, pending_registry_intent_plan_sha256,
-                              last_completed_operation, held_lock)
+                              last_completed_operation, established_origin, held_lock)
         except WorkSessionActorError as error:
             code = error.code
         except Exception:
@@ -405,7 +436,7 @@ class WorkSessionActorStore:
         raise _fail(code)
 
     def _save(self, expected, session, claim, binding, manifest, context_sha,
-              registry_pending, completed, held):
+              registry_pending, completed, origin, held):
         self._lock(held)
         if expected is not None and not registry._is_digest(expected):
             raise _fail()
@@ -415,6 +446,11 @@ class WorkSessionActorStore:
             raise _fail()
         if completed is not _UNSET and completed is not None and type(completed) is not CompletedOperationSelector:
             raise _fail()
+        if origin is not _UNSET and origin is not None:
+            if type(origin) is not EstablishmentSelector:
+                raise _fail()
+            # Freeze caller-owned input before any later boundary observation.
+            origin = EstablishmentSelector.from_document(origin.document())
         if (session is not None and not registry._ref(session, "work_session")) or (
             claim is not None and not registry._ref(claim, "claim")
         ) or (manifest is None) != (context_sha is None) or any(
@@ -440,12 +476,14 @@ class WorkSessionActorStore:
         for field, value in (
             ("pending_registry_intent_plan_sha256", registry_pending),
             ("last_completed_operation", completed),
+            ("established_origin", origin),
         ):
             if value is _UNSET:
                 if field in previous_document:
                     basis[field] = previous_document[field]
             else:
-                basis[field] = value.document() if type(value) is CompletedOperationSelector else value
+                basis[field] = value.document() if type(value) in (CompletedOperationSelector, EstablishmentSelector) else value
+        _require_establishment_continuity(previous_document, basis)
         raw = registry._canonical({**basis, "actor_sha256": _sha(registry._canonical(basis))})
         frozen = ActorContext(raw)
         self._routes(frozen, self._check_store(), current=True)

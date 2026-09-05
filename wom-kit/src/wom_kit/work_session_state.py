@@ -11,6 +11,7 @@ from . import work_session_actor as actor
 from . import work_session_actor_execution as actor_guard
 from . import work_session_bundle as bundle
 from . import work_session_claim as claim
+from . import work_session_establishment as establishment
 from . import work_session_lifecycle as lifecycle
 from . import work_session_registry as registry
 from . import work_session_registry_intent as intents
@@ -69,16 +70,16 @@ def _match_intent(intent, *, action=None, client_app_ref, work_session_ref):
         raise WorkSessionStateError("work_session_original_operation_changed")
     if action is not None and request["action"] != action:
         raise WorkSessionStateError("work_session_state_action_mismatch")
-    if intent.original_create_selector is None:
+    if intent.original_establishment_selector is None:
         raise WorkSessionStateError("work_session_original_operation_changed")
     return document
 
 
-def _verify_create(root, store, routing, selected, *, held, app, route, session, selector):
-    claim._verify_original_create(
+def _verify_establishment(root, store, routing, selected, *, held, app, route, session, selector):
+    claim._verify_original_establishment(
         root, store, routing, selected, held=held, client_app_ref=app,
         task_route_ref=route, work_session_ref=session, key_provider=None,
-        original_create_selector=selector,
+        original_establishment_selector=selector,
     )
 
 
@@ -110,6 +111,10 @@ def _unclaimed_binding(store, *, held, app, session, expected, state):
 
 def _source_selector(store, selected, *, held, app, session):
     document = selected.document()
+    if document.get("established_origin") is not None:
+        # Independent of the latest operation (for example a later recovery).
+        # The caller still authenticates the original completed MAC and route.
+        return establishment.EstablishmentSelector.from_document(document["established_origin"])
     pointer = document.get("last_completed_operation")
     if pointer is None or pointer["kind"] != "registry_transition":
         raise WorkSessionStateError("work_session_original_operation_missing")
@@ -120,7 +125,7 @@ def _source_selector(store, selected, *, held, app, session):
             or outcome.transition.after.binding(session).document() != document["observed_binding"]
             or outcome.transition.after._document["sessions"][session]["claim_ref"] != document["claim_ref"]):
         raise WorkSessionStateError("work_session_original_operation_changed")
-    return original.original_create_selector
+    return original.original_establishment_selector
 
 
 def _pending_source(store, intent, selected, *, held):
@@ -210,8 +215,8 @@ def _transition_task_held(root, *, held, action, original_resume,
             plan = pending if pending is not None else pointer["plan_sha256"]
             intent = intents.load_registry_intent(store, plan_sha256=plan, held_lock=held)
             _match_intent(intent, action=action, client_app_ref=client_app_ref, work_session_ref=work_session_ref)
-            _verify_create(root, store, routing, selected, held=held, app=client_app_ref,
-                           route=task_route_ref, session=work_session_ref, selector=intent.original_create_selector)
+            _verify_establishment(root, store, routing, selected, held=held, app=client_app_ref,
+                           route=task_route_ref, session=work_session_ref, selector=intent.original_establishment_selector)
             if pending is None:
                 outcome = intents.observe_committed_registry_intent(store, plan_sha256=plan, held_lock=held)
                 return _finish(store, routing, selected, outcome, held=held, action=action,
@@ -233,7 +238,7 @@ def _transition_task_held(root, *, held, action, original_resume,
                                      expected=expected, state="paused")
             _assert_selected(routing, selected)
             selector = _source_selector(store, selected, held=held, app=client_app_ref, session=work_session_ref)
-            _verify_create(root, store, routing, selected, held=held, app=client_app_ref,
+            _verify_establishment(root, store, routing, selected, held=held, app=client_app_ref,
                            route=task_route_ref, session=work_session_ref, selector=selector)
             before = store.read()
             if (before.binding(work_session_ref) != expected
@@ -241,7 +246,8 @@ def _transition_task_held(root, *, held, action, original_resume,
                 raise WorkSessionStateError("work_session_state_changed")
             transition = registry.plan_transition(before, action=action, client_app_ref=client_app_ref,
                 work_session_ref=work_session_ref, claim_ref=document["claim_ref"] if action != "resume" else None)
-            intent = intents.prepare_registry_intent(store, transition, held_lock=held, original_create_selector=selector)
+            intent = intents.prepare_registry_intent(store, transition, held_lock=held,
+                                                      original_establishment_selector=selector)
             intents.save_registry_intent(store, intent, held_lock=held)
             _assert_selected(routing, selected)
             # One pending CAS precedes mutation. An unselected orphan intent is

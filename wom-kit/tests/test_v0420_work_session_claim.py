@@ -190,7 +190,7 @@ class TaskClaimTests(unittest.TestCase):
         path = t.root.joinpath(*intents.PRIVATE_ROOT) / (result["plan_sha256"][7:] + ".json")
         original = path.read_bytes()
         row = json.loads(original)
-        origin = row["original_create_selector"]
+        origin = row["original_establishment_selector"]
         variants = [None, {**origin, "context_sha256": "sha256:" + "a" * 64},
                     {**origin, "manifest_sha256": "sha256:" + "a" * 64},
                     {**origin, "private_extra": "private_error_marker"}]
@@ -198,9 +198,9 @@ class TaskClaimTests(unittest.TestCase):
             with self.subTest(kind="missing" if variant == "missing" else type(variant).__name__):
                 changed = json.loads(original)
                 if variant == "missing":
-                    del changed["original_create_selector"]
+                    del changed["original_establishment_selector"]
                 else:
-                    changed["original_create_selector"] = variant
+                    changed["original_establishment_selector"] = variant
                 changed["intent_sha256"] = intents._sha(intents._canonical({k: v for k, v in changed.items() if k != "intent_sha256"}))
                 path.write_bytes(intents._canonical(changed))
                 before = t.domain_files()

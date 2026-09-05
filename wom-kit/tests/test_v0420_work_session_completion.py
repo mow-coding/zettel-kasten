@@ -123,12 +123,12 @@ class CompletionTests(unittest.TestCase):
         self.assertEqual(base["generated_refs"], [])
         self.assertIsNone(base["request"]["label"])
         self.assertIsNone(base["request"]["target_app_ref"])
-        self.assertIn("original_create_selector", base)
+        self.assertIn("original_establishment_selector", base)
         changes = []
         missing = deepcopy(base)
-        del missing["original_create_selector"]
+        del missing["original_establishment_selector"]
         changes.append(missing)
-        for key, value in (("generated_refs", [old_claim]), ("original_create_selector", None)):
+        for key, value in (("generated_refs", [old_claim]), ("original_establishment_selector", None)):
             changed = deepcopy(base)
             changed[key] = value
             changes.append(changed)
@@ -149,7 +149,7 @@ class CompletionTests(unittest.TestCase):
                 if field == "claim":
                     changed["request"]["claim_ref"] = registry._new_ref("claim")
                 elif field == "context":
-                    changed["original_create_selector"]["context_sha256"] = "sha256:" + "f" * 64
+                    changed["original_establishment_selector"]["context_sha256"] = "sha256:" + "f" * 64
                 else:
                     changed["request"]["action"] = "pause"
                 changed["intent_sha256"] = intents._sha(intents._canonical(

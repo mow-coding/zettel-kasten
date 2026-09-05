@@ -1,4 +1,4 @@
-"""Claim an explicit human-created task with the original private intent.
+"""Claim a human-created/accepted task with its original private intent.
 
 Internal composition only: native input and caller claim tokens are absent.
 Actor pointers select records, never grant approval or current ownership.
@@ -9,7 +9,7 @@ after actor pending publication all continuations use that exact original.
 from pathlib import Path
 
 from . import work_session_actor as actor
-from . import work_session_execution as execution
+from . import work_session_establishment as establishment
 from . import work_session_lifecycle as lifecycle
 from . import work_session_registry as registry
 from . import work_session_registry_intent as intents
@@ -51,6 +51,11 @@ def _safe_call(call):
     except intents.WorkSessionRegistryIntentError as error:
         if error.code == "work_session_registry_intent_changed":
             code = "work_session_original_operation_changed"
+    except establishment.WorkSessionEstablishmentError as error:
+        if error.code in {"work_session_task_context_mismatch", "work_session_lock_required"}:
+            code = error.code
+        elif error.code in {"work_session_establishment_invalid", "work_session_establishment_changed"}:
+            code = "work_session_original_operation_changed"
     except WorkSessionWaitError as error:
         code = "work_session_claim_cancelled" if error.args == ("work_session_wait_cancelled",) else "work_session_claim_changed"
     except Exception:
@@ -75,31 +80,40 @@ def _assert_selection(routing, expected):
         raise WorkSessionClaimError("work_session_claim_changed")
 
 
+def _verify_original_establishment(root, store, routing, selected, *, held, client_app_ref,
+                                   task_route_ref, work_session_ref, key_provider,
+                                   original_establishment_selector):
+    def verify():
+        pointer = original_establishment_selector
+        if type(pointer) is not establishment.EstablishmentSelector:
+            raise WorkSessionClaimError("work_session_original_operation_changed")
+        pointer = establishment.EstablishmentSelector.from_document(pointer.document())
+        recorded = selected.document().get("established_origin")
+        if recorded is not None and establishment.EstablishmentSelector.from_document(recorded) != pointer:
+            raise WorkSessionClaimError("work_session_original_operation_changed")
+        # The immutable origin is distinct from last_completed_operation. It
+        # still needs the exact original completed MAC and app/route/session.
+        _assert_selection(routing, selected)
+        bound = establishment.verify_original_establishment_held(
+            root, store, held=held, selector=pointer, client_app_ref=client_app_ref,
+            task_route_ref=task_route_ref, work_session_ref=work_session_ref, key_provider=key_provider,
+        )
+        _assert_selection(routing, selected)
+        store._require_held_lock(held)
+        return bound
+    return _safe_call(verify)
+
+
 def _verify_original_create(root, store, routing, selected, *, held, client_app_ref,
                             task_route_ref, work_session_ref, key_provider, original_create_selector):
-    pointer = original_create_selector
-    if pointer is None:
-        raise WorkSessionClaimError("work_session_original_operation_changed")
-    bound = lifecycle._bound_create(
-        store, client_app_ref=client_app_ref, task_route_ref=task_route_ref,
-        manifest_sha256=pointer["manifest_sha256"], context_sha256=pointer["context_sha256"],
-    )
-    binding = bound.prepared.manifest.work_session_binding
-    if binding.work_session_ref != work_session_ref:
-        raise WorkSessionClaimError("work_session_task_context_mismatch")
-    # Do not remove pending registry state just to enter the facade's ordinary
-    # create resume. Verify the original create using its existing read-only
-    # completed-claim router; this may never finish a started human operation.
-    _assert_selection(routing, selected)
-    result = execution._resume_session_decision_held(
-        root, held=held, manifest_sha256=pointer["manifest_sha256"],
-        completed_only=True, key_provider=key_provider,
-    )
-    if (result.get("ok") is not True or result.get("independent_post_verification") is not True
-            or result.get("work_session_binding") != binding.document()):
-        raise WorkSessionClaimError("work_session_original_operation_changed")
-    _assert_selection(routing, selected)
-    store._require_held_lock(held)
+    """Legacy create-only call contract; normalization never rewrites evidence."""
+    def verify():
+        _verify_original_establishment(
+            root, store, routing, selected, held=held, client_app_ref=client_app_ref,
+            task_route_ref=task_route_ref, work_session_ref=work_session_ref, key_provider=key_provider,
+            original_establishment_selector=establishment.EstablishmentSelector.from_original_create(original_create_selector),
+        )
+    return _safe_call(verify)
 
 
 def _finish(store, routing, selected, outcome, *, held, client_app_ref, work_session_ref, publish):
@@ -165,25 +179,33 @@ def _claim_task_held(root, *, held, client_app_ref, task_route_ref, work_session
         if pending is not None:
             intent = intents.load_registry_intent(store, plan_sha256=pending, held_lock=held)
             _match_intent(intent, client_app_ref=client_app_ref, work_session_ref=work_session_ref)
-            _verify_original_create(root, store, routing, selected, held=held, client_app_ref=client_app_ref,
+            _verify_original_establishment(root, store, routing, selected, held=held, client_app_ref=client_app_ref,
                                     task_route_ref=task_route_ref, work_session_ref=work_session_ref, key_provider=key_provider,
-                                    original_create_selector=intent.original_create_selector)
+                                    original_establishment_selector=intent.original_establishment_selector)
         elif completed is not None and completed["kind"] == "registry_transition":
             # A terminal pointer is no permission to execute a pending intent.
             outcome = intents.observe_committed_registry_intent(store, plan_sha256=completed["plan_sha256"], held_lock=held)
-            _verify_original_create(root, store, routing, selected, held=held, client_app_ref=client_app_ref,
+            _verify_original_establishment(root, store, routing, selected, held=held, client_app_ref=client_app_ref,
                                     task_route_ref=task_route_ref, work_session_ref=work_session_ref, key_provider=key_provider,
-                                    original_create_selector=outcome.intent.original_create_selector)
+                                    original_establishment_selector=outcome.intent.original_establishment_selector)
             return _finish(store, routing, selected, outcome, held=held, client_app_ref=client_app_ref,
                            work_session_ref=work_session_ref, publish=False)
         else:
-            if completed is None or completed["kind"] != "human_session_decision":
-                raise WorkSessionClaimError("work_session_original_operation_changed")
-            result = lifecycle._resume_task_create_held(
-                root, held=held, client_app_ref=client_app_ref, task_route_ref=task_route_ref, key_provider=key_provider,
+            if document.get("established_origin") is not None:
+                origin = establishment.EstablishmentSelector.from_document(document["established_origin"])
+            else:
+                if completed is None or completed["kind"] != "human_session_decision":
+                    raise WorkSessionClaimError("work_session_original_operation_changed")
+                origin = establishment.EstablishmentSelector.from_original_create({
+                    "manifest_sha256": completed["manifest_sha256"], "context_sha256": completed["context_sha256"],
+                })
+            bound = _verify_original_establishment(
+                root, store, routing, selected, held=held, client_app_ref=client_app_ref,
+                task_route_ref=task_route_ref, work_session_ref=work_session_ref, key_provider=key_provider,
+                original_establishment_selector=origin,
             )
-            if (result.get("original_task_operation_already_completed") is not True
-                    or result.get("work_session_binding") != document["observed_binding"]):
+            if (bound.prepared.manifest.work_session_binding.document() != document["observed_binding"]
+                    or document["claim_ref"] is not None):
                 raise WorkSessionClaimError("work_session_original_operation_changed")
             _assert_selection(routing, selected)
             before = store.read()
@@ -194,8 +216,7 @@ def _claim_task_held(root, *, held, client_app_ref, task_route_ref, work_session
             transition = registry.plan_transition(before, action="claim", client_app_ref=client_app_ref,
                                                    work_session_ref=work_session_ref)
             intent = intents.prepare_registry_intent(store, transition, held_lock=held,
-                original_create_selector={"manifest_sha256": completed["manifest_sha256"],
-                                          "context_sha256": completed["context_sha256"]})
+                                                      original_establishment_selector=origin)
             intents.save_registry_intent(store, intent, held_lock=held)
             _assert_selection(routing, selected)
             # This CAS comes before the first actual registry claim mutation.

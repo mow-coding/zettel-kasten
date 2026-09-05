@@ -21,6 +21,7 @@ from . import exact_operation_manifest as exact
 from . import project_update_transaction as durable
 from . import work_session_bundle as bundle
 from . import work_session_registry as registry
+from .work_session_establishment import EstablishmentSelector
 from .exact_human_approval import exact_human_approval_context_sha256 as approval_context_sha256
 
 
@@ -98,7 +99,8 @@ def _strict_document(raw: bytes) -> dict[str, Any]:
     # Reuse duplicate-key/nonfinite/canonical rejection, then enforce the
     # narrower intent limit and exact action-specific original request shape.
     document = bundle._strict_document(raw)
-    if (set(document) not in (_DOCUMENT_KEYS, _DOCUMENT_KEYS | {"original_create_selector"})
+    if (set(document) not in (_DOCUMENT_KEYS, _DOCUMENT_KEYS | {"original_create_selector"},
+                             _DOCUMENT_KEYS | {"original_establishment_selector"})
             or document["schema"] != INTENT_SCHEMA):
         raise _fail()
     revision = document["before_revision"]
@@ -116,9 +118,10 @@ def _strict_document(raw: bytes) -> dict[str, Any]:
     if type(generated) is not list or request["target_app_ref"] is not None:
         raise _fail()
     # These new actions have no historical unbound format. Preserve the exact
-    # human-created task selector; the held facade, not this private record,
+    # human-established task selector; the held facade, not this private record,
     # authenticates its original completed approval and the caller's route.
-    if action in _STATE_ACTIONS and "original_create_selector" not in document:
+    if (action in _STATE_ACTIONS and "original_create_selector" not in document
+            and "original_establishment_selector" not in document):
         raise _fail()
     if action == "register-app":
         if (request["client_app_ref"] is not None or request["work_session_ref"] is not None
@@ -144,6 +147,10 @@ def _strict_document(raw: bytes) -> dict[str, Any]:
         if action == "register-app":
             raise _fail("work_session_registry_intent_action_refused")
         _original_create_document(document["original_create_selector"])
+    if "original_establishment_selector" in document:
+        if action == "register-app":
+            raise _fail("work_session_registry_intent_action_refused")
+        EstablishmentSelector.from_document(document["original_establishment_selector"])
     basis = {key: value for key, value in document.items() if key != "intent_sha256"}
     if not hmac.compare_digest(document["intent_sha256"], _sha(_canonical(basis))):
         raise _fail()
@@ -168,6 +175,18 @@ class RegistryTransitionIntent:
     def original_create_selector(self):
         """Detached private selector, never authentication by itself."""
         return _safe_call(lambda: _strict_document(self._raw).get("original_create_selector"))
+
+    @property
+    def original_establishment_selector(self):
+        """Typed read normalization; the original raw image is never rebuilt."""
+        def selected():
+            document = _strict_document(self._raw)
+            if "original_establishment_selector" in document:
+                return EstablishmentSelector.from_document(document["original_establishment_selector"])
+            if "original_create_selector" in document:
+                return EstablishmentSelector.from_original_create(document["original_create_selector"])
+            return None
+        return _safe_call(selected)
 
     def public_summary(self):
         def summary():
@@ -237,14 +256,14 @@ def _decode(store, raw, plan_sha256, held_lock):
     if (next(generated, None) is not None or rebuilt.human_decision_required
             or rebuilt.after.sha256 != document["after_sha256"] or rebuilt.plan_sha256 != plan_sha256):
         raise _fail()
-    selector = document.get("original_create_selector")
+    selector = RegistryTransitionIntent(raw).original_establishment_selector
     if selector is not None:
-        original = bundle.load_context_bound_session_decision(store, manifest_sha256=selector["manifest_sha256"])
+        original = bundle.load_context_bound_session_decision(store, manifest_sha256=selector.manifest_sha256)
         binding = original.prepared.manifest.work_session_binding
-        if (original.prepared.transition.action != "create" or original.prepared.task_route_ref is None
+        if (original.prepared.transition.action != selector.action or original.prepared.task_route_ref is None
                 or binding.client_app_ref != document["request"]["client_app_ref"]
                 or binding.work_session_ref != document["request"]["work_session_ref"]
-                or approval_context_sha256(original.context) != selector["context_sha256"]):
+                or approval_context_sha256(original.context) != selector.context_sha256):
             raise _fail("work_session_registry_intent_changed")
     target_name = f"{rebuilt.after.revision:012d}.json"
     committed = target_name in names
@@ -263,19 +282,25 @@ def _decode(store, raw, plan_sha256, held_lock):
     return rebuilt, committed
 
 
-def _prepare(store, transition, held_lock, original_create_selector=None):
+def _prepare(store, transition, held_lock, original_create_selector=None, original_establishment_selector=None):
     _check(store, held_lock)
     if type(transition) is not registry.RegistryTransition:
         raise _fail()
     transition.validate()
     if transition.action not in _INTENT_ACTIONS:
         raise _fail("work_session_registry_intent_action_refused")
+    if original_create_selector is not None and original_establishment_selector is not None:
+        raise _fail()
     basis = {"schema": INTENT_SCHEMA, "archive_identity_sha256": store.archive_identity_sha256,
              "before_revision": transition.after.revision - 1, "before_sha256": transition.before_sha256,
              "request": transition._request, "generated_refs": list(transition._generated_refs),
              "after_sha256": transition.after.sha256, "plan_sha256": transition.plan_sha256}
     if original_create_selector is not None:
         basis["original_create_selector"] = _original_create_document(original_create_selector)
+    if original_establishment_selector is not None:
+        if type(original_establishment_selector) is not EstablishmentSelector:
+            raise _fail()
+        basis["original_establishment_selector"] = original_establishment_selector.document()
     raw = _canonical({**basis, "intent_sha256": _sha(_canonical(basis))})
     rebuilt, _committed = _decode(store, raw, transition.plan_sha256, held_lock)
     if rebuilt != transition:
@@ -283,8 +308,10 @@ def _prepare(store, transition, held_lock, original_create_selector=None):
     return RegistryTransitionIntent(raw)
 
 
-def prepare_registry_intent(store, transition, *, held_lock, original_create_selector=None) -> RegistryTransitionIntent:
-    return _safe_call(lambda: _prepare(store, transition, held_lock, original_create_selector))
+def prepare_registry_intent(store, transition, *, held_lock, original_create_selector=None,
+                            original_establishment_selector=None) -> RegistryTransitionIntent:
+    return _safe_call(lambda: _prepare(store, transition, held_lock, original_create_selector,
+                                     original_establishment_selector))
 
 
 def _directory(store):

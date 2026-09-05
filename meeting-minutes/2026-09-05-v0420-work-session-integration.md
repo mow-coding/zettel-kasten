@@ -809,6 +809,61 @@ bump, PR, tag, wheel or client application has occurred.
   App handoff does not transfer predecessor artifacts or legacy cleanup
   responsibility by inference. Public human lifecycle integration remains open.
 
+## Establishment implementation and accepted continuation checkpoint
+
+- A typed create-or-accept selector now checks the original bundle, action,
+  archive, app, task route, session and context. Its held verification delegates
+  to the existing completed-only MAC, receipt and immutable postimage runner.
+  It does not execute a started operation, confer a current claim, or turn a
+  stored selector into authority. The helper/intent cohort passed 36 tests and
+  95 subtests in 131.64 seconds, including a real synthetic create/handoff/
+  accept sequence. Independent source review found no additional blocker.
+- Actor images may explicitly append an immutable establishment origin in a
+  new CAS generation. Omission preserves old absence or the existing pointer;
+  recorded origins cannot be removed, substituted or moved to another session.
+  Existing raw images, hashes and legacy summaries are unchanged. Actor proof
+  remains separate from pointer storage. Eight dedicated/legacy tests and
+  twenty subtests passed in 12.67 seconds.
+- The held lifecycle shares create and accept establishment while retaining
+  create-only compatibility wrappers. A first independently verified terminal
+  save records the origin; a completed legacy replay does not migrate its
+  bytes. Accept establishes a new unclaimed successor in the same workstream,
+  not ownership of predecessor artifacts. Ten existing lifecycle tests passed
+  in 39.019 seconds, and five accept/legacy lifecycle tests in 65.660 seconds.
+  These include wrong route/action, cancellation, started and pre-terminal
+  publication cuts, original resume and unchanged completed evidence.
+- Claim and pause/resume/completion use normalized original intent selectors
+  plus independently verified original approval and actor CAS. Fresh records
+  use the typed origin; old actor/intent/approval bytes remain valid without
+  rewriting. Nine tests and twenty subtests passed in 162.73 seconds, covering
+  actual accept-to-claim/state work, committed cuts, origin forgery, current
+  binding drift and a real recover operation followed by state work with the
+  unchanged original establishment. Public recover routing is not yet open.
+- Two accept-specific genuine child exit/new-process continuation tests passed
+  in 44.03 seconds: after authenticated claim publication before checkpoint,
+  and after terminal actor publication. Original claim files, prior succeeded
+  bytes, original bundle, registry postimage, receipt, OS lock reacquisition
+  and accept-origin MAC were checked independently. An initial test-only
+  projection assumed an optional started-branch diagnostic always existed;
+  it now preserves absence as null instead of inventing false. These are source
+  child-process tests, not installed-wheel or client acceptance evidence.
+- Explicit re-review also supports the original accept cut before claim
+  publication. Its old default remains create. Existing authenticated claims
+  resume without a new native decision; only genuinely absent claim plus the
+  original pending operation can reopen its exact unchanged context. Wrong
+  action, cancellation and target drift cannot approve replacement data.
+  The three new accept tests and twelve existing re-review tests passed in
+  99.324 seconds, with source-only independent review finding no blocker.
+- Public accept/handoff/recover routing, installed package session journeys
+  and all-writer integration remain separate unfinished gates. The outgoing
+  handoff facade is being prepared separately; these results do not publish
+  it or transfer legacy cleanup responsibility. No private client data changed.
+- Root reran the unchanged public CLI/MCP flow, mode matrix and service guards
+  against the new origin implementation: 28 tests passed in 138.349 seconds.
+  Registration, creation, claim, pause, resume and completion still follow the
+  same public routes and original approval; all 288 mode combinations remain
+  checked. Independent source review found no additional claim/state blocker.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)

@@ -165,3 +165,21 @@ old original-create references without in-place evidence migration. Preserve
 current storage and CAS, not a new event store. This planned origin contract
 does not yet make the human lifecycle commands publicly available, transfer
 old artifact ownership or assign legacy cleanup responsibility.
+
+## Establishment implementation boundary
+
+The typed origin and old-selector read normalization are implemented in the
+existing private storage. Original create/accept identity and completed human
+MAC/receipt verification are shared by claim and state transitions. Actor CAS
+preserves an explicitly recorded origin independently of the latest completed
+operation; omitted old fields keep their original bytes and interpretation.
+
+Create-only compatibility entrypoints remain create-only. The shared internal
+accept path requires its own exact successor approval and records created state
+without a claim. Started, succeeded and pre-claim re-review paths retain their
+separate authority requirements. Missing claim evidence never silently grants
+approval; old completed evidence is not migrated during read-only replay.
+
+Source and genuine child-process results are recorded in the integration
+minutes. Public human lifecycle routing, installed-wheel acceptance and private
+client execution remain incomplete; this contract is not a release claim.

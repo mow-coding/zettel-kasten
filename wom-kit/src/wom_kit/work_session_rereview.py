@@ -82,14 +82,16 @@ def _classify_original_claim_presence_held(store, prepared, context, *, held, ke
 
 
 def _review_original_session_decision_held(root, *, held, client_app_ref, task_route_ref,
-                                          native=None, key_provider=None):
-    """Explicitly re-review only the pending original create, under one lock.
+                                          native=None, key_provider=None, action="create"):
+    """Explicitly re-review the pending original create/accept, under one lock.
 
     No new reviewer, label, work/session reference, manifest or approval ID is
     accepted. The facade's caller explicitly chose re-review; absence alone
     never calls this function or grants approval automatically.
     """
     def run():
+        if type(action) is not str or action not in {"create", "accept"}:
+            raise WorkSessionRereviewError()
         store, routing = lifecycle._routing(root, held=held, client_app_ref=client_app_ref, task_route_ref=task_route_ref)
         selected = routing.read()
         if selected is None:
@@ -103,15 +105,18 @@ def _review_original_session_decision_held(root, *, held, client_app_ref, task_r
                    else document.get("last_completed_operation"))
         if pointer is None or (not pending and pointer["kind"] != "human_session_decision"):
             raise WorkSessionRereviewError("work_session_original_operation_missing")
-        bound = lifecycle._bound_create(store, client_app_ref=client_app_ref, task_route_ref=task_route_ref,
+        bound = lifecycle._bound_establishment(store, action=action, client_app_ref=client_app_ref, task_route_ref=task_route_ref,
                                          manifest_sha256=pointer["manifest_sha256"], context_sha256=pointer["context_sha256"])
         prepared, context = bound.prepared, bound.context
         if document["work_session_ref"] not in {None, prepared.manifest.work_session_binding.work_session_ref}:
             raise WorkSessionRereviewError("work_session_task_context_mismatch")
+        if (document.get("established_origin") is not None
+                and document["established_origin"] != lifecycle._origin(bound).document()):
+            raise WorkSessionRereviewError("work_session_original_operation_changed")
         lifecycle._assert_actor(routing, selected)
         presence = _classify_original_claim_presence_held(store, prepared, context, held=held, key_provider=key_provider)
         if presence == "existing":
-            result = lifecycle._resume_task_create_held(root, held=held, client_app_ref=client_app_ref,
+            result = lifecycle._resume_task_establishment_held(root, held=held, action=action, client_app_ref=client_app_ref,
                                                         task_route_ref=task_route_ref, key_provider=key_provider)
             return {**result, "native_approval_redisplayed": False}
         if not pending:
@@ -188,6 +193,6 @@ def _review_original_session_decision_held(root, *, held, client_app_ref, task_r
             # discard any private cause captured by an inner callback.
             raise WorkSessionRereviewError(boundary_failure)
         result = execution._result(prepared, outcome, terminal)
-        result = lifecycle._finish_create(store, routing, selected, held=held, bound=bound, result=result)
+        result = lifecycle._finish_establishment(store, routing, selected, held=held, bound=bound, result=result)
         return {**result, "native_approval_redisplayed": True}
     return _safe_call(run)
