@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
-from contextlib import redirect_stderr, redirect_stdout
-from dataclasses import dataclass
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
+from dataclasses import dataclass, replace
 import hashlib
 import io
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -50,6 +51,9 @@ class ScaleProfile:
     zettels: int
     mint_receipts: int
     retired_receipts: int
+    object_sizes: tuple[int, ...] = (30,)
+    body_sizes: tuple[int, ...] = ()
+    independent_mint_sources: bool = False
 
 
 FULL_PROFILE = ScaleProfile(
@@ -66,6 +70,26 @@ REDUCED_PROFILE = ScaleProfile(
     mint_receipts=5,
     retired_receipts=6,
 )
+
+
+def mixed_payload_profile(profile: ScaleProfile) -> ScaleProfile:
+    """Keep the count profile, but remove tiny-payload/shared-source shortcuts."""
+    return replace(
+        profile,
+        name=profile.name + "-mixed-payload",
+        object_sizes=(128, 1_024, 4_096, 65_536),
+        body_sizes=(512, 4_096, 16_384),
+        independent_mint_sources=True,
+    )
+
+
+def _fixture_body(profile: ScaleProfile, index: int, original: str) -> str:
+    if not profile.body_sizes:
+        return original
+    size = profile.body_sizes[index % len(profile.body_sizes)]
+    # ASCII makes the byte distribution reproducible on every supported OS.
+    padding = " Synthetic source evidence, independent of other records."
+    return (original + padding * (size // len(padding) + 1))[:size]
 
 
 class BenchmarkFailure(RuntimeError):
@@ -346,12 +370,26 @@ def _build_applied_mint_receipt(
     return receipt
 
 
-def _write_object_fixture(root: Path, count: int) -> None:
+def _fixture_progress(callback: Any, stage: str, current: int, total: int) -> None:
+    if callback is not None:
+        message = "start" if current == 0 else "done" if current == total else "progress"
+        callback(stage, message, current, total)
+
+
+def _write_object_fixture(
+    root: Path, profile: ScaleProfile, progress_callback: Any = None
+) -> None:
+    count = profile.unique_objets
+    _fixture_progress(progress_callback, "fixture-objects", 0, count)
     manifest_path = root / "objects" / "manifests" / "files.jsonl"
     seen_digests: set[str] = set()
     with manifest_path.open("wb") as manifest:
         for index in range(count):
             body = index.to_bytes(8, "big") + b"-letter148-scale-objet"
+            size = profile.object_sizes[index % len(profile.object_sizes)]
+            if size < len(body):
+                raise BenchmarkFailure("synthetic_object_size_invalid")
+            body = (body * (size // len(body) + 1))[:size]
             digest = _sha256_bytes(body)
             if digest in seen_digests:
                 raise BenchmarkFailure("synthetic_object_digest_collision")
@@ -380,11 +418,14 @@ def _write_object_fixture(root: Path, count: int) -> None:
             if index in {0, count - 1}:
                 _require_schema(record, "object-manifest-entry.schema.json")
             manifest.write(_json_bytes(record))
+            _fixture_progress(progress_callback, "fixture-objects", index + 1, count)
     if len(seen_digests) != count:
         raise BenchmarkFailure("synthetic_object_count_mismatch")
 
 
-def _write_lifecycle_fixture(root: Path, profile: ScaleProfile) -> None:
+def _write_lifecycle_fixture(
+    root: Path, profile: ScaleProfile, progress_callback: Any = None
+) -> None:
     shared_id = "zet_20260827_letter148_shared_source"
     shared_relative = f"inbox/{shared_id}.md"
     shared_path = root / "inbox" / f"{shared_id}.md"
@@ -397,7 +438,7 @@ def _write_lifecycle_fixture(root: Path, profile: ScaleProfile) -> None:
     seed_source_relative = f"inbox/{seed_id}.md"
     seed_source_path = root / "inbox" / f"{seed_id}.md"
     seed_source_frontmatter = _source_frontmatter(seed_id)
-    seed_source_body = "Synthetic retirement seed body."
+    seed_source_body = _fixture_body(profile, 0, "Synthetic retirement seed body.")
     seed_source_bytes = _render_zettel(
         seed_source_frontmatter,
         seed_source_body,
@@ -415,6 +456,7 @@ def _write_lifecycle_fixture(root: Path, profile: ScaleProfile) -> None:
         seed_source_bytes,
     )
 
+    _fixture_progress(progress_callback, "fixture-mint", 0, profile.mint_receipts)
     for index in range(profile.mint_receipts):
         zettel_id = f"zet_20260827_letter148_minted_{index:05d}"
         title = f"Synthetic minted scale zet {index}"
@@ -426,6 +468,17 @@ def _write_lifecycle_fixture(root: Path, profile: ScaleProfile) -> None:
             source_frontmatter = seed_source_frontmatter
             source_body = seed_source_body
             snapshot_relative = seed_snapshot_relative
+        elif profile.independent_mint_sources:
+            source_relative = f"inbox/source-{index:05d}.md"
+            source_path = root.joinpath(*source_relative.split("/"))
+            source_frontmatter = _source_frontmatter(zettel_id)
+            source_body = _fixture_body(
+                profile, index, f"Independent synthetic source {index}."
+            )
+            snapshot_relative = f"receipts/mint/drafts/source-{index:05d}.md"
+            source_bytes = _render_zettel(source_frontmatter, source_body)
+            _write_bytes(source_path, source_bytes)
+            _write_bytes(root.joinpath(*snapshot_relative.split("/")), source_bytes)
         else:
             source_path = shared_path
             source_relative = shared_relative
@@ -441,7 +494,7 @@ def _write_lifecycle_fixture(root: Path, profile: ScaleProfile) -> None:
         )
         target_bytes = _render_zettel(
             target_frontmatter,
-            f"Synthetic minted scale body {index}.",
+            _fixture_body(profile, index, f"Synthetic minted scale body {index}."),
         )
         target_path = root.joinpath(*target_relative.split("/"))
         _write_bytes(target_path, target_bytes)
@@ -465,6 +518,9 @@ def _write_lifecycle_fixture(root: Path, profile: ScaleProfile) -> None:
             _json_bytes(receipt),
         )
 
+        _fixture_progress(progress_callback, "fixture-mint", index + 1, profile.mint_receipts)
+
+    _fixture_progress(progress_callback, "fixture-index", 0, 1)
     indexed = archive_services.index_archive(root)
     if indexed.get("ok") is not True:
         raise BenchmarkFailure("retirement_builder_index_blocked")
@@ -478,6 +534,8 @@ def _write_lifecycle_fixture(root: Path, profile: ScaleProfile) -> None:
     if not isinstance(seed_receipt, dict):
         raise BenchmarkFailure("retirement_builder_preview_missing")
 
+    _fixture_progress(progress_callback, "fixture-index", 1, 1)
+    _fixture_progress(progress_callback, "fixture-retired", 0, profile.retired_receipts)
     for index in range(profile.retired_receipts):
         if index == 0:
             retired_id = seed_id
@@ -511,11 +569,16 @@ def _write_lifecycle_fixture(root: Path, profile: ScaleProfile) -> None:
             _json_bytes(receipt),
         )
 
+        _fixture_progress(progress_callback, "fixture-retired", index + 1, profile.retired_receipts)
+
     seed_source_path.unlink()
 
     plain_count = profile.zettels - profile.mint_receipts - 1
+    if profile.independent_mint_sources:
+        plain_count -= profile.mint_receipts - 1
     if plain_count < 1:
         raise BenchmarkFailure("synthetic_zettel_profile_invalid")
+    _fixture_progress(progress_callback, "fixture-canonical", 0, plain_count)
     for index in range(plain_count):
         zettel_id = f"zet_20260827_letter148_plain_{index:05d}"
         title = (
@@ -528,6 +591,7 @@ def _write_lifecycle_fixture(root: Path, profile: ScaleProfile) -> None:
             if index == 0
             else f"Synthetic plain scale body {index}."
         )
+        body = _fixture_body(profile, index, body)
         filename = (
             PRIVATE_PATH_SENTINEL
             if index == 0
@@ -541,6 +605,7 @@ def _write_lifecycle_fixture(root: Path, profile: ScaleProfile) -> None:
             root / "zettels" / filename,
             _render_zettel(frontmatter, body),
         )
+        _fixture_progress(progress_callback, "fixture-canonical", index + 1, plain_count)
 
 
 def _count_fixture(root: Path) -> dict[str, int]:
@@ -580,11 +645,13 @@ def _count_fixture(root: Path) -> dict[str, int]:
     }
 
 
-def build_fixture(root: Path, profile: ScaleProfile) -> dict[str, Any]:
+def build_fixture(
+    root: Path, profile: ScaleProfile, *, progress_callback: Any = None
+) -> dict[str, Any]:
     started = time.perf_counter()
     _copy_archive_skeleton(root)
-    _write_object_fixture(root, profile.unique_objets)
-    _write_lifecycle_fixture(root, profile)
+    _write_object_fixture(root, profile, progress_callback)
+    _write_lifecycle_fixture(root, profile, progress_callback)
     counts = _count_fixture(root)
     expected = {
         "unique_objets": profile.unique_objets,
@@ -606,8 +673,62 @@ def build_fixture(root: Path, profile: ScaleProfile) -> dict[str, Any]:
     }
 
 
-def _progress_elapsed_seconds(stderr: str) -> list[float]:
-    return [float(value) for value in ELAPSED_SECONDS_RE.findall(stderr)]
+def describe_fixture_payload(root: Path) -> dict[str, Any]:
+    """Measure generated bytes, not declared sizes; never expose fixture text."""
+    object_sizes = Counter(
+        path.stat().st_size
+        for path in (root / "objects" / "sha256").glob("*/*")
+    )
+    canonical_sizes = Counter(
+        path.stat().st_size for path in (root / "zettels").glob("*.md")
+    )
+    source_paths: set[str] = set()
+    snapshot_paths: set[str] = set()
+    for path in (root / "receipts" / "mint").glob("*.mint.json"):
+        receipt = json.loads(path.read_text(encoding="utf-8"))
+        source_paths.add(receipt["source"]["path"])
+        snapshot_paths.add(receipt["snapshot"]["path"])
+    return {
+        "object_total_bytes": sum(
+            size * count for size, count in object_sizes.items()
+        ),
+        "object_size_distribution": [
+            {"bytes": size, "count": count}
+            for size, count in sorted(object_sizes.items())
+        ],
+        "canonical_total_bytes": sum(
+            size * count for size, count in canonical_sizes.items()
+        ),
+        "canonical_file_count": sum(canonical_sizes.values()),
+        "inbox_file_count": sum(1 for _path in (root / "inbox").glob("*.md")),
+        "canonical_min_bytes": min(canonical_sizes, default=0),
+        "canonical_max_bytes": max(canonical_sizes, default=0),
+        "independent_mint_source_count": len(source_paths),
+        "independent_mint_snapshot_count": len(snapshot_paths),
+        "cache_condition": "generated_in_current_process_os_caches_uncontrolled",
+        "claim_boundary": (
+            "Deterministic synthetic metadata and payload regression only; "
+            "not a reproduction or timing proof of any private client archive."
+        ),
+    }
+
+
+class _TimedProgressCapture(io.StringIO):
+    """Measure delivery time, not the command's self-reported elapsed=0 line."""
+
+    def __init__(self, started: float, forward_stream: Any = None) -> None:
+        super().__init__()
+        self.started = started
+        self.status_times: list[float] = []
+        self.forward_stream = forward_stream
+
+    def write(self, value: str) -> int:
+        if ELAPSED_SECONDS_RE.search(value):
+            self.status_times.append(time.perf_counter() - self.started)
+        if self.forward_stream is not None:
+            self.forward_stream.write(value)
+            self.forward_stream.flush()
+        return super().write(value)
 
 
 def _maximum_status_gap(
@@ -647,11 +768,22 @@ def run_operational_doctor(
     root: Path,
     *,
     expected_objets: int,
+    progress_output: Any = None,
 ) -> dict[str, Any]:
     counters: Counter[str] = Counter()
     stage_timings: dict[str, float] = {}
 
+    error_codes: Counter[str] = Counter()
+
     class InstrumentedDoctor(archive_cli.Doctor):
+        def run(self) -> Any:
+            result = super().run()
+            for item in result:
+                if item.severity == "ERROR":
+                    code = str(item.code)
+                    error_codes[code if re.fullmatch(r"[a-z][a-z0-9_]{0,95}", code) else "unknown_error"] += 1
+            return result
+
         def _run_stage(self, stage_name: str, stage_func: Any) -> None:
             stage_started = time.perf_counter()
             try:
@@ -688,10 +820,10 @@ def run_operational_doctor(
             return super()._check_retired_draft_receipts()
 
     stdout = io.StringIO()
-    stderr = io.StringIO()
     real_stable_hash = archive_doctor.observe_stable_regular_file_sha256
     real_edge_index = archive_services.edge_receipt_paths_by_source_segment
     started = time.perf_counter()
+    stderr = _TimedProgressCapture(started, progress_output)
     with (
         mock.patch.object(archive_cli, "Doctor", InstrumentedDoctor),
         mock.patch.object(
@@ -726,7 +858,7 @@ def run_operational_doctor(
         summary = json.loads(stdout_value)
     except json.JSONDecodeError as exc:
         raise BenchmarkFailure("operational_summary_json_invalid") from exc
-    progress_times = _progress_elapsed_seconds(stderr_value)
+    progress_times = stderr.status_times
     first_status_seconds = progress_times[0] if progress_times else operation_seconds
     max_status_gap_seconds = _maximum_status_gap(
         progress_times,
@@ -782,6 +914,7 @@ def run_operational_doctor(
         "ok": all(checks.values()),
         "cli_exit_code": exit_code,
         "summary_ok": bool(summary.get("ok")),
+        "error_code_counts": dict(sorted(error_codes.items())),
         "timing_seconds": {
             "doctor_operational": round(operation_seconds, 6),
             "first_status": round(first_status_seconds, 6),
@@ -798,6 +931,7 @@ def run_operational_doctor(
         "progress": {
             "content_free_status_line_count": len(progress_times),
             "heartbeat_interval_limit_seconds": 10,
+            "timing_basis": "observed_stderr_delivery",
         },
         "instrumentation": {
             **dict(sorted(counters.items())),
@@ -831,11 +965,24 @@ def run_deep_full_doctor(
     root: Path,
     *,
     expected_objets: int,
+    expected_object_bytes: int = 0,
+    regression_budget_seconds: float = 180.0,
+    progress_output: Any = None,
 ) -> dict[str, Any]:
     counters: Counter[str] = Counter()
     stage_timings: dict[str, float] = {}
 
+    error_codes: Counter[str] = Counter()
+
     class InstrumentedDeepDoctor(archive_cli.Doctor):
+        def run(self) -> Any:
+            result = super().run()
+            for item in result:
+                if item.severity == "ERROR":
+                    code = str(item.code)
+                    error_codes[code if re.fullmatch(r"[a-z][a-z0-9_]{0,95}", code) else "unknown_error"] += 1
+            return result
+
         def _run_stage(self, stage_name: str, stage_func: Any) -> None:
             stage_started = time.perf_counter()
             try:
@@ -872,10 +1019,10 @@ def run_deep_full_doctor(
             return super()._check_retired_draft_receipts()
 
     stdout = io.StringIO()
-    stderr = io.StringIO()
     real_stable_hash = archive_doctor.observe_stable_regular_file_sha256
     real_edge_index = archive_services.edge_receipt_paths_by_source_segment
     started = time.perf_counter()
+    stderr = _TimedProgressCapture(started, progress_output)
     with (
         mock.patch.object(archive_cli, "Doctor", InstrumentedDeepDoctor),
         mock.patch.object(
@@ -910,7 +1057,7 @@ def run_deep_full_doctor(
         summary = json.loads(stdout_value)
     except json.JSONDecodeError as exc:
         raise BenchmarkFailure("deep_summary_json_invalid") from exc
-    progress_times = _progress_elapsed_seconds(stderr_value)
+    progress_times = stderr.status_times
     first_status_seconds = progress_times[0] if progress_times else operation_seconds
     max_status_gap_seconds = _maximum_status_gap(
         progress_times,
@@ -935,7 +1082,9 @@ def run_deep_full_doctor(
         stderr_value,
     )
     checks = {
-        "completed_within_180_seconds": operation_seconds <= 180.0,
+        "completed_within_configured_regression_budget": (
+            operation_seconds <= regression_budget_seconds
+        ),
         "first_status_within_2_seconds": first_status_seconds <= 2.0,
         "heartbeat_gap_within_10_seconds": max_status_gap_seconds <= 10.0,
         "object_stable_hash_call_count_exact": len(normalized_paths)
@@ -977,6 +1126,29 @@ def run_deep_full_doctor(
         "ok": all(checks.values()),
         "cli_exit_code": exit_code,
         "summary_ok": bool(summary.get("ok")),
+        "error_code_counts": dict(sorted(error_codes.items())),
+        "regression_budget_seconds": regression_budget_seconds,
+        "byte_throughput": {
+            "object_total_bytes": expected_object_bytes,
+            "complete_verified_pass": (
+                checks["all_objets_rehashed_now"]
+                and checks["completion_revalidation_current"]
+                and checks["summary_reports_ok"]
+            ),
+            "object_bytes_per_whole_doctor_second": (
+                round(expected_object_bytes / max(operation_seconds, 0.000001), 6)
+                if (
+                    checks["all_objets_rehashed_now"]
+                    and checks["completion_revalidation_current"]
+                    and checks["summary_reports_ok"]
+                )
+                else None
+            ),
+            "claim_boundary": (
+                "Whole Doctor elapsed time includes metadata and receipt checks; "
+                "this is not raw disk throughput or a size-independent 180-second SLA."
+            ),
+        },
         "timing_seconds": {
             "doctor_deep_full": round(operation_seconds, 6),
             "first_status": round(first_status_seconds, 6),
@@ -993,6 +1165,7 @@ def run_deep_full_doctor(
         "progress": {
             "content_free_status_line_count": len(progress_times),
             "heartbeat_interval_limit_seconds": 10,
+            "timing_basis": "observed_stderr_delivery",
         },
         "stable_hash_calls": len(normalized_paths),
         "unique_paths_hashed": len(path_counts),
@@ -1026,26 +1199,78 @@ def run_deep_full_doctor(
     }
 
 
-def run_benchmark(profile: ScaleProfile) -> dict[str, Any]:
-    with tempfile.TemporaryDirectory(
+@contextmanager
+def _benchmark_progress(stage: str, stream: Any):
+    if stream is None:
+        yield None
+        return
+    # Close this reporter BEFORE measuring Doctor; its heartbeat must never
+    # fake the measured command's own first-status or heartbeat evidence.
+    with redirect_stderr(stream):
+        reporter = archive_cli.CommandProgressReporter(
+            True, label="doctor-benchmark", heartbeat_interval_seconds=5.0
+        )
+        reporter.progress(stage, "start", None, None)
+        try:
+            yield reporter.progress
+        finally:
+            reporter.progress(stage, "done", None, None)
+            reporter.close()
+
+
+def run_benchmark(
+    profile: ScaleProfile,
+    *,
+    deep_regression_budget_seconds: float = 180.0,
+    progress_output: Any = None,
+) -> dict[str, Any]:
+    temporary = tempfile.TemporaryDirectory(
         prefix="wom-letter148-doctor-scale-"
-    ) as temporary:
-        archive_root = Path(temporary) / "archive"
-        fixture = build_fixture(archive_root, profile)
+    )
+    try:
+        archive_root = Path(temporary.name) / "archive"
+        with _benchmark_progress("fixture", progress_output) as progress_callback:
+            fixture = build_fixture(
+                archive_root, profile, progress_callback=progress_callback
+            )
+            _fixture_progress(progress_callback, "fixture-payload-observation", 0, 1)
+            payload = describe_fixture_payload(archive_root)
+            _fixture_progress(progress_callback, "fixture-payload-observation", 1, 1)
         operational = run_operational_doctor(
             archive_root,
             expected_objets=profile.unique_objets,
+            progress_output=progress_output,
         )
         deep = run_deep_full_doctor(
             archive_root,
             expected_objets=profile.unique_objets,
+            expected_object_bytes=payload["object_total_bytes"],
+            regression_budget_seconds=deep_regression_budget_seconds,
+            progress_output=progress_output,
         )
+    finally:
+        with _benchmark_progress("fixture-cleanup", progress_output):
+            temporary.cleanup()
     ok = operational["ok"] and deep["ok"]
     return {
         "ok": ok,
         "schema": BENCHMARK_SCHEMA,
         "profile": profile.name,
         "fixture": fixture,
+        "fixture_payload": payload,
+        "budgets": {
+            "operational_seconds": 180.0,
+            "deep_fixture_regression_seconds": deep_regression_budget_seconds,
+            "deep_budget_is_client_archive_sla": False,
+            "first_status_seconds": 2.0,
+            "heartbeat_gap_seconds": 10.0,
+        },
+        "timing_scope": {
+            "start": "in_process_cli_dispatch",
+            "status_observed_at": "in_process_stderr_write",
+            "python_startup_and_imports_included": False,
+            "external_pipe_or_terminal_rendering_measured": False,
+        },
         "operational_doctor": operational,
         "deep_full_doctor": deep,
         "safety": {
@@ -1079,7 +1304,7 @@ def main(argv: list[str] | None = None) -> int:
     profile_group.add_argument(
         "--full-scale",
         action="store_true",
-        help="Use the exact Letter 148 production-scale cardinalities.",
+        help="Use the historical Letter 148 counts, not its private byte distribution.",
     )
     profile_group.add_argument(
         "--reduced",
@@ -1087,10 +1312,32 @@ def main(argv: list[str] | None = None) -> int:
         help="Use the bounded normal-suite fixture.",
     )
     parser.add_argument("--format", choices=["json", "text"], default="text")
+    parser.add_argument(
+        "--mixed-payload",
+        action="store_true",
+        help="Vary object/body bytes and give each mint receipt its own source/snapshot.",
+    )
+    parser.add_argument(
+        "--deep-regression-budget-seconds",
+        type=float,
+        default=180.0,
+        help="Explicit synthetic deep-run regression budget; default 180, not a client SLA.",
+    )
     args = parser.parse_args(argv)
+    if (
+        not math.isfinite(args.deep_regression_budget_seconds)
+        or args.deep_regression_budget_seconds <= 0
+    ):
+        parser.error("--deep-regression-budget-seconds must be positive and finite")
     profile = FULL_PROFILE if args.full_scale else REDUCED_PROFILE
+    if args.mixed_payload:
+        profile = mixed_payload_profile(profile)
     try:
-        result = run_benchmark(profile)
+        result = run_benchmark(
+            profile,
+            deep_regression_budget_seconds=args.deep_regression_budget_seconds,
+            progress_output=sys.stderr,
+        )
     except BenchmarkFailure as exc:
         result = _safe_failure(exc.reason_code, profile)
     except Exception:

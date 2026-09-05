@@ -191,3 +191,34 @@ not complete at this checkpoint.
   180 seconds but returned a failing diagnostic, so the combined gate remains
   failed. The same fixture is retained to expose content-free error counts and
   isolate that discrepancy instead of rebuilding it or weakening the gate.
+- A same-fixture operational retry completed all diagnostic and traversal
+  checks in 120.296 seconds. That retry does not explain or erase the first
+  failure. The candidate retains the discrepancy and requires fresh isolated
+  CI with preserved error counts before any release decision.
+- The small CLI entrypoint's initial eleven tests passed, including real
+  compilation, first status, independent heartbeat, parent termination, and
+  unchanged JSON stdout. The progress-name/default table is checked against
+  the actual parser. The installed-wheel driver additionally measures the
+  complete public-launcher Doctor process; that candidate run is still pending.
+- The real partial-no-op cleanup test now continues through public CLI
+  `--resume` without transaction, approval, or checkpoint identifiers. It
+  reuses existing authority, opens no new approval, compacts the interrupted
+  history, preserves domain bytes, and permits the next ordinary preview. The
+  existing external-writer quiescence assertion remains required in this
+  pre-session release. This extended case passed.
+- A separate deterministic Doctor test reproduced a directory-allocation-only
+  false boundary change after inventory completion. Root and inventory identity
+  now exclude directory size only; file size, inode/device/type/reparse state,
+  timestamps, and membership remain guarded. Combined real file/member changes
+  still fail even when directory timestamps are restored. This independent
+  reproduction does not establish the cause of the discarded first-run issue.
+- Final bounded review found one service-level truth mismatch: approval replay
+  correctly observed an unavailable index but still reported a rebuild blocker.
+  Its blocker now uses the same fixed preflight reason. Four focused draft
+  tests and independent replay passed; neither index rebuilding nor approval
+  was enabled by unavailable evidence.
+- Independent review of the startup implementation and its launcher/version
+  boundary found no further actionable findings. Startup plus launcher tests
+  passed with fifteen tests and thirty-one subtests. The source is being frozen
+  for supported-platform CI and complete installed-wheel verification; none of
+  these local results claims a published release or private client completion.

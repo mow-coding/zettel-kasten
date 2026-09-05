@@ -387,6 +387,7 @@ import secrets
 import shutil
 import sqlite3
 import stat
+import struct
 import subprocess
 import sys
 import threading
@@ -401,6 +402,7 @@ from contextlib import (
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timezone
 from fnmatch import fnmatchcase
+from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable, Iterator, Mapping
 from uuid import UUID
@@ -467,6 +469,7 @@ from .exact_human_approval_workflow import (
 from .exact_operation_manifest import ExactOperationManifestError, ExactOperationProgress
 from .markdown_display import project_wom_safe_markdown
 from .process_launch import noninteractive_creationflags
+from .cli_entry import handoff_startup_progress
 from .resource_paths import runtime_release_note_path, runtime_resource_root
 from .schema_validator import validate_schema
 
@@ -642,6 +645,215 @@ DOCTOR_ZETTEL_TEXT_MAX_BYTES = 64 * 1024 * 1024
 DOCTOR_PARALLEL_IN_FLIGHT_FACTOR = 2
 DOCTOR_ARCHIVE_TREE_INVENTORY_MAX_ENTRIES = 1_000_000
 DOCTOR_RUN_CACHE_SNAPSHOT_MAX_ENTRIES = 250_000
+
+
+def _doctor_parse_windows_directory_generation_buffer(
+    raw: bytes | bytearray | memoryview,
+) -> dict[str, tuple[Any, ...]]:
+    """Parse one FILE_ID_EXTD_DIR_INFO observation batch in memory."""
+
+    header_bytes = 88
+    try:
+        view = memoryview(raw).cast("B")
+    except (TypeError, ValueError):
+        raise OSError(
+            "doctor_windows_directory_generation_buffer_invalid"
+        ) from None
+    if len(view) < header_bytes:
+        raise OSError("doctor_windows_directory_generation_buffer_invalid")
+    results: dict[str, tuple[Any, ...]] = {}
+    offset = 0
+    while True:
+        if offset < 0 or offset + header_bytes > len(view):
+            raise OSError("doctor_windows_directory_generation_buffer_invalid")
+        (
+            next_offset,
+            _file_index,
+            creation_time,
+            _last_access_time,
+            last_write_time,
+            change_time,
+            end_of_file,
+            _allocation_size,
+            attributes,
+            name_bytes,
+            _ea_size,
+            reparse_tag,
+            file_id,
+        ) = struct.unpack_from("<IIqqqqqqIIII16s", view, offset)
+        name_start = offset + header_bytes
+        name_end = name_start + int(name_bytes)
+        if (
+            name_bytes <= 0
+            or name_bytes % 2
+            or name_end > len(view)
+            or (
+                next_offset
+                and (
+                    next_offset < header_bytes
+                    or next_offset % 8
+                    or offset + next_offset > len(view)
+                    or name_end > offset + next_offset
+                )
+            )
+        ):
+            raise OSError("doctor_windows_directory_generation_buffer_invalid")
+        try:
+            name = view[name_start:name_end].tobytes().decode(
+                "utf-16-le",
+                errors="strict",
+            )
+        except UnicodeDecodeError:
+            raise OSError(
+                "doctor_windows_directory_generation_name_invalid"
+            ) from None
+        if not name or "\x00" in name or "/" in name or "\\" in name:
+            raise OSError("doctor_windows_directory_generation_name_invalid")
+        if name not in {".", ".."}:
+            if name in results:
+                raise OSError(
+                    "doctor_windows_directory_generation_duplicate_name"
+                )
+            if not any(file_id):
+                raise OSError(
+                    "doctor_windows_directory_generation_id_unavailable"
+                )
+            results[name] = (
+                "windows_directory_entry_observation_v1",
+                file_id.hex(),
+                int(attributes),
+                int(creation_time),
+                int(last_write_time),
+                int(change_time),
+                int(end_of_file),
+                (
+                    int(reparse_tag)
+                    if int(attributes) & 0x00000400
+                    else 0
+                ),
+            )
+        if next_offset == 0:
+            break
+        offset += int(next_offset)
+    return results
+
+
+@lru_cache(maxsize=1)
+def _doctor_windows_directory_generation_query() -> Callable[
+    [int], dict[str, tuple[Any, ...]]
+]:
+    """Build one cached Win32 batch query for child generations.
+
+    Python exposes Windows creation time as ``st_ctime_ns``.  That value does
+    not change for an in-place write, so it cannot close Doctor's completion
+    snapshot.  ``FileIdExtdDirectoryInfo`` reports each child's ``ChangeTime``
+    and 128-bit file id in batches through Doctor's already-held
+    exact directory handle.  This avoids opening tens of thousands of child
+    handles while retaining a content-free cooperative-writer drift detector.
+    Windows permits duplicate directory metadata to be stale, so callers must
+    fail closed for hardlinks, duplicate ids, or inconsistent observations;
+    this is not a cryptographic content proof.
+    """
+
+    if os.name != "nt":
+        raise OSError("doctor_windows_directory_generation_wrong_platform")
+
+    import ctypes
+    from ctypes import wintypes
+
+    class FileIdInformation(ctypes.Structure):
+        _fields_ = [
+            ("VolumeSerialNumber", ctypes.c_ulonglong),
+            ("FileId", ctypes.c_ubyte * 16),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    get_information_ex = kernel32.GetFileInformationByHandleEx
+    get_information_ex.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+    ]
+    get_information_ex.restype = wintypes.BOOL
+
+    buffer_bytes = 256 * 1024
+    file_id_extd_directory_info = 19
+    file_id_extd_directory_restart_info = 20
+    error_no_more_files = 18
+
+    def query(handle: int) -> dict[str, tuple[Any, ...]]:
+        if not isinstance(handle, int) or handle <= 0:
+            raise OSError("doctor_windows_directory_generation_handle_invalid")
+        parent_file_id = FileIdInformation()
+        if not get_information_ex(
+            handle,
+            18,  # FileIdInfo
+            ctypes.byref(parent_file_id),
+            ctypes.sizeof(parent_file_id),
+        ) or not any(parent_file_id.FileId):
+            raise OSError(
+                "doctor_windows_directory_generation_parent_id_unavailable"
+            )
+        volume_serial = int(parent_file_id.VolumeSerialNumber)
+        raw_results: dict[str, tuple[Any, ...]] = {}
+        information_class = file_id_extd_directory_restart_info
+        empty_batch_seen = False
+        while True:
+            buffer = ctypes.create_string_buffer(buffer_bytes)
+            ctypes.set_last_error(0)
+            succeeded = bool(
+                get_information_ex(
+                    handle,
+                    information_class,
+                    buffer,
+                    buffer_bytes,
+                )
+            )
+            information_class = file_id_extd_directory_info
+            if not succeeded:
+                if ctypes.get_last_error() == error_no_more_files:
+                    break
+                raise OSError(
+                    "doctor_windows_directory_generation_query_unavailable"
+                )
+            batch = _doctor_parse_windows_directory_generation_buffer(
+                memoryview(buffer)
+            )
+            if not batch:
+                if empty_batch_seen:
+                    raise OSError(
+                        "doctor_windows_directory_generation_no_progress"
+                    )
+                empty_batch_seen = True
+            for name, token in batch.items():
+                if name in raw_results:
+                    raise OSError(
+                        "doctor_windows_directory_generation_duplicate_name"
+                    )
+                raw_results[name] = token
+                if (
+                    len(raw_results)
+                    > DOCTOR_ARCHIVE_TREE_INVENTORY_MAX_ENTRIES
+                ):
+                    raise OSError(
+                        "doctor_windows_directory_generation_capacity_exceeded"
+                    )
+        id_counts: dict[str, int] = {}
+        for token in raw_results.values():
+            file_id = str(token[1])
+            id_counts[file_id] = id_counts.get(file_id, 0) + 1
+        return {
+            name: (
+                "windows_directory_generation_observation_v1",
+                volume_serial,
+                *token[1:],
+                id_counts[str(token[1])] == 1,
+            )
+            for name, token in raw_results.items()
+        }
+
+    return query
 DIAGNOSTIC_SEVERITIES = ("ERROR", "WARN", "INFO")
 DIAGNOSTIC_LEVEL_ALIASES = {
     "ERROR": "ERROR",
@@ -1311,6 +1523,7 @@ def _make_stage_progress_callback(
             log_handle.flush()
         if not should_print_to_stderr(stage, message, current, total, now):
             return
+        handoff_startup_progress()
         last_stderr_by_stage[stage] = now
         if current is not None and total:
             last_count_by_stage[stage] = (current, total, now)
@@ -1474,6 +1687,8 @@ class CommandProgressReporter:
 
     def _emit_stderr(self, stage: str, message: str, current: int | None, total: int | None) -> None:
         """Keep progress-stream failures observational, never transactional."""
+        if self._stderr_callback is not None:
+            handoff_startup_progress()
         with self._callback_lock:
             callback = self._stderr_callback
             if callback is None:
@@ -1907,8 +2122,20 @@ class Doctor:
         # keys (which may fall back to a resolved external path).
         self._lexical_archive_relative_cache: dict[str, str | None] = {}
         self._archive_tree_file_identities: dict[str, tuple[int, ...]] = {}
+        self._archive_tree_file_generation_tokens: dict[
+            str, tuple[Any, ...]
+        ] = {}
+        self._archive_tree_file_generation_hash_required: set[str] = set()
         self._archive_tree_directory_identities: dict[str, tuple[int, ...]] = {}
         self._archive_tree_directory_entry_digests: dict[str, str] = {}
+        # Windows completion uses this content-free projection for its first
+        # whole-tree barrier.  It is deliberately separate from the full
+        # scandir+lstat digest above: the native directory query is only a
+        # cooperative-writer race detector, never a cryptographic proof.
+        self._archive_tree_directory_native_entry_digests: dict[str, str] = {}
+        self._archive_tree_directory_native_fast_path_unavailable: set[str] = (
+            set()
+        )
         self._archive_tree_unsafe_entries: list[tuple[Path, bool]] = []
         self._archive_tree_inventory_complete = False
         self._archive_root_boundary_failure_reported = False
@@ -2535,6 +2762,26 @@ class Doctor:
         finally:
             guard.release(path)
 
+    @staticmethod
+    def _retained_windows_directory_generations(
+        guard: Any,
+        path: Path,
+    ) -> dict[str, tuple[Any, ...]] | None:
+        """Enumerate child ChangeTime/FileId tokens through the held handle."""
+
+        if os.name != "nt":
+            return {}
+        accessor = getattr(guard, "retained_windows_handle", None)
+        if not callable(accessor):
+            return None
+        try:
+            handle = accessor(path)
+            if not isinstance(handle, int):
+                return None
+            return _doctor_windows_directory_generation_query()(handle)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return None
+
     def _edge_receipt_source_load_summary(self, prefix: str) -> str:
         return (
             f"{prefix} sources={self._edge_source_sources_loaded} "
@@ -2643,12 +2890,67 @@ class Doctor:
             int(value.st_dev),
             int(getattr(value, "st_ino", 0) or 0),
             int(value.st_mode),
-            int(value.st_size),
+            # Directory allocation may change independently of its members.
+            # The generation barrier compares member identities separately.
+            0 if stat.S_ISDIR(value.st_mode) else int(value.st_size),
             int(getattr(value, "st_mtime_ns", 0)),
             int(getattr(value, "st_ctime_ns", 0)),
             int(getattr(value, "st_file_attributes", 0)),
             int(getattr(value, "st_nlink", 0) or 0),
         )
+
+    @classmethod
+    def _file_generation_token_from_directory_observation(
+        cls,
+        observed: os.stat_result,
+        native_token: tuple[Any, ...] | None,
+    ) -> tuple[Any, ...] | None:
+        """Bind one lstat result to its held-directory generation record.
+
+        POSIX ``st_ctime_ns`` is a change timestamp and already participates
+        in the stat identity.  On Windows it is a creation timestamp, so the
+        native directory observation supplies the child's ChangeTime and
+        FileId128.  Windows permits this batch metadata to be stale, so only a
+        single-link, unique-id, internally consistent observation may use the
+        fast cooperative-writer drift detector.  The caller routes hardlinks
+        and duplicate ids to descriptor-bound content hashing instead of
+        treating this metadata as a content proof.
+        """
+
+        if (
+            stat.S_ISLNK(observed.st_mode)
+            or archive_doctor._is_reparse_point(observed)
+            or not stat.S_ISREG(observed.st_mode)
+        ):
+            return None
+        if os.name != "nt":
+            return (
+                "posix_file_generation_v1",
+                *cls._inventory_stat_identity(observed),
+            )
+        if (
+            not isinstance(native_token, tuple)
+            or len(native_token) != 10
+            or native_token[0]
+            != "windows_directory_generation_observation_v1"
+        ):
+            return None
+        # Name lookup occurs inside the retained exact parent.  Cross-check the
+        # independently observed kind, size, attributes and reparse tag before
+        # accepting its opaque FileId/ChangeTime generation.
+        if (
+            int(getattr(observed, "st_nlink", 0) or 0) < 1
+            or type(native_token[9]) is not bool
+            or int(observed.st_size) != int(native_token[7])
+            or int(getattr(observed, "st_file_attributes", 0))
+            != int(native_token[3])
+            or (
+                int(native_token[3]) & 0x00000400
+                and int(native_token[8]) == 0
+            )
+        ):
+            return None
+        return native_token
 
     @staticmethod
     def _inventory_directory_identity(
@@ -2669,7 +2971,10 @@ class Doctor:
     @classmethod
     def _inventory_directory_entry_digest(
         cls,
-        observations: Iterable[tuple[Path, os.stat_result]],
+        observations: Iterable[
+            tuple[Path, os.stat_result]
+            | tuple[Path, os.stat_result, tuple[Any, ...] | None]
+        ],
     ) -> str:
         """Bind one directory's exact names, kinds, and entry identities.
 
@@ -2679,7 +2984,13 @@ class Doctor:
         """
 
         signatures: list[tuple[Any, ...]] = []
-        for path, observed in observations:
+        for observation in observations:
+            path, observed = observation[:2]
+            generation_token = (
+                observation[2]
+                if len(observation) == 3
+                else ("generation_not_supplied",)
+            )
             if (
                 not stat.S_ISLNK(observed.st_mode)
                 and not archive_doctor._is_reparse_point(observed)
@@ -2693,7 +3004,10 @@ class Doctor:
                 and stat.S_ISREG(observed.st_mode)
             ):
                 kind = "file"
-                identity = cls._inventory_stat_identity(observed)
+                identity = (
+                    *cls._inventory_stat_identity(observed),
+                    generation_token,
+                )
             else:
                 kind = "unsafe"
                 identity = cls._inventory_stat_identity(observed)
@@ -2705,6 +3019,88 @@ class Doctor:
             separators=(",", ":"),
         ).encode("utf-8")
         return hashlib.sha256(payload).hexdigest()
+
+    @staticmethod
+    def _inventory_native_directory_entry_digest(
+        generations: Mapping[str, tuple[Any, ...]],
+    ) -> tuple[str, bool] | None:
+        """Hash one exact native child-name/generation projection in memory.
+
+        The digest contains exact names, but only the SHA-256 is retained or
+        compared.  ``FileIdExtdDirectoryInfo`` duplicate metadata may be stale,
+        so this projection is eligible for the fast first barrier only when all
+        records are internally canonical, non-reparse, and have unique nonzero
+        file ids.  An ineligible but well-formed baseline can still use the
+        existing descriptor-hash/full-directory fallback without losing the
+        exact projection.
+        """
+
+        if not isinstance(generations, Mapping):
+            return None
+        signatures: list[tuple[Any, ...]] = []
+        file_ids: list[str] = []
+        volume_serial: int | None = None
+        fast_path_eligible = True
+        for name, token in generations.items():
+            if (
+                not isinstance(name, str)
+                or not name
+                or name in {".", ".."}
+                or "\x00" in name
+                or "/" in name
+                or "\\" in name
+                or not isinstance(token, tuple)
+                or len(token) != 10
+                or token[0]
+                != "windows_directory_generation_observation_v1"
+                or isinstance(token[1], bool)
+                or not isinstance(token[1], int)
+                or token[1] < 0
+                or token[1] > (2**64 - 1)
+                or not isinstance(token[2], str)
+                or re.fullmatch(r"[0-9a-f]{32}", token[2]) is None
+                or token[2] == ("0" * 32)
+                or any(
+                    isinstance(value, bool) or not isinstance(value, int)
+                    for value in token[3:9]
+                )
+                or token[3] < 0
+                or token[3] > (2**32 - 1)
+                or token[7] < 0
+                or token[8] < 0
+                or token[8] > (2**32 - 1)
+                or type(token[9]) is not bool
+                or (
+                    not int(token[3]) & 0x00000400
+                    and int(token[8]) != 0
+                )
+            ):
+                return None
+            if volume_serial is None:
+                volume_serial = int(token[1])
+            elif int(token[1]) != volume_serial:
+                return None
+            file_id = str(token[2])
+            file_ids.append(file_id)
+            if (
+                token[9] is not True
+                or bool(int(token[3]) & 0x00000400)
+                or (
+                    bool(int(token[3]) & 0x00000400)
+                    and int(token[8]) == 0
+                )
+            ):
+                fast_path_eligible = False
+            signatures.append((name, *token))
+        if len(file_ids) != len(set(file_ids)):
+            fast_path_eligible = False
+        signatures.sort(key=lambda item: (str(item[0]).casefold(), item))
+        payload = json.dumps(
+            signatures,
+            ensure_ascii=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(payload).hexdigest(), fast_path_eligible
 
     @staticmethod
     def _archive_tree_key(relative: str) -> str:
@@ -3190,7 +3586,11 @@ class Doctor:
         expected_identity: tuple[int, ...],
         executor: _DoctorBoundedDaemonExecutor,
         guard: Any,
-    ) -> tuple[tuple[int, ...], str] | None:
+    ) -> tuple[
+        tuple[int, ...],
+        str,
+        dict[str, tuple[Any, ...]],
+    ] | None:
         """Re-observe one exact directory without exposing member names."""
 
         path = self.archive_root
@@ -3231,16 +3631,19 @@ class Doctor:
                     entries.sort(
                         key=lambda item: (item.name.casefold(), item.name)
                     )
-
                 def observe_entry(
                     entry: os.DirEntry[str],
-                ) -> tuple[Path, os.stat_result | None]:
+                ) -> tuple[
+                    Path,
+                    str,
+                    os.stat_result | None,
+                ]:
                     child_path = Path(entry.path)
                     try:
                         observed = os.lstat(child_path)
                     except OSError:
                         observed = None
-                    return child_path, observed
+                    return child_path, entry.name, observed
 
                 if len(entries) >= 32:
                     observed_entries = self._bounded_executor_results(
@@ -3253,9 +3656,62 @@ class Doctor:
                     )
                 else:
                     observed_entries = map(observe_entry, entries)
-                observations = tuple(observed_entries)
-                if any(observed is None for _child, observed in observations):
+                unbound_observations = tuple(observed_entries)
+                if any(
+                    observed is None
+                    for _child, _name, observed in unbound_observations
+                ):
                     return None
+                # Keep the native generation query after every child lstat.
+                # A cooperative same-inode writer that restores mtime after an
+                # early child observation is then caught by ChangeTime in this
+                # final per-directory observation.
+                native_generations = (
+                    self._retained_windows_directory_generations(guard, path)
+                )
+                if native_generations is None:
+                    return None
+                if os.name == "nt":
+                    if relative == ".":
+                        native_generations = {
+                            name: token
+                            for name, token in native_generations.items()
+                            if name.casefold() not in quarantine_names
+                        }
+                    if set(native_generations) != {
+                        name for _child, name, _observed in unbound_observations
+                    }:
+                        return None
+                    if (
+                        self._inventory_native_directory_entry_digest(
+                            native_generations
+                        )
+                        is None
+                    ):
+                        return None
+                observations: list[
+                    tuple[Path, os.stat_result, tuple[Any, ...] | None]
+                ] = []
+                for child_path, name, observed in unbound_observations:
+                    if observed is None:
+                        return None
+                    generation_token = None
+                    if (
+                        not stat.S_ISLNK(observed.st_mode)
+                        and not archive_doctor._is_reparse_point(observed)
+                        and stat.S_ISREG(observed.st_mode)
+                    ):
+                        generation_token = (
+                            self._file_generation_token_from_directory_observation(
+                                observed,
+                                native_generations.get(name),
+                            )
+                        )
+                        if generation_token is None:
+                            return None
+                    observations.append(
+                        (child_path, observed, generation_token)
+                    )
                 after = os.lstat(path)
                 if (
                     stat.S_ISLNK(after.st_mode)
@@ -3268,11 +3724,87 @@ class Doctor:
                 return (
                     expected_identity,
                     self._inventory_directory_entry_digest(
-                        (child, observed)
-                        for child, observed in observations
+                        (child, observed, generation_token)
+                        for child, observed, generation_token in observations
                         if observed is not None
                     ),
+                    {
+                        child.name: generation_token
+                        for child, observed, generation_token in observations
+                        if observed is not None
+                        and not stat.S_ISLNK(observed.st_mode)
+                        and not archive_doctor._is_reparse_point(observed)
+                        and stat.S_ISREG(observed.st_mode)
+                        and generation_token is not None
+                    },
                 )
+        except OSError:
+            return None
+
+    def _observe_inventory_directory_native_generation(
+        self,
+        relative: str,
+        *,
+        expected_identity: tuple[int, ...],
+        guard: Any,
+    ) -> tuple[tuple[int, ...], str, bool] | None:
+        """Observe one Windows directory through its retained native handle.
+
+        This is only the first of two completion barriers.  The following full
+        barrier still cross-checks scandir, every child lstat, and the native
+        map.  Any unsupported or internally inconsistent native observation
+        returns ``None`` so the caller schedules the existing full fallback
+        and final third directory barrier.
+        """
+
+        if os.name != "nt":
+            return None
+        path = self.archive_root
+        if relative != ".":
+            path = self.archive_root.joinpath(*PurePosixPath(relative).parts)
+        quarantine_names = {
+            name.casefold() for name in SECRET_SAFETY_QUARANTINED_ROOT_DIRS
+        }
+        try:
+            with self._retained_inventory_directory(guard, path) as retained:
+                if not retained:
+                    return None
+                before = os.lstat(path)
+                if (
+                    stat.S_ISLNK(before.st_mode)
+                    or archive_doctor._is_reparse_point(before)
+                    or not stat.S_ISDIR(before.st_mode)
+                    or self._inventory_directory_identity(before)
+                    != expected_identity
+                ):
+                    return None
+                native_generations = (
+                    self._retained_windows_directory_generations(guard, path)
+                )
+                if native_generations is None:
+                    return None
+                if relative == ".":
+                    native_generations = {
+                        name: token
+                        for name, token in native_generations.items()
+                        if name.casefold() not in quarantine_names
+                    }
+                projection = self._inventory_native_directory_entry_digest(
+                    native_generations
+                )
+                if projection is None:
+                    return None
+                after = os.lstat(path)
+                if (
+                    stat.S_ISLNK(after.st_mode)
+                    or archive_doctor._is_reparse_point(after)
+                    or not stat.S_ISDIR(after.st_mode)
+                    or self._inventory_directory_identity(after)
+                    != expected_identity
+                ):
+                    return None
+                digest, fast_path_eligible = projection
+                return expected_identity, digest, fast_path_eligible
         except OSError:
             return None
 
@@ -3313,61 +3845,98 @@ class Doctor:
 
         def file_generation_changed(
             snapshot: tuple[str, Path, tuple[int, ...]],
+            observed_generations: Mapping[str, tuple[Any, ...]],
         ) -> bool:
-            _relative, path, expected = snapshot
+            relative, path, expected = snapshot
             try:
                 observed = os.lstat(path)
             except OSError:
                 return True
-            return bool(
+            if (
                 stat.S_ISLNK(observed.st_mode)
                 or archive_doctor._is_reparse_point(observed)
                 or not stat.S_ISREG(observed.st_mode)
                 or self._stat_identity(observed) != expected
+            ):
+                return True
+            snapshot_key = self._archive_tree_key(relative)
+            expected_generation = self._archive_tree_file_generation_tokens.get(
+                snapshot_key
+            )
+            observed_generation = observed_generations.get(snapshot_key)
+            requires_descriptor_hash = bool(
+                snapshot_key
+                in self._archive_tree_file_generation_hash_required
+                or int(getattr(observed, "st_nlink", 0) or 0) != 1
+                or (
+                    observed_generation is not None
+                    and (
+                        not isinstance(observed_generation, tuple)
+                        or len(observed_generation) != 10
+                        or observed_generation[9] is not True
+                    )
+                )
+            )
+            if requires_descriptor_hash:
+                cached_hash = self._file_sha256_cache.get(
+                    self._file_cache_key(path)
+                )
+                if cached_hash is None or cached_hash[0] != expected:
+                    return True
+                try:
+                    current_hash = sha256_file(
+                        path,
+                        required_root=boundary,
+                    )
+                except OSError:
+                    return True
+                return current_hash != cached_hash[1]
+            if observed_generation is None:
+                # The failed directory observation already schedules a full
+                # final parent barrier.  Do not misreport an unchanged child as
+                # changed merely because that earlier projection was absent.
+                return False
+            return bool(
+                expected_generation is None
+                or observed_generation != expected_generation
             )
 
-        def file_change_pass(pass_number: int) -> tuple[bool, ...]:
+        def file_change_pass(
+            pass_number: int,
+            file_snapshots: tuple[
+                tuple[str, Path, tuple[int, ...]], ...
+            ],
+            observed_generations: Mapping[str, tuple[Any, ...]],
+        ) -> tuple[bool, ...]:
             self._progress(
                 "doctor-cache-snapshot-revalidation",
                 f"file generation barrier pass {pass_number}",
                 0,
-                len(snapshots),
+                len(file_snapshots),
             )
-            if len(snapshots) >= 32:
+            if len(file_snapshots) >= 32:
                 with self._bounded_parallel_map(
-                    file_generation_changed,
-                    snapshots,
-                    max_workers=min(16, len(snapshots)),
+                    lambda snapshot: file_generation_changed(
+                        snapshot,
+                        observed_generations,
+                    ),
+                    file_snapshots,
+                    max_workers=min(16, len(file_snapshots)),
                     thread_name_prefix="wom-doctor-file-revalidate",
                 ) as observations:
                     result = tuple(bool(item) for item in observations)
             else:
                 result = tuple(
-                    file_generation_changed(snapshot)
-                    for snapshot in snapshots
+                    file_generation_changed(snapshot, observed_generations)
+                    for snapshot in file_snapshots
                 )
             self._progress(
                 "doctor-cache-snapshot-revalidation",
                 f"file generation barrier pass {pass_number} done",
-                len(snapshots),
-                len(snapshots),
+                len(file_snapshots),
+                len(file_snapshots),
             )
             return result
-
-        # A worker can finish before another worker has even observed its
-        # file.  A complete second pass starts only after every first-pass
-        # observation has crossed the barrier, closing that early-worker gap.
-        first_file_pass = file_change_pass(1)
-        second_file_pass = file_change_pass(2)
-        changed_files = sum(
-            1
-            for first_changed, second_changed in zip(
-                first_file_pass,
-                second_file_pass,
-                strict=True,
-            )
-            if first_changed or second_changed
-        )
 
         # The frozen projection powers whole-tree checks such as secret safety,
         # including directories that contain no later cached file.  Revalidate
@@ -3387,7 +3956,85 @@ class Doctor:
             )
         )
 
-        def directory_change_pass(pass_number: int) -> tuple[bool, ...]:
+        def native_directory_change_pass(
+            pass_number: int,
+        ) -> tuple[str, ...]:
+            """Run the Windows-only content-free first directory barrier."""
+
+            self._progress(
+                "doctor-cache-snapshot-revalidation",
+                f"native directory membership barrier pass {pass_number}",
+                0,
+                len(directory_relatives),
+            )
+            guard = archive_services._WomKitProjectUpdateDirectoryGuard(
+                self.archive_root
+            )
+            results: list[str] = []
+            close_failed = False
+            try:
+                for index, relative in enumerate(
+                    directory_relatives,
+                    start=1,
+                ):
+                    key = self._archive_tree_key(relative)
+                    expected_identity = (
+                        self._archive_tree_directory_identities.get(key)
+                    )
+                    expected_native_digest = (
+                        self._archive_tree_directory_native_entry_digests.get(
+                            key
+                        )
+                    )
+                    baseline_eligible = bool(
+                        expected_native_digest is not None
+                        and key
+                        not in self._archive_tree_directory_native_fast_path_unavailable
+                    )
+                    observed = (
+                        self._observe_inventory_directory_native_generation(
+                            relative,
+                            expected_identity=expected_identity,
+                            guard=guard,
+                        )
+                        if expected_identity is not None
+                        and expected_native_digest is not None
+                        else None
+                    )
+                    if observed is None:
+                        state = "unavailable"
+                    elif (
+                        observed[0] != expected_identity
+                        or observed[1] != expected_native_digest
+                    ):
+                        state = "changed"
+                    elif not baseline_eligible or observed[2] is not True:
+                        state = "unavailable"
+                    else:
+                        state = "current"
+                    results.append(state)
+                    if index == len(directory_relatives) or index % 250 == 0:
+                        self._progress(
+                            "doctor-cache-snapshot-revalidation",
+                            (
+                                "native directory membership barrier pass "
+                                f"{pass_number}"
+                            ),
+                            index,
+                            len(directory_relatives),
+                        )
+            finally:
+                try:
+                    guard.close()
+                except OSError:
+                    close_failed = True
+            if close_failed:
+                return ("unavailable",) * len(directory_relatives)
+            return tuple(results)
+
+        def directory_change_pass(
+            pass_number: int,
+        ) -> tuple[tuple[bool, ...], dict[str, tuple[Any, ...]]]:
             self._progress(
                 "doctor-cache-snapshot-revalidation",
                 f"directory membership barrier pass {pass_number}",
@@ -3409,6 +4056,7 @@ class Doctor:
                 else None
             )
             results: list[bool] = []
+            file_generations: dict[str, tuple[Any, ...]] = {}
             aborted = False
             close_failed = False
             try:
@@ -3436,6 +4084,20 @@ class Doctor:
                         or observed[0] != expected_identity
                         or observed[1] != expected_entry_digest
                     )
+                    if observed is not None:
+                        for name, generation_token in observed[2].items():
+                            child_relative = (
+                                PurePosixPath(name).as_posix()
+                                if relative == "."
+                                else (
+                                    PurePosixPath(relative) / name
+                                ).as_posix()
+                            )
+                            child_key = self._archive_tree_key(child_relative)
+                            if child_key in file_generations:
+                                results[-1] = True
+                                continue
+                            file_generations[child_key] = generation_token
                     if index == len(directory_relatives) or index % 250 == 0:
                         self._progress(
                             "doctor-cache-snapshot-revalidation",
@@ -3457,20 +4119,136 @@ class Doctor:
                     except OSError:
                         close_failed = True
             if close_failed:
-                return (True,) * len(directory_relatives)
-            return tuple(results)
+                return (True,) * len(directory_relatives), {}
+            return tuple(results), file_generations
 
-        first_directory_pass = directory_change_pass(1)
-        second_directory_pass = directory_change_pass(2)
-        changed_directories = sum(
-            1
-            for first_changed, second_changed in zip(
+        if os.name == "nt":
+            first_native_directory_pass = native_directory_change_pass(1)
+            first_directory_pass = tuple(
+                state == "changed" for state in first_native_directory_pass
+            )
+            first_directory_unavailable = tuple(
+                state == "unavailable"
+                for state in first_native_directory_pass
+            )
+            # The native-only pass deliberately does not flatten private child
+            # names into a run-wide map.  Hash-required snapshots do not depend
+            # on it, and any missing observation schedules the full fallback.
+            first_directory_file_generations: dict[
+                str, tuple[Any, ...]
+            ] = {}
+        else:
+            first_directory_pass, first_directory_file_generations = (
+                directory_change_pass(1)
+            )
+            first_directory_unavailable = (False,) * len(
+                directory_relatives
+            )
+        second_directory_pass, second_directory_file_generations = (
+            directory_change_pass(2)
+        )
+        changed_directory_keys = {
+            self._archive_tree_key(relative)
+            for relative, first_changed, second_changed in zip(
+                directory_relatives,
                 first_directory_pass,
                 second_directory_pass,
                 strict=True,
             )
             if first_changed or second_changed
+        }
+        fallback_directory_keys = {
+            self._archive_tree_key(relative)
+            for relative, first_changed, first_unavailable, second_changed in zip(
+                directory_relatives,
+                first_directory_pass,
+                first_directory_unavailable,
+                second_directory_pass,
+                strict=True,
+            )
+            if first_changed or first_unavailable or second_changed
+        }
+        # Each directory-entry digest binds the exact child name, kind and
+        # full ``_inventory_stat_identity`` (including device/inode, size,
+        # timestamps, attributes and link count).  After two complete
+        # directory barriers, a cached file whose direct parent remained
+        # current has therefore already received the same cooperative-writer
+        # drift barriers as the historical per-file lstat checks, plus native
+        # ChangeTime/FileId observations.  Only projections that are
+        # missing, inconsistent, or belong to a changed parent fall back to
+        # those two file passes.  This removes no observation from a changed
+        # or partially inventoried tree.
+        file_fallback: list[tuple[str, Path, tuple[int, ...]]] = []
+        for snapshot in snapshots:
+            relative, _path, expected = snapshot
+            relative_path = PurePosixPath(relative)
+            parent_relative = relative_path.parent.as_posix()
+            if parent_relative in {"", "."}:
+                parent_relative = "."
+            parent_key = self._archive_tree_key(parent_relative)
+            snapshot_key = self._archive_tree_key(relative)
+            projection_complete = bool(
+                self._archive_tree_file_identities.get(snapshot_key)
+                == expected
+                and snapshot_key
+                in self._archive_tree_file_generation_tokens
+                and snapshot_key
+                not in self._archive_tree_file_generation_hash_required
+                and parent_key
+                in self._archive_tree_directory_identities
+                and parent_key
+                in self._archive_tree_directory_entry_digests
+            )
+            if (
+                not projection_complete
+                or parent_key in fallback_directory_keys
+            ):
+                file_fallback.append(snapshot)
+        file_fallback_snapshots = tuple(file_fallback)
+
+        # A worker can finish before another worker has even observed its
+        # file.  When fallback is required, a complete second pass starts only
+        # after every first-pass observation has crossed the barrier.
+        first_file_pass = file_change_pass(
+            1,
+            file_fallback_snapshots,
+            first_directory_file_generations,
         )
+        second_file_pass = file_change_pass(
+            2,
+            file_fallback_snapshots,
+            second_directory_file_generations,
+        )
+        changed_files = sum(
+            1
+            for first_changed, second_changed in zip(
+                first_file_pass,
+                second_file_pass,
+                strict=True,
+            )
+            if first_changed or second_changed
+        )
+
+        # Fallback file probes are archive reads too.  Keep the historical
+        # property that the final archive-content observation is a complete
+        # parent-membership barrier: if fallback ran, perform one final
+        # directory pass after it and fold any newly observed drift into the
+        # same fixed-closed result.  Clean, fully projected runs retain the
+        # two-pass early-worker barrier without paying for a third traversal.
+        if file_fallback_snapshots or fallback_directory_keys:
+            final_directory_pass, _final_directory_file_generations = (
+                directory_change_pass(3)
+            )
+            changed_directory_keys.update(
+                self._archive_tree_key(relative)
+                for relative, changed in zip(
+                    directory_relatives,
+                    final_directory_pass,
+                    strict=True,
+                )
+                if changed
+            )
+        changed_directories = len(changed_directory_keys)
 
         root_current = archive_doctor.doctor_archive_root_boundary_is_current(
             boundary
@@ -3495,7 +4273,10 @@ class Doctor:
         else:
             self.info(
                 "doctor_cache_snapshot_current",
-                "Descriptor-proven cached inputs and their parent boundaries are current at completion.",
+                (
+                    "Descriptor-read cached inputs and their parent boundaries "
+                    "passed the completion drift barriers."
+                ),
                 details={
                     "state": "current",
                     "revalidated_file_count": len(snapshots),
@@ -5229,6 +6010,121 @@ class Doctor:
                 self.archive_root / "inbox",
             )
 
+    def _observed_minted_draft_twin(
+        self, draft_path: Path, draft_data: dict[str, Any]
+    ) -> bool:
+        """Classify read-only artifact evidence, never mint retirement authority.
+
+        Doctor already binds its input inventory and cached reads to stage/run
+        completion barriers. Calling the write planner here would rescan the
+        whole index for every inbox draft. The actual retirement planner/writer
+        still performs its own fresh index and approval checks.
+        """
+        zettel_id = draft_data.get("id")
+        if (
+            not isinstance(zettel_id, str)
+            or not archive_services.valid_draft_zettel_id(zettel_id)
+            or draft_data.get("status") != "draft"
+        ):
+            return False
+
+        def observed_file(relative: Any) -> Path | None:
+            if not isinstance(relative, str) or not relative.strip():
+                return None
+            candidate = self._resolve_archive_relative_path(relative)
+            if self._archive_tree_inventory_complete:
+                return (
+                    candidate
+                    if self._resolved_inventory_file_identity(candidate) is not None
+                    else None
+                )
+            self._file_cache_identity(candidate)
+            return candidate
+
+        try:
+            receipt_relative = f"{archive_services.MINT_RECEIPTS_DIR}/{zettel_id}.mint.json"
+            receipt_path = observed_file(receipt_relative)
+            if receipt_path is None:
+                return False
+            retired_relative = (
+                f"{archive_services.MINT_RETIRED_DRAFT_RECEIPTS_DIR}/"
+                f"{zettel_id}.retire-draft.json"
+            )
+            # A first mint need not have created the retired-drafts directory.
+            # Prove that directory's absence against its inventoried mint parent
+            # before asking the strict resolver about a possibly missing leaf.
+            retired_directory = self._resolve_archive_relative_path(
+                archive_services.MINT_RETIRED_DRAFT_RECEIPTS_DIR
+            )
+            if retired_directory.exists():
+                if not retired_directory.is_dir() or self._resolve_archive_relative_path(
+                    retired_relative
+                ).exists():
+                    return False
+            receipt = self._load_json_file(receipt_path)
+            if not isinstance(receipt, dict):
+                return False
+            source = receipt.get("source")
+            target = receipt.get("target")
+            snapshot = receipt.get("snapshot")
+            receipt_zet = receipt.get("zettel")
+            if not all(isinstance(value, dict) for value in (source, target, snapshot, receipt_zet)):
+                return False
+            if (
+                receipt.get("action") != "mint_zettel"
+                or receipt.get("dry_run") is not False
+                or receipt.get("authority_mode") != archive_services.MINT_AUTHORITY_MODE
+                or not receipt.get("reviewed_by")
+                or receipt_zet.get("id") != zettel_id
+                or source.get("path") != self._display_path(draft_path)
+                or source.get("status") != "draft"
+                or target.get("status") != "canonical"
+            ):
+                return False
+            canonical_path = observed_file(target.get("path"))
+            snapshot_path = observed_file(snapshot.get("path"))
+            if canonical_path is None or snapshot_path is None:
+                return False
+            refs = ((source, draft_path), (target, canonical_path), (snapshot, snapshot_path))
+            actual_hashes = []
+            for reference, reference_path in refs:
+                expected = reference.get("sha256")
+                if not isinstance(expected, str) or SHA256_RE.fullmatch(expected) is None:
+                    return False
+                actual = self._sha256_file_cached(reference_path)
+                actual_hashes.append(actual)
+                if actual == expected:
+                    continue
+                if reference is not target:
+                    return False
+                if self._target_sha_evolved_by_direct_objet_receipts(
+                    receipt, receipt_path, canonical_path, expected, actual
+                ) is None and not self._target_sha_evolved_by_edge_receipts(
+                    receipt, canonical_path, expected
+                ):
+                    return False
+            if actual_hashes[0] != actual_hashes[2]:
+                source_text = self._load_zettel_text_cached(draft_path)
+                snapshot_text = self._load_zettel_text_cached(snapshot_path)
+                normalize = archive_services.bytes_normalized_for_content_compare
+                if not source_text or not snapshot_text or normalize(
+                    source_text.encode("utf-8")
+                ) != normalize(snapshot_text.encode("utf-8")):
+                    return False
+            canonical = self._load_zettel_frontmatter_cached(canonical_path)
+            if not isinstance(canonical, dict):
+                return False
+            mint = canonical.get("mint")
+            return (
+                canonical.get("id") == zettel_id
+                and canonical.get("status") == "canonical"
+                and isinstance(mint, dict)
+                and mint.get("receipt_path") == receipt_relative
+                and mint.get("draft_snapshot_path") == snapshot.get("path")
+            )
+        except (ArchivePathError, OSError, ValueError, archive_services.ArchiveServiceError):
+            return False
+
     def _check_zettel_file(self, path: Path, expected_status: str) -> None:
         cached = self._indexed_zettel_cache_for_path(path)
         if cached is not None:
@@ -5294,11 +6190,11 @@ class Doctor:
         minted_draft_twin = None
         displayed_path = self._display_path(path) or ""
         if expected_status == "draft" and displayed_path.startswith("inbox/"):
-            minted_draft_twin = archive_services.is_minted_inbox_draft_twin(self.archive_root, path)
+            minted_draft_twin = self._observed_minted_draft_twin(path, data)
             if minted_draft_twin:
                 self.info(
                     "minted_inbox_draft_twin_pending_retire",
-                    "Inbox draft is already backed by canonical mint artifacts and can be closed with retire-draft.",
+                    "Inbox draft has matching canonical mint artifacts. Review retirement with retire-draft; its planner rechecks the index and approval independently.",
                     path,
                 )
 
@@ -7164,8 +8060,12 @@ class Doctor:
 
     def _check_symlink_boundaries(self) -> None:
         self._archive_tree_file_identities.clear()
+        self._archive_tree_file_generation_tokens.clear()
+        self._archive_tree_file_generation_hash_required.clear()
         self._archive_tree_directory_identities.clear()
         self._archive_tree_directory_entry_digests.clear()
+        self._archive_tree_directory_native_entry_digests.clear()
+        self._archive_tree_directory_native_fast_path_unavailable.clear()
         self._archive_tree_unsafe_entries.clear()
         self._archive_tree_inventory_complete = False
         quarantine_names = {
@@ -7290,10 +8190,13 @@ class Doctor:
                             entries.sort(
                                 key=lambda item: item.name.casefold()
                             )
-
                         def observe_entry(
                             entry: os.DirEntry[str],
-                        ) -> tuple[Path, os.stat_result | None]:
+                        ) -> tuple[
+                            Path,
+                            str,
+                            os.stat_result | None,
+                        ]:
                             path = Path(entry.path)
                             try:
                                 # The retained parent handle keeps this
@@ -7302,7 +8205,7 @@ class Doctor:
                                 observed = os.lstat(path)
                             except OSError:
                                 observed = None
-                            return path, observed
+                            return path, entry.name, observed
 
                         if len(entries) >= 32:
                             observed_entries = self._bounded_executor_results(
@@ -7315,7 +8218,71 @@ class Doctor:
                             )
                         else:
                             observed_entries = map(observe_entry, entries)
-                        retained_observations = tuple(observed_entries)
+                        unbound_observations = tuple(observed_entries)
+                        if any(
+                            observed is None
+                            for _path, _name, observed in unbound_observations
+                        ):
+                            inventory_unavailable_count += 1
+                            continue
+                        native_generations = (
+                            self._retained_windows_directory_generations(
+                                inventory_directory_guard,
+                                dir_path,
+                            )
+                        )
+                        if native_generations is None:
+                            inventory_unavailable_count += 1
+                            continue
+                        if os.name == "nt":
+                            if is_archive_root:
+                                native_generations = {
+                                    name: token
+                                    for name, token in native_generations.items()
+                                    if name.casefold() not in quarantine_names
+                                }
+                            if set(native_generations) != {
+                                name
+                                for _path, name, _observed in unbound_observations
+                            }:
+                                inventory_boundary_changed_count += 1
+                                continue
+                            if (
+                                self._inventory_native_directory_entry_digest(
+                                    native_generations
+                                )
+                                is None
+                            ):
+                                inventory_unavailable_count += 1
+                                continue
+                        retained_observations: list[
+                            tuple[
+                                Path,
+                                os.stat_result,
+                                tuple[Any, ...] | None,
+                            ]
+                        ] = []
+                        for path, name, observed in unbound_observations:
+                            if observed is None:
+                                inventory_unavailable_count += 1
+                                continue
+                            generation_token = None
+                            if (
+                                not stat.S_ISLNK(observed.st_mode)
+                                and not archive_doctor._is_reparse_point(
+                                    observed
+                                )
+                                and stat.S_ISREG(observed.st_mode)
+                            ):
+                                generation_token = self._file_generation_token_from_directory_observation(
+                                    observed,
+                                    native_generations.get(name),
+                                )
+                                if generation_token is None:
+                                    inventory_unavailable_count += 1
+                            retained_observations.append(
+                                (path, observed, generation_token)
+                            )
                 except OSError:
                     inventory_unavailable_count += 1
                     continue
@@ -7326,15 +8293,16 @@ class Doctor:
                 if directory_relative is None:
                     inventory_boundary_changed_count += 1
                     continue
+                directory_key = self._archive_tree_key(directory_relative)
                 self._archive_tree_directory_entry_digests[
-                    self._archive_tree_key(directory_relative)
+                    directory_key
                 ] = self._inventory_directory_entry_digest(
-                    (path, observed)
-                    for path, observed in retained_observations
+                    (path, observed, generation_token)
+                    for path, observed, generation_token in retained_observations
                     if observed is not None
                 )
                 child_directories: list[tuple[Path, tuple[int, ...]]] = []
-                for path, observed in retained_observations:
+                for path, observed, generation_token in retained_observations:
                     if observed is None:
                         inventory_unavailable_count += 1
                         continue
@@ -7370,9 +8338,31 @@ class Doctor:
                     ):
                         relative = self._lexical_archive_relative(path)
                         if relative is not None:
-                            self._archive_tree_file_identities[
-                                self._archive_tree_key(relative)
-                            ] = self._inventory_stat_identity(observed)
+                            key = self._archive_tree_key(relative)
+                            self._archive_tree_file_identities[key] = (
+                                self._inventory_stat_identity(observed)
+                            )
+                            if generation_token is None:
+                                inventory_unavailable_count += 1
+                            else:
+                                self._archive_tree_file_generation_tokens[
+                                    key
+                                ] = generation_token
+                                if (
+                                    int(
+                                        getattr(
+                                            observed,
+                                            "st_nlink",
+                                            0,
+                                        )
+                                        or 0
+                                    )
+                                    != 1
+                                    or generation_token[9] is not True
+                                ):
+                                    self._archive_tree_file_generation_hash_required.add(
+                                        key
+                                    )
                         continue
                     if stat.S_ISLNK(observed.st_mode):
                         try:
@@ -7396,6 +8386,47 @@ class Doctor:
                         child_directories
                     )
                 )
+            # Capture the native-only baseline only after the full inventory is
+            # complete.  Parent directory metadata can settle while descendants
+            # are first enumerated; recording an earlier per-parent query would
+            # create a false drift signal before any later stage can reuse the
+            # projection.  The full lstat/native digest remains independently
+            # frozen above, so later pass 2 still catches a mutation between
+            # these two baseline observations.
+            if os.name == "nt" and not (
+                inventory_unavailable_count
+                or inventory_boundary_changed_count
+                or inventory_capacity_exceeded
+            ):
+                self._archive_tree_directory_native_entry_digests.clear()
+                self._archive_tree_directory_native_fast_path_unavailable.clear()
+                for directory_key, expected_identity in sorted(
+                    self._archive_tree_directory_identities.items()
+                ):
+                    directory_relative = directory_key.replace(os.sep, "/")
+                    native_observed = (
+                        self._observe_inventory_directory_native_generation(
+                            directory_relative,
+                            expected_identity=expected_identity,
+                            guard=inventory_directory_guard,
+                        )
+                    )
+                    if native_observed is None:
+                        inventory_unavailable_count += 1
+                        break
+                    observed_identity, native_digest, native_eligible = (
+                        native_observed
+                    )
+                    if observed_identity != expected_identity:
+                        inventory_boundary_changed_count += 1
+                        break
+                    self._archive_tree_directory_native_entry_digests[
+                        directory_key
+                    ] = native_digest
+                    if not native_eligible:
+                        self._archive_tree_directory_native_fast_path_unavailable.add(
+                            directory_key
+                        )
             inventory_succeeded = True
         except BaseException:
             if inventory_executor is not None:
@@ -11462,6 +12493,7 @@ def _git_backup_progress_printer(event: Any) -> None:
         }
     else:
         return
+    handoff_startup_progress()
     print(
         json.dumps(document, ensure_ascii=True, sort_keys=True),
         file=sys.stderr,
@@ -24145,6 +25177,7 @@ def _create_draft_cli_error(
     reason_code: str | None = None,
     reason_codes: list[str] | None = None,
     missing_required_options: list[str] | None = None,
+    next_safe_actions: list[str] | None = None,
     message: str,
 ) -> int:
     """Return a fixed, content-free create-draft failure.
@@ -24168,10 +25201,14 @@ def _create_draft_cli_error(
     }
     if missing_required_options is not None:
         result["missing_required_options"] = list(missing_required_options)
+    if next_safe_actions is not None:
+        result["next_safe_actions"] = list(next_safe_actions)
     if getattr(args, "format", None) == "json":
         print_json(result)
     else:
         print(message, file=sys.stderr)
+        for action in next_safe_actions or []:
+            print(action, file=sys.stderr)
     return 1
 
 
@@ -24680,6 +25717,17 @@ def command_facet_vocabulary(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def _create_draft_ai_provenance_scope(args: argparse.Namespace) -> bool:
+    """Share the service-owned argument classification with discovery/dispatch."""
+
+    return archive_services.source_fidelity_ai_provenance_declared(
+        creation_mode=args.creation_mode,
+        created_by=args.created_by or "cli:archive",
+        assisted_by=args.assisted_by,
+        local_ai_sessions=build_local_ai_session_refs(args),
+    )
+
+
 def command_create_draft(args: argparse.Namespace) -> int:
     if args.list_kinds:
         try:
@@ -24702,12 +25750,7 @@ def command_create_draft(args: argparse.Namespace) -> int:
                 print(f"- {kind_id}")
         return 0
 
-    ai_creation_mode = archive_services.source_fidelity_ai_provenance_declared(
-        creation_mode=args.creation_mode,
-        created_by=args.created_by or "cli:archive",
-        assisted_by=args.assisted_by,
-        local_ai_sessions=build_local_ai_session_refs(args),
-    )
+    ai_creation_mode = _create_draft_ai_provenance_scope(args)
     if (args.approve and not ai_creation_mode) or (
         not args.dry_run and not (ai_creation_mode and args.approve)
     ):
@@ -24849,6 +25892,32 @@ def command_create_draft(args: argparse.Namespace) -> int:
                 approved=True,
                 **create_kwargs,
             )
+            write_preflight = preview.get("write_preflight")
+            if isinstance(write_preflight, dict) and write_preflight.get("state") in {
+                "failed", "unavailable"
+            }:
+                unavailable = write_preflight.get("state") == "unavailable"
+                return _create_draft_cli_error(
+                    args,
+                    reason_code=(
+                        "archive_index_observation_unavailable"
+                        if unavailable else archive_services.INDEX_REBUILD_REQUIRED
+                    ),
+                    message=(
+                        "Draft approval is blocked because its index prerequisite "
+                        "could not be confirmed; no approval window was opened."
+                        if unavailable else
+                        "Draft approval is blocked because the generated index must "
+                        "be rebuilt; no approval window was opened."
+                    ),
+                    next_safe_actions=(
+                        [
+                            "Restore stable read access and let the active index writer finish before retrying.",
+                            archive_services.INDEX_REBUILD_NEXT_SAFE_ACTIONS[1],
+                        ]
+                        if unavailable else list(archive_services.INDEX_REBUILD_NEXT_SAFE_ACTIONS)
+                    ),
+                )
             plan_sha256 = _source_fidelity_plan_sha256_from_result(
                 preview
             )
@@ -24971,10 +26040,22 @@ def command_create_draft(args: argparse.Namespace) -> int:
                 print("Warnings:")
                 for warning in result["warnings"]:
                     print(f"- {warning}")
+            if result.get("next_safe_actions"):
+                print("Next safe actions:")
+                for action in result["next_safe_actions"]:
+                    print(f"- {action}")
             source_fidelity_plan_sha256 = _source_fidelity_plan_sha256_from_result(result)
             if source_fidelity_plan_sha256:
                 print(f"Source-fidelity plan: {source_fidelity_plan_sha256}")
-            print("Draft dry-run passed." if result["ok"] else "Draft dry-run blocked.")
+            write_preflight = result.get("write_preflight")
+            approval_blocked = (
+                isinstance(write_preflight, dict)
+                and write_preflight.get("state") in {"failed", "unavailable"}
+            )
+            if result["ok"] and approval_blocked:
+                print("Draft input is valid, but approval is blocked by its write prerequisite.")
+            else:
+                print("Draft dry-run passed." if result["ok"] else "Draft dry-run blocked.")
         else:
             print(f"Created draft zettel {result['zettel_id']} at {result['path']}")
             for warning in result.get("warnings", []):
@@ -27370,6 +28451,62 @@ def print_reconcile_human_review_plan(result: dict[str, Any]) -> None:
     print("- Uncertain: stop without writing and ask the human owner.")
 
 
+def _reconcile_writer_availability_result(
+    result: dict[str, Any],
+    *,
+    command_name: str,
+) -> dict[str, Any]:
+    """Keep diagnostic classification without proposing a closed writer."""
+
+    if command_name not in command_status.COMPOUND_APPROVAL_FIXED_CLOSED_COMMANDS:
+        return result
+    projected = dict(result)
+    projected.update(
+        command_status.compound_approval_fixed_closed_contract(command_name)
+    )
+    projected.update(
+        {
+            "approval_state": command_status.CAPABILITY_WRITER_UNAVAILABLE,
+            "validation_preview_available": True,
+            "validation_digest_is_approval_authority": False,
+            "approval_would_write": False,
+        }
+    )
+    guidance = [
+        item
+        for item in result.get("next_safe_actions", [])
+        if isinstance(item, str) and "--approve" not in item
+    ]
+    unavailable_notice = (
+        "writer_unavailable: this release supports classification and local review only; "
+        "approval cannot execute this reconcile writer."
+    )
+    if unavailable_notice not in guidance:
+        guidance.append(unavailable_notice)
+    projected["next_safe_actions"] = guidance
+    if not result.get("blockers") and result.get("drift_class") != "clean":
+        projected["suggested_next_action"] = "review_evidence_writer_unavailable"
+    plan = result.get("human_review_plan")
+    if isinstance(plan, dict):
+        plan = dict(plan)
+        commands = dict(plan.get("commands") or {})
+        commands["approve_if_intentional"] = None
+        plan["commands"] = commands
+        plan["approval_state"] = command_status.CAPABILITY_WRITER_UNAVAILABLE
+        plan["decision_options"] = [
+            {
+                **item,
+                "next_action": "record_review_writer_unavailable",
+                "command": None,
+            }
+            if isinstance(item, dict) and item.get("decision") == "intentional_change"
+            else item
+            for item in plan.get("decision_options", [])
+        ]
+        projected["human_review_plan"] = plan
+    return projected
+
+
 def command_remint_reconcile(args: argparse.Namespace) -> int:
     if args.dry_run and args.approve:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
@@ -27414,9 +28551,17 @@ def command_remint_reconcile(args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return 1
 
+    result = _reconcile_writer_availability_result(
+        result, command_name="remint-reconcile"
+    )
     if args.format == "json":
         if diagnostic_only:
-            print_json(archive_services.remint_reconcile_diagnostic_view(result))
+            print_json(
+                _reconcile_writer_availability_result(
+                    archive_services.remint_reconcile_diagnostic_view(result),
+                    command_name="remint-reconcile",
+                )
+            )
         else:
             print_json(result)
     else:
@@ -27460,7 +28605,7 @@ def command_remint_reconcile(args: argparse.Namespace) -> int:
                 print(text.rstrip("\n"))
                 print("--- canonical text (end) ---")
         print_reconcile_human_review_plan(result)
-        if result.get("content_change_ack_required"):
+        if result.get("content_change_ack_required") and result.get("approval_would_write"):
             print("Content change acknowledgment required: rerun --approve with --content-changed-ack.")
         if result.get("bom_strip_note"):
             print(f"BOM strip: {result.get('bom_strip_note')}")
@@ -27518,6 +28663,9 @@ def command_retire_draft_reconcile(args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return 1
 
+    result = _reconcile_writer_availability_result(
+        result, command_name="retire-draft-reconcile"
+    )
     if args.format == "json":
         print_json(result)
     else:
@@ -27546,7 +28694,7 @@ def command_retire_draft_reconcile(args: argparse.Namespace) -> int:
                 )
             )
         print_reconcile_human_review_plan(result)
-        if result.get("content_change_ack_required"):
+        if result.get("content_change_ack_required") and result.get("approval_would_write"):
             print("Content change acknowledgment required: rerun --approve with --content-changed-ack.")
         if result.get("bom_strip_note"):
             print(f"BOM strip: {result.get('bom_strip_note')}")
@@ -34544,8 +35692,8 @@ def add_runtime_skill_target_arguments(command: argparse.ArgumentParser) -> None
 
 
 COMPOUND_APPROVAL_BLOCKED_HELP = (
-    f"Unavailable in v{__version__}: this write needs an operation-specific "
-    "exact compound human-approval binding that is not implemented yet. No "
+    f"Unavailable in v{__version__}: the current operation-specific exact "
+    "compound human-approval path for this write is unavailable. No "
     "approval-mode substitute is supported. Use the command's dry-run, plan, "
     "or audit mode and query `archive capabilities --machine` for installed "
     "status."
@@ -34627,6 +35775,17 @@ def _mark_compound_approval_help(parser: argparse.ArgumentParser) -> None:
         if len(approval_actions) != 1:
             raise RuntimeError(
                 "compound_approval_help_action_invalid:" + command_path
+            )
+        history = availability["approval_exposure_history"]
+        if history["state"] == "previously_exposed_now_restricted":
+            history_help = (
+                f"Public source exposed approval at {history['exposed_at_tag']} "
+                f"and restricted this path at {history['restricted_at_tag']}. "
+                "Successful execution at those versions is not verified. "
+                "An earlier-version bypass is not supported."
+            )
+            command_parser.epilog = "\n\n".join(
+                value for value in (command_parser.epilog, history_help) if value
             )
         approval_actions[0].help = COMPOUND_APPROVAL_BLOCKED_HELP
 
@@ -41319,7 +42478,20 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     create_draft.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
-    create_draft.set_defaults(func=command_create_draft)
+    create_draft.set_defaults(
+        func=command_create_draft,
+        _wom_approval_scope={
+            "kind": "namespace_predicate",
+            "predicate_ref": "create_draft_ai_provenance",
+            "outside_scope_status": command_status.APPROVAL_FIXED_CLOSED,
+            "outside_scope_reason_code": command_status.COMPOUND_APPROVAL_REASON_CODE,
+        },
+    )
+    setattr(
+        create_draft,
+        command_status._APPROVAL_SCOPE_PREDICATE_ATTRIBUTE,
+        _create_draft_ai_provenance_scope,
+    )
 
     inbox_pipeline_audit = subcommands.add_parser(
         "inbox-pipeline-audit",

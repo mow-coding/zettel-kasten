@@ -37417,18 +37417,57 @@ def create_draft_zettel(
                 if item != fidelity_receipt_relative
             ]
 
-    # The AI approval command replays the dry-run with ``approved=True``.
-    # Prove the generated Zet index is current during that replay, before the
-    # native human broker can be opened.  A plain exploratory dry-run remains
-    # read-only and can still explain the draft itself; an idempotent replay
-    # that will not create a Zet also has no index delta to protect.
-    if is_ai_draft and approved and proposed_path in planned_writes:
+    # Input validity and write readiness are different observations. Expose the
+    # same read-only index prerequisite during exploration and approval replay
+    # without rebuilding the index or opening native approval. Existing callers
+    # can still inspect a valid draft; its approval handoff must not say ready
+    # when the generated index would reject that exact write moments later.
+    write_preflight = {
+        "state": "not_reached",
+        "reason_code": "draft_write_not_requested",
+    }
+    write_next_safe_actions: list[str] = []
+    if is_ai_draft and not blockers and proposed_path in planned_writes:
         try:
             index_evidence = require_current_zettel_index(root)
-        except (ArchiveServiceError, OSError, ValueError):
-            index_evidence = {"ok": False}
-        if index_evidence.get("ok") is not True:
-            blockers.append(INDEX_REBUILD_REQUIRED)
+        except (ArchiveServiceError, OSError, ValueError, sqlite3.Error):
+            index_evidence = {
+                "ok": False,
+                "reason_codes": ["archive_index_observation_unavailable"],
+            }
+        if index_evidence.get("ok") is True:
+            write_preflight = {"state": "passed", "reason_code": "archive_index_current"}
+        else:
+            unavailable_index_reasons = {
+                "archive_index_observation_unavailable",
+                "archive_index_schema_unreadable",
+                "archive_index_manifest_unreadable",
+                "archive_index_live_authority_watcher_unavailable",
+                "archive_index_mutation_in_progress",
+            }
+            unavailable = bool(
+                unavailable_index_reasons.intersection(index_evidence.get("reason_codes", []))
+            )
+            write_preflight = {
+                "state": "unavailable" if unavailable else "failed",
+                "reason_code": (
+                    "archive_index_observation_unavailable"
+                    if unavailable else INDEX_REBUILD_REQUIRED
+                ),
+            }
+            write_next_safe_actions = (
+                [
+                    "Restore stable read access and let the active index writer finish before retrying.",
+                    INDEX_REBUILD_NEXT_SAFE_ACTIONS[1],
+                ]
+                if unavailable else list(INDEX_REBUILD_NEXT_SAFE_ACTIONS)
+            )
+        if approved and write_preflight["state"] != "passed":
+            blockers.append(write_preflight["reason_code"])
+    elif is_ai_draft and not blockers:
+        write_preflight = {"state": "passed", "reason_code": "draft_index_delta_not_required"}
+    elif is_ai_draft:
+        write_preflight = {"state": "not_reached", "reason_code": "draft_input_validation_blocked"}
 
     approval_replay = {
         "draft_id": (
@@ -37490,8 +37529,10 @@ def create_draft_zettel(
             [] if blockers else [f"write {item}" for item in planned_writes]
         ),
         "approval_replay": approval_replay,
+        "write_preflight": write_preflight,
+        "next_safe_actions": write_next_safe_actions,
         "approval_handoff": _create_draft_approval_handoff(
-            ready=not blockers,
+            ready=not blockers and is_ai_draft and write_preflight["state"] == "passed",
             approval_replay=approval_replay,
         ),
     }
@@ -110337,6 +110378,25 @@ class _WomKitProjectUpdateDirectoryGuard:
 
         return self.held_observation(path)["state"] == "passed"
 
+    def retained_windows_handle(self, path: Path) -> int | None:
+        """Borrow the exact active Windows directory handle read-only.
+
+        The guard remains the sole owner.  Callers may use the returned value
+        only while their existing ``hold`` lifetime is active and must never
+        close or retain it.  Revalidation happens before every borrow; an
+        absent, stale, unsafe, or unavailable binding returns ``None`` rather
+        than exposing an unrelated raw handle.
+        """
+
+        if os.name != "nt":
+            return None
+        if self.held_observation(path)["state"] != "passed":
+            return None
+        handle = self._handles.get(self._key(path))
+        if not isinstance(handle, int):
+            return None
+        return handle
+
     def held_observation(self, path: Path) -> dict[str, str]:
         """Re-prove one held directory without exposing its path or identity.
 
@@ -135828,6 +135888,7 @@ def _wom_kit_project_version_update_legacy_core_generator(
     prepared_runtime_bundle: Any | None = None
     prepared_runtime_bundle_summary: dict[str, Any] | None = None
     prepared_runtime_bundle_cleanup_state = "not_required"
+    existing_runtime_noop_observation: dict[str, Any] | None = None
     runtime_preparation_revalidation = (
         wom_kit_project_update_runtime_preparation_revalidation()
     )
@@ -135929,6 +135990,7 @@ def _wom_kit_project_version_update_legacy_core_generator(
         _ProjectVersionUpdateDurableApprovalState | None
     ) = None
     durable_handoff_complete = False
+    owned_abort_compaction: _ProjectUpdateAbortHistoryCompactionOutcome | None = None
     target_git_snapshot: dict[str, Any] | None = None
     trusted_target_ref_snapshot: dict[str, str] | None = None
     source_materialization_completed = False
@@ -136030,6 +136092,11 @@ def _wom_kit_project_version_update_legacy_core_generator(
         runtime_result["preparation_revalidation"] = copy.deepcopy(
             runtime_preparation_revalidation
         )
+        if existing_runtime_noop_observation is not None:
+            runtime_result["existing_runtime_noop_verification"] = {
+                name: existing_runtime_noop_observation[name]
+                for name in ("state", "reason_code", "reusable", "repair_required")
+            }
         if project_runtime_materialization is not None and not rolled_back:
             runtime_result["materialized"] = (
                 project_runtime_materialization.public_summary()
@@ -136330,6 +136397,30 @@ def _wom_kit_project_version_update_legacy_core_generator(
                 "objet_bytes_read": False,
             },
         }
+        if owned_abort_compaction is not None:
+            if owned_abort_compaction.incomplete:
+                # Source/runtime no-op is not a completed user journey while
+                # its own terminal control history blocks the next command.
+                # Preserve that evidence for the established identifier-free
+                # resume path; never turn uncertain cleanup into success.
+                payload.update(
+                    _project_update_terminal_cleanup_outcome_unknown_result(
+                        operator_resume_identifiers_supplied=False,
+                        archive_identity_metadata_read=True,
+                    )
+                )
+                # A competing writer may acquire a new lock after our own
+                # abort released it. The generic no-lock cleanup result must
+                # not report that successor's lock as absent.
+                lock_presence = wom_kit_real_path_kind_observation(project_root, lock_path)
+                payload["observed_version_update_lock_present"] = (
+                    lock_presence["kind"] != "missing"
+                    if lock_presence["state"] == "passed"
+                    else None
+                )
+            payload = _project_update_attach_abort_history_compaction_effect(
+                payload, owned_abort_compaction,
+            )
         last_result_payload = payload
         return payload
 
@@ -136704,6 +136795,30 @@ def _wom_kit_project_version_update_legacy_core_generator(
             )
         prepared_runtime_bundle_cleanup_state = "verified_absent"
 
+    def compact_current_abort_or_raise() -> None:
+        nonlocal owned_abort_compaction
+        if durable_reservation is None or durable_approval_state is not None:
+            raise ArchiveServiceError("project_update_transaction_cleanup_refused")
+        # Only the reservation created by this invocation is eligible. Its
+        # own validated abort receipt, not a new human approval or a guessed
+        # global history sweep, authorizes the existing exact cleanup core.
+        owned_abort_compaction = _ProjectUpdateAbortHistoryCompactionOutcome(
+            discovered_count=1, attempted_count=1, completed_count=0,
+            cleanup_proof_count=0, incomplete=True,
+        )
+        terminal = durable_reservation.inspect_abort_receipt()
+        authority = terminal.get("receipt_sha256") if isinstance(terminal, Mapping) else None
+        if (
+            type(authority) is not str
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", authority) is None
+            or not durable_reservation.exact_cleanup(cleanup_authority_sha256=authority)
+        ):
+            raise ArchiveServiceError("project_update_transaction_cleanup_refused")
+        owned_abort_compaction = _ProjectUpdateAbortHistoryCompactionOutcome(
+            discovered_count=1, attempted_count=1, completed_count=1,
+            cleanup_proof_count=1, incomplete=False,
+        )
+
     def release_current_lock_or_raise(intent_status: str) -> None:
         nonlocal lock_acquired, lock_release_intent_status
         nonlocal lock_release_state, preserve_lock
@@ -136740,6 +136855,8 @@ def _wom_kit_project_version_update_legacy_core_generator(
             lock_release_intent_status = intent_status
             lock_release_state = "released"
             lock_acquired = False
+            if durable_approval_state is None:
+                compact_current_abort_or_raise()
             return
         # Every terminal state removes the exact pre-approval network bundle
         # before releasing the project lock.  Uncertain cleanup preserves the
@@ -137092,42 +137209,84 @@ def _wom_kit_project_version_update_legacy_core_generator(
                 )
                 release_current_lock_or_raise("blocked")
                 return result_payload("blocked")
-            try:
-                prepared_runtime_bundle = (
-                    project_runtime.prepare_runtime_candidate(
+            # A same-version no-op must not download wheels or construct a
+            # replacement runtime merely to discover that the installed one
+            # is already correct. Verify retained supply and static executable
+            # bytes before running the installed interpreter, then share the
+            # exact post-observation revalidation used by real preparation.
+            if (
+                not legacy_recovery_mode
+                and head_before == target_commit
+                and pins_already_target
+                and target_runtime_source_integrity_verified
+                and not checkout_required
+                and bool(project_runtime_launcher_snapshot.get("already_target"))
+            ):
+                existing_runtime_noop_observation = (
+                    project_runtime.verify_existing_runtime_for_noop(
                         project_root,
-                        durable_reservation.transaction_root,
                         target=target_version or "",
                         target_commit=target_commit,
                         bootstrap=project_runtime_bootstrap,
                         supply=project_runtime_supply,
-                        running_version=WOM_KIT_VERSION,
-                        receipt_created_at=durable_reservation.created_at,
                         progress_callback=progress_callback,
                     )
                 )
-                prepared_runtime_bundle_cleanup_state = "pending"
-                prepared_runtime_bundle_summary = dict(
-                    prepared_runtime_bundle.public_summary()
-                )
-            except project_runtime.PreparedRuntimeBundleCleanupError:
-                prepared_runtime_bundle_cleanup_state = "uncertain"
-                rollback["prepared_runtime_bundle_removed"] = False
-                preserve_lock = True
-                raise
-            except project_runtime.PreparedRuntimeCandidateIncompleteError as failure:
-                prepared_runtime_bundle_cleanup_state = "uncertain"
-                rollback["prepared_runtime_bundle_removed"] = False
-                preserve_lock = True
-                blockers.append(str(failure))
-                raise
-            except project_runtime.ProjectRuntimeError as failure:
-                blockers.append(str(failure))
-                release_current_lock_or_raise("blocked")
-                return result_payload("blocked")
-            project_runtime_plan["runtime_candidate"] = copy.deepcopy(
-                prepared_runtime_bundle_summary
+                if existing_runtime_noop_observation["state"] in {
+                    "unavailable", "not_reached",
+                } or (
+                    existing_runtime_noop_observation["state"] == "failed"
+                    and existing_runtime_noop_observation["repair_required"] is not True
+                ):
+                    blockers.append(existing_runtime_noop_observation["reason_code"])
+                    release_current_lock_or_raise("blocked")
+                    return result_payload("blocked")
+            reuse_verified_existing_runtime = bool(
+                existing_runtime_noop_observation is not None
+                and existing_runtime_noop_observation["state"] == "passed"
+                and existing_runtime_noop_observation["reusable"] is True
             )
+            if reuse_verified_existing_runtime:
+                prepared_runtime_bundle_summary = dict(
+                    existing_runtime_noop_observation["installed"]
+                )
+            else:
+                try:
+                    prepared_runtime_bundle = (
+                        project_runtime.prepare_runtime_candidate(
+                            project_root,
+                            durable_reservation.transaction_root,
+                            target=target_version or "",
+                            target_commit=target_commit,
+                            bootstrap=project_runtime_bootstrap,
+                            supply=project_runtime_supply,
+                            running_version=WOM_KIT_VERSION,
+                            receipt_created_at=durable_reservation.created_at,
+                            progress_callback=progress_callback,
+                        )
+                    )
+                    prepared_runtime_bundle_cleanup_state = "pending"
+                    prepared_runtime_bundle_summary = dict(
+                        prepared_runtime_bundle.public_summary()
+                    )
+                except project_runtime.PreparedRuntimeBundleCleanupError:
+                    prepared_runtime_bundle_cleanup_state = "uncertain"
+                    rollback["prepared_runtime_bundle_removed"] = False
+                    preserve_lock = True
+                    raise
+                except project_runtime.PreparedRuntimeCandidateIncompleteError as failure:
+                    prepared_runtime_bundle_cleanup_state = "uncertain"
+                    rollback["prepared_runtime_bundle_removed"] = False
+                    preserve_lock = True
+                    blockers.append(str(failure))
+                    raise
+                except project_runtime.ProjectRuntimeError as failure:
+                    blockers.append(str(failure))
+                    release_current_lock_or_raise("blocked")
+                    return result_payload("blocked")
+                project_runtime_plan["runtime_candidate"] = copy.deepcopy(
+                    prepared_runtime_bundle_summary
+                )
 
             # Bundle preparation may perform bounded downloads for long enough
             # that another process can change the source, pins, refs, policy,
@@ -137198,9 +137357,10 @@ def _wom_kit_project_version_update_legacy_core_generator(
             post_bundle_runtime_plan["policy"] = dict(
                 post_bundle_runtime_policy
             )
-            post_bundle_runtime_plan["runtime_candidate"] = copy.deepcopy(
-                prepared_runtime_bundle_summary
-            )
+            if not reuse_verified_existing_runtime:
+                post_bundle_runtime_plan["runtime_candidate"] = copy.deepcopy(
+                    prepared_runtime_bundle_summary
+                )
             post_bundle_launcher_snapshot = (
                 project_runtime.launcher_snapshot(
                     project_root,
@@ -137217,18 +137377,33 @@ def _wom_kit_project_version_update_legacy_core_generator(
                     runner=git_runner,
                 )
             )
-            (
-                prepared_runtime_payload_state,
-                prepared_runtime_payload_reason,
-                post_bundle_live_observation,
-            ) = project_runtime.verify_prepared_runtime_candidate_observation(
-                prepared_runtime_bundle,
-                project_root=project_root,
-                target=target_version or "",
-                target_commit=target_commit,
-                bootstrap=project_runtime_bootstrap,
-                supply=project_runtime_supply,
-            )
+            if reuse_verified_existing_runtime:
+                existing_runtime_noop_observation = (
+                    project_runtime.verify_existing_runtime_for_noop(
+                        project_root,
+                        target=target_version or "",
+                        target_commit=target_commit,
+                        bootstrap=project_runtime_bootstrap,
+                        supply=project_runtime_supply,
+                        progress_callback=progress_callback,
+                    )
+                )
+                prepared_runtime_payload_state = existing_runtime_noop_observation["state"]
+                prepared_runtime_payload_reason = existing_runtime_noop_observation["reason_code"]
+                post_bundle_live_observation = existing_runtime_noop_observation["installed"]
+            else:
+                (
+                    prepared_runtime_payload_state,
+                    prepared_runtime_payload_reason,
+                    post_bundle_live_observation,
+                ) = project_runtime.verify_prepared_runtime_candidate_observation(
+                    prepared_runtime_bundle,
+                    project_root=project_root,
+                    target=target_version or "",
+                    target_commit=target_commit,
+                    bootstrap=project_runtime_bootstrap,
+                    supply=project_runtime_supply,
+                )
             post_bundle_live_summary = (
                 dict(post_bundle_live_observation)
                 if post_bundle_live_observation is not None
@@ -137460,6 +137635,9 @@ def _wom_kit_project_version_update_legacy_core_generator(
                 blockers.append(
                     "project_version_update_state_changed_during_runtime_preparation"
                 )
+                if reuse_verified_existing_runtime:
+                    release_current_lock_or_raise("blocked")
+                    return result_payload("blocked")
                 try:
                     _project_update_abort_unsealed_candidate(
                         reservation=durable_reservation,
@@ -137476,40 +137654,45 @@ def _wom_kit_project_version_update_legacy_core_generator(
                 prepared_runtime_bundle = None
                 lock_acquired = False
                 lock_release_state = "released"
+                compact_current_abort_or_raise()
                 return result_payload("blocked")
 
-            # A required project runtime is a policy invariant, not proof that
-            # this invocation still has a domain change to make.  Only the
-            # complete pre-native candidate can prove the existing runtime is
-            # byte-for-byte reusable.  Once that proof is available, an exact
-            # source/pin/launcher target is a true no-op: remove the transient
-            # candidate, durably abort the still-unsealed reservation, and do
-            # not open a second native approval or write another receipt.
+            # Retained-supply proof takes the no-candidate fast path. A repair
+            # preparation may also discover exact equivalence; in either case
+            # preserve the active bytes and do not create approval/domain
+            # receipts. Close the existing reservation using its own authority.
             if (
                 head_before == target_commit
                 and pins_already_target
                 and target_runtime_source_integrity_verified
                 and not checkout_required
-                and prepared_runtime_bundle.existing_runtime_reusable
+                and (
+                    reuse_verified_existing_runtime
+                    or prepared_runtime_bundle.existing_runtime_reusable
+                )
                 and bool(
                     project_runtime_launcher_snapshot.get("already_target")
                 )
             ):
-                try:
-                    _project_update_abort_unsealed_candidate(
-                        reservation=durable_reservation,
-                        expected_lock_bytes=durable_lock_bytes,
-                        candidate=prepared_runtime_bundle,
-                    )
-                except BaseException:
-                    prepared_runtime_bundle_cleanup_state = "uncertain"
-                    rollback["prepared_runtime_bundle_removed"] = False
-                    preserve_lock = True
-                    raise
-                prepared_runtime_bundle_cleanup_state = "verified_absent"
-                rollback["prepared_runtime_bundle_removed"] = True
-                lock_acquired = False
-                lock_release_state = "released"
+                if reuse_verified_existing_runtime:
+                    release_current_lock_or_raise("no_change")
+                else:
+                    try:
+                        _project_update_abort_unsealed_candidate(
+                            reservation=durable_reservation,
+                            expected_lock_bytes=durable_lock_bytes,
+                            candidate=prepared_runtime_bundle,
+                        )
+                    except BaseException:
+                        prepared_runtime_bundle_cleanup_state = "uncertain"
+                        rollback["prepared_runtime_bundle_removed"] = False
+                        preserve_lock = True
+                        raise
+                    prepared_runtime_bundle_cleanup_state = "verified_absent"
+                    rollback["prepared_runtime_bundle_removed"] = True
+                    lock_acquired = False
+                    lock_release_state = "released"
+                    compact_current_abort_or_raise()
                 head_after = head_before
                 installed_summary = copy.deepcopy(
                     project_runtime_plan.get("installed", {})
@@ -137519,6 +137702,9 @@ def _wom_kit_project_version_update_legacy_core_generator(
                         "status": "verified",
                         "verified": True,
                         "verification_basis": (
+                            "trusted_retained_supply_and_fresh_process"
+                            if reuse_verified_existing_runtime
+                            else
                             "sealed_candidate_equivalence_and_live_existing_runtime_verification"
                         ),
                         "live_reverification_required_before_reuse": False,
