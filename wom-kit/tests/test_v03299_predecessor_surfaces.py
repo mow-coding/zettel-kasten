@@ -117,6 +117,7 @@ CLI_ADDITIONS = {
     ("source-fidelity-session-evidence",),
     ("source-reference-coverage-audit",),
     ("source-intake-batch",),
+    ("work-session",),
     ("zet-objet-link",),
     ("zet-objet-link-receipts",),
     ("zet-objet-link-revert",),
@@ -124,16 +125,18 @@ CLI_ADDITIONS = {
     ("zettel-objet-link-receipts",),
     ("zettel-objet-link-revert",),
 }
-CURRENT_CLI_COUNT = 575
+CURRENT_CLI_COUNT = 576
 CURRENT_CLI_CANONICAL_SHA256 = (
-    "f3d12300e12dc3ab54d2b72e443f69bb4102ac2460c3d51d7f3da17108063c1f"
+    "18287b38efa279b4a2c096234e762d66fbc8f426a1e74859b7e921cc90e809b7"
 )
-CURRENT_MCP_COUNT = 131
+CURRENT_MCP_COUNT = 134
 CURRENT_MCP_CANONICAL_SHA256 = (
-    "40c6667552b13d3662afedfeb1e5049d933a7bf01a04774f41426fe225139f1e"
+    "e9aa7b84466f0454cf8102b6fb460afc7001ed7a60681f58db3356725b4d413d"
 )
 MCP_ADDITIONS = {
     "archive_capabilities",
+    "archive_work_session",
+    "archive_work_session_manage",
     "approval_integrity_audit",
     "approval_integrity_guard",
     "approval_integrity_overlay_plan",
@@ -142,6 +145,7 @@ MCP_ADDITIONS = {
     "human_artifact_registry_scan",
     "human_artifact_root_registration_plan",
     "human_artifact_transition_plan",
+    "source_intake_record",
     "zettel_objet_link_receipts",
 }
 CURRENT_DATABASE_COUNT = 3

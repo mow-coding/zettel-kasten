@@ -97,6 +97,11 @@ def startup_progress_requested(argv: list[str]) -> bool:
         # heavy CLI import. Inspect fixed option names only, never their values;
         # actual parsing and the original unscoped mode remain unchanged.
         return True
+    if argv[0] == "source-intake-record" and any(
+        option.split("=", 1)[0] in {"--client-app-ref", "--task-route-ref", "--work-session-ref"}
+        for option in options
+    ):
+        return True
     return bool(STARTUP_PROGRESS_DEFAULTS[argv[0]] or "--progress" in options)
 
 

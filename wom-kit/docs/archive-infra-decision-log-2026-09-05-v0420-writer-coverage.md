@@ -196,3 +196,21 @@ unfinished. In particular, legacy objet capture is not a common exact held
 transaction and must not be opened to scoped intake through schema widening.
 Reuse the existing next exact-manifest families before claiming universal writer
 coverage; retain old approvals and already usable legacy modes meanwhile.
+
+## Subsequent scoped single-record source checkpoint
+
+`source-intake-record` now composes its own one-receipt exact manifest with the
+existing actor/claim/origin guards, retained original-input codec and shared
+approval/checkpoint engine. It has joined source tests for CLI interruption to
+MCP original resume, and MCP interruption to CLI original resume; completed
+replay is read-only in both directions. The other two scoped domain families
+remain CLI-only. Single-record MCP parity does not imply universal domain
+parity or installed-release acceptance.
+
+The parser delta remains exactly one top-level `work-session`; new arguments
+extend existing families. Relative to the released surface, MCP additions are
+the two work-session tools and the single source-intake record tool. Do not
+count aliases, preview paths or internal classes as completed writer families.
+Metadata recording still does not prove source capture, cleanup responsibility
+or Git producer ownership. Single-record downstream Git authentication and the
+remaining writer/effect coverage remain explicit follow-up work.

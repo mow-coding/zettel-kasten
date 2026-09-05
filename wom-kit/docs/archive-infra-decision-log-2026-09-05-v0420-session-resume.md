@@ -339,3 +339,25 @@ Count prepared capture requests as outputs, not receipts or preserved source
 files. Keep artifact/source-custody completion false. Joined public source
 tests, installed acceptance, full writer coverage and release are separate
 stages; the integration minutes state which stage was actually exercised.
+
+## One metadata receipt remains one operation
+
+Bind the existing single source-intake record to its own retained exact inputs
+and explicit actor route. Do not impersonate a batch or manufacture its capture
+request. Share the original session/origin guards, exact broker, checkpoints and
+atomic no-replace primitives. A reconstructed ready plan is not proof that a
+destination is absent or a caller still owns the session; check those facts at
+the held publication boundary. Preserve old unbound manifest/context bytes.
+
+Keep the original reviewed JSON verbatim in ignored private control storage.
+Fresh approval revalidates that input; original continuation uses the retained
+original and authenticates its original claim. A missing claim does not trigger
+new approval automatically. Succeeded output verification and current-owner
+completion acknowledgement are distinct. Unknown destination bytes and stale
+pending files are never overwritten, inferred as success, or silently removed.
+
+CLI and MCP call the same single-record service. The asynchronous MCP lane
+reuses the existing scheduler and cancellation boundary. Its heartbeat may say
+that it is waiting for another observed status; it must not invent processed
+items. Metadata receipt completion is neither source capture nor Git backup
+producer authentication. Those downstream contracts remain separate work.

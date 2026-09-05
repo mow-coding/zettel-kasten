@@ -1819,6 +1819,28 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "source_intake_record",
+        "description": (
+            "Record one redacted source-intake plan using its explicit app/task session and native exact approval. "
+            "This preserves metadata only, not source bytes, and creates no capture request. "
+            "Resume selects the original approval using only app/task references; omit plan, reviewer, hashes and approval IDs."
+        ),
+        "annotations": {"readOnlyHint": False, "destructiveHint": False,
+                        "idempotentHint": False, "openWorldHint": False},
+        "inputSchema": {
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                "archive_root": {"type": "string"},
+                "mode": {"type": "string", "enum": ["preview", "apply", "resume"]},
+                "client_app_ref": {"type": "string"}, "task_route_ref": {"type": "string"},
+                "work_session_ref": {"type": "string"},
+                "source_intake_plan": {"type": "string", "description": "Existing redacted plan JSON path; omitted on original resume."},
+                "reviewed_by": {"type": "string", "description": "Safe reviewer reference for fresh apply only."},
+            },
+            "required": ["archive_root", "mode", "client_app_ref", "task_route_ref"],
+        },
+    },
+    {
         "name": "source_intake_plan",
         "description": "Plan safe source/objet references before draft creation. Read-only metadata-only dry-run; never reads file bodies, hashes, copies, uploads, imports, OCRs, transcribes, or calls provider APIs.",
         "inputSchema": {
@@ -3661,6 +3683,11 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_project_intake_item_plan(arguments)
     if name == "source_intake_plan":
         return tool_source_intake_plan(arguments)
+    if name == "source_intake_record":
+        from ._mcp_session_transport import management_metadata
+        if not management_metadata(params)[0]:
+            raise InvalidParamsError()
+        return tool_source_intake_record(arguments)
     if name == "tiro_import_plan":
         return tool_tiro_import_plan(arguments)
     if name == "archive_init":
@@ -5331,6 +5358,43 @@ def tool_project_intake_item_plan(arguments: dict[str, Any]) -> dict[str, Any]:
     )
     state = str(result.get("state") or ("passed" if result["ok"] else "blocked"))
     return tool_success_result(f"project_intake_item_plan: {state}.", result)
+
+
+def tool_source_intake_record(arguments: dict[str, Any]) -> dict[str, Any]:
+    from ._mcp_session_transport import current_session_request
+    from .source_intake_session_command import dispatch_session_source_intake_record
+
+    allowed = {"archive_root", "mode", "client_app_ref", "task_route_ref", "work_session_ref",
+               "source_intake_plan", "reviewed_by"}
+    required = {"archive_root", "mode", "client_app_ref", "task_route_ref"}
+    if (type(arguments) is not dict or set(arguments) - allowed or not required <= set(arguments)
+            or any(type(arguments[key]) is not str for key in arguments)
+            or arguments["mode"] not in {"preview", "apply", "resume"}):
+        raise InvalidParamsError()
+    # Bound both the direct call and asynchronous transport input. Do not echo
+    # rejected path/identity values or let extra approval knobs reach a writer.
+    if len(json.dumps(arguments, ensure_ascii=True).encode("utf-8")) > 65536:
+        raise InvalidParamsError()
+    if (arguments["mode"] == "resume" and {"source_intake_plan", "reviewed_by"} & set(arguments)
+            or arguments["mode"] == "preview" and "reviewed_by" in arguments):
+        raise InvalidParamsError()
+    archive_root = require_path_arg(arguments, "archive_root")
+    value = arguments.get("source_intake_plan")
+    plan_path = None
+    if value is not None:
+        candidate = Path(value)
+        candidate = candidate if candidate.is_absolute() else archive_root / candidate
+        plan_path = require_path_arg({"plan": str(candidate)}, "plan")
+    context = current_session_request()
+    callbacks = {} if context is None else {"cancel_requested": context.cancel_requested, "progress": context.progress}
+    result = dispatch_session_source_intake_record(archive_root, mode=arguments["mode"],
+        client_app_ref=arguments["client_app_ref"], task_route_ref=arguments["task_route_ref"],
+        work_session_ref=arguments.get("work_session_ref"), plan_path=plan_path,
+        reviewer_claim=arguments.get("reviewed_by"), **callbacks)
+    if result.get("ok") is not True:
+        return {"content": [{"type": "text", "text": "Source-intake record could not be completed."}],
+                "structuredContent": result, "isError": True}
+    return tool_success_result("Source-intake metadata record returned; source bytes are not captured.", result)
 
 
 def tool_source_intake_plan(arguments: dict[str, Any]) -> dict[str, Any]:

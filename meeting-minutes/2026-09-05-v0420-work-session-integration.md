@@ -1923,6 +1923,137 @@ bump, PR, tag, wheel or client application has occurred.
   assignment remain open. No new task command or parallel approval system was
   added by the intake-output Git integration.
 
+## Single metadata-record session integration, in development
+
+- Continued from clean, pushed checkpoint `859d8d83` in the existing unfinished
+  v0.4.20 worktree. The release remains v0.4.19; this is not a v0.4.20 release
+  or a client recovery result. No private client archive or runtime was changed.
+- Selected existing `source-intake-record` next because it already has one
+  absent-to-exact receipt manifest. It does not capture source bytes or prepare
+  a batch capture request. Routing it through batch intake would add an
+  unintended artifact. Legacy capture has a different transaction lifecycle
+  and is not reopened merely by accepting a new evidence schema.
+- Extracted a pure reconstruction factory while preserving original unscoped
+  manifest, approval context, receipt and source-basis bytes. New private
+  retained inputs bind original redacted JSON bytes/path, original unbound
+  manifest, session claim/origin and predecessor to a new scoped manifest.
+  Loading is data validation, never original-approval or current-owner proof.
+  The legacy public entry rejects a scoped plan before native approval.
+- New single-record held execution reuses the common exact engine, checkpoints,
+  authenticated final receipt and existing exclusive staging/no-replace move
+  primitives. It leaves interrupted pending files intact, never scans or adopts
+  them as authority, and refuses an unknown existing destination. Original
+  continuation does not need the external caller JSON. The workflow reuses
+  existing concrete current-session and original-establishment checks, the
+  common native broker and original-claim discovery, not a second approval
+  framework. Missing approval remains a blocker without an automatic prompt.
+- Shared command routing now supports single and batch receipt modes while
+  retaining batch call grammar. The existing single CLI gains explicit session
+  selectors and original resume. A matching MCP tool uses the same held/runtime
+  service, bounded closed arguments and MCP allowed-root checks. New MCP work
+  enters the existing serial lane and cooperatively waits; only audited reader
+  queries bypass that lane. Intake progress is closed stage/count data; an
+  idle interval reports liveness with the last observed facts, not invented
+  processing progress. No new top-level CLI command was introduced.
+- Initial legacy/codec result: 26 tests passed in 9.974 seconds, including 15
+  new codec/legacy-entry checks and all 11 existing single-record cases. The
+  preceding 25-case run had one overly specific error-code test expectation;
+  the malformed context already refused safely. The expectation was corrected,
+  not product admission. Existing writer/context/authority AST remains unchanged.
+- Single-record completion foundations passed seven tests in 2.945 seconds.
+  A fully rehashed but forged-MAC envelope passes structural loading and still
+  fails authenticated completion. These foundations do not claim actual owned
+  publication. The first actual private workflow case separately passed in
+  25.987 seconds: actual publication, injected interruption, original resume
+  with deleted caller JSON and read-only completed replay. The broader final
+  workflow cohort and cross-CLI/MCP public journey are still under examination.
+- All 17 existing batch command-routing tests passed in 8.749 seconds after
+  shared dispatch/CLI factoring. They use mocked domain runners and are not
+  proof of actual intake execution, installed release acceptance or timing.
+  Source hashes and final broader results will be recorded after review.
+- Independent review found that reusing the legacy single-record verifier in
+  the new scoped path would resolve away an internal link and did not reject
+  unexpected hardlinks. Publication itself used strict reads, but later
+  postimage/resume authentication needed the same protection. The scoped path
+  now receives a lexical, bound-file verifier at preimage, exact writer,
+  started-final and completed-proof boundaries. The legacy verifier is not
+  weakened or silently redefined. Earlier passing tests do not close this gap;
+  the corrected source needs new link-refusal and continuation evidence.
+- The initial broader private workflow cohort had seven passing cases and one
+  test-fixture failure: saving identical actor fields is intentionally a no-op,
+  so that callback did not create the claimed drift. The corrected test makes
+  a real actor CAS change and asserts different raw bytes; that case passed
+  separately in 6.484 seconds. These are eight distinct covered cases, not one
+  passing final eight-case run. The forthcoming scoped-verifier revision also
+  requires revalidation of those earlier results.
+
+## Single-record corrected-source verification
+
+- Final scoped verifier uses the lexical approved receipt path, retained full
+  directory/file binding and a separate strict single-link, stable control
+  read. Review discovered that the held-file primitive itself did not enforce
+  single-link status, so it was not treated as sufficient by name alone.
+  No common legacy reader was modified for this single-record change.
+- The corrected completion-foundation cohort ran nine tests in 3.268 seconds:
+  eight passed; the real Windows file-symlink test was explicitly skipped for
+  native privilege error 1314. Actual hardlink creation proved the old-reader
+  acceptance and the new refusal. The missing native symlink privilege is not
+  a passing Windows symlink test; the cross-platform/full release gate remains.
+- All eight actual private workflow tests then passed in one final run,
+  105.031 seconds, with no skips. This includes real publish-before-checkpoint
+  interruption, retained original resume, exact ownership/input/MAC refusal,
+  preserved unpublished staging and read-only completed replay. Independent
+  review of the bundle, unchanged legacy factory values, workflow and narrowed
+  verifier found no further blocking issue in those reviewed changes.
+- Both joined public source tests passed in one run, 75.867 seconds, no skips:
+  CLI publication interruption to MCP original resume to CLI replay; and the
+  reverse direction. Actual public session registration/create/claim, native
+  broker, domain writer, receipt/checkpoint, runtime guard and shared service
+  execute. Only native answers/key bytes and the precisely placed interruption
+  are synthetic. MCP uses real JSON-RPC dispatch in-process; this is not a
+  fresh stdio process, installed-wheel journey, native power loss or timing
+  acceptance. Source files and original private context stay unchanged; no
+  capture request or extra claim is manufactured.
+- New command/MCP/serial-lane tests passed 18/18 in 5.293 seconds, no skips.
+  Those tests mock domain execution and instead cover closed grammar, root
+  policy, real runtime/held routing, cancellation, terminal silence and safe
+  observed-stage/count liveness. They complement rather than replace the two
+  actual public journeys. Earlier 17-case batch command regression remains
+  separately recorded. Broader existing transport/startup/resource regression
+  is being run before this development checkpoint is pushed.
+- Frozen corrected source SHA-256 (no `sha256:` prefix):
+  - Single workflow: `22a1bd3267b34167a997f8edcde6e0a3a0643572b8fa3544e30464a75bb46f5b`.
+  - Held execution/verifier: `c807b1898d268b6dfa5365c64ee4d9e04f96c2b8ce75c1f729876a21055ac8dc`.
+  - Retained bundle: `89fb3ac61aea787a7444231da03db923182502ffb08edcceac1ad434067467ec`.
+  - Legacy pure factory/public-entry guard: `b16a2fe17ab44722194d280622e8f387e4c26321706b35a920f4795a37c1c56c`.
+  - Public journey test: `c6224ebe109d2a646a7417d25f29a20beb28ca1c14e0ad5b885faa2ddeea639a`.
+  - Private workflow test: `5d2121c0c1e156aa2617001efaf44812af74e8aed8dda94c206814a103937378`.
+  - Grammar/transport test: `8022c5b27e1937ee50f9282dc515187bfe2c367ec0e8a9e28570a881496b311d`.
+- Windows Python 3.12 executed these tests. Parsing changed Python sources with
+  Python 3.10 grammar is additional syntax evidence only. Concurrent isolated
+  functional fixtures are not performance acceptance. Version remains 0.4.19
+  in this unreleased feature branch. No client or provider state was modified.
+- Final existing regression cohort passed 57/57 in 23.152 seconds, no skips:
+  batch command routing, MCP session transport, fresh-process CLI startup and
+  package resources. The four public readiness checks passed, including public
+  privacy hygiene. These are development gates, not full multi-platform CI.
+- The present-day surface assertions needed their already approved additions:
+  exactly one CLI path (`work-session`) and three MCP tools (session query,
+  session management and single-record intake). Current counts are 576 CLI
+  spellings and 134 MCP tools. Removing exactly those additions reproduces the
+  old 575/131 canonical digests; no existing MCP input schema or CLI path was
+  changed by that comparison. Five targeted surface tests passed in 0.513
+  seconds. Historical fixture goldens and every privacy/raw/derived/path/BOM/
+  subset checking expression remain unchanged; the broad history suite was
+  not claimed as rerun. Existing checkout CRLF differences were distinguished
+  from the fixture's Git bytes without editing the fixture.
+- Remote read-only recheck still reports latest release v0.4.19, no open PR,
+  main `84d55bd5871e852eef97da6e4b89dcba252d0d8b` and original task head
+  `859d8d83b7dc88b4ed4460f4ac84e2bab7722f4b` before this checkpoint push.
+  Open secret alert count is zero; this does not guarantee no historical
+  exposure. Only the canonical root and this unfinished feature worktree are
+  registered. No completed worktree was recreated and no client file was used.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)

@@ -20,6 +20,7 @@ _BOOLEANS = frozenset({
     "original_completion_verified", "actor_completion_published", "original_operation_already_completed",
     "prepared_capture_request_verified", "completion_authentication_verified", "independent_verification",
     "source_bytes_reverified", "requires_new_capture_approval", "domain_writer_reentered",
+    "prepared_capture_request_created",
 })
 _COUNTS = frozenset({"item_count", "completed_item_count"})
 _DIGESTS = frozenset({
@@ -98,15 +99,17 @@ def _public_result(result, *, mode):
     return public
 
 
-def dispatch_session_source_intake(
+def _dispatch_session_source_intake(
     root, *, mode, client_app_ref, task_route_ref, work_session_ref=None,
     request_path=None, reviewer_claim=None, cancel_requested=lambda: False, progress=lambda _event: None,
+    family,
 ):
     """One held archive lane; resume receives only the retained caller route."""
     workflow, started, original_verified = None, False, False
     code = "work_session_intake_command_unavailable"
     try:
-        if (type(mode) is not str or mode not in {"preview", "apply", "resume"}
+        if (type(family) is not str or family not in {"batch", "record"}
+                or type(mode) is not str or mode not in {"preview", "apply", "resume"}
                 or not callable(cancel_requested) or not callable(progress)):
             return _failure("work_session_intake_command_invalid", mode=mode)
         if mode == "resume" and (request_path is not None or reviewer_claim is not None):
@@ -122,7 +125,16 @@ def dispatch_session_source_intake(
         if work_session_ref is not None:
             sessions._refs(client_app_ref, task_route_ref, work_session_ref, require_session=True)
         resolved = sessions._root(root)
-        from . import work_session_source_intake_workflow as workflow
+        if family == "batch":
+            from . import work_session_source_intake_workflow as workflow
+            preview = workflow._preview_session_source_intake_batch_held
+            apply = workflow._execute_session_source_intake_batch_held
+            resume = workflow._resume_session_source_intake_batch_held
+        else:
+            from . import work_session_source_intake_record_workflow as workflow
+            preview = workflow._preview_session_source_intake_record_held
+            apply = workflow._execute_session_source_intake_record_held
+            resume = workflow._resume_session_source_intake_record_held
 
         def safe_callback(callback, *args):
             failed = False
@@ -145,10 +157,10 @@ def dispatch_session_source_intake(
             nonlocal started
             started = True
             if mode == "resume":
-                return workflow._resume_session_source_intake_batch_held(resolved, held=held, **common)
+                return resume(resolved, held=held, **common)
             if mode == "preview":
-                return workflow._preview_session_source_intake_batch_held(resolved, request_path, held=held, **common)
-            return workflow._execute_session_source_intake_batch_held(
+                return preview(resolved, request_path, held=held, **common)
+            return apply(
                 resolved, request_path, held=held, reviewer_claim=reviewer_claim, **common)
 
         result = sessions._write(resolved, cancel_requested=safe_cancel, progress=safe_progress, run=run)
@@ -169,3 +181,23 @@ def dispatch_session_source_intake(
                 ("work_session_wait_cancelled",), ("work_session_wait_root_changed",)):
             code = error.args[0]
     return _failure(code, mode=mode, effects_started=started, original_completion_verified=original_verified)
+
+
+def dispatch_session_source_intake(
+    root, *, mode, client_app_ref, task_route_ref, work_session_ref=None,
+    request_path=None, reviewer_claim=None, cancel_requested=lambda: False, progress=lambda _event: None,
+):
+    """Existing batch route; keeps its public call grammar unchanged."""
+    return _dispatch_session_source_intake(root, mode=mode, client_app_ref=client_app_ref,
+        task_route_ref=task_route_ref, work_session_ref=work_session_ref, request_path=request_path,
+        reviewer_claim=reviewer_claim, cancel_requested=cancel_requested, progress=progress, family="batch")
+
+
+def dispatch_session_source_intake_record(
+    root, *, mode, client_app_ref, task_route_ref, work_session_ref=None,
+    plan_path=None, reviewer_claim=None, cancel_requested=lambda: False, progress=lambda _event: None,
+):
+    """Single receipt route; no batch request or source-byte capture effects."""
+    return _dispatch_session_source_intake(root, mode=mode, client_app_ref=client_app_ref,
+        task_route_ref=task_route_ref, work_session_ref=work_session_ref, request_path=plan_path,
+        reviewer_claim=reviewer_claim, cancel_requested=cancel_requested, progress=progress, family="record")

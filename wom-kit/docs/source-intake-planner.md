@@ -209,7 +209,9 @@ This release does not:
 - mint canonical memory,
 - sync providers.
 
-MCP exposes only read-only `source_intake_plan`; it exposes no apply/capture/upload/sync/provider API tool.
+The released v0.4.19 MCP intake surface exposes read-only `source_intake_plan`;
+it does not expose this record writer. The unreleased scoped single-record
+extension below must not be confused with source capture or a provider API.
 
 ## Unreleased v0.4.20 session-bound batch route
 
@@ -246,3 +248,38 @@ or release acceptance and does not include the referenced source bytes: scoped c
 and its independent preservation proof are still separate unfinished work.
 Do not advertise end-to-end source preservation or delete source files based on
 intake completion or metadata backup.
+
+## Unreleased v0.4.20 session-bound single record
+
+The existing `source-intake-record` is a separate one-receipt operation. It
+records an already redacted metadata plan; it does not hash or copy source
+bodies and does not manufacture the batch's prepared capture request.
+
+```text
+archive source-intake-record <archive-root> --client-app-ref <app> --task-route-ref <task> --work-session-ref <session> --source-intake-plan <private-plan.json> --dry-run --format json
+archive source-intake-record <archive-root> --client-app-ref <app> --task-route-ref <task> --work-session-ref <session> --source-intake-plan <private-plan.json> --approve --reviewed-by <reviewer> --format json
+archive source-intake-record <archive-root> --client-app-ref <app> --task-route-ref <task> --resume --format json
+```
+
+The AI retains the app/task route and prepares inputs; the person reviews the
+native change. Original resume requires no caller JSON, new reviewer, plan
+digest or approval ID. A missing or invalid original approval is a blocker,
+not an automatic new approval request. Completed replay verifies the original
+authenticated receipt/checkpoint and current exact whole output; it does not
+turn a copied matching JSON file into an approved record.
+
+MCP `source_intake_record` uses the same service with `mode` set to `preview`,
+`apply` or `resume`, explicit `client_app_ref`/`task_route_ref` and optional
+same-session assertion on resume. Fresh calls supply `source_intake_plan` and
+the claimed `work_session_ref`; only fresh apply supplies `reviewed_by`.
+Both archive and input path must satisfy MCP allowed-root policy. There are
+no public key-provider, native-dialog, claim or execution override parameters.
+Its serial lane retains cancellation while waiting and content-free stage/count
+progress. A heartbeat repeating the last observed state is liveness, not proof
+that additional items completed.
+
+This is development-source integration, not a release or client result. The
+single record is not yet a newly authenticated Git producer; do not assume the
+batch producer accepts it. An interrupted unpublished stage remains preserved,
+not silently adopted or deleted. Unknown destination bytes, symlinks/reparse
+points and unexpected hardlinks block the scoped operation.

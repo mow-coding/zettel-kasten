@@ -20125,6 +20125,8 @@ def command_authoring_conventions(args: argparse.Namespace) -> int:
 
 
 def command_source_intake_record(args: argparse.Namespace) -> int:
+    if _source_intake_session_selected(args):
+        return _command_session_source_intake(args, record=True)
     reporter = CommandProgressReporter(
         bool(getattr(args, "progress", False)),
         label="source-intake-record",
@@ -20141,7 +20143,8 @@ def command_source_intake_record(args: argparse.Namespace) -> int:
         )
 
     try:
-        if args.dry_run == args.approve:
+        if (args.dry_run == args.approve or not args.source_intake_plan
+                or bool(getattr(args, "resume", False))):
             raise source_intake_record_exact.SourceIntakeRecordExactError(
                 "source_intake_record_request_invalid"
             )
@@ -20189,25 +20192,29 @@ def _source_intake_session_selected(args: argparse.Namespace) -> bool:
                for name in ("client_app_ref", "task_route_ref", "work_session_ref"))
 
 
-def _command_session_source_intake_batch(args: argparse.Namespace) -> int:
-    from .source_intake_session_command import dispatch_session_source_intake, _failure, _project_progress
+def _command_session_source_intake(args: argparse.Namespace, *, record: bool) -> int:
+    from .source_intake_session_command import (
+        dispatch_session_source_intake, dispatch_session_source_intake_record, _failure, _project_progress,
+    )
 
     original = bool(getattr(args, "resume", False))
     mode = "resume" if original else ("preview" if args.dry_run else "apply")
+    path = args.source_intake_plan if record else args.manifest
     forbidden = (any(getattr(args, name, None) is not None
                      for name in ("expected_plan_sha256", "resume_approval_id", "execution_sha256"))
                  or bool(getattr(args, "reconcile", False)))
     mode_count = sum((bool(args.dry_run), bool(args.approve), original))
     if (forbidden or mode_count != 1
-            or original and (args.manifest is not None or args.reviewed_by is not None)
+            or original and (path is not None or args.reviewed_by is not None)
             or args.dry_run and args.reviewed_by is not None):
         result = _failure("work_session_intake_original_inputs_forbidden" if original or forbidden
                           else "work_session_intake_command_invalid", mode=mode)
     else:
         reporter, entered, original_verified = None, False, False
         try:
-            reporter = CommandProgressReporter(bool(getattr(args, "progress", True)),
-                label="source-intake-batch", heartbeat_interval_seconds=5.0)
+            progress_setting = getattr(args, "progress", None)
+            reporter = CommandProgressReporter(True if progress_setting is None else bool(progress_setting),
+                label="source-intake-record" if record else "source-intake-batch", heartbeat_interval_seconds=5.0)
             reporter.progress("source-intake-session", "start", None, None)
 
             def progress(event):
@@ -20217,11 +20224,13 @@ def _command_session_source_intake_batch(args: argparse.Namespace) -> int:
                     reporter.progress(stage, "start" if current is None else "progress", current, total)
 
             entered = True
-            result = dispatch_session_source_intake(Path(args.archive_root), mode=mode,
+            dispatch = dispatch_session_source_intake_record if record else dispatch_session_source_intake
+            input_path = {"plan_path": path} if record else {"request_path": path}
+            result = dispatch(Path(args.archive_root), mode=mode,
                 client_app_ref=getattr(args, "client_app_ref", None),
                 task_route_ref=getattr(args, "task_route_ref", None),
                 work_session_ref=getattr(args, "work_session_ref", None),
-                request_path=args.manifest, reviewer_claim=args.reviewed_by, progress=progress)
+                reviewer_claim=args.reviewed_by, progress=progress, **input_path)
             original_verified = type(result) is dict and result.get("original_completion_verified") is True
         except KeyboardInterrupt:
             result = _failure("work_session_wait_cancelled", mode=mode, effects_started=entered,
@@ -20245,6 +20254,10 @@ def _command_session_source_intake_batch(args: argparse.Namespace) -> int:
         state = "blocked" if result.get("ok") is not True else ("ready_for_write" if mode == "preview" else "completed")
         print("Session source intake: " + state)
     return 0 if result.get("ok") is True else 1
+
+
+def _command_session_source_intake_batch(args: argparse.Namespace) -> int:
+    return _command_session_source_intake(args, record=False)
 
 
 def command_source_intake_batch(args: argparse.Namespace) -> int:
@@ -39584,7 +39597,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Record a reviewed source-intake dry-run plan under receipts/sources/.",
     )
     source_intake_record.add_argument("archive_root", help="Archive root to update.")
-    source_intake_record.add_argument("--source-intake-plan", required=True, help="JSON file from source-intake --dry-run.")
+    source_intake_record.add_argument("--source-intake-plan", help="JSON file from source-intake --dry-run. Required except session original --resume.")
+    source_intake_record.add_argument("--client-app-ref", help="Explicit registered app selects the session-bound single receipt route.")
+    source_intake_record.add_argument("--task-route-ref", help="Original task route retained by the AI.")
+    source_intake_record.add_argument("--work-session-ref", help="Current session for fresh recording; optional assertion on original --resume.")
+    source_intake_record.add_argument("--resume", action="store_true", help="With session references, resume the original approved record without plan, reviewer, hash or approval ID.")
     source_intake_record.add_argument("--dry-run", action="store_true", help="Preview validation without writing files.")
     source_intake_record.add_argument("--approve", action="store_true", help="Write the reviewed source-intake plan record.")
     source_intake_record.add_argument("--reviewed-by", help="Reviewer id required when --approve is used.")
@@ -39592,13 +39609,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--expected-plan-sha256",
         help="Optional expert binding to the exact manifest SHA-256 shown by --dry-run.",
     )
-    source_intake_record.add_argument(
+    source_intake_record_progress = source_intake_record.add_mutually_exclusive_group()
+    source_intake_record_progress.add_argument(
         "--progress",
         action="store_true",
-        help="Print content-free progress and heartbeats to stderr.",
+        help="Print content-free progress and heartbeats to stderr (default for the session route).",
     )
+    source_intake_record_progress.add_argument("--no-progress", dest="progress", action="store_false", help="Disable progress output.")
+    source_intake_record.set_defaults(progress=None)
     source_intake_record.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
-    source_intake_record.set_defaults(func=command_source_intake_record)
+    source_intake_record.set_defaults(func=command_source_intake_record, _wom_project_runtime_resume_effect=True)
 
     source_intake_batch = subcommands.add_parser(
         "source-intake-batch",
@@ -47643,7 +47663,7 @@ def main(argv: list[str] | None = None) -> int:
             "work-session",
         }
     )
-    if raw_argv[:1] == ["source-intake-batch"]:
+    if raw_argv and raw_argv[0] in {"source-intake-batch", "source-intake-record"}:
         option_tokens = raw_argv[:raw_argv.index("--")] if "--" in raw_argv else raw_argv
         privacy_sensitive_command = privacy_sensitive_command or any(
             token.split("=", 1)[0] in {"--client-app-ref", "--task-route-ref", "--work-session-ref"}
@@ -47711,6 +47731,10 @@ def main(argv: list[str] | None = None) -> int:
                         and args.manifest is None
                         and not (_source_intake_session_selected(args) and getattr(args, "resume", False))):
                     parser.error("the following arguments are required: --manifest")
+                if (getattr(args, "func", None) is command_source_intake_record
+                        and args.source_intake_plan is None
+                        and not (_source_intake_session_selected(args) and getattr(args, "resume", False))):
+                    parser.error("the following arguments are required: --source-intake-plan")
     except SystemExit as exc:
         exit_code = int(exc.code or 0)
         if not exit_code:

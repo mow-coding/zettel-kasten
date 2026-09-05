@@ -42,7 +42,7 @@ def _request_key(value):
 def is_management_request(message):
     return (type(message) is dict and message.get("method") == "tools/call"
             and type(message.get("params")) is dict
-            and message["params"].get("name") == "archive_work_session_manage")
+            and message["params"].get("name") in ("archive_work_session_manage", "source_intake_record"))
 
 
 def management_metadata(params):
@@ -62,6 +62,11 @@ def _managed_mutation(message):
     arguments = message["params"].get("arguments")
     if type(arguments) is not dict:
         return False
+    if message["params"].get("name") == "source_intake_record":
+        # Even preview acquires the existing held lane for a consistent plan.
+        # Scheduling is not availability or authority; the service validates
+        # every argument, current runtime/session and exact native approval.
+        return type(arguments.get("mode")) is str and arguments["mode"] in {"preview", "apply", "resume"}
     mode = resolve_work_session_mode(action=arguments.get("action"), **{
         key: arguments.get(key, False)
         for key in ("dry_run", "approve", "apply", "resume", "review_original")
@@ -84,7 +89,7 @@ def _error(request_id, code, message):
 class SessionRequest:
     """Ephemeral callbacks. Repr and progress never include domain inputs."""
 
-    def __init__(self, token, send):
+    def __init__(self, token, send, *, domain_progress=False):
         self._token = token
         self._send = send
         self._lock = threading.RLock()
@@ -94,6 +99,9 @@ class SessionRequest:
         self._sequence = 0
         self._queued = True
         self._last_queue_progress = None
+        self._domain_enabled = domain_progress is True
+        self._domain_status = None
+        self._last_domain_progress = None
 
     def __repr__(self):
         return "<McpSessionRequest>"
@@ -111,6 +119,21 @@ class SessionRequest:
             return False
 
     def progress(self, event):
+        if self._domain_enabled:
+            # Only the existing closed projector can read a domain event. No
+            # arbitrary Mapping/repr/public_document callback or user label.
+            from .source_intake_session_command import _project_progress
+            projected = _project_progress(event)
+            if projected is None:
+                return
+            with self._lock:
+                if self._terminal or self._cancel:
+                    return
+                self._domain_status = projected
+                if self._token is not None:
+                    self._emit_progress(message=self._domain_message())
+                    self._last_domain_progress = time.monotonic()
+            return
         # Only original wait events are supported. No labels, elapsed values,
         # supplied message, total, ownership or guessed domain progress escape.
         if type(event) is not dict or type(event.get("stage")) is not str or event["stage"] not in {
@@ -121,11 +144,31 @@ class SessionRequest:
                 return
             self._emit_progress()
 
-    def _emit_progress(self):
+    def _emit_progress(self, *, message=None):
         self._sequence += 1
+        params = {"progressToken": self._token, "progress": self._sequence}
+        if message is not None:
+            params["message"] = message
         self._send({"jsonrpc": "2.0", "method": "notifications/progress", "params": {
-            "progressToken": self._token, "progress": self._sequence,
+            **params,
         }})
+
+    def _domain_message(self):
+        stage, current, total = self._domain_status
+        counts = "" if current is None else f"; completed items {current}/{total}"
+        return "source-intake: " + stage + counts
+
+    def execution_heartbeat(self):
+        """Liveness with last observed facts, never invented item completion."""
+        with self._lock:
+            if (not self._domain_enabled or self._queued or self._terminal or self._cancel
+                    or self._token is None or self._domain_status is None):
+                return
+            now = time.monotonic()
+            if self._last_domain_progress is not None and now - self._last_domain_progress < QUEUE_HEARTBEAT_SECONDS:
+                return
+            self._emit_progress(message="Awaiting next observed status; " + self._domain_message())
+            self._last_domain_progress = now
 
     def queued_progress(self):
         with self._lock:
@@ -149,7 +192,8 @@ class SessionRequest:
             result = response.get("result") if type(response) is dict else None
             content = result.get("structuredContent") if type(result) is dict else None
             accepted = (self._observed_cancel and type(content) is dict
-                        and content.get("schema") == "wom-kit/work-session-management/v1"
+                        and content.get("schema") in ("wom-kit/work-session-management/v1",
+                                                      "wom-kit/source-intake-session-command/v1")
                         and content.get("ok") is False
                         and content.get("reason_code") == "work_session_wait_cancelled")
             # Release this exact routing entry before a client can observe the
@@ -267,7 +311,8 @@ class SessionStdioTransport:
         if not within_limit:
             self.send(_error(message["id"], -32602, "Invalid params"))
             return
-        context = SessionRequest(token, self.send) if managed else None
+        context = (SessionRequest(token, self.send,
+            domain_progress=message["params"].get("name") == "source_intake_record") if managed else None)
         with self._condition:
             if self._closed:
                 return
@@ -332,19 +377,21 @@ class SessionStdioTransport:
                 self._remove(key, entry)
 
     def _queue_heartbeat(self):
-        # One queued-only scheduler, not one thread per request. It never emits
-        # after a job enters a native dialog/writer, nor invents domain progress.
+        # One scheduler, not one thread per request. Legacy management remains
+        # queued-only. The audited intake lane can report liveness with its last
+        # observed closed stage while native approval/exact execution continues.
         while True:
             with self._condition:
                 if self._closed:
                     return
-                contexts = [item[2] for item in self._pending if item[2] is not None]
+                contexts = [entry[0] for entry in self._active.values() if entry[0] is not None]
                 self._condition.wait(timeout=1 if contexts else None)
                 if self._closed:
                     return
-                contexts = [item[2] for item in self._pending if item[2] is not None]
+                contexts = [entry[0] for entry in self._active.values() if entry[0] is not None]
             for context in contexts:
                 context.queued_progress()
+                context.execution_heartbeat()
 
     def close(self, *, wait=True):
         with self._condition:
