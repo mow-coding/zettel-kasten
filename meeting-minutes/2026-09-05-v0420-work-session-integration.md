@@ -864,6 +864,29 @@ bump, PR, tag, wheel or client application has occurred.
   same public routes and original approval; all 288 mode combinations remain
   checked. Independent source review found no additional claim/state blocker.
 
+## Outgoing handoff internal checkpoint
+
+- The outgoing held facade verifies the selected actor's exact current claim,
+  original establishment, source app/session/route and target app, then uses
+  the existing native broker and before-claim actor publication. The original
+  resume follows only that handoff's pending or completed selector. It accepts
+  no replacement reviewer, raw claim, key or native implementation inputs.
+- Terminal publication separately checks current handoff-pending state with
+  no claim and the exact target. If a successor has already accepted, the
+  original committed result remains verified but current state is unavailable;
+  old ownership is not restored or advertised. Neither artifact ownership nor
+  legacy cleanup responsibility is transferred by this operation.
+- Ten dedicated tests and five subtests passed in 197.19 seconds, including
+  actual process exit after authenticated completion and original continuation
+  in a new process, started/pre-checkpoint and terminal publication cuts,
+  original receipt preservation, wrong scopes and later-accept separation.
+  A further legacy-image test passed in 27.33 seconds: old bytes remain intact
+  and verified origin is attached only in a new approved pending CAS image.
+  Independent source review found no additional actionable issue.
+- This is an internal source checkpoint. Public CLI/MCP routing and explicit
+  original native re-review after a handoff pre-claim cut remain unfinished.
+  Automatic approval or a successful resume is not inferred from that cut.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)
