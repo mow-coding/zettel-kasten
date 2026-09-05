@@ -325,6 +325,53 @@ bump, PR, tag, wheel or client application has occurred.
   before commit, so output loss cannot create another app or a replacement
   claim. That bootstrap/discovery integration is explicitly pending; internal
   components are not advertised as a completed public lifecycle.
+- Review then exposed a narrower routing mistake before public lifecycle
+  exposure: an app installation can host two simultaneous tasks. A single
+  per-app current selection would let task A adopt task B's otherwise valid
+  claim after B updates that selection. Checking the claim alone would not
+  detect that the caller had silently switched tasks.
+- The private actor key is therefore being corrected to require an explicit
+  opaque task-route selector beneath the existing app selector. It is a routing
+  key, not a second app identity or authority. Each caller retains its own route,
+  including before a new session is created; there is no current/latest default.
+  The facade must also check any explicit work-session reference against that
+  route. Missing or conflicting task context is not resolved by guessing.
+  The earlier per-app design is not being exposed publicly or marked complete.
+
+## Task routing and original registration intent checkpoint
+
+- The actor correction is implemented as an explicit app/task-route pair.
+  Its immutable private generations retain the selected session, observed
+  binding, private claim and original pending manifest/context pair. Missing
+  selectors never select the latest app or task. A fresh write additionally
+  compares the caller's explicit session with that route before consulting the
+  existing held-lock claimed-binding guard. Two otherwise valid claims cannot
+  make a mismatched task selection valid. Actor assertions are not authority.
+- Register-app and claim now have bounded private original transition intents.
+  The original immutable predecessor, generated reference and request are
+  retained before commit. Re-observation after an actual child-process exit
+  recognizes that same committed transition without creating another reference
+  or generation. Historical success explicitly does not evaluate current claim
+  authority. Bootstrap selector discovery and public lifecycle routing remain
+  separate unfinished integration work.
+- Independent review reproduced a late parent-directory replacement between
+  pending-file verification and publication. The common no-replace mover now
+  accepts an optional expected parent identity for these same-parent callers;
+  both intent and actor publication bind the retained directory to it. Default
+  two-argument callers retain their existing behavior. Windows retains handles
+  through publication; POSIX uses retained directory descriptors and refuses
+  named-path drift. Uncertain bytes are not deleted or blindly retried.
+- Root's final combined actor, task-selection, original-intent, parent-move and
+  held-execution cohort ran 58 tests in 55.818 seconds: 55 passed and three
+  platform/capability-specific tests were skipped. Two skips require Linux and
+  one requires host symlink support; these are not cross-platform success
+  evidence. Five existing transaction move/terminal-delivery regressions also
+  passed in 2.931 seconds. Independent final source and test review found no
+  additional blocker. No client or installed-wheel success is claimed.
+- The next integration must persist the task's original pending selector before
+  approval claim publication, then reconnect create/claim/resume through CLI
+  and MCP without requiring a human to copy IDs, hashes or checkpoint names.
+  This internal checkpoint is not advertised as a completed public workflow.
 
 ## Standard references
 

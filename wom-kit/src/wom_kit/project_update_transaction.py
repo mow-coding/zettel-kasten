@@ -2780,7 +2780,12 @@ def _bound_directory_for_move(path: Path) -> Iterator[_BoundDirectoryForMove]:
             raise close_error
 
 
-def _atomic_move_entry_no_replace(source: Path, destination: Path) -> None:
+def _atomic_move_entry_no_replace(
+    source: Path,
+    destination: Path,
+    *,
+    expected_parent_identity: tuple[int, int] | None = None,
+) -> None:
     """Move one entry no-replace while both complete parent chains stay bound."""
 
     import ctypes
@@ -2794,13 +2799,20 @@ def _atomic_move_entry_no_replace(source: Path, destination: Path) -> None:
         or destination.name in {"", ".", ".."}
     ):
         raise _fail("project_update_transaction_path_unsafe")
+    same_parent = os.path.normcase(str(source.parent)) == os.path.normcase(
+        str(destination.parent)
+    )
+    if expected_parent_identity is not None and (
+        type(expected_parent_identity) is not tuple
+        or len(expected_parent_identity) != 2
+        or any(type(value) is not int or value < 0 for value in expected_parent_identity)
+        or not same_parent
+    ):
+        raise _fail("project_update_transaction_path_unsafe")
     source_parent_before = _safe_directory(source.parent, within=source.parent)
     destination_parent_before = _safe_directory(
         destination.parent,
         within=destination.parent,
-    )
-    same_parent = os.path.normcase(str(source.parent)) == os.path.normcase(
-        str(destination.parent)
     )
     with ExitStack() as stack:
         source_binding = stack.enter_context(
@@ -2822,8 +2834,17 @@ def _atomic_move_entry_no_replace(source: Path, destination: Path) -> None:
                 int(destination_parent_before.st_ino),
             )
             or source_binding.identity[0] != destination_binding.identity[0]
+            or (
+                expected_parent_identity is not None
+                and (
+                    source_binding.identity != expected_parent_identity
+                    or destination_binding.identity != expected_parent_identity
+                )
+            )
         ):
             raise _fail("project_update_transaction_path_unsafe")
+        if expected_parent_identity is not None:
+            _assert_named_reservation_directory_identity(source.parent, expected_parent_identity)
         if os.name == "nt":
             kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
             move = kernel32.MoveFileExW
@@ -2843,6 +2864,8 @@ def _atomic_move_entry_no_replace(source: Path, destination: Path) -> None:
                 and not _fsync_directory(source.parent).durable
             ):
                 raise OSError("atomic no-replace source flush failed")
+            if expected_parent_identity is not None:
+                _assert_named_reservation_directory_identity(source.parent, expected_parent_identity)
             return
         source_descriptor = source_binding.descriptor
         destination_descriptor = destination_binding.descriptor
@@ -2877,6 +2900,8 @@ def _atomic_move_entry_no_replace(source: Path, destination: Path) -> None:
         os.fsync(destination_descriptor)
         if not same_parent:
             os.fsync(source_descriptor)
+        if expected_parent_identity is not None:
+            _assert_named_reservation_directory_identity(source.parent, expected_parent_identity)
 
 
 def _atomic_move_directory_no_replace(source: Path, destination: Path) -> None:
@@ -2887,10 +2912,19 @@ def _atomic_move_directory_no_replace(source: Path, destination: Path) -> None:
     _atomic_move_entry_no_replace(source, destination)
 
 
-def _atomic_move_file_no_replace(source: Path, destination: Path) -> None:
+def _atomic_move_file_no_replace(
+    source: Path,
+    destination: Path,
+    *,
+    expected_parent_identity: tuple[int, int] | None = None,
+) -> None:
     """Atomically move one file only while the destination is absent."""
 
-    _atomic_move_entry_no_replace(source, destination)
+    if expected_parent_identity is None:
+        # Preserve the existing two-positional-argument seam for old callers.
+        _atomic_move_entry_no_replace(source, destination)
+    else:
+        _atomic_move_entry_no_replace(source, destination, expected_parent_identity=expected_parent_identity)
 
 
 def _cleanup_bound_directory_context(project: Path, path: Path) -> Any:
