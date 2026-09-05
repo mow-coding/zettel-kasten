@@ -85,6 +85,7 @@ class UpdateNoopJourneyTests(unittest.TestCase):
                     return_value=_MemoryOnlyApprovalKey(),
                 ))
                 observation = _FirstUpdateObservation()
+                first_failed = False
                 with mock.patch.object(
                     project_runtime, "_download_exact_artifact",
                     side_effect=artifacts["download"],
@@ -100,14 +101,23 @@ class UpdateNoopJourneyTests(unittest.TestCase):
                 ), mock.patch.object(
                     archive_cli, "_project_version_update_privacy_safe_failure_result",
                     new=observation.failure_projector(archive_cli._project_version_update_privacy_safe_failure_result),
-                ):
+                ), observation.live_components(), observation.runtime_boundaries():
                     try:
                         first_code, first_stdout, first_stderr = helper.run_cli_split(approved)
                     except Exception as error:
                         observation.record("first_cli_call", error)
-                        raise AssertionError(observation.diagnostic(native_observed=native_decision.called)) from None
-                self.assertEqual(first_code, 0, observation.diagnostic(native_observed=native_decision.called))
-                first = json.loads(first_stdout)
+                        first_failed = True
+                # Exit observers before formatting: their exact final snapshots
+                # are captured on exit, including exception paths.
+                if first_failed:
+                    raise AssertionError(observation.diagnostic(native_observed=native_decision.called)) from None
+                try:
+                    first = json.loads(first_stdout)
+                except (TypeError, ValueError):
+                    first = None
+                self.assertEqual(first_code, 0, observation.diagnostic(native_observed=native_decision.called,
+                                                                       cli_code=first_code, cli_result=first))
+                self.assertIs(type(first), dict, "project_update_response_invalid")
                 self.assertEqual(first["status"], "updated_restart_required", first)
                 native_decision.assert_called_once()
                 self.assertTrue(first["terminal_finalization"]["transaction_cleanup_completed"])

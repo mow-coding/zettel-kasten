@@ -879,3 +879,68 @@ not complete at this checkpoint.
   import/startup). Both the runtime observer and its reuse/source-CLI attachment
   received independent source review with no remaining actionable blocker.
   Readiness's four checks, 169-resource synchronization and diff checks passed.
+
+## Directory attribute false-positive class (2026-09-06 local time)
+
+- The user requested continuation after an apparent interruption. Candidate
+  `460cdc11` remained unmerged and unreleased. Run `33975344022` installed job
+  `101330944623` failed at repair-fresh-resume. The same-frame observer now
+  establishes that only the directory identity's attributes field changed;
+  device, inode, type, normalized size and mtime did not. This observation does
+  not identify the exact bit or prove the earlier failures share its cause.
+- Windows shard 3 failed the missing-retained-wheel scenario because runtime
+  inspection returned unavailable before reaching its expected missing-file
+  decision. Its observer likewise recorded attributes-only directory change.
+  Windows shard 4 failed the first-update/no-op journey with an unknown live
+  transaction component; that fixture had not entered the shared inner observers.
+  Its failure remains distinct until direct evidence connects it.
+- An independent native Windows reproduction toggled only the directory
+  ARCHIVE backup bit between real enumeration and lstat calls. Current code
+  rejected the unchanged tree; a stable subsequent observation matched its
+  original digest and bytes. Two hundred ordinary scan cycles did not reproduce
+  an automatic bit change locally. This confirms one false-positive class,
+  not the exact CI bit or the responsible background program.
+- The narrow correction normalizes directory ARCHIVE (0x20) only. File
+  attributes, every other directory bit (including unknown, reparse and storage
+  bits), identity, kind, mtime, exact member sets and descriptor-bound bytes
+  remain checked. No retry, deadline, approval or policy bypass was added.
+- New portable and native tests passed eight cases; the existing directory
+  identity cohort passed five. Native tests changed real attributes during
+  enumeration and ancestor-bound reads at root and intermediate levels.
+  Negative cases preserve rejection of other identity/attribute changes and
+  member drift with restored timestamps; same-size byte drift changes the hash.
+- Failure diagnostics now optionally retain fixed changed-attribute names and
+  an unknown-bit boolean from the original comparison. They never record raw
+  masks, identities, paths or extra filesystem observations. Shared-bit meanings
+  remain ambiguous rather than being inferred. Old field-only payloads remain
+  valid. The source first-update fixture also enters the existing shared
+  component/runtime observers and formats the validated failure after exit.
+- The initial diagnostic cohort passed 43 tests; after adding source diagnostic
+  forwarding and the product normalization, the expanded cohort passed 51
+  tests in 2.092 seconds of unittest execution (excluding import/startup).
+  Full final-candidate CI, installed acceptance and independent review are
+  still required. None of these local results is a client recovery claim.
+- Audit correction: a fixture named `source_mirror` in the tree-hash test is
+  not itself the production source-mirror Git snapshot. That separate path
+  retains its own Git/index/flags/worktree and descriptor-read checks. A folder
+  name must not be presented as proof of an end-to-end source-mirror result.
+
+- The combined product/diagnostic cohort passed 64 tests in 4.334 seconds.
+  Independent review found no blocking source issue. Its suggested stronger
+  success assertion now runs after observer exit and confirms no failure-only
+  payload is emitted. The selected eleven-test cohort passed in 0.218 seconds.
+  The source diagnostic also forwards parsed CLI results through the existing
+  strict projection rather than dropping already computed preparation states.
+- The original Windows public source update/no-op/drift/cleanup journey passed
+  in 472.505 seconds with the corrected product. This real local wheel/venv and
+  CLI/broker test does not mock runtime preparation or its writer. Native choice
+  and key/provider fixtures remain synthetic. The process loaded before the
+  final failure-only CLI-output projection/assertion edits; those edits have
+  separate focused coverage. Full exact-candidate CI remains necessary.
+- Readiness's four gates and 169-file resource synchronization passed. This
+  correction and its diagnostics received independent source review; the
+  previous candidate's still-running Windows lanes are not cancelled merely
+  to replace their evidence with a newer candidate.
+
+Reference: Microsoft distinguishes the ARCHIVE backup marker from reparse and
+remote-storage attributes in [WinNT attribute definitions](https://learn.microsoft.com/en-us/windows/win32/fileio/file-attribute-constants).
