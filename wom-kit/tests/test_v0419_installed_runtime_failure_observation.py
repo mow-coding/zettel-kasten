@@ -6,6 +6,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -22,10 +23,11 @@ spec.loader.exec_module(driver)
 
 
 class InstalledRuntimeFailureObservationTests(unittest.TestCase):
-    def failure(self):
-        observer = driver.FirstUpdateObservation()
+    def failure(self, *, stage="first_update"):
+        observer = driver.FirstUpdateObservation(stage=stage)
         observer.record("runtime_prepare", TypeError("SYNTHETIC_PRIVATE_TOKEN"))
-        return {"ok": False, "schema": driver.SCHEMA, "reason_code": "public_update_failed",
+        return {"ok": False, "schema": driver.SCHEMA,
+                "reason_code": "repair_resume_failed" if stage == "repair_fresh_resume" else "public_update_failed",
                 "failure_observation": observer.failure_payload(native_observed=False, cli_code=1,
                     cli_result={"status": "blocked", "effects_state": "unknown",
                                 "reason_code": "project_runtime_tree_changed",
@@ -136,6 +138,202 @@ class InstalledRuntimeFailureObservationTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIs(actual, result)
         self.assertEqual(effects, ["prepare", "broker"])
+
+    def test_default_first_update_bytes_are_unchanged_and_only_two_stages_exist(self):
+        self.assertEqual(json.dumps(self.failure(), sort_keys=True),
+                         json.dumps(self.failure(stage="first_update"), sort_keys=True))
+        for invalid in (None, True, [], "SYNTHETIC_PRIVATE_TOKEN", "repair_prepare_to_cut"):
+            with self.subTest(value_type=type(invalid).__name__), self.assertRaises(driver.JourneyCheckError) as caught:
+                driver.FirstUpdateObservation(stage=invalid)
+            self.assertNotIn("SYNTHETIC_PRIVATE_TOKEN", repr(caught.exception))
+        original = self.failure(stage="repair_fresh_resume")
+        self.assertEqual(checker._parse_runtime_failure_output(json.dumps(original)), original)
+        forged = deepcopy(original)
+        forged["failure_observation"]["stage"] = "SYNTHETIC_PRIVATE_TOKEN"
+        with self.assertRaises(checker.WheelCheckError):
+            checker._parse_runtime_failure_output(json.dumps(forged))
+        for wrong_stage in ({**original, "reason_code": "public_update_failed"},
+                            {**self.failure(), "reason_code": "repair_resume_failed"}):
+            with self.subTest(reason=wrong_stage["reason_code"]), self.assertRaises(checker.WheelCheckError):
+                checker._parse_runtime_failure_output(json.dumps(wrong_stage))
+
+    def test_real_resume_alias_runs_once_and_retains_fixed_inner_failure_without_private_values(self):
+        from wom_kit import archive_cli, exact_human_approval_workflow as workflow
+        from wom_kit import project_update_transaction as transaction
+        real = archive_cli._resume_exact_human_approved_transaction_auto_core
+        subject = object.__new__(transaction.ProjectUpdateTransaction)
+        classification = transaction.ComponentClassification(
+            overall="unknown", component_states=(("SYNTHETIC_PRIVATE_TOKEN", "unknown"),),
+            observed_state_sha256="sha256:" + "a" * 64,
+        )
+        private_argument = object()
+        calls, failures = [], []
+
+        def fault_at_discovery(root, *_args, **_kwargs):
+            self.assertIs(root, private_argument)
+            calls.append(True)
+            return subject._validate_live_for_event(None, (), classification)
+
+        def project(error):
+            failures.append(error)
+            return {"status": "blocked", "private_extension": "SYNTHETIC_PRIVATE_TOKEN"}
+
+        cli_module = SimpleNamespace(_resume_exact_human_approved_transaction_auto_core=real,
+                                     _project_version_update_privacy_safe_failure_result=project)
+        prepare = mock.Mock(side_effect=AssertionError("resume prepared"))
+        runtime = SimpleNamespace(prepare_runtime_candidate=prepare)
+
+        def cli(argv):
+            self.assertIs(argv, private_argument)
+            try:
+                cli_module._resume_exact_human_approved_transaction_auto_core(
+                    private_argument, None, None, None, None, None, resume_boundary=lambda: None,
+                )
+            except transaction.ProjectUpdateTransactionError as error:
+                return 1, cli_module._project_version_update_privacy_safe_failure_result(error)
+
+        with mock.patch.object(workflow, "_discover_exact_human_approved_transaction_resume_core",
+                               side_effect=fault_at_discovery), self.assertRaises(driver.InitialUpdateCheckError) as caught:
+            driver.observed_repair_resume(cli_module, runtime, cli, private_argument, SimpleNamespace(called=False))
+        self.assertEqual(calls, [True])
+        self.assertEqual(len(failures), 1)
+        prepare.assert_not_called()
+        self.assertIs(cli_module._resume_exact_human_approved_transaction_auto_core, real)
+        self.assertIs(cli_module._project_version_update_privacy_safe_failure_result, project)
+        self.assertIs(runtime.prepare_runtime_candidate, prepare)
+        self.assertIsNone(caught.exception.__context__)
+        payload = caught.exception.observation
+        self.assertEqual(str(caught.exception), "repair_resume_failed")
+        self.assertEqual(payload["stage"], "repair_fresh_resume")
+        self.assertFalse(payload["native_observed"])
+        self.assertEqual(payload["boundaries"]["approval_broker"], {"entered": True, "returned": False})
+        source = payload["failures"]["approval_broker"][0]["source"]
+        self.assertEqual(source["function"], "_validate_live_for_event")
+        self.assertNotIn("SYNTHETIC_PRIVATE_TOKEN", json.dumps(payload))
+
+    def test_successful_resume_alias_keeps_original_result_identity_and_does_not_prepare(self):
+        result = {"status": "updated_restart_required", "private_original": object()}
+        resume = mock.Mock(return_value=result)
+        prepare = mock.Mock(side_effect=AssertionError("resume prepared"))
+        cli_module = SimpleNamespace(_resume_exact_human_approved_transaction_auto_core=resume,
+                                     _project_version_update_privacy_safe_failure_result=lambda error: None)
+        runtime = SimpleNamespace(prepare_runtime_candidate=prepare)
+        argument = object()
+        code, actual = driver.observed_repair_resume(cli_module, runtime,
+            lambda argv: (0, cli_module._resume_exact_human_approved_transaction_auto_core(argv)),
+            argument, SimpleNamespace(called=False))
+        self.assertEqual(code, 0)
+        self.assertIs(actual, result)
+        resume.assert_called_once_with(argument)
+        prepare.assert_not_called()
+        self.assertIs(cli_module._resume_exact_human_approved_transaction_auto_core, resume)
+
+    def test_actual_nonzero_resume_child_forwards_only_validated_failure_to_outer_main(self):
+        value = self.failure(stage="repair_fresh_resume")
+        script = "import sys;print(sys.argv[1]);raise SystemExit(1)"
+        with tempfile.TemporaryDirectory(prefix="wom-resume-failure-child-") as temporary:
+            with self.assertRaises(driver.InitialUpdateCheckError) as caught:
+                driver.command([sys.executable, "-I", "-B", "-c", script, json.dumps(value)],
+                    cwd=Path(temporary), timeout=30, runtime_failure_stage="repair_fresh_resume")
+        self.assertEqual(caught.exception.observation, value["failure_observation"])
+        self.assertIsNone(caught.exception.__context__)
+        output = io.StringIO()
+        with mock.patch.object(driver.sys, "argv", ["tool", "wheel", "source", "shim", "fixture", "0.4.19"]), \
+                mock.patch.object(driver, "run_journey", side_effect=caught.exception), redirect_stdout(output):
+            self.assertEqual(driver.main(), 1)
+        parsed = checker._parse_runtime_failure_output(output.getvalue())
+        self.assertEqual(parsed, value)
+        self.assertNotIn("SYNTHETIC_PRIVATE_TOKEN", output.getvalue())
+        partial = checker.WheelPartialEvidence()
+        partial.record_runtime_failure(parsed)
+        self.assertNotIn("installed_v0419_runtime_journey", partial.public_payload())
+
+    def test_resume_child_opt_in_rejects_wrong_stage_private_overflow_and_false_success(self):
+        correct = self.failure(stage="repair_fresh_resume")
+        wrong = deepcopy(correct)
+        wrong["failure_observation"]["stage"] = "SYNTHETIC_PRIVATE_TOKEN"
+        cases = (json.dumps(self.failure()), json.dumps(wrong), "SYNTHETIC_PRIVATE_TOKEN",
+                 "x" * (driver.FAILURE_OUTPUT_LIMIT_BYTES + 1), json.dumps({**correct, "ok": True}))
+        argv = ["synthetic-interpreter", "synthetic-argument"]
+        for raw in cases:
+            result = subprocess.CompletedProcess(argv, 1, raw, "SYNTHETIC_PRIVATE_TOKEN")
+            with self.subTest(length=len(raw)), mock.patch.object(driver.subprocess, "run", return_value=result) as run, \
+                    self.assertRaises(driver.JourneyCheckError) as caught:
+                driver.command(argv, cwd=Path.cwd(), timeout=600, runtime_failure_stage="repair_fresh_resume")
+            self.assertEqual(str(caught.exception), "synthetic_child_command_failed")
+            self.assertIsNone(caught.exception.__context__)
+            self.assertFalse(hasattr(caught.exception, "observation"))
+            self.assertIs(run.call_args.args[0], argv)
+            self.assertEqual(run.call_args.kwargs["timeout"], 600)
+        with mock.patch.object(driver.subprocess, "run") as run, self.assertRaises(driver.JourneyCheckError) as caught:
+            driver.command(argv, cwd=Path.cwd(), runtime_failure_stage="SYNTHETIC_PRIVATE_TOKEN")
+        run.assert_not_called()
+        self.assertNotIn("SYNTHETIC_PRIVATE_TOKEN", repr(caught.exception))
+        with mock.patch.object(driver.subprocess, "run",
+                               return_value=subprocess.CompletedProcess(argv, 1, json.dumps(correct), "")), \
+                self.assertRaises(driver.JourneyCheckError) as caught:
+            driver.command(argv, cwd=Path.cwd())
+        self.assertEqual(str(caught.exception), "synthetic_child_command_failed")
+        with mock.patch.object(driver.subprocess, "run",
+                               return_value=subprocess.CompletedProcess(argv, 86, "", "")):
+            self.assertEqual(driver.command(argv, cwd=Path.cwd(), expected_code=86), "")
+
+    def test_real_unknown_component_refusal_exposes_only_fixed_method_coordinate(self):
+        from wom_kit import project_update_transaction as transaction
+        observer = driver.FirstUpdateObservation()
+        subject = object.__new__(transaction.ProjectUpdateTransaction)
+        classification = transaction.ComponentClassification(
+            overall="unknown", component_states=(("SYNTHETIC_PRIVATE_TOKEN", "unknown"),),
+            observed_state_sha256="sha256:" + "a" * 64,
+        )
+        calls, errors = [], []
+
+        def original_call():
+            calls.append(True)
+            try:
+                return subject._validate_live_for_event(None, (), classification)
+            except transaction.ProjectUpdateTransactionError as error:
+                errors.append(error)
+                raise
+
+        with self.assertRaises(transaction.ProjectUpdateTransactionError) as caught:
+            observer.boundary("approval_broker", original_call)()
+        self.assertEqual(calls, [True])
+        self.assertIs(caught.exception, errors[0])
+        value = {"ok": False, "schema": driver.SCHEMA, "reason_code": "public_update_failed",
+                 "failure_observation": observer.failure_payload(native_observed=True, cli_code=1)}
+        parsed = checker._parse_runtime_failure_output(json.dumps(value))
+        item = parsed["failure_observation"]["failures"]["approval_broker"][0]
+        self.assertEqual(item["code"], "project_update_transaction_state_transition_invalid")
+        self.assertEqual(item["source"]["function"], "_validate_live_for_event")
+        self.assertEqual(item["source"]["file"], "wom-kit/src/wom_kit/project_update_transaction.py")
+        self.assertGreater(item["source"]["line"], 0)
+        self.assertNotIn("SYNTHETIC_PRIVATE_TOKEN", json.dumps(value))
+        self.assertNotIn("component_states", json.dumps(value))
+
+    def test_real_nested_append_refusal_is_registered_without_new_io_or_replacement(self):
+        import test_project_update_transaction as fixture
+        helper = fixture.ProjectUpdateTransactionTests("runTest")
+        helper.setUp()
+        self.addCleanup(helper.doCleanups)
+        transaction = helper.create_transaction()
+        helper.activate(transaction)
+        observer = driver.FirstUpdateObservation()
+        original = type(transaction)._append_guard_held
+        before = {path.relative_to(helper.project).as_posix(): path.read_bytes()
+                  for path in helper.project.rglob("*") if path.is_file()}
+
+        with self.assertRaises(fixture.ProjectUpdateTransactionError):
+            observer.boundary("approval_broker", transaction.append)(
+                phase="completed", stage="verified", live_component_sha256=helper.live_pre(),
+            )
+        self.assertIs(type(transaction)._append_guard_held, original)
+        item = observer.failure_payload(native_observed=True)["failures"]["approval_broker"][0]
+        self.assertEqual(item["source"]["function"], "_append_guard_held")
+        self.assertEqual(item["source"]["file"], "wom-kit/src/wom_kit/project_update_transaction.py")
+        self.assertNotIn(str(helper.project), json.dumps(item))
+        self.assertEqual({path.relative_to(helper.project).as_posix(): path.read_bytes()
+                          for path in helper.project.rglob("*") if path.is_file()}, before)
 
     def test_driver_main_exports_only_validated_failure_observation(self):
         payload = self.failure()["failure_observation"]

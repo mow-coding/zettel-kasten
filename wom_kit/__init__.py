@@ -23,3 +23,7 @@ else:
     __path__ = _extended_path
 
 __version__ = "0.4.19"
+
+from ._unicode_runtime import register_unicode_finder as _register_unicode_finder
+
+_register_unicode_finder()

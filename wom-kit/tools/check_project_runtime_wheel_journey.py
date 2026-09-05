@@ -58,6 +58,7 @@ SAFE_REASON_CODES = frozenset({
 })
 
 FAILURE_OBSERVATION_SCHEMA = "wom-kit/installed-runtime-failure-observation/v0.1"
+FAILURE_OBSERVATION_STAGES = frozenset({"first_update", "repair_fresh_resume"})
 FAILURE_OUTPUT_LIMIT_BYTES = 32 * 1024
 INITIAL_FAILURE_FILE = "initial-update-failure.json"
 # Literal allowlists, not a code-shaped regular expression or arbitrary class
@@ -101,6 +102,10 @@ OBSERVED_SOURCE_FUNCTIONS = {
     "wom-kit/src/wom_kit/archive_services.py": frozenset({
         "_wom_kit_project_version_update_live_approval_transaction", "_wom_kit_project_version_update_legacy_core",
         "_wom_kit_project_version_update_legacy_core_generator", "_project_update_close_after_service_failure",
+        "_project_update_durable_writer",
+    }),
+    "wom-kit/src/wom_kit/project_update_transaction.py": frozenset({
+        "append", "_append_guard_held", "_validate_live_for_event", "_authority_for_append",
     }),
     "wom-kit/src/wom_kit/project_runtime.py": frozenset({
         "prepare_runtime_candidate", "_initialize_runtime_payload", "_candidate_inventory_snapshot",
@@ -108,6 +113,7 @@ OBSERVED_SOURCE_FUNCTIONS = {
     }),
     "wom-kit/src/wom_kit/exact_human_approval_workflow.py": frozenset({
         "_execute_exact_human_approved_write_core", "_run_started_claim_writer",
+        "_resume_exact_human_approved_transaction_auto_core",
     }),
 }
 OBSERVED_FAILURE_KINDS = frozenset({
@@ -131,11 +137,12 @@ class JourneyCheckError(RuntimeError):
 
 
 class InitialUpdateCheckError(JourneyCheckError):
-    """Carries only a revalidated, detached observation, never a CLI result."""
+    """Legacy name for the shared typed first-update/resume failure envelope."""
 
     def __init__(self, observation):
-        super().__init__("public_update_failed")
         self.observation = validate_first_update_observation(observation)
+        super().__init__("repair_resume_failed" if self.observation["stage"] == "repair_fresh_resume"
+                         else "public_update_failed")
 
 
 class PhaseReporter:
@@ -198,7 +205,10 @@ def verify_installed_origins(modules: dict[str, object], prefix: Path) -> bool:
     return True
 
 
-def command(argv: list[str], *, cwd: Path, timeout: int = 120, expected_code: int = 0) -> str:
+def command(argv: list[str], *, cwd: Path, timeout: int = 120, expected_code: int = 0,
+            runtime_failure_stage: str | None = None) -> str:
+    require(runtime_failure_stage is None or type(runtime_failure_stage) is str
+            and runtime_failure_stage == "repair_fresh_resume", "journey_arguments_invalid")
     options = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
     environment = dict(os.environ)
     environment.pop("PYTHONPATH", None)
@@ -209,6 +219,19 @@ def command(argv: list[str], *, cwd: Path, timeout: int = 120, expected_code: in
         argv, cwd=cwd, capture_output=True, text=True, encoding="utf-8",
         env=environment, timeout=timeout, check=False, **options,
     )
+    if completed.returncode != expected_code and runtime_failure_stage is not None:
+        observed_failure = None
+        try:
+            parsed = parse_failure_output(completed.stdout)
+            observation = parsed.get("failure_observation")
+            if type(observation) is dict and observation["stage"] == runtime_failure_stage:
+                observed_failure = observation
+        except Exception:
+            pass  # Unknown, oversized or private output stays the generic failure.
+        if observed_failure is not None:
+            # Outside the parser's exception handler: no raw child output or
+            # private exception context accompanies the strict typed envelope.
+            raise InitialUpdateCheckError(observed_failure)
     require(completed.returncode == expected_code, "synthetic_child_command_failed")
     return completed.stdout.strip()
 
@@ -295,7 +318,9 @@ class FirstUpdateObservation:
         "project_runtime_python_version_mismatch",
     }) | OBSERVED_SUBPROCESS_FAILURE_CODES
 
-    def __init__(self):
+    def __init__(self, *, stage="first_update"):
+        require(type(stage) is str and stage in FAILURE_OBSERVATION_STAGES, "installed_runtime_journey_failed")
+        self.stage = stage
         from wom_kit import archive_cli, archive_services, project_runtime
         from wom_kit import exact_human_approval_workflow
         self._services, self._runtime, self._workflow = archive_services, project_runtime, exact_human_approval_workflow
@@ -314,6 +339,7 @@ class FirstUpdateObservation:
                 "_wom_kit_project_version_update_legacy_core",
                 "_wom_kit_project_version_update_legacy_core_generator",
                 "_project_update_close_after_service_failure",
+                "_project_update_durable_writer",
             )),
             (project_runtime, "project_runtime.py", (
                 "prepare_runtime_candidate", "_initialize_runtime_payload", "_candidate_inventory_snapshot",
@@ -321,6 +347,7 @@ class FirstUpdateObservation:
             )),
             (exact_human_approval_workflow, "exact_human_approval_workflow.py", (
                 "_execute_exact_human_approved_write_core", "_run_started_claim_writer",
+                "_resume_exact_human_approved_transaction_auto_core",
             )),
         )
         for module, basename, names in source_functions:
@@ -329,6 +356,16 @@ class FirstUpdateObservation:
                 code = getattr(getattr(module, name, None), "__code__", None)
                 if isinstance(code, CodeType):
                     self._register_code(code, expected_file, "wom-kit/src/wom_kit/" + basename, name)
+        transaction = archive_services.project_update_transaction
+        expected_file = os.path.normcase(os.path.abspath(transaction.__file__))
+        # Only these original methods and their literal nested code objects
+        # identify the refusal branch. Never inspect transaction state, frame
+        # locals, argument values, arbitrary members or caller-supplied phases.
+        for name in ("append", "_append_guard_held", "_validate_live_for_event", "_authority_for_append"):
+            code = getattr(getattr(transaction.ProjectUpdateTransaction, name, None), "__code__", None)
+            if isinstance(code, CodeType):
+                self._register_code(code, expected_file,
+                                    "wom-kit/src/wom_kit/project_update_transaction.py", name)
 
     def _register_code(self, code, expected_file, relative_file, owner_function=None):
         if os.path.normcase(os.path.abspath(code.co_filename)) != expected_file:
@@ -415,7 +452,7 @@ class FirstUpdateObservation:
         return observe
 
     def diagnostic(self, *, native_observed):
-        return json.dumps({"stage": "first_update", "boundaries": self.boundaries,
+        return json.dumps({"stage": self.stage, "boundaries": self.boundaries,
                            "failures": self.failures, "native_observed": bool(native_observed)},
                           sort_keys=True)
 
@@ -439,7 +476,7 @@ class FirstUpdateObservation:
         return validate_first_update_observation({
             "schema": FAILURE_OBSERVATION_SCHEMA, "scope": "synthetic_harness_only",
             "product_recovery_evidence": False, "private_values_echoed": False,
-            "stage": "first_update", "boundaries": self.boundaries, "failures": self.failures,
+            "stage": self.stage, "boundaries": self.boundaries, "failures": self.failures,
             "native_observed": native_observed is True, "cli": fields,
         })
 
@@ -453,7 +490,8 @@ def validate_first_update_observation(value):
     require(valid, "installed_runtime_journey_failed")
     require(value["schema"] == FAILURE_OBSERVATION_SCHEMA and value["scope"] == "synthetic_harness_only"
             and value["product_recovery_evidence"] is False and value["private_values_echoed"] is False
-            and value["stage"] == "first_update" and type(value["native_observed"]) is bool,
+            and type(value["stage"]) is str and value["stage"] in FAILURE_OBSERVATION_STAGES
+            and type(value["native_observed"]) is bool,
             "installed_runtime_journey_failed")
     boundaries = value["boundaries"]
     require(type(boundaries) is dict and set(boundaries) == set(FirstUpdateObservation._BOUNDARIES),
@@ -518,8 +556,10 @@ def parse_failure_output(stdout):
             and value["reason_code"] in SAFE_REASON_CODES | {"installed_runtime_journey_failed"},
             "installed_runtime_journey_failed")
     if "failure_observation" in value:
-        require(value["reason_code"] == "public_update_failed", "installed_runtime_journey_failed")
         value["failure_observation"] = validate_first_update_observation(value["failure_observation"])
+        expected_reason = ("repair_resume_failed" if value["failure_observation"]["stage"] == "repair_fresh_resume"
+                           else "public_update_failed")
+        require(value["reason_code"] == expected_reason, "installed_runtime_journey_failed")
     return value
 
 
@@ -613,13 +653,24 @@ def cli_json(archive_cli, argv):
 
 def observed_initial_update(archive_cli, project_runtime, cli, argv, native):
     """Observe the real first call without substituting prepare/broker/writer."""
-    observation = FirstUpdateObservation()
+    return _observed_runtime_call(archive_cli, project_runtime, cli, argv, native, stage="first_update")
+
+
+def observed_repair_resume(archive_cli, project_runtime, cli, argv, native):
+    """Use the same observer on the actual imported auto-resume broker alias."""
+    return _observed_runtime_call(archive_cli, project_runtime, cli, argv, native, stage="repair_fresh_resume")
+
+
+def _observed_runtime_call(archive_cli, project_runtime, cli, argv, native, *, stage):
+    observation = FirstUpdateObservation(stage=stage)
+    broker_name = ("_resume_exact_human_approved_transaction_auto_core" if stage == "repair_fresh_resume"
+                   else "_execute_project_version_update_exact_human_approved_write")
     code, result = None, None
     with ExitStack() as stack:
         stack.enter_context(mock.patch.object(project_runtime, "prepare_runtime_candidate",
             new=observation.boundary("runtime_prepare", project_runtime.prepare_runtime_candidate)))
-        stack.enter_context(mock.patch.object(archive_cli, "_execute_project_version_update_exact_human_approved_write",
-            new=observation.boundary("approval_broker", archive_cli._execute_project_version_update_exact_human_approved_write)))
+        stack.enter_context(mock.patch.object(archive_cli, broker_name,
+            new=observation.boundary("approval_broker", getattr(archive_cli, broker_name))))
         stack.enter_context(mock.patch.object(archive_cli, "_project_version_update_privacy_safe_failure_result",
             new=observation.failure_projector(archive_cli._project_version_update_privacy_safe_failure_result)))
         try:
@@ -938,14 +989,18 @@ def run_repair_worker(wheel: Path, root: Path, version: str, mode: str) -> dict[
                             return_value=(bootstrap, bootstrap.public_summary())))
         stack.enter_context(mock.patch.object(exact_human_approval_workflow, "_production_key_provider",
                             return_value=_MemoryOnlyApprovalKey()))
-        stack.enter_context(mock.patch.object(exact_human_approval_windows._CtypesTaskDialogNative, "show",
+        native = stack.enter_context(mock.patch.object(exact_human_approval_windows._CtypesTaskDialogNative, "show",
                             side_effect=native_decision))
         download = stack.enter_context(mock.patch.object(project_runtime, "_download_exact_artifact", side_effect=transport))
         observer = stack.enter_context(CallObservation({"prepare": (project_runtime, "prepare_runtime_candidate"),
             "initialize": (project_runtime, "_initialize_runtime_payload"),
             "append": (archive_services.project_update_transaction.ProjectUpdateTransaction, "append")},
             on_return=interrupt_at_checkpoint))
-        code, result = cli_json(archive_cli, argv)
+        if mode == "resume":
+            code, result = observed_repair_resume(archive_cli, project_runtime,
+                lambda selected: cli_json(archive_cli, selected), argv, native)
+        else:
+            code, result = cli_json(archive_cli, argv)
     require(mode == "resume", "repair_interruption_not_reached")
     require(code == 0 and result.get("status") == "updated_restart_required"
             and result.get("terminal_finalization", {}).get("transaction_cleanup_completed") is True,
@@ -998,7 +1053,8 @@ def exercise_installed_repair(wheel, root, project, version, project_runtime, ar
     phases.passed()
     phases.begin("repair_fresh_resume")
     started = time.monotonic()
-    resumed = json.loads(command([*worker, "resume"], cwd=root, timeout=600))
+    resumed = json.loads(command([*worker, "resume"], cwd=root, timeout=600,
+                                 runtime_failure_stage="repair_fresh_resume"))
     resume_seconds = time.monotonic() - started
     require(resumed == {"ok": True, "schema": SCHEMA, "worker": "resume", "same_approval_resumed": True,
                         "no_new_preparation_download_or_approval": True, "private_values_echoed": False}, "repair_resume_failed")
