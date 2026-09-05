@@ -4,6 +4,7 @@ import io
 import base64
 import copy
 import hashlib
+import importlib.util
 import itertools
 import json
 import os
@@ -79,6 +80,40 @@ def _no_project_update_terminal_handoff(
     if isinstance(_observation_out, list):
         _observation_out.append(None)
     return None
+
+
+@contextmanager
+def _observe_project_update_fixture_boundaries():
+    """Observe original calls; never change the fixture's approval policy."""
+
+    spec = importlib.util.spec_from_file_location(
+        "wom_cli_fixture_update_observation",
+        KIT_ROOT / "tools" / "check_project_runtime_wheel_journey.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    observation = module.FirstUpdateObservation()
+    with patch.object(
+        project_runtime,
+        "prepare_runtime_candidate",
+        new=observation.boundary(
+            "runtime_prepare", project_runtime.prepare_runtime_candidate
+        ),
+    ), patch.object(
+        archive_cli,
+        "_execute_project_version_update_exact_human_approved_write",
+        new=observation.boundary(
+            "approval_broker",
+            archive_cli._execute_project_version_update_exact_human_approved_write,
+        ),
+    ), patch.object(
+        archive_cli,
+        "_project_version_update_privacy_safe_failure_result",
+        new=observation.failure_projector(
+            archive_cli._project_version_update_privacy_safe_failure_result
+        ),
+    ):
+        yield observation
 
 
 class _FakeUrlOpener:
@@ -9778,7 +9813,7 @@ class ArchiveCliTests(unittest.TestCase):
                 .TrustedProjectUpdateGitRunner,
                 "resolve_preapproval",
                 side_effect=resolve_once,
-            ):
+            ), _observe_project_update_fixture_boundaries() as observation:
                 code, stdout, stderr = self.run_cli_split(
                     [
                         "project-version-update",
@@ -9795,7 +9830,18 @@ class ArchiveCliTests(unittest.TestCase):
                     ]
                 )
 
-            self.assertEqual(code, 0, stdout + stderr)
+            # setUp retains its existing synthetic claim helper. It does not
+            # display a native dialog: broker entry is not native observation.
+            self.assertEqual(
+                code,
+                0,
+                json.dumps(
+                    observation.failure_payload(
+                        native_observed=False, cli_code=code
+                    ),
+                    sort_keys=True,
+                ) if code != 0 else "",
+            )
             result = json.loads(stdout)
             self.assertEqual(result["status"], "updated_restart_required")
             self.assertNotIn("exact_human_approval", result)

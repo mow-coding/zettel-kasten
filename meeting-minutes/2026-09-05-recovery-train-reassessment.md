@@ -647,3 +647,84 @@ not complete at this checkpoint.
   job is superseded by the consolidated candidate's complete new matrix. That
   unfinished old lane is not counted as passed or fully audited. No new
   candidate check is skipped and no prior candidate result waives a release gate.
+
+## Installed acceptance passed; remaining Windows fixture failures
+
+- Candidate `3423028f` passed the complete installed public Windows workflow
+  in CI run `33963274478`, including the formerly failing repair continuation.
+  The candidate wheel SHA-256 was
+  `9eed1df1c08cab723ec43f9cfd077a9a4040c536edb87013d0d1b7f3a4d34c3e`.
+  This is development installation acceptance, not a published release or
+  client recovery. The readiness gate, all three scale gates and all four
+  Ubuntu test shards passed. Remaining Windows failures still block release.
+- Windows shard 3 reported one partial-write interruption marker timeout.
+  The existing twenty-second deadline includes cold imports, hook setup and
+  reaching the actual writer checkpoint. A single local execution passed but
+  measured import completion at 17.375 seconds, writer start at the same point,
+  and the checkpoint at 18.016 seconds. The actual writer segment was 0.641
+  seconds. This demonstrates a tight setup-inclusive fixture budget; the old
+  CI log has no stage evidence and does not establish which phase timed out.
+- Windows shard 4 failed before its noop test body: the initial runtime payload
+  hash compared different directory identities before and after enumeration.
+  Directory size is already normalized to zero; this is not the earlier size-
+  only regression. The old log does not identify the changing device, inode,
+  type, modification timestamp or attributes. One real local setup and healthy
+  noop execution passed without reproducing that difference. The cause remains
+  unconfirmed, and no production tree comparison is relaxed.
+- Narrow test-only observation records changed identity field names at the
+  exact original nested comparison, and fixed import/writer/checkpoint stages.
+  It forwards original calls and errors, does not rescan the filesystem, and
+  stores no raw path, stat values, private data or exception text. Independent
+  review found no further blocker in this diagnostic slice. The first small
+  cohort passed seventeen tests and 23 subtests; the actual one-shot fixture
+  cohort passed three tests in 122.343 seconds. These are not proof that an
+  intermittent CI failure has been fixed.
+- Based on the measured startup cost, independent review accepted separating
+  the test process's bounded startup budget from its unchanged twenty-second
+  writer-checkpoint budget. This is a fixture correction, not permission to
+  increase product deadlines, retry failed writes or waive an acceptance check.
+  The implemented fixture uses one launch clock, a sixty-second startup
+  deadline, the original twenty-second checkpoint deadline from the first
+  valid ready observation, and an eighty-second absolute cap. A completed
+  fixed-byte sibling outside the archive is published without replacement;
+  stale, partial, wrong, late or changed readiness cannot extend the budget.
+  Existing child-kill, live-at-checkpoint and fresh-process validation remain.
+  The final helper cohort passed 24 tests and 37 subtests in 20.08 seconds;
+  root independently reran it unchanged with the same counts in 19.68 seconds.
+  One actual interrupted partial-write, fresh-process diagnostic and rollback
+  passed in 38.765 seconds. Its import completed at 17.905 seconds, writer
+  started at 17.921, and checkpoint arrived at 18.562. Product timeouts and
+  production writers were not changed.
+- Windows shard 1 subsequently reported one real candidate/finalizer test
+  failure. Candidate install, static inventory, dependency/version/resource
+  checks and new-process inspection passed before a privacy-safe generic
+  refusal. Its log does not establish the underlying exception. That source
+  fixture is being examined separately rather than attributed to either of the
+  other Windows failures. The remaining Windows shard was allowed to finish
+  and passed. This candidate's complete run therefore ended with all four
+  Ubuntu shards, Windows shard 2, installed acceptance, readiness and all three
+  scales passed, but three other Windows shards and the aggregate required-CI
+  check failed. No candidate is merged or released on that result.
+- The source candidate fixture now reuses `FirstUpdateObservation` around its
+  original preparation, broker and safe-failure projector. Its one CLI call,
+  synthetic approval helper, real writer and all success postconditions remain
+  unchanged. Failed assertions show only the bounded existing diagnostic
+  schema; synthetic broker entry is not reported as native UI observation.
+  Independent source review found no further blocker in that two-file change.
+  Root's frozen observer/forwarding cohort passed 25 tests and 25 subtests in
+  37.56 seconds. The separately executed real source candidate test passed
+  once, including its seven subtests, in 367.21 seconds. Its receipt, claim
+  finalizer, cleanup and malicious Git-hook/filter defenses all passed. The
+  old CI failure did not reproduce locally and remains unattributed; a local
+  success is not evidence that an underlying product defect was fixed.
+- All four release-readiness checks and package synchronization passed on
+  this test-only correction. The next candidate retains production code from
+  `3423028f` and runs the full matrix again with the startup/checkpoint clocks
+  separated and the formerly silent source boundaries observable. It does not
+  rerun an unchanged failed job until it turns green or waive any release gate.
+- The parallel v0.4.20 public management checkpoint was independently verified
+  and backed up on its own unfinished branch. Its source handler tests are not
+  substituted for v0.4.19 acceptance. The canonical main checkout remains
+  unchanged; the latest public release is still v0.4.18, with only the draft
+  integration PR open. Open secret alerts were zero on recheck, not a guarantee
+  that every possible disclosure has been excluded.

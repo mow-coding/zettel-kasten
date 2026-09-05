@@ -2,8 +2,8 @@
 
 Date: 2026-09-05
 
-Status: revised correction implemented and locally verified; final candidate
-CI, installed public workflow and release remain pending.
+Status: revised correction implemented; installed public workflow passed on
+candidate `3423028f`. Remaining Windows CI failures and release remain pending.
 
 ## Context
 

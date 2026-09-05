@@ -3,9 +3,11 @@ from __future__ import annotations
 import ctypes
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
+import stat
 import sys
 import tempfile
 import textwrap
@@ -25,6 +27,115 @@ SNAPSHOT = "sha256:" + ("b" * 64)
 OBSERVATION = "sha256:" + ("c" * 64)
 REVIEW = "sha256:" + ("d" * 64)
 OPERATOR = "operator:approval-test"
+
+_INTERRUPTION_STAGES = ("import_start", "import_done", "writer_start", "checkpoint")
+_INTERRUPTION_STAGE_SCHEMA = "wom-kit/test-interruption-stage/v1"
+_INTERRUPTION_READY_BYTES = b"wom-test-writer-ready/v1\n"
+_INTERRUPTION_BUDGET_CODES = frozenset({
+    "interruption_clock_invalid", "interruption_absolute_timeout", "interruption_child_exited",
+    "interruption_ready_invalid", "interruption_startup_timeout", "interruption_ready_order_invalid",
+    "interruption_ready_changed", "interruption_checkpoint_timeout",
+})
+
+
+def _interruption_ready_snapshot(path: Path):
+    """Read only the fixed complete sibling marker; never echo its identity."""
+    try:
+        before = path.lstat()
+    except FileNotFoundError:
+        return "absent", None
+    except OSError:
+        return "invalid", None
+    if (not stat.S_ISREG(before.st_mode) or stat.S_ISLNK(before.st_mode)
+            or bool(getattr(before, "st_file_attributes", 0) & 0x400)):
+        return "invalid", None
+    try:
+        with path.open("rb") as stream:
+            value = stream.read(len(_INTERRUPTION_READY_BYTES) + 1)
+        after = path.lstat()
+        identity = lambda info: (int(info.st_dev), int(info.st_ino), int(info.st_mode),
+                                 int(info.st_size), int(info.st_mtime_ns), int(getattr(info, "st_file_attributes", 0)))
+        first, second = identity(before), identity(after)
+    except OSError:
+        return "invalid", None
+    if value != _INTERRUPTION_READY_BYTES or first != second:
+        return "invalid", None
+    return "valid", first
+
+
+class _InterruptionBudget:
+    """One launch clock, one readiness, no reset and no performance claim."""
+    def __init__(self, launched_at):
+        if type(launched_at) not in (int, float) or not math.isfinite(launched_at):
+            raise ValueError("interruption_clock_invalid")
+        self.launched_at = self.last_now = launched_at
+        self.startup_deadline, self.absolute_deadline = launched_at + 60, launched_at + 80
+        self.writer_deadline, self.ready_identity = None, None
+
+    def observe(self, *, now, ready_state, ready_identity, checkpoint_present, child_exited=False):
+        if (type(now) not in (int, float) or not math.isfinite(now) or now < self.last_now
+                or type(checkpoint_present) is not bool or type(child_exited) is not bool):
+            raise ValueError("interruption_clock_invalid")
+        self.last_now = now
+        if now >= self.absolute_deadline:
+            raise ValueError("interruption_absolute_timeout")
+        if child_exited:
+            raise ValueError("interruption_child_exited")
+        if type(ready_state) is not str or ready_state not in {"absent", "valid", "invalid"}:
+            raise ValueError("interruption_ready_invalid")
+        if (ready_state == "invalid" or (ready_state == "valid" and (
+                type(ready_identity) is not tuple or len(ready_identity) != 6
+                or any(type(value) is not int for value in ready_identity)))):
+            raise ValueError("interruption_ready_invalid")
+        if self.writer_deadline is None:
+            if now >= self.startup_deadline:
+                raise ValueError("interruption_startup_timeout")
+            if ready_state == "absent":
+                if checkpoint_present:
+                    raise ValueError("interruption_ready_order_invalid")
+                return "waiting_startup"
+            self.ready_identity = ready_identity
+            self.writer_deadline = min(now + 20, self.absolute_deadline)
+        elif ready_state != "valid" or ready_identity != self.ready_identity:
+            raise ValueError("interruption_ready_changed")
+        if now >= self.writer_deadline:
+            raise ValueError("interruption_checkpoint_timeout")
+        # Both files may first appear in one parent poll. The child publishes
+        # complete readiness before calling the original writer; it cannot
+        # publish this checkpoint before readiness. Stale siblings are removed
+        # before launch, and later readiness changes cannot reset this budget.
+        return "checkpoint" if checkpoint_present else "waiting_checkpoint"
+
+
+def _interruption_stage_observation(stderr: object) -> dict[str, object]:
+    """Keep a bounded validated prefix, never child text, paths or exceptions."""
+    events: list[dict[str, object]] = []
+    invalid = type(stderr) is not str
+    if not invalid:
+        invalid = len(stderr) > 4096
+        lines = stderr[:4096].splitlines()
+        if len(lines) > len(_INTERRUPTION_STAGES):
+            invalid = True
+        for line in lines[:len(_INTERRUPTION_STAGES)]:
+            try:
+                pairs = json.loads(line, object_pairs_hook=lambda value: value)
+                if (type(pairs) is not list or any(type(item) is not tuple or len(item) != 2 for item in pairs)
+                        or len(pairs) != 3 or any(type(key) is not str for key, _value in pairs)):
+                    raise ValueError()
+                value = dict(pairs)
+                if (set(value) != {"schema", "stage", "elapsed_ms"}
+                        or value["schema"] != _INTERRUPTION_STAGE_SCHEMA
+                        or value["stage"] != _INTERRUPTION_STAGES[len(events)]
+                        or type(value["elapsed_ms"]) is not int or not 0 <= value["elapsed_ms"] <= 80000
+                        or (events and value["elapsed_ms"] < events[-1]["elapsed_ms"])):
+                    raise ValueError()
+            except Exception:
+                invalid = True
+                break
+            events.append({"stage": value["stage"], "elapsed_ms": value["elapsed_ms"]})
+    return {"schema": "wom-kit/test-interruption-observation/v1", "scope": "synthetic_test_only",
+            "events": events, "last_stage": events[-1]["stage"] if events else "not_started",
+            "protocol_invalid": invalid, "product_completion_unknown": True}
 
 
 def _intake() -> dict[str, object]:
@@ -300,24 +411,42 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
         plan_sha256: str,
     ) -> dict[str, object]:
         marker = self.root.with_name(f"{self.root.name}-{hook}.marker")
+        ready = marker.with_suffix(marker.suffix + ".ready")
+        ready_pending = ready.with_suffix(ready.suffix + ".pending")
         marker.unlink(missing_ok=True)
+        ready.unlink(missing_ok=True)
+        ready_pending.unlink(missing_ok=True)
         child_source = textwrap.dedent(
             """
             import ctypes
             import hashlib
+            import json
             import os
             from pathlib import Path
+            import sys
             import time
 
+            diagnostic_started = time.monotonic()
+            def test_stage(stage):
+                sys.stderr.write(json.dumps({"schema": "wom-kit/test-interruption-stage/v1",
+                    "stage": stage, "elapsed_ms": int((time.monotonic() - diagnostic_started) * 1000)},
+                    separators=(",", ":")) + "\\n")
+                sys.stderr.flush()
+
+            test_stage("import_start")
             from wom_kit import archive_services
             from wom_kit import private_metadata_win32 as win32
+            test_stage("import_done")
 
             root = Path(os.environ["WOM_P_ROOT"])
             marker = Path(os.environ["WOM_P_MARKER"])
+            ready = marker.with_suffix(marker.suffix + ".ready")
+            ready_pending = ready.with_suffix(ready.suffix + ".pending")
             hook = os.environ["WOM_P_HOOK"]
 
             def reached(name):
                 marker.write_text(name, encoding="utf-8")
+                test_stage("checkpoint")
                 time.sleep(300)
 
             if hook == "first_lock":
@@ -709,6 +838,15 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
             else:
                 raise RuntimeError("unknown interruption hook")
 
+            # A complete, no-overwrite readiness publication is outside the
+            # archive. It is a fixture clock signal, never writer authority.
+            with ready_pending.open("xb") as stream:
+                stream.write(b"wom-test-writer-ready/v1\\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.link(ready_pending, ready)
+            ready_pending.unlink()
+            test_stage("writer_start")
             archive_services._private_objet_source_metadata_write_legacy_core(
                 root,
                 intake=os.environ["WOM_P_INTAKE"],
@@ -727,6 +865,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
             plan_sha256=plan_sha256,
             marker=marker,
         )
+        budget = _InterruptionBudget(time.monotonic())
         process = subprocess.Popen(
             [sys.executable, "-c", child_source],
             env=environment,
@@ -734,24 +873,34 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
             stderr=subprocess.PIPE,
             text=True,
         )
-        deadline = time.monotonic() + 20
         try:
-            while not marker.exists() and time.monotonic() < deadline:
-                if process.poll() is not None:
-                    stdout, stderr = process.communicate()
-                    self.fail(
-                        "interruption child exited before marker: "
-                        f"returncode={process.returncode}\n{stdout}\n{stderr}"
-                    )
+            while True:
+                ready_state, ready_identity = _interruption_ready_snapshot(ready)
+                checkpoint_present = marker.exists()
+                try:
+                    action = budget.observe(now=time.monotonic(), ready_state=ready_state,
+                        ready_identity=ready_identity, checkpoint_present=checkpoint_present,
+                        child_exited=process.poll() is not None)
+                except ValueError as error:
+                    if process.poll() is None:
+                        process.kill()
+                    _stdout, stderr = process.communicate(timeout=10)
+                    self.last_interruption_observation = _interruption_stage_observation(stderr)
+                    self.last_interruption_observation["budget_reason"] = (
+                        error.args[0] if len(error.args) == 1 and type(error.args[0]) is str
+                        and error.args[0] in _INTERRUPTION_BUDGET_CODES else "interruption_observation_invalid")
+                    self.fail("checkpoint fixture stopped: " + json.dumps(self.last_interruption_observation))
+                if action == "checkpoint":
+                    break
                 time.sleep(0.02)
-            self.assertTrue(marker.exists(), "checkpoint marker timed out")
             self.assertEqual(marker.read_text(encoding="utf-8"), hook)
             self.assertIsNone(
                 process.poll(),
                 "interruption child was not alive at the checkpoint",
             )
             process.kill()
-            process.communicate(timeout=10)
+            _stdout, stderr = process.communicate(timeout=10)
+            self.last_interruption_observation = _interruption_stage_observation(stderr)
             self.assertIsNotNone(process.returncode)
             self.assertNotEqual(process.returncode, 0)
         finally:
@@ -763,6 +912,8 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
                     process.kill()
                     process.wait(timeout=10)
             marker.unlink(missing_ok=True)
+            ready.unlink(missing_ok=True)
+            ready_pending.unlink(missing_ok=True)
         return self._fresh_process_dry_run()
 
     def _fresh_process_dry_run(self) -> dict[str, object]:
