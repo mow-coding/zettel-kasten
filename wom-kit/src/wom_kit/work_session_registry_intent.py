@@ -21,6 +21,7 @@ from . import exact_operation_manifest as exact
 from . import project_update_transaction as durable
 from . import work_session_bundle as bundle
 from . import work_session_registry as registry
+from .exact_human_approval import exact_human_approval_context_sha256 as approval_context_sha256
 
 
 INTENT_SCHEMA = "wom-kit/work-session-private-registry-intent/v1"
@@ -82,13 +83,21 @@ def _sha(raw: bytes) -> str:
     return "sha256:" + hashlib.sha256(raw).hexdigest()
 
 
+def _original_create_document(value):
+    if (type(value) is not dict or set(value) != {"manifest_sha256", "context_sha256"}
+            or any(not registry._is_digest(item) for item in value.values())):
+        raise _fail()
+    return dict(value)
+
+
 def _strict_document(raw: bytes) -> dict[str, Any]:
     if type(raw) is not bytes or not raw or len(raw) > MAX_INTENT_BYTES:
         raise _fail()
     # Reuse duplicate-key/nonfinite/canonical rejection, then enforce the
     # narrower intent limit and exact action-specific original request shape.
     document = bundle._strict_document(raw)
-    if set(document) != _DOCUMENT_KEYS or document["schema"] != INTENT_SCHEMA:
+    if (set(document) not in (_DOCUMENT_KEYS, _DOCUMENT_KEYS | {"original_create_selector"})
+            or document["schema"] != INTENT_SCHEMA):
         raise _fail()
     revision = document["before_revision"]
     if type(revision) is not int or not 0 <= revision < 10**12 - 1:
@@ -116,6 +125,10 @@ def _strict_document(raw: bytes) -> dict[str, Any]:
           or not registry._ref(request["work_session_ref"], "work_session")
           or not registry._ref(generated[0], "claim")):
         raise _fail()
+    if "original_create_selector" in document:
+        if action != "claim":
+            raise _fail("work_session_registry_intent_action_refused")
+        _original_create_document(document["original_create_selector"])
     basis = {key: value for key, value in document.items() if key != "intent_sha256"}
     if not hmac.compare_digest(document["intent_sha256"], _sha(_canonical(basis))):
         raise _fail()
@@ -135,6 +148,11 @@ class RegistryTransitionIntent:
     @property
     def plan_sha256(self):
         return _safe_call(lambda: _strict_document(self._raw)["plan_sha256"])
+
+    @property
+    def original_create_selector(self):
+        """Detached private selector, never authentication by itself."""
+        return _safe_call(lambda: _strict_document(self._raw).get("original_create_selector"))
 
     def public_summary(self):
         def summary():
@@ -204,6 +222,15 @@ def _decode(store, raw, plan_sha256, held_lock):
     if (next(generated, None) is not None or rebuilt.human_decision_required
             or rebuilt.after.sha256 != document["after_sha256"] or rebuilt.plan_sha256 != plan_sha256):
         raise _fail()
+    selector = document.get("original_create_selector")
+    if selector is not None:
+        original = bundle.load_context_bound_session_decision(store, manifest_sha256=selector["manifest_sha256"])
+        binding = original.prepared.manifest.work_session_binding
+        if (original.prepared.transition.action != "create" or original.prepared.task_route_ref is None
+                or binding.client_app_ref != document["request"]["client_app_ref"]
+                or binding.work_session_ref != document["request"]["work_session_ref"]
+                or approval_context_sha256(original.context) != selector["context_sha256"]):
+            raise _fail("work_session_registry_intent_changed")
     target_name = f"{rebuilt.after.revision:012d}.json"
     committed = target_name in names
     if committed:
@@ -221,7 +248,7 @@ def _decode(store, raw, plan_sha256, held_lock):
     return rebuilt, committed
 
 
-def _prepare(store, transition, held_lock):
+def _prepare(store, transition, held_lock, original_create_selector=None):
     _check(store, held_lock)
     if type(transition) is not registry.RegistryTransition:
         raise _fail()
@@ -232,6 +259,8 @@ def _prepare(store, transition, held_lock):
              "before_revision": transition.after.revision - 1, "before_sha256": transition.before_sha256,
              "request": transition._request, "generated_refs": list(transition._generated_refs),
              "after_sha256": transition.after.sha256, "plan_sha256": transition.plan_sha256}
+    if original_create_selector is not None:
+        basis["original_create_selector"] = _original_create_document(original_create_selector)
     raw = _canonical({**basis, "intent_sha256": _sha(_canonical(basis))})
     rebuilt, _committed = _decode(store, raw, transition.plan_sha256, held_lock)
     if rebuilt != transition:
@@ -239,8 +268,8 @@ def _prepare(store, transition, held_lock):
     return RegistryTransitionIntent(raw)
 
 
-def prepare_registry_intent(store, transition, *, held_lock) -> RegistryTransitionIntent:
-    return _safe_call(lambda: _prepare(store, transition, held_lock))
+def prepare_registry_intent(store, transition, *, held_lock, original_create_selector=None) -> RegistryTransitionIntent:
+    return _safe_call(lambda: _prepare(store, transition, held_lock, original_create_selector))
 
 
 def _directory(store):
@@ -358,3 +387,19 @@ def observe_or_apply_registry_intent(store, *, plan_sha256, held_lock) -> Regist
     Fresh domain writes still require the independent claimed-binding guard.
     """
     return _safe_call(lambda: _observe_or_apply(store, plan_sha256, held_lock))
+
+
+def observe_committed_registry_intent(store, *, plan_sha256, held_lock) -> RegistryIntentOutcome:
+    """Read only: a completed selector cannot execute a merely pending intent.
+
+    This proves the original immutable commit, never current claim ownership.
+    No commit, new intent or automatic completion is allowed on this path.
+    """
+    def observe():
+        intent = _load(store, plan_sha256, held_lock)
+        transition, committed = _decode(store, intent._raw, plan_sha256, held_lock)
+        if not committed or _read_raw(store, plan_sha256) != intent._raw:
+            raise _fail("work_session_registry_intent_changed")
+        _check(store, held_lock)
+        return RegistryIntentOutcome("already_committed", transition, intent)
+    return _safe_call(observe)

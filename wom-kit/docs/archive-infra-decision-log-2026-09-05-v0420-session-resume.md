@@ -59,6 +59,20 @@ it. The existing broker authenticates claims against the full original context.
     before claim publication is not approved work; a native re-review path is
     required before this branch can become a complete public recovery flow.
 
+## Original claim composition amendment
+
+New task claims retain their original human-create manifest/context selector
+inside the existing private registry intent. Pending and completed continuation
+authenticate that original receipt and its app, task route and session. A
+private selector or a rehashed intent alone is not sufficient. Completed
+continuation is read-only and must separately prove current claimed ownership;
+a later pause does not erase the verified historical commit.
+
+Old intents without the optional origin retain their exact bytes and existing
+low-level observation. The task facade does not retroactively assign them an
+original human route. A copied completed selector from another route is refused.
+No new approval protocol, claim token input or duplicate claim is introduced.
+
 ## Evidence and remaining integration
 
 The combined execution/preview group passed 37 tests and 37 subtests. After

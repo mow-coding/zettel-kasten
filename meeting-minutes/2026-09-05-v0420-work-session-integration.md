@@ -447,6 +447,39 @@ bump, PR, tag, wheel or client application has occurred.
   source review found no additional blocker. Public command/tool routing and
   downstream claim integration remain pending.
 
+## Original claim intent and present ownership
+
+- The internal claim composition now connects an explicitly selected, human-
+  created task to its original registry claim intent. It verifies the original
+  human claim/MAC and immutable receipt, retains the original intent before
+  actor pending publication, then commits and separately proves current
+  ownership. A completed pointer uses a read-only intent observer; it cannot
+  execute a merely pending intent or manufacture a replacement claim.
+- Root review found that copying a completed selector into another blank task
+  route of the same app could reuse the original claim without proving its
+  route. The new claim intent therefore retains an optional original-create
+  manifest/context selector. Pending and completed continuation verify the
+  original human-bound app, route and session, not only the intent's own hash.
+  This is an added check on the existing approval, not a rewritten approval.
+- Legacy intents without that optional selector retain their exact bytes,
+  hashes and existing low-level reader/observer behavior. The new task facade
+  refuses to retroactively attach them to a human-created route. A subsequent
+  pause can leave the historical commit verified while current ownership is
+  unavailable; these are deliberately different results.
+- The final focused seven-test/nine-subtest run passed in 125.32 seconds,
+  including real exits after intent, pending actor, registry commit and final
+  actor publication, followed by fresh-process continuation. It also covered
+  copied routes, missing/rehash-tampered origin, old-byte compatibility, paused
+  ownership and read-only refusal of a forged completed pointer. The earlier
+  ten-test run preceded the route correction and is not final evidence.
+- Root's independent current-claim, paused-ownership and copied-route cases,
+  together with the existing original-intent cohort, then passed all nineteen
+  tests in 54.635 seconds. No further actionable source finding remained in
+  that bounded review; complete supported-platform integration is still needed.
+- Public CLI/MCP claim routing, original pre-claim human re-review and all
+  writer-family integration remain pending. These internal tests do not mean
+  that v0.4.20 has shipped or that the client's operations have completed.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)
