@@ -73,6 +73,24 @@ low-level observation. The task facade does not retroactively assign them an
 original human route. A copied completed selector from another route is refused.
 No new approval protocol, claim token input or duplicate claim is introduced.
 
+## Original pre-claim re-review amendment
+
+An explicitly requested re-review may redisplay only the original pending
+human decision whose authenticated claim is genuinely absent. Failed, corrupt
+or ambiguous claims are blockers, not absence. An existing claim uses original
+resume and does not reopen the approval window. No new manifest, reviewer,
+label, task route or approval identifier is accepted by this recovery path.
+
+Presence discovery must finish its key consumer before the broker is invoked.
+After the native decision, rescan for claims and revalidate the original
+actor, bundle, predecessor and target before entering claim publication. Keep
+publication checks independent of nested key consumers. Continue through the
+existing runner and terminal verification, preserving original authority.
+
+The source-level re-review cohort passed twelve tests in an independent root
+run, including genuine pre-claim and post-claim process exits. Public routing
+and the installed package journey remain separate, unfinished acceptance gates.
+
 ## Evidence and remaining integration
 
 The combined execution/preview group passed 37 tests and 37 subtests. After

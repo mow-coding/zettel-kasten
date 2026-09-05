@@ -54,8 +54,8 @@ class PendingPublicationTests(unittest.TestCase):
         calls, prepared_calls = [], []
         original_prepare = operation.prepare_session_decision
 
-        def prepare(transition):
-            result = original_prepare(transition)
+        def prepare(transition, **kwargs):
+            result = original_prepare(transition, **kwargs)
             prepared_calls.append(result)
             return result
 

@@ -480,6 +480,36 @@ bump, PR, tag, wheel or client application has occurred.
   writer-family integration remain pending. These internal tests do not mean
   that v0.4.20 has shipped or that the client's operations have completed.
 
+## Original decision re-review after a pre-claim exit
+
+- The internal recovery path now distinguishes an absent authenticated claim
+  from an existing, failed, corrupt or ambiguous claim. A genuinely pending
+  original bundle without a claim requires another native human decision; it
+  does not silently become approved. Existing authenticated work follows its
+  original resume path without another approval window.
+- Re-review retains the original app, task route, reviewer, manifest, context
+  and session. It cannot accept replacement labels or approval identifiers.
+  It rechecks the actor, predecessor, immutable target and original bundle
+  after the human decision and immediately before claim publication. A change
+  stops the operation instead of creating a different approved task.
+- Authenticated presence discovery exits its key consumer before invoking the
+  broker. Publication checks do not nest another key consumer. This reuses the
+  existing claim, runner, receipt and actor finalization rather than adding a
+  second approval protocol.
+- The final combined regression run passed 26 tests and six subtests in
+  70.71 seconds. Root independently reran the twelve re-review tests unchanged:
+  all passed in 48.896 seconds. Genuine child exits covered the cut before a
+  claim and the cut after its publication, followed by original fresh-process
+  continuation. Cancellation, selector/claim drift, failed/corrupt/ambiguous
+  evidence and absent/foreign locks were also checked. Independent source
+  review found no further actionable issue in this bounded component.
+- A pre-existing test forwarding wrapper omitted the optional task-route
+  argument; it now forwards keyword arguments unchanged to the real function.
+  Its assertions and the production validator were not weakened.
+- This is still an internal, unpublished checkpoint. Public command/tool
+  routing, installed-wheel journeys and complete writer-family scope coverage
+  remain open. No client archive, credential or provider was modified.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)
