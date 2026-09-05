@@ -800,3 +800,29 @@ not complete at this checkpoint.
   not reproduce. Production bytes have not been changed on an unproven cause.
   The next exact candidate retains that failure history and adds the reviewed
   component observer to collect the decisive original state if CI fails again.
+
+## Preparation refusal on the next diagnostic candidate
+
+- Candidate `48eca53d` was pushed with the original production code and the
+  reviewed component observer. Run `33970833399` installed job `101318924564`
+  failed during initial update in 65.015 seconds, before the approval broker.
+  Runtime preparation entered and returned; the existing field-level result
+  reported failed revalidation. No nested exception or repair continuation
+  was reached. This is different observed evidence from the previous unknown
+  component refusal, not a confirmed common cause or a successful correction.
+- The failure projection had retained only overall preparation state, dropping
+  already available per-check results. It now forwards fourteen fixed check
+  names and their states, with explicit unclassified for missing/invalid
+  observations. Compared values, arbitrary reason strings and paths are not
+  copied. No additional query, retry, timeout or product behavior is introduced.
+- The parent accepts only the exact fixed shape and rejects an inconsistent
+  aggregate when all individual states are known. Known allowlisted blockers
+  can use the existing reason-code list. Independent review caught a combined
+  list saturation defect in that projection; the final deduplicated list is
+  now capped at 32, with a 65-code saturation regression. This correction is
+  diagnostic-only, not evidence that the preparation refusal has been fixed.
+- The final four-module diagnostic cohort passed 36 tests (unittest-reported
+  1.921 seconds, excluding module collection/startup). All four readiness
+  checks and 169-file resource synchronization passed. Independent review
+  confirmed the final cap correction and found no further actionable issue.
+  A new exact candidate still requires full CI; prior failures remain evidence.

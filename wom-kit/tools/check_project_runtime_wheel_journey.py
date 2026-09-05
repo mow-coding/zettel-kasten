@@ -141,6 +141,7 @@ OBSERVED_FAILURE_CODES = frozenset({
     "project_update_git_runner_closed", "project_update_git_runner_close_unverified",
     "project_update_git_runner_resolved_more_than_once", "project_update_git_runner_handoff_invalid",
     "project_version_update_terminal_cleanup_required", "project_version_update_terminal_cleanup_outcome_unknown",
+    "project_version_update_state_changed_during_runtime_preparation",
 })
 OBSERVED_SUBPROCESS_FAILURE_CODES = frozenset(
     f"{prefix}-{stage}_{outcome}"
@@ -187,6 +188,14 @@ CLI_OBSERVATION_VALUES = {
     "existing_operation_presence": frozenset({"present", "absent", "unavailable"}),
     "preparation_revalidation_state": frozenset({"passed", "failed", "not_reached", "unavailable"}),
 }
+PREPARATION_OBSERVATION_SCHEMA = "wom-kit/installed-runtime-preparation-observation/v0.1"
+PREPARATION_CHECKS = (
+    "git_snapshot", "git_config_trust", "git_metadata", "version_pins",
+    "target_refs", "target_evidence", "runtime_policy", "runtime_supply",
+    "runtime_bootstrap", "runtime_plan", "launcher", "materialization_preflight",
+    "prepared_runtime_payload", "source_branch",
+)
+PREPARATION_STATES = frozenset({"passed", "failed", "not_reached", "unavailable"})
 
 
 class JourneyCheckError(RuntimeError):
@@ -680,8 +689,11 @@ class FirstUpdateObservation:
         if type(supplied_codes) is not list:
             supplied_codes = []
         candidates = [value.get("reason_code"), *supplied_codes[:32]]
+        blockers = value.get("blockers")
+        if type(blockers) is list:
+            candidates.extend(blockers[:32])
         fields["reason_codes"] = sorted({item for item in candidates
-                                         if type(item) is str and item in allowed})
+                                         if type(item) is str and item in allowed})[:32]
         fields["return_code"] = cli_code if type(cli_code) is int and cli_code in {0, 1, 2} else None
         payload = {
             "schema": FAILURE_OBSERVATION_SCHEMA, "scope": "synthetic_harness_only",
@@ -691,6 +703,19 @@ class FirstUpdateObservation:
         }
         if self.component_observation is not None:
             payload["component_observation"] = self.component_observation
+        if type(revalidation) is dict:
+            # Existing product results already distinguish these checks. Keep
+            # their fixed states, not compared values, paths or free-form
+            # reasons. This adds no query, wrapper, retry or product mutation.
+            checks = revalidation.get("checks")
+            if type(checks) is not dict:
+                checks = {}
+            states = {}
+            for name in PREPARATION_CHECKS:
+                item = checks.get(name)
+                state = item.get("state") if type(item) is dict else None
+                states[name] = state if type(state) is str and state in PREPARATION_STATES else "unclassified"
+            payload["preparation_observation"] = {"schema": PREPARATION_OBSERVATION_SCHEMA, "checks": states}
         return validate_first_update_observation(payload)
 
 
@@ -700,7 +725,8 @@ def validate_first_update_observation(value):
         "schema", "scope", "product_recovery_evidence", "private_values_echoed", "stage",
         "boundaries", "failures", "native_observed", "cli",
     }
-    valid = type(value) is dict and (set(value) == required or set(value) == required | {"component_observation"})
+    valid = (type(value) is dict and required <= set(value)
+             and set(value) <= required | {"component_observation", "preparation_observation"})
     require(valid, "installed_runtime_journey_failed")
     if "component_observation" in value:
         component = value["component_observation"]
@@ -748,6 +774,20 @@ def validate_first_update_observation(value):
     for name, allowed in CLI_OBSERVATION_VALUES.items():
         require(cli[name] is None or type(cli[name]) is str and cli[name] in allowed,
                 "installed_runtime_journey_failed")
+    if "preparation_observation" in value:
+        preparation = value["preparation_observation"]
+        require(type(preparation) is dict and set(preparation) == {"schema", "checks"}
+                and preparation["schema"] == PREPARATION_OBSERVATION_SCHEMA,
+                "installed_runtime_journey_failed")
+        checks = preparation["checks"]
+        require(type(checks) is dict and set(checks) == set(PREPARATION_CHECKS)
+                and all(type(state) is str and state in PREPARATION_STATES | {"unclassified"}
+                        for state in checks.values()), "installed_runtime_journey_failed")
+        observed_states = set(checks.values())
+        if "unclassified" not in observed_states:
+            overall = next(state for state in ("failed", "unavailable", "not_reached", "passed")
+                           if state in observed_states)
+            require(cli["preparation_revalidation_state"] == overall, "installed_runtime_journey_failed")
     require(cli["return_code"] is None or type(cli["return_code"]) is int and cli["return_code"] in {0, 1, 2},
             "installed_runtime_journey_failed")
     codes = cli["reason_codes"]
