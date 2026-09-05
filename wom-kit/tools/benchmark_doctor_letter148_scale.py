@@ -1293,6 +1293,47 @@ def _safe_failure(reason_code: str, profile: ScaleProfile) -> dict[str, Any]:
     }
 
 
+def _safe_exception_diagnostics(exc: Exception) -> dict[str, Any]:
+    """Expose only fixed source coordinates, never exception text or locals."""
+    known_types = (
+        AssertionError, AttributeError, IndexError, KeyError, MemoryError,
+        NotImplementedError, OSError, RuntimeError, TypeError, ValueError,
+    )
+    exception_type = next(
+        (kind.__name__ for kind in known_types if type(exc) is kind), "Exception"
+    )
+    known_sources = {
+        os.path.normcase(os.path.abspath(filename)): label
+        for filename, label in (
+            (__file__, "tools/benchmark_doctor_letter148_scale.py"),
+            (archive_cli.__file__, "wom_kit/archive_cli.py"),
+            (archive_doctor.__file__, "wom_kit/archive_doctor.py"),
+            (archive_services.__file__, "wom_kit/archive_services.py"),
+        )
+    }
+    frames = []
+    cursor = exc.__traceback__
+    inspected = 0
+    while cursor is not None and inspected < 64:
+        code = cursor.tb_frame.f_code
+        source = known_sources.get(os.path.normcase(os.path.abspath(code.co_filename)))
+        if source is not None:
+            function = code.co_name
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,95}|<(?:module|lambda|genexpr|listcomp)>", function) is None:
+                function = "unknown_function"
+            frames.append({"source": source, "function": function, "line": cursor.tb_lineno})
+        inspected += 1
+        cursor = cursor.tb_next
+    return {
+        "exception_type": exception_type,
+        "known_source_frames": frames[-8:],
+        "traceback_truncated": cursor is not None or len(frames) > 8,
+        "exception_text_emitted": False,
+        "locals_emitted": False,
+        "absolute_paths_emitted": False,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
@@ -1340,8 +1381,9 @@ def main(argv: list[str] | None = None) -> int:
         )
     except BenchmarkFailure as exc:
         result = _safe_failure(exc.reason_code, profile)
-    except Exception:
+    except Exception as exc:
         result = _safe_failure("benchmark_internal_error", profile)
+        result["exception_diagnostics"] = _safe_exception_diagnostics(exc)
 
     if args.format == "json":
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))

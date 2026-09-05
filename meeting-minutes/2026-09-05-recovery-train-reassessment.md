@@ -222,3 +222,27 @@ not complete at this checkpoint.
   passed with fifteen tests and thirty-one subtests. The source is being frozen
   for supported-platform CI and complete installed-wheel verification; none of
   these local results claims a published release or private client completion.
+
+## First supported-platform candidate
+
+- Candidate `90104abe03ce95235f1e390902bf9ebece175a6e` was pushed in draft
+  PR #97. Its Windows installed-wheel job completed the real update, retained
+  runtime no-op, follow-on preview, new-process runtime verification, public
+  launcher progress, and existing installed workflow checks successfully.
+  That wheel is candidate-specific evidence, not the final release asset.
+- Both Ubuntu scale jobs then exposed the same immediate `IndexError` in the
+  symlink-boundary inventory. A POSIX observation has nine tuple members, but
+  its consumer read a Windows-only tenth member. A reduced real inventory
+  reproduced the exact failing frame; the correction keeps the common
+  hardlink test and reads the native Windows flag only on Windows.
+- Regression coverage exercises the actual POSIX observation branch even on
+  the Windows development host. Benchmark failures now retain only fixed
+  exception classes and allowlisted repository source coordinates, excluding
+  exception messages, local values, and absolute paths. Independent review and
+  a fresh full candidate CI remain required; the failed run is not waived.
+- The final local operational mixed-profile run before this POSIX correction
+  passed in 90.811767 seconds, with first status at 0.254 seconds and maximum
+  observed progress gap 5.014736 seconds. Source hashes were stable through
+  that measurement. This result does not erase the earlier unexplained mixed
+  failure and does not prove the separate public-process startup or client
+  byte-scale performance contracts.

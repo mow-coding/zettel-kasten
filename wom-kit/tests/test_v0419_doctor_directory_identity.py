@@ -112,6 +112,50 @@ class DoctorDirectoryIdentityTests(unittest.TestCase):
             archive_cli.Doctor._inventory_stat_identity(altered),
         )
 
+    def test_posix_inventory_does_not_read_windows_only_generation_flag(self) -> None:
+        # Select Doctor's POSIX branch without changing pathlib's host platform.
+        # This remains a real POSIX run on Linux CI, and catches tuple-contract
+        # mistakes on Windows before they reach the Linux matrix.
+        posix_observer = SimpleNamespace(**(vars(os) | {"name": "posix"}))
+        with tempfile.TemporaryDirectory(prefix="wom-doctor-posix-generation-") as tmp:
+            root = Path(tmp) / "archive"
+            self.benchmark["build_fixture"](root, self.benchmark["REDUCED_PROFILE"])
+            doctor = archive_cli.Doctor(root)
+            with mock.patch.object(archive_cli, "os", posix_observer):
+                diagnostics = doctor.run()
+            self.assertTrue(doctor._archive_tree_inventory_complete)
+            self.assertEqual(Counter(item.code for item in diagnostics if item.severity == "ERROR"), {})
+            self.assertTrue(any(item.code == "doctor_cache_snapshot_current" for item in diagnostics))
+            self.assertTrue(doctor._archive_tree_file_generation_tokens)
+            for token in doctor._archive_tree_file_generation_tokens.values():
+                self.assertEqual(token[0], "posix_file_generation_v1")
+                self.assertEqual(len(token), 9)
+
+    def test_posix_hardlink_keeps_descriptor_hash_fallback(self) -> None:
+        posix_observer = SimpleNamespace(**(vars(os) | {"name": "posix"}))
+        with tempfile.TemporaryDirectory(prefix="wom-doctor-posix-hardlink-") as tmp:
+            base = Path(tmp)
+            root = base / "archive"
+            path = root / "nested" / "source.json"
+            path.parent.mkdir(parents=True)
+            path.write_bytes(b'{"synthetic":true}\n')
+            try:
+                os.link(path, base / "second-link.json")
+            except OSError:
+                self.skipTest("Host filesystem does not provide hardlinks")
+            doctor = archive_cli.Doctor(root)
+            with mock.patch.object(archive_cli, "os", posix_observer):
+                doctor._run_stage("symlink-boundaries", doctor._check_symlink_boundaries)
+                doctor._load_json_file(path)
+                with mock.patch.object(archive_cli, "sha256_file", wraps=archive_cli.sha256_file) as hashed:
+                    doctor._finalize_run_file_generation_snapshots()
+            self.assertEqual(hashed.call_count, 2)
+            self.assertIn(
+                doctor._archive_tree_key("nested/source.json"),
+                doctor._archive_tree_file_generation_hash_required,
+            )
+            self.assertTrue(any(item.code == "doctor_cache_snapshot_current" for item in doctor.diagnostics))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -229,6 +229,38 @@ class DoctorPayloadFixtureContractTests(unittest.TestCase):
                     )
                 self.assertEqual(raised.exception.code, 2)
 
+    def test_unexpected_failure_reports_coordinates_not_exception_values(self) -> None:
+        benchmark = self.benchmark
+        stdout = io.StringIO()
+        private_text = " ".join(benchmark["PRIVATE_SENTINELS"])
+
+        def fail(*_args, **_kwargs):
+            private_local = private_text
+            raise IndexError(private_local)
+
+        with (
+            mock.patch.dict(benchmark["main"].__globals__, {"run_benchmark": fail}),
+            redirect_stdout(stdout),
+            redirect_stderr(io.StringIO()),
+        ):
+            status = benchmark["main"](["--reduced", "--format", "json"])
+        result = json.loads(stdout.getvalue())
+        self.assertEqual(status, 1)
+        self.assertEqual(result["reason_code"], "benchmark_internal_error")
+        diagnostic = result["exception_diagnostics"]
+        self.assertEqual(diagnostic["exception_type"], "IndexError")
+        self.assertTrue(diagnostic["known_source_frames"])
+        for frame in diagnostic["known_source_frames"]:
+            self.assertEqual(frame["source"], "tools/benchmark_doctor_letter148_scale.py")
+            self.assertEqual(frame["function"], "main")
+            self.assertIsInstance(frame["line"], int)
+        for sentinel in benchmark["PRIVATE_SENTINELS"]:
+            self.assertNotIn(sentinel, stdout.getvalue())
+        self.assertNotIn(str(BENCHMARK_PATH), stdout.getvalue())
+        self.assertFalse(diagnostic["exception_text_emitted"])
+        self.assertFalse(diagnostic["locals_emitted"])
+        self.assertFalse(diagnostic["absolute_paths_emitted"])
+
 
 if __name__ == "__main__":
     unittest.main()

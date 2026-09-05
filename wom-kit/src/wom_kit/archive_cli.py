@@ -8358,7 +8358,10 @@ class Doctor:
                                         or 0
                                     )
                                     != 1
-                                    or generation_token[9] is not True
+                                    or (
+                                        os.name == "nt"
+                                        and generation_token[9] is not True
+                                    )
                                 ):
                                     self._archive_tree_file_generation_hash_required.add(
                                         key
