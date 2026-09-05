@@ -633,6 +633,29 @@ class OperationApprovalBindingTests(unittest.TestCase):
             first.review_binding_codes,
         )
 
+        current_observed_policy = copy.deepcopy(plan)
+        current_observed_policy["project_runtime"]["policy"].update(
+            {
+                "observation_state": "passed",
+                "observation_reason_code": "verified",
+            }
+        )
+        observed_binding = project_version_update_approval_binding(
+            current_observed_policy
+        )
+        self.assertNotEqual(first.plan_sha256, observed_binding.plan_sha256)
+        unavailable_policy = copy.deepcopy(current_observed_policy)
+        unavailable_policy["project_runtime"]["policy"].update(
+            {
+                "observation_state": "unavailable",
+                "observation_reason_code": (
+                    "project_runtime_policy_unavailable"
+                ),
+            }
+        )
+        with self.assertRaises(OperationApprovalBindingError):
+            project_version_update_approval_binding(unavailable_policy)
+
         empty_repair = copy.deepcopy(plan)
         for runtime_candidate in (
             empty_repair["approval_preparation"]["runtime_candidate"],
