@@ -422,6 +422,31 @@ bump, PR, tag, wheel or client application has occurred.
   A bundle without an authenticated claim does not authorize automatic resume.
   The current refusal is safe but is not a completed user recovery workflow.
 
+## Original app-registration discovery service
+
+- Registration now has two shared service calls: a read-only original preview,
+  and apply-or-resume of that same retained selection. Preview generates one
+  opaque app reference and binds its original predecessor, label digest and
+  plan digest without writing an intent or taking the writer lock. The AI
+  harness retains those selectors before apply; a human does not copy them.
+- Apply detaches and strictly validates the selection, checks the original
+  private label and archive, obtains the existing cancelable OS lock, then
+  loads the original intent by its plan digest before considering a new write.
+  Only a genuinely missing intent with the same unchanged predecessor can be
+  reconstructed using the original app reference. A committed app missing its
+  intent is not repaired by manufacturing historical evidence.
+- Actual child exits before intent publication, after intent publication and
+  after registry commit recover one original app reference, one generation and
+  one original intent. Registration remains self-declared routing, not native
+  approval, app attestation or claimed-session write authority.
+- An initial drift-injection test incorrectly reinjected its change during the
+  registry's own replay verification. The fixture was narrowed to one original
+  preview boundary; neither production replay nor its success result was
+  replaced. Root's final unchanged registration cohort passed ten tests in
+  18.142 seconds after the strict schema/key type correction. Independent
+  source review found no additional blocker. Public command/tool routing and
+  downstream claim integration remain pending.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)
