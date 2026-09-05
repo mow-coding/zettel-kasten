@@ -291,3 +291,61 @@ release or client-resolution evidence: the production six-state caller must
 obey the terminal-control and recovery serialization order, its cancellation
 delivery path remains under review, and full repository CI, wheel validation,
 merge, tag, public release, and client-run verification are pending.
+
+## v0.4.19 per-call Windows child-process enforcement
+
+The Windows no-console policy is now checked at every process-creation call
+site rather than by counting helper names in source text. The AST regression
+requires each noninteractive `subprocess` call to use the exact common hidden
+child helper, permits only the explicitly interactive KeePass window, and
+binds each `multiprocessing` creation to the corresponding per-scope helper.
+Import aliases, from-import aliases, raw zero flags, omitted flags, incorrect
+helper arguments, count offsets, and direct starts are all negative fixtures.
+The independent full test file passed 15 tests and 12 subtests, and commit
+`737c071d` records this enforcement. Native approval, credential UI, progress,
+errors, and receipts remain visible; this change does not suppress the human
+interaction surface.
+
+## v0.4.19 pending-cancellation restart correction
+
+An actual cancellation restart exposed two deliberately different digest
+domains that the first resolver had accidentally treated as one: transaction
+semantic JSON and delivery-payload semantic JSON omit the storage newline,
+while durable private documents and their HMAC-bound records include it. The
+resolver now names and validates those domains separately, without accepting a
+second format or weakening immutable-document and HMAC checks. It reconstructs
+a pending cancellation only when the exact capsule, unapproved receipt, and
+active `unapproved_restored` locator all cross-bind.
+
+Independent review then found that the first test incorrectly treated an
+active `terminal_completed` locator before retirement as a valid pending
+state. That state is now fixed-closed as a state change and every related
+control byte is preserved. The corrected primitive passed 35 focused tests and
+18 subtests plus the actual service restart fault reproduction. A second
+reviewer re-ran the critical two cases with 14 subtests and reported P0/P1 zero.
+Commit `a0839be4` records the corrected primitive. Production caller
+integration and its final fault matrix remain pending.
+
+## v0.4.19 runtime cleanup sidecar review
+
+The runtime cleanup candidate introduced a private sibling sidecar so a fresh
+process can resume cleanup without trusting transient Python state. Its initial
+focused, parent-durability, runtime, Doctor, and capability suites passed, but
+an independent destructive-boundary review rejected the frozen candidate with
+four P1 findings before service integration.
+
+First, a self-described sidecar was not cross-checked against the surviving
+normal candidate seal, so a changed target commit could still authorize tree
+cleanup. Second, an NTFS alternate data stream on the sidecar was detected only
+at final retirement, after destructive cleanup. Third, replacing the sidecar
+with a byte-identical file changed its identity but the old in-memory capsule
+could still delete the replacement. Fourth, the retire API accepted a transient
+hash string rather than a disk-revalidated durable outer acknowledgment. The
+next candidate must bind the capsule creation identity in its own durable
+document, verify the sidecar and normal seal including default-stream-only
+state before any destructive resume, and require a typed transaction
+acknowledgment that revalidates its exact checkpoint or abort receipt from
+disk. Normal runtime promotion, sealed cancellation, and unsealed abort must
+all record the full terminal-evidence digest and capsule identity before the
+sidecar is retired. Until those corrections are re-frozen and independently
+approved, the runtime primitive and v0.4.19 remain release-blocked.

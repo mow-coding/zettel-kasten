@@ -1,7 +1,8 @@
 """Parser-derived, content-free command approval status inventory.
 
-The inventory describes only facts exposed by an already-built
-``argparse.ArgumentParser``.  It does not evaluate command prerequisites,
+Current approval truth comes from an already-built ``argparse.ArgumentParser``;
+optional exposure history records a bounded audit of public source tags, not
+successful use.  The inventory does not evaluate command prerequisites,
 render help text, execute handlers, or inspect any filesystem, network, or
 provider state.
 """
@@ -132,6 +133,44 @@ COMPOUND_APPROVAL_FIXED_CLOSED_PLAN_WRITERS = {
     "zet-revision-plan": "zet-revision-write",
 }
 
+# Public parser and dispatch exposure was audited at v0.3.320 and its explicit
+# restriction at v0.4.0. These facts do not prove successful execution at either
+# tag, and must never be presented as a last-working-version or downgrade path.
+AUDITED_PREVIOUSLY_EXPOSED_APPROVAL_COMMANDS = frozenset({
+    "discard-draft",
+    "discard-draft-restore",
+    "mint-zet-batch",
+    "retire-draft-batch",
+    "zettel-edge-batch",
+    "zet-revision-write",
+    "zet-revision-restore-write",
+    "remint-reconcile",
+    "retire-draft-reconcile",
+})
+
+
+def approval_exposure_history(
+    command: str,
+    approval_status: str,
+) -> dict[str, Any]:
+    """Return only audited public exposure, never infer successful use."""
+
+    if (
+        command in AUDITED_PREVIOUSLY_EXPOSED_APPROVAL_COMMANDS
+        and approval_status == APPROVAL_FIXED_CLOSED
+    ):
+        return {
+            "state": "previously_exposed_now_restricted",
+            "exposed_at_tag": "v0.3.320",
+            "restricted_at_tag": "v0.4.0",
+            "evidence_basis": "public_tag_parser_and_dispatch",
+            "successful_use_verified": False,
+        }
+    # Unaudited commands, old inventory rows, and future reopened surfaces must
+    # not inherit an unsupported never-implemented or currently-restricted claim.
+    return {"state": "history_not_audited", "successful_use_verified": False}
+
+
 # These top-level launchers deliberately hand their remaining argv to bounded
 # parsers that do not use argparse. Keep that exceptional surface explicit so
 # the shared inventory reports the mode the real dispatcher accepts instead of
@@ -156,6 +195,7 @@ _DELEGATED_ARGUMENT_SYNTAX_ATTRIBUTE = (
 _DELEGATED_ARGUMENT_SYNTAX_KEYS = frozenset(
     {"valid", "requested_mode", "reason_code"}
 )
+_APPROVAL_SCOPE_PREDICATE_ATTRIBUTE = "_wom_approval_scope_predicate"
 
 
 def compound_approval_fixed_closed_contract(command: str) -> dict[str, Any]:
@@ -272,6 +312,21 @@ def _parser_approval_scope(
         "outside_scope_status": APPROVAL_FIXED_CLOSED,
         "outside_scope_reason_code": COMPOUND_APPROVAL_REASON_CODE,
     }
+    if raw.get("kind") == "namespace_predicate":
+        if (
+            set(raw) != {"kind", "predicate_ref", *common}
+            or type(raw.get("predicate_ref")) is not str
+            or re.fullmatch(r"[a-z][a-z0-9_]*", raw["predicate_ref"]) is None
+            or not callable(
+                getattr(parser, _APPROVAL_SCOPE_PREDICATE_ATTRIBUTE, None)
+            )
+        ):
+            raise ValueError("command_approval_scope_invalid")
+        return {
+            "kind": "namespace_predicate",
+            "predicate_ref": raw["predicate_ref"],
+            **common,
+        }
     if raw.get("kind") == "argument_value_allowlist":
         if set(raw) != {
             "kind",
@@ -437,6 +492,9 @@ def build_command_status_inventory(
                             "approval_status": approval_status,
                             "approval_reason_code": approval_reason_code,
                             "approval_scope": approval_scope,
+                            "approval_exposure_history": approval_exposure_history(
+                                canonical_path_text, approval_status
+                            ),
                             "dry_run_exposed": _dry_run_exposed(
                                 canonical_path_text,
                                 command_parser,
@@ -599,6 +657,14 @@ def _validated_approval_scope(scope: Any) -> dict[str, Any] | None:
     ):
         raise ValueError("command_status_inventory_invalid")
     kind = scope.get("kind")
+    if kind == "namespace_predicate":
+        if (
+            set(scope) != {"kind", "predicate_ref", *common}
+            or type(scope.get("predicate_ref")) is not str
+            or re.fullmatch(r"[a-z][a-z0-9_]*", scope["predicate_ref"]) is None
+        ):
+            raise ValueError("command_status_inventory_invalid")
+        return {"kind": kind, "predicate_ref": scope["predicate_ref"], **common}
     if kind == "argument_value_allowlist":
         if set(scope) != {"kind", "argument", "allowed_values", *common}:
             raise ValueError("command_status_inventory_invalid")
@@ -675,7 +741,10 @@ def _validated_inventory_commands(inventory: Mapping[str, Any]) -> tuple[dict[st
     sanitized: list[dict[str, Any]] = []
     canonical_paths: set[str] = set()
     for raw_command in inventory["commands"]:
-        if type(raw_command) is not dict or set(raw_command) != expected_keys:
+        if type(raw_command) is not dict or set(raw_command) not in (
+            expected_keys,
+            expected_keys | {"approval_exposure_history"},
+        ):
             raise TypeError("command_status_inventory_invalid")
         canonical_path = raw_command.get("canonical_path")
         alias_paths = raw_command.get("alias_paths")
@@ -714,6 +783,17 @@ def _validated_inventory_commands(inventory: Mapping[str, Any]) -> tuple[dict[st
                 raise ValueError("command_status_inventory_invalid")
         else:
             raise ValueError("command_status_inventory_invalid")
+        history = approval_exposure_history("", approval_status)
+        if "approval_exposure_history" in raw_command:
+            raw_history = raw_command["approval_exposure_history"]
+            expected_history = approval_exposure_history(canonical_path, approval_status)
+            if (
+                type(raw_history) is not dict
+                or raw_history.get("successful_use_verified") is not False
+                or (raw_history != history and raw_history != expected_history)
+            ):
+                raise ValueError("command_status_inventory_invalid")
+            history = dict(raw_history)
         if (
             type(raw_command.get("dry_run_exposed")) is not bool
             or raw_command.get("invocation_surface_available") is not True
@@ -726,6 +806,7 @@ def _validated_inventory_commands(inventory: Mapping[str, Any]) -> tuple[dict[st
                 "approval_status": approval_status,
                 "approval_reason_code": approval_reason_code,
                 "approval_scope": approval_scope,
+                "approval_exposure_history": history,
                 "dry_run_exposed": raw_command["dry_run_exposed"],
                 "invocation_surface_available": True,
             }
@@ -738,6 +819,13 @@ def _approval_scope_summary(scope: Mapping[str, Any] | None) -> dict[str, Any] |
 
     if scope is None:
         return None
+    if scope["kind"] == "namespace_predicate":
+        return {
+            "kind": scope["kind"],
+            "predicate_ref": scope["predicate_ref"],
+            "allowlisted_entry_count": None,
+            "values_disclosed": False,
+        }
     if scope["kind"] == "argument_value_allowlist":
         count = len(scope["allowed_values"])
     else:
@@ -996,11 +1084,21 @@ def _approval_argument_values(
 def _approval_scope_mode_status(
     scope: Mapping[str, Any] | None,
     argument_tokens: tuple[str, ...],
+    *,
+    argument_predicate_matched: bool | None = None,
 ) -> tuple[bool, str | None]:
     if scope is None:
         return True, None
     kind = scope.get("kind")
     outside_reason = COMPOUND_APPROVAL_REASON_CODE
+    if kind == "namespace_predicate":
+        # Only a trusted parser callback can classify private argument values.
+        # Public inventories and raw-token callers remain conservative.
+        return (
+            (True, None)
+            if argument_predicate_matched is True
+            else (False, outside_reason)
+        )
     if kind == "argument_value_allowlist":
         argument = scope.get("argument")
         allowed_values = scope.get("allowed_values")
@@ -1036,6 +1134,7 @@ def _capability_availability_for_command(
     *,
     requested_mode: str,
     argument_tokens: tuple[str, ...] = (),
+    argument_predicate_matched: bool | None = None,
 ) -> dict[str, Any]:
     """Resolve one parser-declared mode through the shared availability gate.
 
@@ -1091,6 +1190,7 @@ def _capability_availability_for_command(
             scope_available, scope_reason = _approval_scope_mode_status(
                 approval_scope,
                 argument_tokens,
+                argument_predicate_matched=argument_predicate_matched,
             )
             available = scope_available
             if available:
@@ -1118,6 +1218,7 @@ def _capability_availability_for_command(
         "reason_code": reason_code,
         "detail_reason_code": detail_reason_code,
         "approval_status": approval_status,
+        "approval_exposure_history": dict(command["approval_exposure_history"]),
         "dry_run_exposed": dry_run_exposed,
         "parser_derived": True,
         "argument_scope_evaluated": requested_mode == "approve",
@@ -1237,6 +1338,8 @@ def _namespace_approval_scope_tokens(
         for option in action.option_strings
     }
     kind = scope.get("kind")
+    if kind == "namespace_predicate":
+        return ()
     if kind == "argument_value_allowlist":
         option = scope.get("argument")
         action = option_actions.get(option)
@@ -1272,6 +1375,31 @@ def _namespace_approval_scope_tokens(
                 tokens.append(option)
         return tuple(tokens)
     raise ValueError("command_approval_scope_invalid")
+
+
+def _namespace_approval_predicate_result(
+    leaf_parser: argparse.ArgumentParser,
+    namespace: argparse.Namespace,
+    scope: Mapping[str, Any] | None,
+) -> bool | None:
+    if scope is None or scope.get("kind") != "namespace_predicate":
+        return None
+    predicate = getattr(leaf_parser, _APPROVAL_SCOPE_PREDICATE_ATTRIBUTE, None)
+    if not callable(predicate):
+        raise ValueError("command_approval_scope_invalid")
+    # Suggested-command parsing suppresses omitted defaults. Restore only the
+    # trusted leaf's argument defaults so its predicate sees the same values as
+    # actual argparse dispatch, without copying values into public records.
+    predicate_namespace = argparse.Namespace(**{
+        action.dest: action.default
+        for action in leaf_parser._actions
+        if action.dest != argparse.SUPPRESS and action.default != argparse.SUPPRESS
+    })
+    vars(predicate_namespace).update(vars(namespace))
+    result = predicate(predicate_namespace)
+    if type(result) is not bool:
+        raise ValueError("command_approval_scope_invalid")
+    return result
 
 
 def resolve_namespace_capability_availability(
@@ -1335,6 +1463,9 @@ def resolve_namespace_capability_availability(
         command,
         requested_mode=requested_mode,
         argument_tokens=argument_tokens,
+        argument_predicate_matched=_namespace_approval_predicate_result(
+            leaf_parser, namespace, command.get("approval_scope")
+        ),
     )
 
 
@@ -1573,6 +1704,7 @@ def resolve_suggested_command_mode(
     approval_reason_code = command.get("approval_reason_code")
     raw_scope = command.get("approval_scope")
     approval_scope = dict(raw_scope) if isinstance(raw_scope, Mapping) else None
+    argument_predicate_matched: bool | None = None
     if (
         approval_scope is not None
         and parsed_leaf is not None
@@ -1583,11 +1715,15 @@ def resolve_suggested_command_mode(
             parsed_namespace,
             approval_scope,
         )
+        argument_predicate_matched = _namespace_approval_predicate_result(
+            parsed_leaf, parsed_namespace, approval_scope
+        )
 
     approval_availability = _capability_availability_for_command(
         command,
         requested_mode="approve",
         argument_tokens=argument_tokens,
+        argument_predicate_matched=argument_predicate_matched,
     )
     approval_mode_available_for_arguments = bool(
         approval_availability["available"]
@@ -1601,6 +1737,7 @@ def resolve_suggested_command_mode(
         command,
         requested_mode=requested_mode,
         argument_tokens=argument_tokens,
+        argument_predicate_matched=argument_predicate_matched,
     )
     requested_mode_available = capability_availability["available"]
     requested_mode_reason_code = capability_availability[

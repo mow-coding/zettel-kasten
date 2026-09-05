@@ -24,6 +24,8 @@ import zipfile
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
 SYNC_TOOL = KIT_ROOT / "tools" / "sync_package_resources.py"
+RUNTIME_JOURNEY_TOOL = KIT_ROOT / "tools" / "check_project_runtime_wheel_journey.py"
+INSTALLED_V0419_RUNTIME_SCHEMA = "wom-kit/installed-v0419-runtime-journey/v0.1"
 RESOURCE_PREFIX = "wom_kit/_resources/"
 RESOURCE_MANIFEST_MEMBER = f"{RESOURCE_PREFIX}resource-manifest.json"
 RESOURCE_PACKAGE_INIT_MEMBER = f"{RESOURCE_PREFIX}__init__.py"
@@ -3123,6 +3125,31 @@ class WheelCheckError(RuntimeError):
     pass
 
 
+class WheelPartialEvidence:
+    """Retain only independently validated, content-free completed proof."""
+
+    def __init__(self) -> None:
+        self._runtime: dict[str, Any] | None = None
+
+    def record_runtime(self, evidence: dict[str, Any]) -> None:
+        if evidence == {"state": "not_applicable", "reason_code": "windows_cpython312_runtime_required"}:
+            return
+        version = evidence.get("package_version")
+        wheel_hash = evidence.get("wheel_sha256")
+        if (
+            not isinstance(version, str) or re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version) is None
+            or not isinstance(wheel_hash, str) or SHA256_RE.fullmatch(wheel_hash) is None
+        ):
+            raise WheelCheckError("Partial runtime evidence has invalid public bindings.")
+        _validate_v0419_runtime_evidence(evidence, expected_version=version, expected_wheel_hash=wheel_hash)
+        # Do not retain a mutable caller-owned mapping or arbitrary extensions.
+        self._runtime = json.loads(json.dumps(evidence))
+
+    def public_payload(self) -> dict[str, Any]:
+        return ({"installed_v0419_runtime_journey": json.loads(json.dumps(self._runtime))}
+                if self._runtime is not None else {})
+
+
 def run(
     command: list[str],
     *,
@@ -3743,8 +3770,11 @@ def _run_installed_entrypoint(
     cwd: Path,
     label: str,
     input_text: str | None = None,
+    timeout_seconds: float | None = None,
 ) -> str:
-    deadline = time.monotonic() + ENTRYPOINT_TIMEOUT_SECONDS
+    deadline = time.monotonic() + (
+        ENTRYPOINT_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
+    )
     environment = dict(os.environ)
     environment["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
     environment.pop("PYTHONHOME", None)
@@ -4589,6 +4619,7 @@ def _wheel_install_success_result(
     wheel_filename: str,
     wheel_sha256: str,
     artifact_preserved: bool,
+    v0419_runtime_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Assemble the versioned public success contract in one tested boundary."""
 
@@ -4604,6 +4635,8 @@ def _wheel_install_success_result(
         "installed_v0410_batch_workflow": v0410_batch_workflow_evidence,
         "installed_v0411_truth_contracts": v0411_truth_evidence,
         "installed_v0414_recovery_contracts": v0414_recovery_evidence,
+        **({"installed_v0419_runtime_journey": v0419_runtime_evidence}
+           if v0419_runtime_evidence is not None else {}),
         "runtime_skill_lifecycle": "passed",
         "onboarding_preview": "passed",
         "onboarding_write": "fixed_closed",
@@ -4615,6 +4648,108 @@ def _wheel_install_success_result(
         "wheel_sha256": wheel_sha256,
         "wheel_artifact_preserved": artifact_preserved,
         "temporary_environment_removed_on_exit": True,
+    }
+
+
+def _check_installed_v0419_runtime_journey(
+    python: Path, wheel: Path, source_copy: Path, fixture_root: Path, *,
+    cwd: Path, expected_package_version: str,
+) -> dict[str, Any]:
+    """Exercise the actual candidate wheel through the project-local runtime.
+
+    The Windows runtime is deliberately not emulated on the Ubuntu lanes.
+    Existing bounded process-tree containment is retained for this longer test.
+    Only content-free heartbeat text is emitted while the child captures CLI
+    progress privately; the returned timings describe actual installed startup.
+    """
+    if os.name != "nt" or sys.version_info[:2] != (3, 12):
+        return {"state": "not_applicable", "reason_code": "windows_cpython312_runtime_required"}
+    stopped = threading.Event()
+
+    def heartbeat() -> None:
+        while not stopped.wait(10):
+            print("Installed project runtime journey: still verifying real wheel/CLI/runtime.", file=sys.stderr, flush=True)
+
+    print("Installed project runtime journey: starting real wheel/CLI/runtime verification.", file=sys.stderr, flush=True)
+    worker = threading.Thread(target=heartbeat, daemon=True)
+    worker.start()
+    try:
+        stdout = _run_installed_entrypoint(
+            [str(python), "-I", "-B", str(RUNTIME_JOURNEY_TOOL), str(wheel),
+             str(source_copy), str(KIT_ROOT.parent / "wom_kit" / "__init__.py"),
+             str(fixture_root), expected_package_version],
+            cwd=cwd, label="installed v0.4.19 real runtime journey", timeout_seconds=1200,
+        )
+    finally:
+        stopped.set()
+        worker.join(timeout=1)
+    evidence = _parse_entrypoint_json_object(stdout, label="installed runtime journey")
+    _validate_v0419_runtime_evidence(
+        evidence, expected_version=expected_package_version,
+        expected_wheel_hash=hashlib.sha256(wheel.read_bytes()).hexdigest(),
+    )
+    return evidence
+
+
+def _validate_v0419_runtime_evidence(
+    evidence: dict[str, Any], *, expected_version: str, expected_wheel_hash: str,
+) -> None:
+    expected_true = {
+        "ok", "candidate_wheel_not_public_release_proof", "isolated_bootstrap_origins",
+        "isolated_runtime_origins", "real_locked_dependencies", "real_public_cli_broker_writer",
+        "update_then_noop_then_preview", "no_candidate_download_or_approval_on_noop",
+        "pin_launcher_domain_receipts_unchanged_on_noop", "no_active_update_residue",
+        "new_process_launcher_version",
+        "public_launcher_doctor_startup_verified",
+    }
+    seconds = evidence.get("seconds")
+    expected_seconds = {"bootstrap_import", "update", "noop", "fresh_runtime_import", "project_launcher_version",
+                        "doctor_first_status", "doctor_maximum_progress_gap", "doctor_terminal"}
+    if (
+        evidence.get("schema") != INSTALLED_V0419_RUNTIME_SCHEMA
+        or evidence.get("package_version") != expected_version
+        or evidence.get("wheel_sha256") != expected_wheel_hash
+        or any(evidence.get(key) is not True for key in expected_true)
+        or evidence.get("private_values_echoed") is not False
+        or not isinstance(seconds, dict) or set(seconds) != expected_seconds
+        or any(type(value) not in {int, float} or not 0 <= value <= 1200 for value in seconds.values())
+        or seconds.get("doctor_first_status", 3) > 2 or seconds.get("doctor_maximum_progress_gap", 11) > 10
+        or type(evidence.get("doctor_startup_status_event_count")) is not int
+        or evidence["doctor_startup_status_event_count"] < 1
+        or set(evidence) != expected_true | {"schema", "package_version", "wheel_sha256", "private_values_echoed", "seconds", "doctor_startup_status_event_count"}
+    ):
+        reason = evidence.get("reason_code")
+        safe_reasons = {
+            "public_update_failed", "public_noop_failed", "noop_blocks_next_command",
+            "bootstrap_wheel_hash_mismatch", "runtime_origin_or_version_mismatch",
+            "installed_runtime_journey_failed",
+        }
+        suffix = f" ({reason})" if isinstance(reason, str) and reason in safe_reasons else ""
+        raise WheelCheckError("Installed v0.4.19 runtime journey did not prove the complete contract" + suffix + ".")
+
+
+def _expected_fixed_closed_writer_result(command: str) -> dict[str, Any]:
+    """Exact v0.4.19 dispatch contract, including the shared availability gate."""
+    if command not in {"runtime-skill-install", "runtime-skill-uninstall", "onboard"}:
+        raise WheelCheckError("Unexpected fixed-closed smoke command.")
+    detail = "compound_exact_human_approval_binding_required"
+    return {
+        "schema": "wom-kit/cli-error/v0.1", "ok": False, "state": "blocked",
+        "status_class": "blocked", "capability_state": "writer_unavailable",
+        "command": command, "canonical_command_path": command,
+        "lifecycle_action": command.replace("-", "_"), "error_class": "policy",
+        "reason_codes": [detail], "capability_reason_codes": ["writer_unavailable", detail],
+        "capability_availability": {
+            "schema": "wom-kit/capability-availability/v0.1", "canonical_path": command,
+            "requested_mode": "approve", "state": "writer_unavailable", "available": False,
+            "reason_code": "writer_unavailable", "detail_reason_code": detail,
+            "approval_status": "approval_fixed_closed",
+            "approval_exposure_history": {"state": "history_not_audited", "successful_use_verified": False},
+            "dry_run_exposed": True, "parser_derived": True, "argument_scope_evaluated": True,
+            "prerequisites_evaluated": False, "private_values_echoed": False,
+            "external_effects_performed": False,
+        },
+        "exit_code": 1, "effects_state": "none", "files_written": [], "private_values_echoed": False,
     }
 
 
@@ -4965,7 +5100,9 @@ def _check_installed_v0414_recovery_contracts(
     return evidence
 
 
-def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
+def check_wheel(
+    output_dir: Path | None = None, *, partial_evidence: WheelPartialEvidence | None = None,
+) -> dict[str, Any]:
     run(
         [sys.executable, str(SYNC_TOOL), "--check"],
         cwd=KIT_ROOT,
@@ -5020,6 +5157,12 @@ def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
                 cwd=temp_root,
             )
         )
+        v0419_runtime_evidence = _check_installed_v0419_runtime_journey(
+            python, wheel, source_copy, temp_root / "v0419-runtime-journey",
+            cwd=temp_root, expected_package_version=package_version,
+        )
+        if partial_evidence is not None:
+            partial_evidence.record_runtime(v0419_runtime_evidence)
 
         skills_root = temp_root / "host-skills"
         skill_target = skills_root / "wom-archive"
@@ -5077,22 +5220,9 @@ def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
             expected_returncode=1,
             require_empty_stderr=True,
         )
-        if blocked_skill_install != {
-            "schema": "wom-kit/cli-error/v0.1",
-            "ok": False,
-            "state": "blocked",
-            "status_class": "blocked",
-            "command": "runtime-skill-install",
-            "lifecycle_action": "runtime_skill_install",
-            "error_class": "policy",
-            "reason_codes": [
-                "compound_exact_human_approval_binding_required"
-            ],
-            "exit_code": 1,
-            "effects_state": "none",
-            "files_written": [],
-            "private_values_echoed": False,
-        } or skills_root.exists() or skill_target.exists():
+        if blocked_skill_install != _expected_fixed_closed_writer_result(
+            "runtime-skill-install"
+        ) or skills_root.exists() or skill_target.exists():
             raise WheelCheckError(
                 "Installed runtime skill write was not fixed-closed without effects."
             )
@@ -5143,22 +5273,9 @@ def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
             expected_returncode=1,
             require_empty_stderr=True,
         )
-        if blocked_skill_uninstall != {
-            "schema": "wom-kit/cli-error/v0.1",
-            "ok": False,
-            "state": "blocked",
-            "status_class": "blocked",
-            "command": "runtime-skill-uninstall",
-            "lifecycle_action": "runtime_skill_uninstall",
-            "error_class": "policy",
-            "reason_codes": [
-                "compound_exact_human_approval_binding_required"
-            ],
-            "exit_code": 1,
-            "effects_state": "none",
-            "files_written": [],
-            "private_values_echoed": False,
-        } or skills_root.exists() or skill_target.exists():
+        if blocked_skill_uninstall != _expected_fixed_closed_writer_result(
+            "runtime-skill-uninstall"
+        ) or skills_root.exists() or skill_target.exists():
             raise WheelCheckError(
                 "Installed runtime skill uninstall was not fixed-closed without effects."
             )
@@ -5195,22 +5312,7 @@ def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
             expected_returncode=1,
             require_empty_stderr=True,
         )
-        if blocked_write != {
-            "schema": "wom-kit/cli-error/v0.1",
-            "ok": False,
-            "state": "blocked",
-            "status_class": "blocked",
-            "command": "onboard",
-            "lifecycle_action": "onboard",
-            "error_class": "policy",
-            "reason_codes": [
-                "compound_exact_human_approval_binding_required"
-            ],
-            "exit_code": 1,
-            "effects_state": "none",
-            "files_written": [],
-            "private_values_echoed": False,
-        } or target.exists():
+        if blocked_write != _expected_fixed_closed_writer_result("onboard") or target.exists():
             raise WheelCheckError(
                 "Installed onboarding write was not fixed-closed without effects."
             )
@@ -5309,6 +5411,7 @@ def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
             wheel_filename=wheel.name,
             wheel_sha256=wheel_sha256,
             artifact_preserved=artifact_preserved,
+            v0419_runtime_evidence=v0419_runtime_evidence,
         )
 
 
@@ -5325,8 +5428,9 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    partial_evidence = WheelPartialEvidence()
     try:
-        result = check_wheel(args.wheel_output_dir)
+        result = check_wheel(args.wheel_output_dir, partial_evidence=partial_evidence)
     except (OSError, WheelCheckError, subprocess.SubprocessError) as exc:
         if args.format == "json":
             print(
@@ -5335,6 +5439,8 @@ def main() -> int:
                         "ok": False,
                         "schema": WHEEL_INSTALL_CHECK_SCHEMA,
                         "error": str(exc),
+                        **({"partial_evidence": partial_evidence.public_payload()}
+                           if partial_evidence.public_payload() else {}),
                     },
                     indent=2,
                 )

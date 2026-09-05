@@ -623,8 +623,12 @@ def _stat_identity(stat_result: os.stat_result) -> tuple[int, int, int, int, int
     """Return the fields that must stay stable across a bound read.
 
     Windows does not expose one uniform generation counter through Python.  A
-    device/inode identity plus type, size, mtime and reparse attributes is the
-    strongest portable observation available here.  The open descriptor is
+    device/inode identity plus type, file size, mtime and reparse attributes is
+    the strongest portable observation available here. Directory allocation
+    size is not a content generation: Windows can report it as zero before a
+    later metadata observation without any member or byte change. Tree scans
+    bind exact member sets separately, so only that size field is normalized
+    for directories. The open descriptor is
     still the authority for the bytes; the path observations only prove that
     the name and its ancestors did not visibly move around that read.
     """
@@ -633,7 +637,7 @@ def _stat_identity(stat_result: os.stat_result) -> tuple[int, int, int, int, int
         int(stat_result.st_dev),
         int(stat_result.st_ino),
         int(stat_module.S_IFMT(stat_result.st_mode)),
-        int(stat_result.st_size),
+        0 if stat_module.S_ISDIR(stat_result.st_mode) else int(stat_result.st_size),
         int(stat_result.st_mtime_ns),
         int(getattr(stat_result, "st_file_attributes", 0)),
     )
@@ -1241,6 +1245,13 @@ def launcher_bytes(target: str) -> bytes:
     version = _version(target)
     if version is None:
         raise ProjectRuntimeError("project_runtime_target_version_invalid")
+    # The lightweight bootstrap first ships in v0.4.19. A newer updater must
+    # not rewrite an older target launcher to import a module its wheel lacks.
+    entry_module = (
+        "wom_kit.cli_entry"
+        if tuple(int(part) for part in version.split(".")) >= (0, 4, 19)
+        else "wom_kit.archive_cli"
+    )
     return (
         "@echo off\r\n"
         "setlocal\r\n"
@@ -1248,7 +1259,7 @@ def launcher_bytes(target: str) -> bytes:
         'set "PYTHONNOUSERSITE=1"\r\n'
         'set "PYTHONSAFEPATH=1"\r\n'
         f'"%~dp0..\\runtimes\\v{version}\\Scripts\\python.exe" '
-        '-I -B -X utf8 -m wom_kit.archive_cli %*\r\n'
+        f'-I -B -X utf8 -m {entry_module} %*\r\n'
     ).encode("utf-8")
 
 
@@ -1321,10 +1332,10 @@ def current_project_runtime_binding(
     main_loaded = sys.modules.get("__main__")
     package_loaded = sys.modules.get("wom_kit")
 
-    # The canonical project launcher uses ``python -m wom_kit.archive_cli``.
-    # In that process the executing module is registered as ``__main__`` and
-    # need not also exist under its canonical import name.  Accept that
-    # standard alias only when the import spec names the exact WOM entrypoint;
+    # New launchers use cli_entry, which imports archive_cli canonically.
+    # Historical launchers use ``python -m wom_kit.archive_cli``: there the
+    # executing module is ``__main__`` and need not also have its canonical
+    # import name. Accept that old alias only for the exact WOM import spec;
     # the expected runtime path, real-component checks, receipt inventory,
     # size, and digest are still verified below.
     archive_cli_module_candidate: str | Path | None = (
@@ -2639,6 +2650,214 @@ def inspect_runtime(
     }
 
 
+def _verify_existing_runtime_support_files(
+    final: Path,
+    inventory: tuple[RuntimeCandidateInventoryEntry, ...],
+) -> None:
+    """Authenticate startup bytes before invoking an existing interpreter.
+
+    Wheel verification covers site-packages, not the venv redirectors or its
+    configuration. The already trusted bootstrap CPython supplies those
+    redirectors; no candidate venv or network request is needed. An unknown
+    layout is not eligible for the early no-op path.
+    """
+
+    excluded_roots = {PROJECT_RUNTIME_ARTIFACTS_NAME, PROJECT_RUNTIME_RECEIPT_NAME}
+    support_files = {
+        item.relative_path
+        for item in inventory
+        if item.entry_type == "file"
+        and PurePosixPath(item.relative_path).parts[0] not in excluded_roots
+        and not item.relative_path.startswith("Lib/site-packages/")
+    }
+    if support_files != {"pyvenv.cfg", "Scripts/python.exe", "Scripts/pythonw.exe"}:
+        raise ProjectRuntimeError("project_runtime_existing_support_inventory_mismatch")
+    base = Path(sys.base_prefix)
+    for name in ("python.exe", "pythonw.exe"):
+        trusted = base / "Lib" / "venv" / "scripts" / "nt" / name
+        if not _existing_components_are_real(base, trusted):
+            raise ProjectRuntimeError("project_runtime_trusted_redirector_unavailable")
+        try:
+            trusted_digest = _sha256_file(trusted, ancestor_root=base)
+        except ProjectRuntimeError as error:
+            raise ProjectRuntimeError("project_runtime_trusted_redirector_unavailable") from error
+        if _sha256_file(final / "Scripts" / name, ancestor_root=final) != trusted_digest:
+            raise ProjectRuntimeError("project_runtime_existing_redirector_mismatch")
+    cfg = _read_limited(final / "pyvenv.cfg", limit=64 * 1024, ancestor_root=final)
+    if cfg is None:
+        raise ProjectRuntimeError("project_runtime_existing_pyvenv_unavailable")
+    try:
+        lines = cfg.decode("utf-8").splitlines()
+    except UnicodeError as error:
+        raise ProjectRuntimeError("project_runtime_existing_pyvenv_mismatch") from error
+    # 'executable' records the original bootstrap path, which can legitimately
+    # differ on a later invocation. CPython's startup home must still be the
+    # trusted base and must not redirect imports to a historical user path.
+    if (
+        len(lines) != 4
+        or lines[:3] != [
+            f"home = {base}",
+            "include-system-site-packages = false",
+            f"version = {platform.python_version()}",
+        ]
+        or not lines[3].startswith("executable = ")
+        or not Path(lines[3].removeprefix("executable = ")).is_absolute()
+    ):
+        raise ProjectRuntimeError("project_runtime_existing_pyvenv_mismatch")
+
+
+def verify_existing_runtime_for_noop(
+    project_root: Path,
+    *,
+    target: str,
+    target_commit: str,
+    bootstrap: BootstrapWheel,
+    supply: RuntimeSupplyLock,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
+) -> dict[str, Any]:
+    """Read-only retained-supply proof before preparing a runtime candidate.
+
+    The caller owns the project lock and the Git/ref/pin/source/launcher
+    preconditions. Only ``repair_required`` authorizes replacement; observed
+    generation drift stays ``failed`` without repair authority. ``unavailable``
+    never authorizes replacing an unreadable runtime. Success
+    performs real fresh-process checks after authenticating executable and
+    package bytes, then re-observes the whole retained tree. No receipt boolean
+    alone, download, candidate directory, or new approval is involved.
+    """
+
+    drift_failure_codes = {
+        "project_runtime_existing_receipt_changed",
+        "project_runtime_existing_payload_changed",
+        "project_runtime_tree_changed",
+        "project_runtime_candidate_concurrent_drift",
+    }
+
+    def result(state: str, reason: str, installed: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        return {
+            "state": state,
+            "reason_code": reason,
+            "reusable": state == "passed",
+            # Observed generation drift is a failed comparison, but not
+            # authority to silently prepare a replacement for a moving target.
+            "repair_required": state == "failed" and reason not in drift_failure_codes,
+            "installed": dict(installed or {}),
+            "private_values_echoed": False,
+            "absolute_paths_echoed": False,
+        }
+
+    version = _version(target)
+    if (
+        version is None
+        or bootstrap.version != version
+        or bootstrap.tag != f"v{version}"
+        or COMMIT_RE.fullmatch(target_commit) is None
+        or project_runtime_supply_lock(supply.raw_bytes, expected_target=target) != supply
+    ):
+        return result("not_reached", "project_runtime_noop_binding_invalid")
+    if not runtime_supply_matches_current_interpreter(supply):
+        return result("not_reached", "project_runtime_interpreter_not_locked")
+    if progress_callback is not None:
+        progress_callback("project-runtime-noop-static", "start", None, None)
+    inspection = inspect_runtime(
+        project_root,
+        target,
+        expected_commit=target_commit,
+        expected_wheel_sha256=bootstrap.sha256,
+        expected_supply_lock_sha256=supply.sha256,
+    )
+    if inspection.get("receipt_candidate_valid") is not True:
+        truth = runtime_inspection_truth(inspection)
+        return result(str(truth["state"]), str(truth["reason_code"]), inspection)
+    final = runtime_path(project_root, version)
+    inventory_before: tuple[RuntimeCandidateInventoryEntry, ...] | None = None
+    try:
+        root_before = _real_component_snapshot(project_root, final, target_must_exist=True)
+        if root_before is None:
+            raise ProjectRuntimeError("project_runtime_existing_observation_unavailable")
+        inventory_before = _candidate_inventory_snapshot(final)
+        if any(item.relative_path == PROJECT_RUNTIME_INSTALLING_NAME for item in inventory_before):
+            raise ProjectRuntimeError("project_runtime_existing_install_incomplete")
+        receipt_bytes = _read_limited(final / PROJECT_RUNTIME_RECEIPT_NAME, limit=2 * 1024 * 1024, ancestor_root=project_root)
+        if receipt_bytes is None:
+            raise ProjectRuntimeError("project_runtime_existing_receipt_unavailable")
+        if inspection.get("receipt_sha256") != f"sha256:{_sha256_bytes(receipt_bytes)}":
+            raise ProjectRuntimeError("project_runtime_existing_receipt_changed")
+        receipt = _candidate_receipt_document(receipt_bytes)
+        if receipt.get("wheel_file_name") != bootstrap.file_name:
+            raise ProjectRuntimeError("project_runtime_existing_receipt_mismatch")
+        _inventory, retained_wheels, _top = _verify_retained_artifacts(
+            final,
+            bootstrap=bootstrap,
+            supply=supply,
+            receipt_inventory=receipt.get("artifact_inventory"),
+        )
+        _verify_existing_runtime_support_files(final, inventory_before)
+        if _candidate_inventory_snapshot(final) != inventory_before:
+            raise ProjectRuntimeError("project_runtime_existing_payload_changed")
+        if progress_callback is not None:
+            progress_callback("project-runtime-noop-static", "done", None, None)
+        # The process verifier authenticates pip and every importable package
+        # against trusted wheels before starting its first target subprocess.
+        verification, packages, python_version = _runtime_process_verification(
+            final,
+            version=version,
+            stage_prefix="project-runtime-noop",
+            progress_callback=progress_callback,
+            bootstrap=bootstrap,
+            supply=supply,
+            retained_wheels=retained_wheels,
+            expected_receipt_packages=receipt.get("installed_distributions"),
+            expected_python_version=receipt.get("python_version"),
+        )
+        if (
+            _candidate_inventory_snapshot(final) != inventory_before
+            or _real_component_snapshot(project_root, final, target_must_exist=True) != root_before
+            or f"sha256:{_runtime_payload_sha256(final)}" != receipt.get("installed_payload_sha256")
+        ):
+            raise ProjectRuntimeError("project_runtime_existing_payload_changed")
+        installed = dict(inspection)
+        installed.update({
+            "status": "verified",
+            "verified": True,
+            "verification": verification,
+            "python_version": python_version,
+            "installed_distributions": packages,
+            "verification_basis": "trusted_retained_supply_and_fresh_process",
+            "verification_scope": "retained_artifacts_startup_and_live_payload",
+            "live_reverification_required_before_reuse": False,
+        })
+        return result("passed", "project_runtime_existing_verified", installed)
+    except ProjectRuntimeError as error:
+        reason = str(error)
+        # A timeout or unsuccessful probe is not evidence that authenticated
+        # installed bytes are corrupt. In particular it must not authorize a
+        # replacement candidate after this observational no-op attempt.
+        unavailable = _runtime_error_is_observation_unavailable(error) or (
+            reason.startswith("project-runtime-noop-")
+            and reason.endswith(("_timeout", "_failed"))
+        )
+        if not unavailable and reason not in drift_failure_codes and inventory_before is not None:
+            # A mismatch halfway through static verification may itself have
+            # been caused by a concurrent change. Compare the already captured
+            # generation before granting repair authority; do not skip this
+            # proof merely because the later success-only comparison was not
+            # reached. Stable pre-existing corruption still permits repair.
+            try:
+                inventory_after_error = _candidate_inventory_snapshot(final)
+            except ProjectRuntimeError as observation_error:
+                if _runtime_error_is_observation_unavailable(observation_error):
+                    return result("unavailable", "project_runtime_existing_observation_unavailable")
+                return result("failed", "project_runtime_existing_payload_changed")
+            except (OSError, UnicodeError, subprocess.SubprocessError):
+                return result("unavailable", "project_runtime_existing_observation_unavailable")
+            if inventory_after_error != inventory_before:
+                return result("failed", "project_runtime_existing_payload_changed")
+        return result("unavailable" if unavailable else "failed", reason)
+    except (OSError, UnicodeError, subprocess.SubprocessError):
+        return result("unavailable", "project_runtime_existing_observation_unavailable")
+
+
 def plan_runtime(
     project_root: Path,
     target: str,
@@ -3100,12 +3319,7 @@ def _walk_regular_files(
             (
                 ".",
                 "directory",
-                int(root_stat.st_dev),
-                int(root_stat.st_ino),
-                int(stat_module.S_IFMT(root_stat.st_mode)),
-                int(root_stat.st_size),
-                int(root_stat.st_mtime_ns),
-                int(getattr(root_stat, "st_file_attributes", 0)),
+                *_stat_identity(root_stat),
             )
         ]
         file_count = 0
@@ -3167,12 +3381,7 @@ def _walk_regular_files(
                     (
                         relative.as_posix(),
                         kind,
-                        int(entry_stat.st_dev),
-                        int(entry_stat.st_ino),
-                        int(stat_module.S_IFMT(entry_stat.st_mode)),
-                        int(entry_stat.st_size),
-                        int(entry_stat.st_mtime_ns),
-                        int(getattr(entry_stat, "st_file_attributes", 0)),
+                        *_stat_identity(entry_stat),
                     )
                 )
         observed.sort(key=lambda item: (item[0].casefold(), item[0], item[1]))

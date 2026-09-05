@@ -1,8 +1,15 @@
 # Agent Operator Capabilities Manifest
 
-Status: v0.4.18 working-tree parser and terminal-original cleanup
+Status: v0.4.19 shared capability availability and four-state runtime truth
 
-v0.4.18 keeps the command inventory stable and lets identifier-free `--resume`
+v0.4.19 keeps the command inventory stable and makes its interpretation
+consistent. Help, `capabilities`, Doctor suggestions, dry-run interpretation,
+and actual CLI dispatch consume one content-free `CapabilityAvailability`
+decision. A fixed-closed approval is reported as `writer_unavailable` before a
+handler, private target read, provider call, or mutation. Archive-specific
+prerequisites still run only after the command surface itself is available.
+
+v0.4.18 kept the command inventory stable and let identifier-free `--resume`
 finish one completed project-update original that outlived its own cleanup
 after the project moved on, using the archive's succeeded approval claim as the
 cleanup authority. v0.4.17 made fresh project-update preview and approval
@@ -103,7 +110,21 @@ These are parser facts, not execution promises. `approval_available` does not
 mean that archive-specific prerequisites have passed. `approval_not_exposed`
 does not mean that the command is read-only.
 
-For the current v0.4.18 working-tree parser, the inventory snapshot is:
+v0.4.19 adds optional `approval_exposure_history` without changing the v0.2
+inventory protocol. A bounded public-tag audit covers nine paths: `discard-draft`,
+`discard-draft-restore`, `mint-zet-batch`, `retire-draft-batch`, `zettel-edge-batch`,
+`zet-revision-write`, `zet-revision-restore-write`, `remint-reconcile`, and
+`retire-draft-reconcile`. Their parser and dispatch exposed approval at v0.3.320;
+v0.4.0 explicitly restricted those paths during exact-native approval migration.
+While currently closed, their state is `previously_exposed_now_restricted`, not
+"never implemented". This proves source exposure only: `successful_use_verified`
+is always `false`, there is no `last_working_version`, and an earlier-version
+bypass is unsupported. All other paths and older rows without this optional
+field remain `history_not_audited`. Inventory, shared capability availability,
+and command help consume the same content-free history. Current availability
+continues to be parser-derived; history does not grant execution authority.
+
+For the current v0.4.19 working-tree parser, the inventory snapshot is:
 
 ```text
 canonical executable command paths: 315
@@ -113,7 +134,7 @@ approval_available:                   47
 approval_fixed_closed:                67
 approval_not_exposed:                201
 conditional approval paths:             9
-dry_run_exposed:                     271
+dry_run_exposed:                     272
 unmatched fixed-close entries:         0
 ```
 

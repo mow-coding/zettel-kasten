@@ -1,8 +1,10 @@
 # WOM-kit Version Truth Source
 
-Status: v0.4.18 terminal-original cleanup and exact-pip bootstrap
+Status: v0.4.19 four-state runtime, updater revalidation, and exact-pip bootstrap
 
-Current checkpoint: Status: v0.4.18 terminal-original cleanup, claim-reference cleanup authority, and installed-wheel hash truth
+Current checkpoint: Status: v0.4.19 runtime and capability truth with installed-wheel hash evidence
+
+Previous checkpoint: Status: v0.4.18 terminal-original cleanup, claim-reference cleanup authority, and installed-wheel hash truth
 
 Previous checkpoint: Status: v0.4.17 cleanup-preflight parity, terminal-history recovery, and installed-wheel hash truth
 
@@ -50,22 +52,22 @@ or runtime workflow. This page defines the safe order for checking them.
 
 ## Current Public Tool
 
-The v0.4.18 URL is a conditional release-artifact contract. Use it only after
+The v0.4.19 URL is a conditional release-artifact contract. Use it only after
 the matching public GitHub Release exists and lists the exact wheel:
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0418-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0419-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.18/wom_kit-0.4.18-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.19/wom_kit-0.4.19-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-Require exactly `archive 0.4.18` from a new process. The external CPython 3.12
+Require exactly `archive 0.4.19` from a new process. The external CPython 3.12
 environment and exact real `python.exe -m pip` retain the wheel SHA-256 in the
 installed PEP 610 metadata. A user-scoped tool environment without that archive
 hash is not project-updater supply evidence. A bootstrap install alone changes
@@ -77,7 +79,19 @@ plan are canonical recovery evidence. Normal `project-version-update --resume`
 restores target, transaction, reviewer, and approval bindings without caller-
 supplied identifiers or a second native decision, and requires exactly one
 checkpoint-valid claim. See [Project Version Update](project-version-update.md)
-and the [v0.4.18 release note](releases/v0.4.18.md).
+and the [v0.4.19 release note](releases/v0.4.19.md).
+
+v0.4.19 makes the runtime, updater, command inventory, and actual dispatch
+describe the same observed state. Runtime checks distinguish `passed`,
+`failed`, `not_reached`, and `unavailable`; an unreadable value is not
+silently rewritten as an observed mismatch or absence. The approved updater
+revalidates Git, refs, pins, policy, supply, launcher, materialization, and the
+prepared payload as separate privacy-safe dimensions. Help, capabilities,
+Doctor suggestions, dry-run interpretation, and dispatch share one
+`CapabilityAvailability` result, so a fixed-closed approval is rejected before
+private work starts. Noninteractive Windows child processes use the common
+no-console policy while native approval and credential interaction remain
+visible.
 
 v0.4.18 finishes one completed project-update original that outlived its own
 cleanup after the project moved to another version. Dry-run, approval, and
@@ -132,7 +146,7 @@ form is for AI runtimes and scripts. `runtime-context` includes the same
 version summary under `wom_kit_version`, so an agent can confirm archive identity
 and kit version in one read-only request.
 
-For a v0.4.18 project, the `project_runtime` object is also canonical evidence.
+For a v0.4.19 project, the `project_runtime` object is also canonical evidence.
 It separately reports the versioned receipt, a freshly observed installed-
 payload tree hash, installed module inventory, stable launcher, current
 executable/module/prefix and isolated Python flags, project-relative

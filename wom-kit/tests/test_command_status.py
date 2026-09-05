@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import io
 import json
 import unittest
@@ -393,6 +394,24 @@ class CommandStatusArchiveParserTests(unittest.TestCase):
         )
         self.assertEqual(errors, [])
 
+    def test_pre_history_v02_inventory_remains_readable_without_backdating_evidence(self) -> None:
+        legacy_inventory = copy.deepcopy(self.inventory)
+        for row in legacy_inventory["commands"]:
+            row.pop("approval_exposure_history")
+        schema_path = (
+            Path(__file__).resolve().parents[1]
+            / "schemas" / "command-approval-status-inventory-v0.2.schema.json"
+        )
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        self.assertEqual(list(Draft202012Validator(schema).iter_errors(legacy_inventory)), [])
+        result = command_status.resolve_capability_availability(
+            legacy_inventory, "discard-draft", requested_mode="approve"
+        )
+        self.assertEqual(result["state"], "writer_unavailable")
+        self.assertEqual(result["approval_exposure_history"], {
+            "state": "history_not_audited", "successful_use_verified": False,
+        })
+
     def test_capabilities_machine_exposes_complete_approval_inventory(self) -> None:
         stdout = io.StringIO()
         with redirect_stdout(stdout):
@@ -493,7 +512,18 @@ class CommandStatusArchiveParserTests(unittest.TestCase):
                 )
         self.assertEqual(
             exposed["counts"]["conditional_approval_command_count"],
-            9,
+            10,
+        )
+        self.assertEqual(
+            by_path["create-draft"]["approval_scope"],
+            {
+                "kind": "namespace_predicate",
+                "predicate_ref": "create_draft_ai_provenance",
+                "outside_scope_status": "approval_fixed_closed",
+                "outside_scope_reason_code": (
+                    "compound_exact_human_approval_binding_required"
+                ),
+            },
         )
 
 

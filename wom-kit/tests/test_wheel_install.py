@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import redirect_stderr, redirect_stdout
+import ast
 import hashlib
 import importlib.util
 import io
@@ -105,7 +106,7 @@ def patch_zip_member_name_bytes(wheel: Path, old_name: str, new_name: str) -> No
 
 
 class InstalledEntrypointTests(unittest.TestCase):
-    PACKAGE_VERSION = "0.4.18"
+    PACKAGE_VERSION = "0.4.19"
     SERVER_NAME = "zettel-kasten-archive-mcp"
 
     def setUp(self) -> None:
@@ -204,7 +205,7 @@ class InstalledEntrypointTests(unittest.TestCase):
 
     def test_installed_wheel_direct_url_retains_exact_pip_hash(self) -> None:
         python = self.scripts / "python.exe"
-        wheel = self.temp_root / "wom_kit-0.4.18-py3-none-any.whl"
+        wheel = self.temp_root / "wom_kit-0.4.19-py3-none-any.whl"
         wheel.write_bytes(b"synthetic exact wheel bytes")
         expected_sha256 = hashlib.sha256(wheel.read_bytes()).hexdigest()
         with mock.patch.object(
@@ -225,7 +226,7 @@ class InstalledEntrypointTests(unittest.TestCase):
 
     def test_installed_wheel_direct_url_missing_hash_fails_closed(self) -> None:
         python = self.scripts / "python.exe"
-        wheel = self.temp_root / "wom_kit-0.4.18-py3-none-any.whl"
+        wheel = self.temp_root / "wom_kit-0.4.19-py3-none-any.whl"
         wheel.write_bytes(b"synthetic exact wheel bytes")
         with mock.patch.object(
             check_wheel_install,
@@ -2754,6 +2755,189 @@ class WheelResourceIntegrityTests(unittest.TestCase):
             wheel,
             message_contains_any=("zip", "resource", "read", "crc"),
         )
+
+
+class InstalledRuntimeJourneyHookTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="wheel-runtime-hook-")
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.wheel = self.root / "wom_kit-0.4.19-py3-none-any.whl"
+        self.wheel.write_bytes(b"synthetic-hook-wheel")
+        self.evidence = {
+            "ok": True, "schema": check_wheel_install.INSTALLED_V0419_RUNTIME_SCHEMA,
+            "package_version": "0.4.19", "wheel_sha256": hashlib.sha256(self.wheel.read_bytes()).hexdigest(),
+            "candidate_wheel_not_public_release_proof": True,
+            "isolated_bootstrap_origins": True, "isolated_runtime_origins": True,
+            "real_locked_dependencies": True, "real_public_cli_broker_writer": True,
+            "update_then_noop_then_preview": True, "no_candidate_download_or_approval_on_noop": True,
+            "pin_launcher_domain_receipts_unchanged_on_noop": True,
+            "no_active_update_residue": True, "new_process_launcher_version": True,
+            "public_launcher_doctor_startup_verified": True,
+            "doctor_startup_status_event_count": 4,
+            "private_values_echoed": False,
+            "seconds": {"bootstrap_import": 1.2, "update": 200, "noop": 90,
+                        "fresh_runtime_import": 1.4, "project_launcher_version": 1.5,
+                        "doctor_first_status": 0.2, "doctor_maximum_progress_gap": 5.1, "doctor_terminal": 14.0},
+        }
+
+    def invoke(self, evidence):
+        with mock.patch.object(check_wheel_install.os, "name", "nt"), mock.patch.object(
+            check_wheel_install.sys, "version_info", (3, 12, 10),
+        ), mock.patch.object(
+            check_wheel_install, "_run_installed_entrypoint", return_value=json.dumps(evidence),
+        ) as child, redirect_stderr(io.StringIO()):
+            result = check_wheel_install._check_installed_v0419_runtime_journey(
+                self.root / "bootstrap/Scripts/python.exe", self.wheel, self.root / "source",
+                self.root / "project-fixture", cwd=self.root, expected_package_version="0.4.19",
+            )
+        return result, child.call_args
+
+    def test_runs_real_artifact_driver_in_isolated_installed_interpreter(self):
+        result, call = self.invoke(self.evidence)
+        self.assertEqual(result, self.evidence)
+        self.assertEqual(call.args[0][1:3], ["-I", "-B"])
+        self.assertEqual(call.args[0][3], str(check_wheel_install.RUNTIME_JOURNEY_TOOL))
+        self.assertEqual(call.args[0][4], str(self.wheel))
+        self.assertEqual(call.kwargs["timeout_seconds"], 1200)
+        checker_tree = ast.parse(CHECKER_PATH.read_text(encoding="utf-8"))
+        check_function = next(node for node in checker_tree.body if isinstance(node, ast.FunctionDef) and node.name == "check_wheel")
+        calls = [node for node in ast.walk(check_function) if isinstance(node, ast.Call)
+                 and isinstance(node.func, ast.Name) and node.func.id == "_check_installed_v0419_runtime_journey"]
+        self.assertEqual(len(calls), 1)
+        self.assertEqual([node.id for node in calls[0].args[:3]], ["python", "wheel", "source_copy"])
+
+    def test_origin_hash_timing_and_noop_evidence_cannot_be_omitted_or_forged(self):
+        cases = [
+            {**self.evidence, "isolated_runtime_origins": False},
+            {**self.evidence, "wheel_sha256": "f" * 64},
+            {**self.evidence, "no_candidate_download_or_approval_on_noop": False},
+            {**self.evidence, "seconds": {**self.evidence["seconds"], "update": float("nan")}},
+            {**self.evidence, "seconds": {**self.evidence["seconds"], "doctor_first_status": 2.01}},
+            {**self.evidence, "seconds": {**self.evidence["seconds"], "doctor_maximum_progress_gap": 10.01}},
+            {**self.evidence, "unapproved_detail": "synthetic-private-value"},
+        ]
+        for evidence in cases:
+            with self.subTest(evidence=evidence), self.assertRaises(check_wheel_install.WheelCheckError):
+                self.invoke(evidence)
+
+    def test_non_windows_lane_does_not_emulate_windows_runtime(self):
+        with mock.patch.object(check_wheel_install.os, "name", "posix"), mock.patch.object(
+            check_wheel_install, "_run_installed_entrypoint",
+        ) as child:
+            result = check_wheel_install._check_installed_v0419_runtime_journey(
+                self.root / "python", self.wheel, self.root / "source", self.root / "fixture",
+                cwd=self.root, expected_package_version="0.4.19",
+            )
+        self.assertEqual(result["state"], "not_applicable")
+        child.assert_not_called()
+
+    def test_driver_rejects_checkout_origin_and_has_no_verifier_replacement(self):
+        spec = importlib.util.spec_from_file_location("runtime_journey_tool", check_wheel_install.RUNTIME_JOURNEY_TOOL)
+        driver = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(driver)
+        site = self.root / "bootstrap/Lib/site-packages"
+        site.mkdir(parents=True)
+        module_file = site / "module.py"
+        module_file.write_bytes(b"# synthetic origin validator fixture\n")
+        module = type("Module", (), {"__file__": str(module_file)})()
+        modules = {name: module for name in ("wom_kit", "archive_cli", "project_runtime")}
+        self.assertTrue(driver.verify_installed_origins(modules, self.root / "bootstrap"))
+        outside = self.root / "source.py"
+        outside.write_bytes(b"# not installed\n")
+        modules["archive_cli"] = type("SourceModule", (), {"__file__": str(outside)})()
+        with self.assertRaisesRegex(RuntimeError, "source_checkout_import_denied"):
+            driver.verify_installed_origins(modules, self.root / "bootstrap")
+        script = check_wheel_install.RUNTIME_JOURNEY_TOOL.read_text(encoding="utf-8")
+        tree = ast.parse(script)
+        imports = [node for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom))]
+        self.assertFalse(any("test_cli" in ast.unparse(node) for node in imports))
+        self.assertNotIn("sys.path.insert", script)
+        # Candidate/initializer sentinels only prohibit no-op side effects.
+        self.assertNotIn('patch.object(project_runtime, "_runtime_process_verification"', script)
+        self.assertNotIn('patch.object(project_runtime, "_verify_retained_artifacts"', script)
+        self.assertNotIn('patch.object(archive_services, "wom_kit_project_update_runtime_policy"', script)
+
+    def test_arbitrary_lowercase_exception_content_is_not_public_evidence(self):
+        spec = importlib.util.spec_from_file_location("runtime_journey_privacy", check_wheel_install.RUNTIME_JOURNEY_TOOL)
+        driver = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(driver)
+        for error in (RuntimeError("private_lowercase_marker"), driver.JourneyCheckError("private_lowercase_marker")):
+            output = io.StringIO()
+            with mock.patch.object(driver.sys, "argv", ["tool", "wheel", "source", "shim", "fixture", "0.4.19"]), mock.patch.object(
+                driver, "run_journey", side_effect=error,
+            ), redirect_stdout(output):
+                self.assertEqual(driver.main(), 1)
+            self.assertNotIn("private_lowercase_marker", output.getvalue())
+            self.assertEqual(json.loads(output.getvalue())["reason_code"], "installed_runtime_journey_failed")
+        with self.assertRaises(check_wheel_install.WheelCheckError) as caught:
+            self.invoke({"ok": False, "reason_code": "private_lowercase_marker"})
+        self.assertNotIn("private_lowercase_marker", str(caught.exception))
+
+    def test_partial_failure_retains_only_completed_validated_runtime_proof(self):
+        def later_failure(_output_dir, *, partial_evidence):
+            partial_evidence.record_runtime(self.evidence)
+            self.evidence["private_unapproved_extension"] = "private_lowercase_marker"
+            raise check_wheel_install.WheelCheckError("fixed later-stage failure")
+
+        output = io.StringIO()
+        with mock.patch.object(check_wheel_install, "check_wheel", side_effect=later_failure), mock.patch.object(
+            check_wheel_install, "parse_args", return_value=check_wheel_install.argparse.Namespace(format="json", wheel_output_dir=None),
+        ), redirect_stdout(output):
+            code = check_wheel_install.main()
+        self.assertEqual(code, 1)
+        result = json.loads(output.getvalue())
+        self.assertFalse(result["ok"])
+        retained = result["partial_evidence"]["installed_v0419_runtime_journey"]
+        self.assertEqual(retained["seconds"], self.evidence["seconds"])
+        self.assertEqual(retained["wheel_sha256"], self.evidence["wheel_sha256"])
+        self.assertNotIn("private_lowercase_marker", output.getvalue())
+        self.assertNotIn("private_unapproved_extension", retained)
+        with self.assertRaises(check_wheel_install.WheelCheckError):
+            check_wheel_install.WheelPartialEvidence().record_runtime(self.evidence)
+
+    def test_fixed_closed_assertions_match_actual_public_availability_dispatch(self):
+        from wom_kit import archive_cli
+
+        skills = self.root / "skills"
+        archive = self.root / "archive"
+        commands = {
+            "runtime-skill-install": ["--host", "custom", "--scope", "custom", "--skills-root", str(skills),
+                                      "--expected-plan-sha256", "a" * 64, "--reviewed-by", "person:synthetic-wheel"],
+            "runtime-skill-uninstall": ["--host", "custom", "--scope", "custom", "--skills-root", str(skills),
+                                        "--expected-plan-sha256", "a" * 64, "--reviewed-by", "person:synthetic-wheel"],
+            "onboard": ["--target-root", str(archive), "--type", "personal", "--archive-id",
+                        "archive:personal:synthetic-wheel", "--principal-id", "person:synthetic-wheel"],
+        }
+        for name, arguments in commands.items():
+            output, errors = io.StringIO(), io.StringIO()
+            with self.subTest(command=name), mock.patch.object(
+                archive_cli, "_project_write_runtime_guard", side_effect=AssertionError("must stop before runtime/filesystem guard"),
+            ) as guard, redirect_stdout(output), redirect_stderr(errors):
+                code = archive_cli.main([name, *arguments, "--approve", "--format", "json"])
+            self.assertEqual(code, 1)
+            self.assertEqual(errors.getvalue(), "")
+            self.assertEqual(json.loads(output.getvalue()), check_wheel_install._expected_fixed_closed_writer_result(name))
+            guard.assert_not_called()
+            self.assertFalse(skills.exists())
+            self.assertFalse(archive.exists())
+
+    def test_startup_timing_counts_terminal_silence_and_never_clamps_failure(self):
+        spec = importlib.util.spec_from_file_location("runtime_journey_timing", check_wheel_install.RUNTIME_JOURNEY_TOOL)
+        driver = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(driver)
+        measured = driver.progress_timing([0.2, 5.2, 10.2], 12.5)
+        self.assertEqual(measured["first_status_seconds"], 0.2)
+        self.assertEqual(measured["terminal_seconds"], 12.5)
+        for statuses, terminal in (([], 0.1), ([2.01], 2.1), ([0.1, 2.0], 12.01)):
+            with self.subTest(statuses=statuses), self.assertRaises(driver.JourneyCheckError):
+                driver.progress_timing(statuses, terminal)
+        # Real OS pipes, but no WOM/import/venv stand-in: this tests only the
+        # observer. The installed checker supplies the actual public launcher.
+        script = "import sys,json;print('[wom] startup: synthetic observer probe',file=sys.stderr,flush=True);print(json.dumps({'ok':True}))"
+        observed = driver.measure_doctor_startup([sys.executable, "-I", "-B", "-c", script], cwd=self.root)
+        self.assertEqual(observed["status_event_count"], 1)
+        self.assertGreaterEqual(observed["terminal_seconds"], observed["first_status_seconds"])
 
 
 if __name__ == "__main__":

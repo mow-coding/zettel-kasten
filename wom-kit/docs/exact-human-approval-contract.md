@@ -1,12 +1,23 @@
 # Exact Human Approval Contract
 
-Status: v0.4.18 claim-reference cleanup authority and fixed inner cause codes; v0.4.0 one-use authority baseline preserved
+Status: v0.4.19 field-level updater revalidation; v0.4.0 one-use authority baseline preserved
 
 ## Purpose
 
 A caller-supplied actor label or command-line affirmation does not prove that a
 human reviewed exact archive changes. v0.4.0 therefore separates ordinary
 operator intent from one-use exact human approval.
+
+v0.4.19 keeps the existing human decision boundary but makes its machine
+preconditions explicit. Project-update preparation is re-observed as separate
+privacy-safe dimensions for Git, refs, pins, policy, supply, bootstrap,
+launcher, materialization, and the prepared runtime payload. Each dimension is
+`passed`, `failed`, `not_reached`, or `unavailable`; expected transaction
+effects such as the reservation, lock, private candidate, and progress output
+are excluded. A changed or unavailable required dimension stops before the
+project mutation rather than being reduced to one unexplained false boolean.
+The record exposes only fixed dimension names and reason codes, never compared
+values, paths, refs, labels, or digests.
 
 v0.4.18 lets a completed project-update transaction whose post-image the
 project has since left prove its cleanup authority from the archive claim

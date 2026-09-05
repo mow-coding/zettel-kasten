@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 from contextlib import redirect_stderr, redirect_stdout
 import io
 import json
@@ -15,6 +16,312 @@ class V0419CapabilityAvailabilityTests(unittest.TestCase):
     def inventory(self) -> dict[str, object]:
         parser = archive_cli.build_parser()
         return archive_cli._parser_capability_inventory(parser)
+
+    def test_audited_history_is_shared_without_claiming_success(self) -> None:
+        parser = archive_cli.build_parser()
+        inventory = archive_cli._parser_capability_inventory(parser)
+        expected_commands = {
+            "discard-draft", "discard-draft-restore", "mint-zet-batch",
+            "retire-draft-batch", "zettel-edge-batch", "zet-revision-write",
+            "zet-revision-restore-write", "remint-reconcile", "retire-draft-reconcile",
+        }
+        self.assertEqual(
+            command_status.AUDITED_PREVIOUSLY_EXPOSED_APPROVAL_COMMANDS,
+            expected_commands,
+        )
+        expected_history = {
+            "state": "previously_exposed_now_restricted",
+            "exposed_at_tag": "v0.3.320",
+            "restricted_at_tag": "v0.4.0",
+            "evidence_basis": "public_tag_parser_and_dispatch",
+            "successful_use_verified": False,
+        }
+        by_path = {row["canonical_path"]: row for row in inventory["commands"]}
+        self.assertEqual({
+            path for path, row in by_path.items()
+            if row["approval_exposure_history"]["state"]
+            == "previously_exposed_now_restricted"
+        }, expected_commands)
+        leaves = command_status._subparser_actions(parser)[0].choices
+        for path in sorted(expected_commands):
+            with self.subTest(command=path):
+                row = by_path[path]
+                self.assertEqual(row["approval_exposure_history"], expected_history)
+                for invocation_path in (path, *row["alias_paths"]):
+                    for mode in ("dry_run", "approve"):
+                        availability = command_status.resolve_capability_availability(
+                            inventory, invocation_path, requested_mode=mode
+                        )
+                        self.assertEqual(
+                            availability["approval_exposure_history"], expected_history
+                        )
+                help_text = " ".join(leaves[path].format_help().split())
+                self.assertIn("exposed approval at v0.3.320", help_text)
+                self.assertIn("restricted this path at v0.4.0", help_text)
+                self.assertIn("Successful execution at those versions is not verified", help_text)
+                self.assertIn("earlier-version bypass is not supported", help_text)
+        for path in ("object-storage-upload", "create-draft"):
+            self.assertEqual(by_path[path]["approval_exposure_history"], {
+                "state": "history_not_audited", "successful_use_verified": False,
+            })
+            self.assertNotIn("exposed approval at v0.3.320", leaves[path].format_help())
+        self.assertNotIn("not implemented yet", leaves["discard-draft"].format_help())
+        self.assertNotIn("last_working_version", json.dumps(inventory))
+
+    def test_history_never_labels_reopened_surface_currently_restricted(self) -> None:
+        for status in (command_status.APPROVAL_AVAILABLE, command_status.APPROVAL_NOT_EXPOSED):
+            self.assertEqual(command_status.approval_exposure_history("discard-draft", status), {
+                "state": "history_not_audited", "successful_use_verified": False,
+            })
+
+    def test_untrusted_history_is_rejected_without_echoing_private_values(self) -> None:
+        inventory = self.inventory()
+        known = next(
+            row for row in inventory["commands"]
+            if row["canonical_path"] == "discard-draft"
+        )
+        history = known["approval_exposure_history"]
+        invalid_histories = [
+            {**history, "exposed_at_tag": "PRIVATE-HISTORY-MARKER"},
+            {**history, "successful_use_verified": True},
+            {**history, "successful_use_verified": 0},
+            {**history, "last_working_version": "v0.3.320"},
+            {"state": "never_implemented", "successful_use_verified": False},
+            None,
+        ]
+        for invalid in invalid_histories:
+            with self.subTest(history=invalid):
+                tampered = copy.deepcopy(inventory)
+                tampered_row = next(
+                    row for row in tampered["commands"]
+                    if row["canonical_path"] == "discard-draft"
+                )
+                tampered_row["approval_exposure_history"] = invalid
+                with self.assertRaisesRegex(ValueError, "^command_status_inventory_invalid$"):
+                    command_status.resolve_capability_availability(
+                        tampered, "discard-draft", requested_mode="approve"
+                    )
+        tampered = copy.deepcopy(inventory)
+        unaudited_row = next(
+            row for row in tampered["commands"]
+            if row["canonical_path"] == "object-storage-upload"
+        )
+        unaudited_row["approval_exposure_history"] = history
+        with self.assertRaisesRegex(ValueError, "^command_status_inventory_invalid$"):
+            command_status.resolve_capability_availability(
+                tampered, "object-storage-upload", requested_mode="approve"
+            )
+
+    def test_create_draft_scope_uses_same_provenance_for_parsed_modes(self) -> None:
+        parser = archive_cli.build_parser()
+        inventory = archive_cli._parser_capability_inventory(parser)
+        cases = [
+            ([], False),
+            (["--creation-mode=human_written"], False),
+            (["--creation-mode=imported"], False),
+            (["--creation-mode=derived"], False),
+            (["--creation-mode=ai_assisted"], True),
+            (["--creation-mode", "ai_generated"], True),
+            (["--created-by=ai:synthetic"], True),
+            (["--created-by", "ai_runtime:synthetic"], True),
+            (["--created-by=mcp:zettel-kasten-archive-mcp"], True),
+            (["--created-by=person:synthetic"], False),
+            (["--assisted-by=ai:synthetic"], True),
+            (["--assisted-by=ai:one", "--assisted-by=ai:two"], True),
+            (["--local-ai-session=session:synthetic"], True),
+            (["--local-ai-session="], False),
+            (["--creation-mode=ai_assisted", "--creation-mode=human_written"], False),
+            (["--creation-mode=human_written", "--creation-mode=ai_assisted"], True),
+            (["--created-by=ai:synthetic", "--created-by=person:synthetic"], False),
+            (["--created-by=person:synthetic", "--created-by=ai:synthetic"], True),
+            (["--creation-mode=human_written", "--assisted-by=ai:synthetic"], True),
+        ]
+        for extra, expected in cases:
+            with self.subTest(arguments=extra):
+                argv = ["create-draft", "synthetic-archive", *extra, "--approve"]
+                namespace = parser.parse_args(argv)
+                self.assertEqual(
+                    archive_cli._create_draft_ai_provenance_scope(namespace), expected
+                )
+                actual = command_status.resolve_namespace_capability_availability(
+                    parser, inventory, namespace
+                )
+                suggested = command_status.resolve_suggested_command_mode(
+                    inventory,
+                    "archive " + " ".join(argv),
+                    trusted_parser=parser,
+                )
+                self.assertEqual(actual["available"], expected)
+                self.assertEqual(suggested["capability_availability"], actual)
+                self.assertNotIn("ai:synthetic", json.dumps(actual))
+                self.assertNotIn("session:synthetic", json.dumps(suggested))
+        unspecified = command_status.resolve_capability_availability(
+            inventory, "create-draft", requested_mode="approve"
+        )
+        self.assertEqual(unspecified["state"], "writer_unavailable")
+        self.assertFalse(unspecified["available"])
+
+    def test_create_draft_non_ai_writer_is_blocked_before_handler(self) -> None:
+        stdout = io.StringIO()
+        with mock.patch.object(
+            archive_cli, "command_create_draft",
+            side_effect=AssertionError("non-AI writer must not dispatch"),
+        ) as handler, redirect_stdout(stdout):
+            result = archive_cli.main([
+                "create-draft", "PRIVATE-SCOPE-MARKER",
+                "--creation-mode=human_written", "--approve", "--format=json",
+            ])
+        self.assertEqual(result, 1)
+        handler.assert_not_called()
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["capability_state"], "writer_unavailable")
+        self.assertNotIn("PRIVATE-SCOPE-MARKER", stdout.getvalue())
+
+    def test_create_draft_scope_requires_trusted_boolean_predicate(self) -> None:
+        parser = archive_cli.build_parser()
+        inventory = archive_cli._parser_capability_inventory(parser)
+        namespace = parser.parse_args([
+            "create-draft", "synthetic-archive", "--creation-mode=ai_assisted", "--approve"
+        ])
+        _, leaf = command_status._selected_canonical_parser_path(parser, namespace)
+        for predicate in (None, lambda unused: "private-non-boolean"):
+            with self.subTest(predicate_callable=callable(predicate)):
+                setattr(leaf, command_status._APPROVAL_SCOPE_PREDICATE_ATTRIBUTE, predicate)
+                with self.assertRaisesRegex(ValueError, "^command_approval_scope_invalid$"):
+                    command_status.resolve_namespace_capability_availability(
+                        parser, inventory, namespace
+                    )
+
+    def test_create_draft_preview_separates_valid_input_from_write_readiness(self) -> None:
+        for state in ("failed", "unavailable"):
+            for output_format in ("text", "json"):
+                with self.subTest(state=state, format=output_format):
+                    preview = {
+                        "ok": True, "dry_run": True,
+                        "frontmatter_preview": {"id": "zet_synthetic"},
+                        "proposed_path": "inbox/zet_synthetic.md",
+                        "blockers": [], "warnings": [],
+                        "write_preflight": {"state": state},
+                        "approval_handoff": {"ready": False},
+                        "next_safe_actions": [archive_services.INDEX_REBUILD_NEXT_SAFE_ACTIONS[1]],
+                    }
+                    stdout = io.StringIO()
+                    with mock.patch.object(
+                        archive_services, "create_draft_zettel", return_value=preview
+                    ), redirect_stdout(stdout):
+                        result = archive_cli.main([
+                            "create-draft", "synthetic-archive",
+                            "--creation-mode=ai_assisted", "--title=Synthetic",
+                            "--body=Synthetic", "--dry-run", "--format", output_format,
+                        ])
+                    self.assertEqual(result, 0)
+                    if output_format == "text":
+                        self.assertIn("input is valid, but approval is blocked", stdout.getvalue())
+                        self.assertNotIn("Draft dry-run passed", stdout.getvalue())
+                        self.assertIn("archive index-health", stdout.getvalue())
+                    else:
+                        payload = json.loads(stdout.getvalue())
+                        self.assertEqual(payload["write_preflight"]["state"], state)
+                        self.assertFalse(payload["approval_handoff"]["ready"])
+
+    def test_create_draft_index_approval_failure_keeps_safe_reason_before_broker(self) -> None:
+        for state, reason in (
+            ("failed", archive_services.INDEX_REBUILD_REQUIRED),
+            ("unavailable", "archive_index_observation_unavailable"),
+        ):
+            for output_format in ("text", "json"):
+                with self.subTest(state=state, format=output_format):
+                    preview = {
+                        "ok": False, "dry_run": True,
+                        "write_preflight": {"state": state, "reason_code": reason},
+                        "next_safe_actions": ["PRIVATE-UNTRUSTED-PREVIEW-MARKER"],
+                    }
+                    stdout, stderr = io.StringIO(), io.StringIO()
+                    with mock.patch.object(
+                        archive_cli, "_project_write_runtime_guard", return_value=None
+                    ), mock.patch.object(
+                        archive_services, "create_draft_zettel", return_value=preview
+                    ), mock.patch.object(
+                        archive_cli, "_exact_human_approval_context",
+                        side_effect=AssertionError("index failure must precede broker context"),
+                    ) as context, redirect_stdout(stdout), redirect_stderr(stderr):
+                        result = archive_cli.main([
+                            "create-draft", "synthetic-archive",
+                            "--creation-mode=ai_assisted", "--title=Synthetic",
+                            "--body=Synthetic", "--draft-id=zet_synthetic",
+                            "--created-at=2026-09-05T00:00:00+00:00",
+                            "--draft-approved-by=person:synthetic",
+                            "--expected-body-sha256=" + "a" * 64,
+                            "--expected-source-fidelity-plan-sha256=" + "b" * 64,
+                            "--approve", "--format", output_format,
+                        ])
+                    self.assertEqual(result, 1)
+                    context.assert_not_called()
+                    combined = stdout.getvalue() + stderr.getvalue()
+                    self.assertNotIn("PRIVATE-UNTRUSTED-PREVIEW-MARKER", combined)
+                    self.assertIn("archive index-health", combined)
+                    if state == "unavailable":
+                        self.assertNotIn("archive index <", combined)
+                    if output_format == "json":
+                        payload = json.loads(stdout.getvalue())
+                        self.assertEqual(payload["reason_codes"], [reason])
+                        self.assertEqual(payload["files_written"], [])
+                    else:
+                        self.assertIn("no approval window was opened", combined)
+
+    def test_reconcile_dry_runs_do_not_offer_unavailable_approval(self) -> None:
+        for command, service_name in (
+            ("remint-reconcile", "remint_reconcile_plan"),
+            ("retire-draft-reconcile", "retire_draft_reconcile_plan"),
+        ):
+            for drift in ("clean", "format_drift", "content_change"):
+                original = {
+                    "ok": True, "dry_run": True, "zettel_id": "zet_synthetic",
+                    "drift_class": drift, "blockers": [], "warnings": [],
+                    "content_change_ack_required": drift == "content_change",
+                    "approval_would_write": drift != "clean",
+                    "body_changed": drift == "content_change",
+                    "current_canonical_text": "PRIVATE-BODY-MARKER",
+                    "next_safe_actions": ["Review the evidence.", "Rerun --approve."],
+                    "human_review_plan": {
+                        "required": drift == "content_change",
+                        "commands": {"approve_if_intentional": "archive ignored --approve"},
+                        "decision_options": [{
+                            "decision": "intentional_change",
+                            "next_action": "approve_only_after_named_human_review",
+                            "command": "archive ignored --approve",
+                        }],
+                    },
+                }
+                saved = copy.deepcopy(original)
+                formats = [("json", False), ("text", False)]
+                if command == "remint-reconcile":
+                    formats.append(("json", True))
+                for output_format, diagnostic in formats:
+                    with self.subTest(command=command, drift=drift, format=output_format, diagnostic=diagnostic):
+                        stdout = io.StringIO()
+                        argv = [
+                            command, "synthetic-archive", "--zettel-id", "zet_synthetic",
+                            "--dry-run", "--format", output_format,
+                        ]
+                        if diagnostic:
+                            argv.append("--diagnostic-only")
+                        with mock.patch.object(
+                            archive_services, service_name, return_value=original
+                        ), redirect_stdout(stdout):
+                            result = archive_cli.main(argv)
+                        self.assertEqual(result, 0)
+                        self.assertEqual(original, saved)
+                        self.assertNotIn("--approve", stdout.getvalue())
+                        self.assertIn("writer_unavailable", stdout.getvalue())
+                        if output_format == "json":
+                            payload = json.loads(stdout.getvalue())
+                            self.assertEqual(payload["drift_class"], drift)
+                            self.assertFalse(payload["approval_would_write"])
+                            self.assertFalse(payload["approved_write_implemented"])
+                            self.assertFalse(payload["validation_digest_is_approval_authority"])
+                        if diagnostic:
+                            self.assertNotIn("PRIVATE-BODY-MARKER", stdout.getvalue())
 
     def test_fixed_closed_and_available_modes_use_one_normalized_truth(self) -> None:
         inventory = self.inventory()

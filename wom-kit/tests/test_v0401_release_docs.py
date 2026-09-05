@@ -130,8 +130,8 @@ class V0401ReleaseDocsTests(unittest.TestCase):
         self.assertEqual(counts["approval_available_command_count"], 47)
         self.assertEqual(counts["approval_fixed_closed_command_count"], 67)
         self.assertEqual(counts["approval_not_exposed_command_count"], 201)
-        self.assertEqual(counts["conditional_approval_command_count"], 9)
-        self.assertEqual(counts["dry_run_exposed_command_count"], 271)
+        self.assertEqual(counts["conditional_approval_command_count"], 10)
+        self.assertEqual(counts["dry_run_exposed_command_count"], 272)
         self.assertEqual(counts["unmatched_fixed_closed_command_count"], 0)
         by_path = {
             row["canonical_path"]: row for row in inventory["commands"]

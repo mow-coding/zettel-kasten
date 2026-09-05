@@ -233,7 +233,13 @@ def _identity_changed(before: os.stat_result, after: os.stat_result) -> bool:
         or inode_changed
         or stat.S_IFMT(int(before.st_mode)) != stat.S_IFMT(int(after.st_mode))
         or _is_reparse_point(before) != _is_reparse_point(after)
-        or int(before.st_size) != int(after.st_size)
+        # Directory allocation size is not content evidence. Identity, kind,
+        # reparse state, and timestamps still guard the directory boundary;
+        # Doctor separately binds and revalidates its actual member set.
+        or (
+            not (stat.S_ISDIR(before.st_mode) and stat.S_ISDIR(after.st_mode))
+            and int(before.st_size) != int(after.st_size)
+        )
         or int(getattr(before, "st_mtime_ns", 0) or 0)
         != int(getattr(after, "st_mtime_ns", 0) or 0)
     )

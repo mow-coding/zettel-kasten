@@ -2,6 +2,47 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.4.19 runtime과 capability 사실성
+
+일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.
+새 외부 CPython 3.12 환경의 실제 `python.exe -m pip`를 사용해 설치된 PEP 610
+metadata에 wheel hash가 남게 합니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0419-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.19/wom_kit-0.4.19-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+새 프로세스에서 정확히 `archive 0.4.19`인지 확인합니다. wheel 공개·설치만으로
+client archive·project runtime·version pin은 바뀌지 않습니다. project update는
+client가 별도로 선택하고 승인합니다.
+
+승인 전 새 dry-run을 확인합니다. runtime integrity는 이제 각 검사 상태를
+따로 보고합니다. `not_reached`는 앞선 prerequisite 때문에 검사를 실행하지
+못했다는 뜻이고, `unavailable`은 검사를 시도했지만 신뢰할 수 있는 근거를
+얻지 못했다는 뜻입니다. 둘 다 mismatch를 관찰했다는 뜻이 아닙니다.
+
+project-update 준비는 `runtime_preparation_revalidation`에 실패하거나 사용할 수
+없는 dimension의 이름만 남기고 비공개 비교 값은 반환하지 않습니다. 모든
+dimension이 `passed`가 아니면 runtime·pin·lock·transaction directory를 손으로
+지우지 말고 결과를 보존한 채 중단합니다. 같은 버전의 건강한 runtime은 정확한
+no-op이고, 손상된 runtime은 기존 atomic repair·resume 계약을 따릅니다.
+
+`writer_unavailable`인 명령은 handler와 비공개 대상 접근 전에 닫힙니다. 다른
+표기로 우회하지 마세요. 비대화형 Windows helper process는 검은 console 없이
+실행되며, native 승인과 credential 상호작용은 계속 보입니다.
+
+한 번의 검토된 project update 뒤 project launcher를 새 프로세스에서 실행해
+pin·source·launcher·runtime 근거를 검증합니다. 그 client 실행 결과가 있어야
+해당 project가 실제로 복구됐다고 말할 수 있습니다.
+
 ## v0.4.18 terminal original 정리
 
 일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.

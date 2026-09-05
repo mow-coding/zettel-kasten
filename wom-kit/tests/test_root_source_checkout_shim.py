@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 
 
@@ -58,7 +59,10 @@ class RootSourceCheckoutShimTests(unittest.TestCase):
             self.assertEqual(completed.returncode, 0, completed.stderr)
             payload = json.loads(completed.stdout)
 
-        self.assertEqual(payload["version"], "0.4.18")
+        project_metadata = tomllib.loads(
+            (KIT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        )
+        self.assertEqual(payload["version"], project_metadata["project"]["version"])
         self.assertEqual(Path(payload["paths"][0]).resolve(), SOURCE_PACKAGE)
         self.assertEqual(
             Path(payload["archive_cli"]).resolve().parent,

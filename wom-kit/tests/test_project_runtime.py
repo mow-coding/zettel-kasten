@@ -173,6 +173,14 @@ def _write_minimal_wheel(destination: Path, version: str) -> Path:
             "archive = wom_kit.archive_cli:main\n"
         ).encode(),
     }
+    if tuple(int(part) for part in version.split(".")) >= (0, 4, 19):
+        # Synthetic payload only: preserve the real release's module-presence
+        # boundary without claiming this tiny fixture tests startup behavior.
+        files["wom_kit/cli_entry.py"] = (
+            "from wom_kit.archive_cli import main\n"
+            "if __name__ == '__main__':\n"
+            "    raise SystemExit(main())\n"
+        ).encode()
     rows: list[list[str]] = []
     for name, data in files.items():
         digest = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode()

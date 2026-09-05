@@ -32,10 +32,10 @@ wom-kit/docs/releases/에만 쌓고, baseline 사다리와 tag 목록을 여기�
 현재 공개 기준:
 
 ```text
-v0.4.18
+v0.4.19
 ```
 
-이전 공개 기준: v0.4.17.
+이전 공개 기준: v0.4.18.
 
 전체 릴리스 이력은 [CHANGELOG.md](CHANGELOG.md)와 [wom-kit/docs/releases/](wom-kit/docs/releases/)를 보세요.
 
@@ -55,13 +55,13 @@ Roadmap 요약: `v0.1.x`는 아이디어/프로토콜 언어 라인, `v0.2.x`는
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0418-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0419-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.18/wom_kit-0.4.18-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.19/wom_kit-0.4.19-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
@@ -73,7 +73,7 @@ wheel hash가 설치 metadata에 없는 사용자 범위 `uv tool` 환경은 upd
 호스트 설정도 조용히 수정하지 않습니다.
 
 공용 PATH에서 실행한 `archive --version`은 로컬 방향 확인에는 쓸 수 있지만,
-그 출력만으로 v0.4.18 project updater bootstrap의 공급 근거가 되지는 않습니다.
+그 출력만으로 v0.4.19 project updater bootstrap의 공급 근거가 되지는 않습니다.
 
 릴리스 파일에는 `wom-archive` Agent Skill도 들어 있습니다. 현재 Codex
 사용자에게 활성화하기 전, 먼저 쓰기 없는 미리보기를 확인합니다.
@@ -107,6 +107,7 @@ archive runtime-skill-install --dry-run --format json
 - v0.4.16은 cleanup 전에 인증된 project-update 결과를 durable terminal handoff로 보존하고 transaction cleanup·owned-resource close·Git-runner close·durable output handoff·attention을 각각 정직하게 보고합니다. 불변 journal과 `active` -> `display-pending` -> `consumed` 상태는 이미 결속된 동일 output을 재사용해 writer 재실행 없이 같은 결과를 at-least-once로 표시합니다. consumed는 이력이며 acknowledgement는 사람이나 AI가 stdout을 실제로 봤다는 증거가 아닙니다. 완전한 legacy cleanup tombstone만 exact 검증 뒤 복구하고, proof-only 상태는 과거 성공을 주장하지 않으며, 일부·malformed residue는 계속 fail-closed입니다. 표준 `python -m wom_kit.archive_cli` 실행은 세 core module을 receipt byte와 대조하고 경로·해시 없는 진단만 냅니다. create-only feedback lane은 runtime mismatch도 다루며, product vocabulary는 단어만으로 secret 오탐되지 않되 실제 credential shape는 계속 fail-closed입니다. caller input과 body를 safety 검사로 읽었는지도 별도 필드에 정확히 표시합니다. 공개·설치만으로 client archive는 바뀌지 않으며 project update는 client가 별도로 선택합니다. [v0.4.16 릴리스 노트](wom-kit/docs/releases/v0.4.16.md)를 보세요.
 - v0.4.17은 fresh project-update dry-run과 approval이 같은 read-only terminal-cleanup preflight를 사용하게 합니다. WOM이 만든 exact preapproval-abort 이력은 identifier 없는 `--resume`으로 보내고, project-domain writer나 source·runtime·pin·archive content를 바꾸지 않은 채 plan에 결속된 비공개 control evidence만 canonical proof 이력으로 정리합니다. 사람은 artifact 개수·해시·내부 ID를 확인하지 않습니다. 알려진 cleanup gate는 고정된 privacy-safe reason code와 실제 다음 행동을 반환하며, 일부·변경·모호·혼합·unsafe residue는 계속 fail-closed이고 손으로 고치면 안 됩니다. 공개·설치만으로 client archive는 바뀌지 않으며 client가 복구와 한 번의 검토된 project update를 별도로 선택합니다. [v0.4.17 릴리스 노트](wom-kit/docs/releases/v0.4.17.md)를 보세요.
 - v0.4.18은 project가 다른 버전으로 넘어간 뒤에도 자기 cleanup을 끝내지 못한 채 남은 완료된 project-update 원본 하나를 마무리합니다. dry-run·approval·identifier 없는 `--resume`이 그 directory를 같은 방식으로 분류하고, resume은 archive에서 원래 승인 claim을 다시 인증한 뒤 그 비공개 control directory만 canonical proof 하나로 정리하며, 과거 성공을 주장하지 않고 새 approval 권한도 만들지 않습니다. live pin이 아직 일치하면 v0.4.16 재생 계약이 그대로 적용되고 같은 정리가 fallback이 됩니다. redacted 실패 산출물은 이제 고정된 내부 reason code 하나를 담을 수 있고, `marker.json`은 lifecycle 기록이 아니라 identity anchor로 문서화됩니다. 공개·설치만으로 client archive는 바뀌지 않습니다. [v0.4.18 릴리스 노트](wom-kit/docs/releases/v0.4.18.md)를 보세요.
+- v0.4.19는 project update, runtime 검사, 명령 사용 가능 여부, Windows child process가 같은 사실을 말하게 합니다. runtime 검사는 `passed`·`failed`·`not_reached`·`unavailable`을 구분하고, updater 준비 검사는 불투명한 boolean 하나 대신 비공개 값을 노출하지 않는 변경 dimension을 보고합니다. help·capabilities·Doctor 제안·dry-run 해석·CLI dispatch는 같은 availability 판정을 쓰며, 비대화형 Windows child는 더 이상 검은 console을 잠깐 띄우지 않되 사람 승인창과 credential 상호작용은 계속 보입니다. 공개·설치만으로 client archive는 바뀌지 않습니다. [v0.4.19 릴리스 노트](wom-kit/docs/releases/v0.4.19.md)를 보세요.
 - Letter 117까지의 통합 실사용 피드백 기능. archive-root 경로, source-intake/Objet capture 배치, 구조화된 zet-objet 연결, 빠짐없는 1-based occurrence 검토 권한, 정확한 synced/transclusion placeholder를 위한 검토된 정적 zettel/objet 연결, 엄격한 빈 database 쌍을 위한 검토된 zettel 탐색 연결, 보호된 literal 강화, graph edge를 추론하지 않는 탐색 전용 zettel reference, 정확한 generated-TOC placeholder 제거, paired file과 검토된 page/audio 연결을 포함한 ready-only 손실 없는 마크업 정규화, callout·unknown column·unsupported 구조를 그대로 차단하는 안전 경계를 제공합니다. transcluded child를 재구성하거나 live provider 동작을 보존한다고 주장하지 않습니다. [Letter 117 완료 가이드](wom-kit/docs/letter117-completion.md)를 보세요.
 - 격리된 spawned child의 native Windows credential intake와 과거 v0.3.320 Notion recovery 근거는 유지합니다. 1회 capability, 비밀값 read 전 인증 claim, endpoint·scope·budget 검사, 내용 없는 세 근거는 계속 감사할 수 있습니다. v0.4.0의 Notion recovery 승인은 credential read·provider call·archive 변경 전에 `compound_exact_human_approval_binding_required`로 닫히며, read-only plan과 검증된 local replay만 남습니다. PAT를 명령 인자·일반 stdin·환경 변수·합성 검증 도구로 받지 않습니다. [Letter 118·119 가이드](wom-kit/docs/letter118-119-credential-continuity-and-notion-page-recovery.md)와 [Credential Capability Contract](wom-kit/docs/credential-capability-contract.md)를 보세요.
 - 보호된 search, 구조화된 `view-zets`, mint 계획이 하나의 fail-closed current-index 권한을 공유합니다. `mint-zet --progress`는 stdout을 최종 결과 하나에만 쓰면서 내용 없는 시작·heartbeat 근거를 stderr로 보내고, 별도의 operator-feedback 본문 companion은 외부 제출이나 실제 보관함 복구를 주장하지 않은 채 정확한 6개 섹션 비공개 요청, digest-bound 사람 승인, lifecycle 검사를 제공합니다. [Letter 120·123 가이드](wom-kit/docs/letter120-123-index-lifecycle-and-feedback-body.md)를 보세요.
@@ -436,7 +437,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
-v0.4.18 (현재 checkpoint)
+v0.4.19 (현재 checkpoint)
 ```
 
 `v0.2.5` 이후의 공개 릴리스에는 compatibility checkpoint tag가 붙습니다. 전체
