@@ -3363,40 +3363,46 @@ def main() -> int:
 
 class JsonRpcMcpServer:
     def serve(self, stdin: Any, stdout: Any) -> int:
-        input_stream = getattr(stdin, "buffer", stdin)
-        for raw_line in input_stream:
-            if isinstance(raw_line, bytes):
+        from ._mcp_session_transport import SessionStdioTransport
+
+        transport = SessionStdioTransport(
+            self.handle_message, lambda response: self._write(stdout, response),
+            jsonrpc_request_id_is_valid,
+        )
+        try:
+            input_stream = getattr(stdin, "buffer", stdin)
+            for raw_line in input_stream:
+                if transport.stopped:
+                    break
+                if isinstance(raw_line, bytes):
+                    try:
+                        raw_line = raw_line.decode("utf-8", errors="strict")
+                    except UnicodeDecodeError:
+                        if not transport.send(error_response(None, JSONRPC_PARSE_ERROR)):
+                            return 0
+                        continue
+                line = raw_line.strip()
+                if not line:
+                    continue
                 try:
-                    raw_line = raw_line.decode("utf-8", errors="strict")
-                except UnicodeDecodeError:
-                    if not self._write(
-                        stdout,
-                        error_response(None, JSONRPC_PARSE_ERROR),
-                    ):
+                    message = json.loads(
+                        line,
+                        parse_constant=reject_nonstandard_json_constant,
+                        parse_float=parse_finite_json_float,
+                    )
+                except (json.JSONDecodeError, NonFiniteJsonNumberError):
+                    if not transport.send(error_response(None, JSONRPC_PARSE_ERROR)):
                         return 0
                     continue
-            line = raw_line.strip()
-            if not line:
-                continue
-            try:
-                message = json.loads(
-                    line,
-                    parse_constant=reject_nonstandard_json_constant,
-                    parse_float=parse_finite_json_float,
-                )
-            except (json.JSONDecodeError, NonFiniteJsonNumberError):
-                if not self._write(stdout, error_response(None, JSONRPC_PARSE_ERROR)):
+                except Exception:
+                    if not transport.send(error_response(None, JSONRPC_INTERNAL_ERROR)):
+                        return 0
+                    continue
+                transport.dispatch(message)
+                if transport.stopped:
                     return 0
-                continue
-            except Exception:
-                if not self._write(stdout, error_response(None, JSONRPC_INTERNAL_ERROR)):
-                    return 0
-                continue
-
-            response = self.handle_message(message)
-            if response is not None:
-                if not self._write(stdout, response):
-                    return 0
+        finally:
+            transport.close()
         return 0
 
     def handle_message(self, message: Any) -> dict[str, Any] | None:
@@ -3417,6 +3423,12 @@ class JsonRpcMcpServer:
         if not has_request_id:
             self._handle_notification(method)
             return None
+
+        # This bounded management lane uses MCP IDs, not the broader historical
+        # JSON-RPC validator. Existing legacy/direct handlers keep their ABI.
+        from ._mcp_session_transport import is_management_request
+        if is_management_request(message) and type(request_id) not in (str, int):
+            return error_response(None, JSONRPC_INVALID_REQUEST)
 
         try:
             params = message.get("params")
@@ -3522,6 +3534,9 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
     if name == "archive_work_session":
         return tool_archive_work_session(arguments)
     if name == "archive_work_session_manage":
+        from ._mcp_session_transport import management_metadata
+        if not management_metadata(params)[0]:
+            raise InvalidParamsError()
         return tool_archive_work_session_manage(arguments)
     if name == "wom_profile_list":
         return tool_wom_profile_list(arguments)
@@ -3897,6 +3912,7 @@ def tool_archive_runtime_context(arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 def tool_archive_work_session_manage(arguments: dict[str, Any]) -> dict[str, Any]:
+    from ._mcp_session_transport import current_session_request
     from .work_session_command import REQUEST_LIMIT_BYTES, dispatch_work_session_management
 
     flags = {"dry_run", "approve", "apply", "resume", "review_original"}
@@ -3919,9 +3935,13 @@ def tool_archive_work_session_manage(arguments: dict[str, Any]) -> dict[str, Any
     if not valid_size:
         raise InvalidParamsError()
     archive_root = require_path_arg(arguments, "archive_root")
+    context = current_session_request()
+    wait_callbacks = {} if context is None else {
+        "cancel_requested": context.cancel_requested, "progress": context.progress,
+    }
     result = dispatch_work_session_management(archive_root, action=arguments["action"],
         **{key: arguments.get(key, False) for key in flags},
-        **{key: arguments.get(key) for key in refs}, request=arguments.get("request"))
+        **{key: arguments.get(key) for key in refs}, request=arguments.get("request"), **wait_callbacks)
     if not result["ok"]:
         return {"content": [{"type": "text", "text": "Work-session operation could not be completed."}],
                 "structuredContent": result, "isError": True}

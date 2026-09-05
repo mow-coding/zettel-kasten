@@ -604,6 +604,115 @@ bump, PR, tag, wheel or client application has occurred.
   does not establish client recovery, a released feature, or completion of
   v0.4.20 through v0.4.24.
 
+## MCP transport follow-up (audited, not implemented)
+
+- After the public management checkpoint, a bounded source audit identified
+  another unfinished transport boundary. The current stdio loop finishes a
+  request before reading the next message, discards notification parameters,
+  and does not forward progress/cancellation callbacks to session management.
+  Passing source handler tests therefore does not prove visible, cancellable
+  lock waiting through a real AI client's MCP connection.
+- Retain the server's existing negotiated protocol versions. The relevant
+  [2025 progress contract](https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/progress)
+  requires a client-supplied active token and increasing progress values;
+  completed requests must stop emitting progress. Unknown total work is not a
+  reason to invent a percentage. Arbitrary client labels or cancellation
+  reasons must not be copied into logs or progress messages.
+- The [stdio contract](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)
+  requires newline-delimited JSON-RPC on stdout. Stderr may be ignored by the
+  client, so writing there does not establish visible progress. A serialized
+  stdout write/flush boundary is needed if a managed request runs concurrently
+  with the input reader and safe read-only requests.
+- The smallest proposed execution model is one managed mutation worker and a
+  bounded serialized queue for legacy work. Keep reading cancellation, ping,
+  tool listing and the already generation-consistent session query. Do not
+  turn arbitrary legacy tools into concurrent writers or replace all their
+  existing behavior with a busy error. Overflow must have a fixed no-execution
+  result; request IDs and progress tokens need active-connection tracking.
+- Existing work-session cancellation is observed during lock waiting and
+  immediately before yielding that lock. It is not a promise to interrupt a
+  native dialog or roll back an already executing writer. Under the
+  [cancellation contract](https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/cancellation),
+  an accepted cancellation may suppress the original response, while an
+  uncancellable or completed operation retains its actual result. Never
+  relabel a successful receipt as cancelled merely because a late notification
+  arrived. The ordinary request ID is not a WOM session or approval identity.
+- Fresh-process stdio tests must cover waiting, progress, a concurrent registry
+  read, correct/foreign/late cancellation, duplicate IDs/tokens, queue bounds,
+  EOF and broken output. A client that does not read stdout can itself block
+  the transport; this must not become an unsupported universal cancellation-
+  latency guarantee. This follow-up is a required implementation boundary,
+  not a feature shipped by the preceding source checkpoint.
+
+## Implemented MCP transport checkpoint
+
+- The audited transport gap is now implemented in `mcp_server.py` and the
+  shared `_mcp_session_transport.py`. Legacy-only connections remain inline;
+  the first actual management mutation starts one serial worker and a bounded
+  FIFO. Only ping, tool listing and the existing generation-consistent session
+  query bypass that lane. Native approval, runtime guard and original writers
+  remain the same authorities; transport request IDs grant none of them.
+- A single queued-only timer and the existing OS-lock wait callbacks send
+  increasing progress for a supplied active token. Cancellation removes a
+  queued management request immediately or is observed at the original lock
+  wait boundary. It does not kill an approval dialog, interrupt an entered
+  writer, undo a commit or hide a success when cancellation arrives too late.
+- Review corrected active integer/legacy-float ID collisions, ambiguous
+  duplicate-ID error responses, malformed metadata masking such collisions,
+  and a completion race when the client reused a just-completed progress
+  token. Terminal state now precedes identity-checked entry retirement and
+  response transmission; old cleanup cannot remove a newer request entry.
+  Collision errors that cannot name a unique request use a null ID.
+- EOF and broken output stop new queued mutations and cancel existing waits.
+  Already entered writes retain original checkpoint/receipt semantics. Stdout
+  serialization preserves complete newline-delimited JSON responses and
+  notifications. Queue capacity and retained message size are bounded; the
+  preexisting unbounded individual input-line parse and stdout backpressure
+  are not fixed by this checkpoint. A blocked stdin read is not guaranteed to
+  wake immediately when another thread detects broken output.
+- Final implementer tests passed 43 tests and 63 subtests in 68.98 seconds;
+  the final legacy compatibility cohort passed 15 tests and 30 subtests in
+  4.95 seconds. These cohorts overlap and are not added together. Real fresh
+  stdio tests exercised the OS lock, queued cancellation, concurrent queries,
+  EOF, and original registration resume in another process. The initialized
+  connection's first progress arrived in under 0.001 seconds, with observed
+  OS-lock and FIFO intervals of 5.078 and 5.063 seconds. This does not measure
+  cold application startup or prove how a specific AI app renders progress.
+- Independent source review found no further blocker after the terminal
+  retirement correction. The reviewer did not rerun the implementer's tests.
+  Root verification, exact checkpoint commit and subsequent installed-wheel
+  acceptance remain separate results; no public release or client update is
+  implied by this source implementation.
+- Root independently reran the two new transport/stdio modules unchanged:
+  nineteen tests and 25 subtests passed in 14.57 seconds. All four readiness
+  checks and the 169-file packaged-resource synchronization also passed.
+- Root's separate unchanged public-management and MCP query regression cohort
+  passed thirteen tests and 38 subtests in 38.28 seconds. This source checkpoint
+  can be backed up independently while v0.4.19 acceptance remains blocked.
+
+## Next bounded integration: pause and paused-session resume
+
+- Source audit confirmed that registry transitions already implement pause,
+  resume, handoff, accept, complete and recover. Native exact execution already
+  supports the meaningful human actions. The missing layer is durable public
+  routing and original-operation replay, not another approval system.
+- Integrate pause and paused-session resume first. `--action resume --apply`
+  means a new ownership transition for the same paused session, while
+  `--action resume --resume` replays that exact earlier operation. Missing or
+  mismatched original evidence must not silently create a new claim.
+- Reuse archive locking, runtime guards, registry before-hash/revision CAS,
+  original create-route evidence and private actor pending/completed selectors.
+  Pause needs the current exact claim. Paused-session resume needs exact
+  paused state and no current claim; applying the claimed-only guard there
+  would incorrectly close a supported transition. New claim generation is
+  fixed once in the durable original intent, never repeated on resume.
+- Keep public claim secrets, approval capabilities, internal callbacks and
+  actor selection creation out of the request. Preserve existing readers and
+  approval bytes. Test cuts before actor publication, after registry commit
+  and before output, wrong-action replay and cross-app/route/session copies.
+  Public handoff, accept, complete and recover remain subsequent work rather
+  than being advertised as completed by the narrower pause/resume slice.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)
