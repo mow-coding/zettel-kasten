@@ -11,7 +11,7 @@ import threading
 import unittest
 from contextlib import ExitStack
 from pathlib import Path
-from types import SimpleNamespace
+from types import CodeType, SimpleNamespace
 from unittest import mock
 
 
@@ -27,6 +27,12 @@ from test_project_runtime import _supply_for_dependency, _write_dependency_wheel
 
 
 WINDOWS_RUNTIME = os.name == "nt" and sys.version_info[:2] == (3, 12) and platform.machine().casefold() in {"amd64", "x86_64"}
+
+# This one production predicate compares the before/after directory lstat.
+# A contract test pins the source line and actual nested code object; another
+# identity call cannot be paired merely because it happened nearby.
+_DIRECTORY_IDENTITY_COMPARISON_LINE = 3345
+_DIRECTORY_IDENTITY_FIELDS = ("device", "inode", "type", "size", "mtime_ns", "attributes")
 
 
 class _RuntimeObservationDiagnostics:
@@ -65,12 +71,19 @@ class _RuntimeObservationDiagnostics:
         self.stack = ExitStack()
         self.owner_thread = None
         self.active_boundaries = []
+        walk_code = getattr(getattr(module, "_walk_regular_files", None), "__code__", None)
+        candidates = ([value for value in walk_code.co_consts
+                       if type(value) is CodeType and value.co_name == "shape_snapshot"]
+                      if type(walk_code) is CodeType else [])
+        self.shape_code = candidates[0] if len(candidates) == 1 else None
+        self.identity_pair = None
 
     @staticmethod
     def _error_number(value):
         return value if type(value) is int and 0 <= value <= 65535 else None
 
-    def _record(self, boundary, outcome, *, reason="unclassified", error=None, operation=None, cause_depth=0):
+    def _record(self, boundary, outcome, *, reason="unclassified", error=None, operation=None, cause_depth=0,
+                changed_identity_fields=()):
         if len(self.events) >= 32:
             self.truncated = True
             return
@@ -84,6 +97,44 @@ class _RuntimeObservationDiagnostics:
             "operation": operation,
             "cause_depth": cause_depth,
         })
+        if changed_identity_fields:
+            self.events[-1]["changed_identity_fields"] = list(changed_identity_fields)
+
+    def _wrap_directory_identity(self, original):
+        def observed(*args, **kwargs):
+            if threading.get_ident() != self.owner_thread or not self.active_boundaries:
+                return original(*args, **kwargs)
+            # Original exactly once. Even a failing diagnostic must not replace
+            # the real result/error or perform another filesystem observation.
+            try:
+                result = original(*args, **kwargs)
+            except BaseException:
+                self.identity_pair = None
+                raise
+            try:
+                caller = sys._getframe(1)
+                if (caller.f_code is not self.shape_code
+                        or caller.f_lineno != _DIRECTORY_IDENTITY_COMPARISON_LINE):
+                    self.identity_pair = None
+                    return result
+                if type(result) is not tuple or len(result) != 6 or any(type(value) is not int for value in result):
+                    self.identity_pair = None
+                    return result
+                previous = self.identity_pair
+                self.identity_pair = None
+                if previous is None or previous[0] != id(caller):
+                    self.identity_pair = (id(caller), result)
+                    return result
+                fields = tuple(name for name, before, after in zip(_DIRECTORY_IDENTITY_FIELDS, previous[1], result)
+                               if before != after)
+                if fields:
+                    self._record("directory_identity", "identity_changed",
+                        reason="project_runtime_tree_changed", operation="before_after_directory_comparison",
+                        changed_identity_fields=fields)
+            except Exception:
+                self.identity_pair = None
+            return result
+        return observed
 
     def _record_exception(self, boundary, error):
         # Follow only explicit causes, not arbitrary exception text/context.
@@ -143,6 +194,10 @@ class _RuntimeObservationDiagnostics:
             for name, boundary in self._TARGETS:
                 original = getattr(self.module, name)
                 self.stack.enter_context(mock.patch.object(self.module, name, self._wrap(original, boundary)))
+            if self.shape_code is not None:
+                original_identity = self.module._stat_identity
+                self.stack.enter_context(mock.patch.object(self.module, "_stat_identity",
+                    self._wrap_directory_identity(original_identity)))
             for target, name, operation in (
                 (Path, "lstat", "path_lstat"),
                 (os, "open", "os_open"),
@@ -156,7 +211,10 @@ class _RuntimeObservationDiagnostics:
         return self
 
     def __exit__(self, *exception_info):
-        return self.stack.__exit__(*exception_info)
+        try:
+            return self.stack.__exit__(*exception_info)
+        finally:
+            self.identity_pair = None
 
     def snapshot(self):
         return {
@@ -414,6 +472,12 @@ class ExistingRuntimeNoopTests(unittest.TestCase):
                 ) for item in cls.supply.artifacts
             ],
         ]
+        with _RuntimeObservationDiagnostics() as diagnostic:
+            try:
+                installed_payload_sha256 = project_runtime._runtime_payload_sha256(cls.runtime)
+            except project_runtime.ProjectRuntimeError as error:
+                error.add_note(json.dumps({"test_observation": diagnostic.snapshot()}, sort_keys=True))
+                raise
         receipt = {
             "schema": project_runtime.PROJECT_RUNTIME_RECEIPT_SCHEMA,
             "status": "verified", "created_at": "2026-09-05T00:00:00Z",
@@ -421,7 +485,7 @@ class ExistingRuntimeNoopTests(unittest.TestCase):
             "wheel_file_name": wheel.name, "wheel_sha256": "sha256:" + cls.bootstrap.sha256,
             "supply_lock_sha256": "sha256:" + cls.supply.sha256,
             "artifact_inventory": sorted(inventory, key=lambda item: item["file_name"].casefold()),
-            "installed_payload_sha256": "sha256:" + project_runtime._runtime_payload_sha256(cls.runtime),
+            "installed_payload_sha256": "sha256:" + installed_payload_sha256,
             "python_version": python_version, "installer_running_version": "0.4.3",
             "installed_distributions": packages, "verification": verification,
             "global_path_mutation": False, "previous_runtime_deleted": False, "absolute_paths_echoed": False,
