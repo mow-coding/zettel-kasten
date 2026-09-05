@@ -1819,6 +1819,46 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "git_backup_reconcile_plan",
+        "description": (
+            "Preview or execute the existing session-scoped Git backup using exact native human approval. "
+            "Fresh preview/apply require the explicit app/task/work-session route; apply also requires reviewed_by. "
+            "Resume and review_original select only the retained original by app/task (optional work-session); "
+            "omit every fresh option and reviewer, including null/default values. review_original redisplays "
+            "the original approval when needed, not a replacement approval. Unknown/other-session changes stay excluded. "
+            "No eligible outputs is not a completed backup; metadata receipts do not prove source-byte capture."
+        ),
+        "annotations": {"readOnlyHint": False, "destructiveHint": False,
+                        "idempotentHint": False, "openWorldHint": True},
+        "inputSchema": {
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                "archive_root": {"type": "string", "minLength": 1, "maxLength": 65536},
+                "mode": {"type": "string", "enum": ["preview", "apply", "resume", "review_original"]},
+                "client_app_ref": {"type": "string", "minLength": 1},
+                "task_route_ref": {"type": "string", "minLength": 1},
+                "work_session_ref": {"type": "string", "minLength": 1},
+                "reviewed_by": {"type": "string", "minLength": 1},
+                "remote_name": {"type": "string", "minLength": 1},
+                "branch": {"type": "string", "minLength": 1},
+                "credential_mode": {"type": "string", "enum": ["stored"]},
+                "max_changes": {"type": "integer", "minimum": 1, "maximum": 100000},
+                "max_changed_bytes": {"type": "integer", "minimum": 1, "maximum": 2147483648},
+            },
+            "required": ["archive_root", "mode", "client_app_ref", "task_route_ref"],
+            "allOf": [
+                {"if": {"properties": {"mode": {"enum": ["preview", "apply"]}}},
+                 "then": {"required": ["work_session_ref"]}},
+                {"if": {"properties": {"mode": {"const": "apply"}}},
+                 "then": {"required": ["reviewed_by"]},
+                 "else": {"not": {"required": ["reviewed_by"]}}},
+                {"if": {"properties": {"mode": {"enum": ["resume", "review_original"]}}},
+                 "then": {"not": {"anyOf": [{"required": [key]} for key in (
+                     "remote_name", "branch", "credential_mode", "max_changes", "max_changed_bytes")]}}},
+            ],
+        },
+    },
+    {
         "name": "source_intake_record",
         "description": (
             "Record one redacted source-intake plan using its explicit app/task session and native exact approval. "
@@ -3688,6 +3728,11 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         if not management_metadata(params)[0]:
             raise InvalidParamsError()
         return tool_source_intake_record(arguments)
+    if name == "git_backup_reconcile_plan":
+        from ._mcp_session_transport import management_metadata
+        if not management_metadata(params)[0]:
+            raise InvalidParamsError()
+        return tool_git_backup_reconcile_plan(arguments)
     if name == "tiro_import_plan":
         return tool_tiro_import_plan(arguments)
     if name == "archive_init":
@@ -5358,6 +5403,48 @@ def tool_project_intake_item_plan(arguments: dict[str, Any]) -> dict[str, Any]:
     )
     state = str(result.get("state") or ("passed" if result["ok"] else "blocked"))
     return tool_success_result(f"project_intake_item_plan: {state}.", result)
+
+
+def tool_git_backup_reconcile_plan(arguments: dict[str, Any]) -> dict[str, Any]:
+    from ._mcp_session_transport import current_session_request
+    from .git_backup_session_command import dispatch_session_git_backup, _project_mcp_git_backup_result
+
+    fresh = {"remote_name", "branch", "credential_mode", "max_changes", "max_changed_bytes"}
+    required = {"archive_root", "mode", "client_app_ref", "task_route_ref"}
+    allowed = required | fresh | {"work_session_ref", "reviewed_by"}
+    if (type(arguments) is not dict or any(type(key) is not str for key in arguments)
+            or set(arguments) - allowed or not required <= set(arguments)):
+        raise InvalidParamsError()
+    for key, value in arguments.items():
+        if key in {"max_changes", "max_changed_bytes"}:
+            limit = 100000 if key == "max_changes" else 2147483648
+            if type(value) is not int or not 1 <= value <= limit:
+                raise InvalidParamsError()
+        elif type(value) is not str or not value.strip() or len(value) > 65536:
+            raise InvalidParamsError()
+    mode = arguments["mode"]
+    if mode not in {"preview", "apply", "resume", "review_original"}:
+        raise InvalidParamsError()
+    original = mode in {"resume", "review_original"}
+    if (original and (fresh | {"reviewed_by"}) & set(arguments)
+            or not original and "work_session_ref" not in arguments
+            or mode == "apply" and "reviewed_by" not in arguments
+            or mode != "apply" and "reviewed_by" in arguments
+            or "credential_mode" in arguments and arguments["credential_mode"] != "stored"
+            or len(json.dumps(arguments, ensure_ascii=True).encode("utf-8")) > 65536):
+        raise InvalidParamsError()
+    archive_root = require_path_arg(arguments, "archive_root")
+    context = current_session_request()
+    callbacks = {} if context is None else {"cancel_requested": context.cancel_requested, "progress": context.progress}
+    raw = dispatch_session_git_backup(archive_root, mode=mode,
+        client_app_ref=arguments["client_app_ref"], task_route_ref=arguments["task_route_ref"],
+        work_session_ref=arguments.get("work_session_ref"), reviewer_claim=arguments.get("reviewed_by"),
+        options={key: arguments[key] for key in fresh if key in arguments}, **callbacks)
+    result = _project_mcp_git_backup_result(raw, mode=mode)
+    if result["ok"] is not True:
+        return {"content": [{"type": "text", "text": "Session Git backup could not be completed."}],
+                "structuredContent": result, "isError": True}
+    return tool_success_result("Session Git backup result returned; completion is reported separately from eligibility.", result)
 
 
 def tool_source_intake_record(arguments: dict[str, Any]) -> dict[str, Any]:

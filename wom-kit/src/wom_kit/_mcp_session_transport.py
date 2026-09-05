@@ -10,6 +10,7 @@ payloads, not the memory needed to parse an oversized individual input line.
 
 from collections import deque
 from contextvars import ContextVar
+from enum import Enum
 import json
 import threading
 import time
@@ -21,6 +22,12 @@ MAX_PENDING_REQUESTS = 16
 MAX_QUEUED_MESSAGE_BYTES = 65536
 QUEUE_HEARTBEAT_SECONDS = 5
 _SESSION_REQUEST = ContextVar("wom_mcp_session_request", default=None)
+
+
+class _ProgressFamily(Enum):
+    LEGACY = "legacy"
+    INTAKE = "intake"
+    GIT = "git"
 
 
 def current_session_request():
@@ -42,7 +49,8 @@ def _request_key(value):
 def is_management_request(message):
     return (type(message) is dict and message.get("method") == "tools/call"
             and type(message.get("params")) is dict
-            and message["params"].get("name") in ("archive_work_session_manage", "source_intake_record"))
+            and message["params"].get("name") in (
+                "archive_work_session_manage", "source_intake_record", "git_backup_reconcile_plan"))
 
 
 def management_metadata(params):
@@ -62,6 +70,10 @@ def _managed_mutation(message):
     arguments = message["params"].get("arguments")
     if type(arguments) is not dict:
         return False
+    if message["params"].get("name") == "git_backup_reconcile_plan":
+        # Every scoped Git mode, including preview, needs the held serial lane.
+        return type(arguments.get("mode")) is str and arguments["mode"] in {
+            "preview", "apply", "resume", "review_original"}
     if message["params"].get("name") == "source_intake_record":
         # Even preview acquires the existing held lane for a consistent plan.
         # Scheduling is not availability or authority; the service validates
@@ -89,7 +101,11 @@ def _error(request_id, code, message):
 class SessionRequest:
     """Ephemeral callbacks. Repr and progress never include domain inputs."""
 
-    def __init__(self, token, send, *, domain_progress=False):
+    def __init__(self, token, send, *, domain_progress=False, _progress_family=None):
+        if _progress_family is None:
+            _progress_family = _ProgressFamily.INTAKE if domain_progress is True else _ProgressFamily.LEGACY
+        if type(_progress_family) is not _ProgressFamily:
+            raise ValueError("Invalid MCP progress family")
         self._token = token
         self._send = send
         self._lock = threading.RLock()
@@ -99,7 +115,8 @@ class SessionRequest:
         self._sequence = 0
         self._queued = True
         self._last_queue_progress = None
-        self._domain_enabled = domain_progress is True
+        self._progress_family = _progress_family
+        self._domain_enabled = _progress_family is not _ProgressFamily.LEGACY
         self._domain_status = None
         self._last_domain_progress = None
 
@@ -122,8 +139,16 @@ class SessionRequest:
         if self._domain_enabled:
             # Only the existing closed projector can read a domain event. No
             # arbitrary Mapping/repr/public_document callback or user label.
-            from .source_intake_session_command import _project_progress
-            projected = _project_progress(event)
+            if self._progress_family is _ProgressFamily.GIT:
+                # Internal malformed domain events must not run custom key
+                # equality during the shared projector's builtin dict lookups.
+                if type(event) is dict and any(type(key) is not str for key in event):
+                    return
+                from .work_session_git_progress import _project
+                projected = _project(event)
+            else:
+                from .source_intake_session_command import _project_progress
+                projected = _project_progress(event)
             if projected is None:
                 return
             with self._lock:
@@ -154,6 +179,20 @@ class SessionRequest:
         }})
 
     def _domain_message(self):
+        if self._progress_family is _ProgressFamily.GIT:
+            document = self._domain_status
+            message = "git-backup: " + document["stage"]
+            for current_key, total_key, label in (
+                    ("completed_items", "total_items", "completed items"),
+                    ("completed_fields", "total_fields", "completed fields"),
+                    ("completed_bytes", "total_bytes", "completed bytes"),
+                    ("current", "total", "observed units")):
+                current, total = document.get(current_key), document.get(total_key)
+                # The closed projector bounds each number; a display pair must
+                # additionally be complete and ordered. Never invent a total.
+                if type(current) is int and type(total) is int and current <= total:
+                    message += f"; {label} {current}/{total}"
+            return message
         stage, current, total = self._domain_status
         counts = "" if current is None else f"; completed items {current}/{total}"
         return "source-intake: " + stage + counts
@@ -183,6 +222,13 @@ class SessionRequest:
     def enter_execution(self):
         with self._lock:
             self._queued = False
+            if self._progress_family is _ProgressFamily.GIT and not self._terminal and not self._cancel:
+                # This is transport liveness, not a claim that a planner,
+                # approval dialog or mutation has already completed a step.
+                self._domain_status = {"stage": "starting"}
+                if self._token is not None:
+                    self._emit_progress(message=self._domain_message())
+                    self._last_domain_progress = time.monotonic()
 
     def finish(self, response, *, retire=lambda: None):
         with self._lock:
@@ -193,9 +239,12 @@ class SessionRequest:
             content = result.get("structuredContent") if type(result) is dict else None
             accepted = (self._observed_cancel and type(content) is dict
                         and content.get("schema") in ("wom-kit/work-session-management/v1",
-                                                      "wom-kit/source-intake-session-command/v1")
+                                                      "wom-kit/source-intake-session-command/v1",
+                                                      "wom-kit/git-backup-session-command/v1")
                         and content.get("ok") is False
-                        and content.get("reason_code") == "work_session_wait_cancelled")
+                        and content.get("reason_code") == "work_session_wait_cancelled"
+                        and not (content.get("schema") == "wom-kit/git-backup-session-command/v1"
+                                 and content.get("original_commit_verified") is True))
             # Release this exact routing entry before a client can observe the
             # terminal response and reuse its now-completed progress token.
             retire()
@@ -311,8 +360,10 @@ class SessionStdioTransport:
         if not within_limit:
             self.send(_error(message["id"], -32602, "Invalid params"))
             return
-        context = (SessionRequest(token, self.send,
-            domain_progress=message["params"].get("name") == "source_intake_record") if managed else None)
+        context = (SessionRequest(token, self.send, _progress_family={
+            "source_intake_record": _ProgressFamily.INTAKE,
+            "git_backup_reconcile_plan": _ProgressFamily.GIT,
+        }.get(message["params"].get("name"), _ProgressFamily.LEGACY)) if managed else None)
         with self._condition:
             if self._closed:
                 return
@@ -378,8 +429,8 @@ class SessionStdioTransport:
 
     def _queue_heartbeat(self):
         # One scheduler, not one thread per request. Legacy management remains
-        # queued-only. The audited intake lane can report liveness with its last
-        # observed closed stage while native approval/exact execution continues.
+        # queued-only. The audited intake/Git lanes report liveness with their
+        # last observed closed stage while native/exact execution continues.
         while True:
             with self._condition:
                 if self._closed:

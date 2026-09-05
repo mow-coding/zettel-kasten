@@ -2213,6 +2213,100 @@ bump, PR, tag, wheel or client application has occurred.
   canonical checkout and this unfinished feature checkout. This source slice
   is ready for its development commit, not a v0.4.20 release or client result.
 
+## Git MCP parity after the single-record producer checkpoint
+
+- The linked-output correction and single-record authenticated Git producer
+  were committed and pushed as `aff17918` and `3d94f40c`. The feature checkout
+  was clean after push; neither is a release or a client-data execution.
+- Continue the approved train by exposing the already tested session Git
+  service through MCP. The next slice adds only `git_backup_reconcile_plan`,
+  four explicit modes, strict presence-sensitive original-input rejection,
+  allowed-root checks and a closed MCP-only result projection. The CLI result,
+  exact writer, original approvals and current-owner guards remain unchanged.
+- Divide implementation by non-overlapping ownership: handler/projection and
+  grammar tests; shared transport and progress/cancellation tests; actual
+  CLI/MCP selective Git journeys and independent review; root documentation,
+  integration review and final hygiene. Limit functional cohorts to two
+  isolated processes. Their elapsed times are not performance acceptance.
+- Review corrected an exact-type boundary in the draft projection: inspect
+  `effects_state` as an exact string before comparing its value. A hostile
+  object's equality method must not be invoked while forming public output.
+  This is a presentation fix, not new authentication or altered Git authority.
+- Existing MCP progress/cancellation specifications were rechecked. Reuse the
+  fixed progress-token sequence, one serial lane and cooperative wait cancel;
+  do not invent item completion, kill entered Git work or drop a verified
+  original result on a late cancellation. References and consequences are in
+  the session-resume decision log.
+- Functional results and frozen source identities are pending. No version
+  bump, pull request, release, provider use or client-data mutation is implied
+  by this implementation checkpoint.
+- The final handler/projection and current-surface cohort passed 18/18 in
+  0.714 seconds, exit 0, no skips: 13 new command cases and five current-surface
+  checks. An initial grammar-test error passed `mode` twice to a test helper;
+  only that fixture call was corrected. Closed projection also refuses
+  non-exact string keys before known-field lookup, including nested anchor
+  keys. This defends against malformed internal objects, not a new JSON
+  authority path. The CLI result object is not rewritten.
+- MCP has 135 tools at this checkpoint. Removing only the new Git tool
+  reproduces the preceding 134-tool digest; existing definitions are unchanged.
+  CLI remains 576 spellings. Only current expected count/digest and the
+  explicit additive name changed in the two surface gates; historical fixtures,
+  raw/derived privacy checks and subset boundaries were not weakened.
+- Final transport tests passed 49/49 in 7.530 seconds: 14 new Git cases and
+  35 existing cases. The first draft malformed-ID test wrongly used a handler
+  stub that accepted an invalid request. It now uses the real JSON-RPC basic
+  validation. A separate exact-key precheck protects only Git event projection;
+  the shared CLI projector and intake behavior remain unchanged.
+- The subsequent six-case cohort passed in 11.661 seconds, exit 0, no skips:
+  one new actual-process Git wait/cancel test, two existing actual-process
+  management tests and three existing MCP startup/error-envelope tests. A
+  foreign OS lock remains held through a serial response barrier; Git waiting
+  and queued cancellation produce no domain writes, ping/query remain live,
+  and protocol stdout/stderr remain clean. This is admission/order evidence,
+  not instrumentation of every native/key call or actual Git backup proof.
+- The first actual two-journey run failed both final completed-replay checks
+  after 331.312 seconds. Before those checks, actual selective commit/push,
+  cross-surface continuation/re-review and independent blob/ref/exclusion
+  checks had completed. The new test over-forbade the shared terminal-MAC
+  function: original session establishment uses that same pure calculation
+  to compare its existing MAC. Root independently confirmed this read-only
+  path. Removed only the blanket MAC-method sentinel; concrete terminal
+  publication, writer, new claim, native approval, context replacement,
+  discovery and actor writes remain forbidden on completed replay, with
+  full files/index/HEAD/remote equality checks. Product authority is unchanged.
+- The corrected two actual journeys are running against the final command
+  and transport snapshots. Earlier execution loaded the previous projection
+  before exact-key hardening and is not final-candidate acceptance. No success
+  or source-byte-custody claim is inferred from a running process.
+- Final corrected actual CLI/MCP Git journeys passed both cases in 341.968
+  seconds, exit 0, no skips. The final source snapshots were unchanged for
+  this run. One crosses CLI pre-push interruption to MCP original resume and
+  CLI completed replay; the other crosses MCP pre-claim interruption to CLI
+  original re-review and MCP completed replay. Both independently check real
+  local-bare remote refs/blobs, excluded staged/worktree bytes, original
+  context/claim, current owner and unchanged completed-replay state. Recomputing
+  an existing establishment MAC is permitted; creating/publishing new evidence
+  is not. These source journeys use the documented synthetic native/key/local
+  transport and read-only handoff fixture, not client credentials or providers.
+- Frozen source SHA-256 values: MCP handler
+  `2557bdffa97e053b404c0256be5165ebe2e2fb04f69c3dfc5c85ed246efb14f6`;
+  Git command/projection
+  `c9ec42576840bf8f1356fe5d61e26da78b447a0e0eeb518963ef8e9c0f182fa3`;
+  transport
+  `5fc12ae2e4e4e4b20f79bbe9b30f099c533ca1e95cc4550132a01e6b2c891f38`.
+  Actual journey test is
+  `0f3beda61758263f0061ee1808d6e952874fdc15392df23f407a1e1e7695f21f`;
+  command test `aed6f19fa4cc83e361a2d292f71cf3789a20d3fd92babab76369e73fad020aab`;
+  transport test `43b887b0425618b55d1167a95e86e7a250694e3dc674c3615a7cd66ccc3a062a`;
+  stdio test `f7416906643b9af77a0e62ce00babe5b8a58f56cd566a47da4e8ab59f420e5e9`.
+- Root and independent reviews are clear. The four public readiness gates
+  passed; Windows Python 3.12 functional results and Python 3.10 grammar
+  evidence are distinct from full cross-platform CI and installed acceptance.
+  Remote recheck still shows public v0.4.19, no open PR, zero open secret alerts
+  (not a no-exposure guarantee), clean canonical main at `84d55bd5` and only
+  the canonical plus unfinished feature worktrees. No client or global runtime
+  was modified. This slice is ready for a development commit, not a release.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)

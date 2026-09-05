@@ -419,3 +419,52 @@ durable completion-evidence path. It does not claim Git hosting account
 ownership, branch-protection policy, provider audit-log coverage, or automatic
 remote rollback. Those are separate provider-policy concerns, not evidence
 silently inferred from a successful Git transport.
+
+## Unreleased v0.4.20 session route
+
+The explicit session route reuses the same exact Git writer. It is separate
+from the legacy file-and-digest route above and does not make humans prepare
+selection JSON or copy approval identifiers. The AI retains its registered
+app/task route, presents the meaningful native decision and uses the saved
+original operation for continuation.
+
+```text
+archive git-backup-reconcile-plan <archive-root> --client-app-ref <app> --task-route-ref <task> --work-session-ref <session> --dry-run --format json
+archive git-backup-reconcile-plan <archive-root> --client-app-ref <app> --task-route-ref <task> --work-session-ref <session> --approve --reviewed-by <reviewer> --credential-mode stored --format json
+archive git-backup-reconcile-plan <archive-root> --client-app-ref <app> --task-route-ref <task> --resume --format json
+archive git-backup-reconcile-plan <archive-root> --client-app-ref <app> --task-route-ref <task> --approve --review-original --format json
+```
+
+MCP `git_backup_reconcile_plan` calls the same service with `mode` set to
+`preview`, `apply`, `resume` or `review_original`. Every call supplies
+`archive_root`, `client_app_ref` and `task_route_ref`. Fresh preview/apply
+requires `work_session_ref`; only apply requires `reviewed_by`. Fresh options
+are `remote_name`, `branch`, `credential_mode` (`stored`), `max_changes` and
+`max_changed_bytes`. Original continuation accepts only an optional same-session
+assertion: omit every fresh option and reviewer, including null/default values.
+No public authority, private-context, key-provider, native or selection override
+is accepted. The archive must pass the existing MCP allowed-root policy.
+
+The route classifies authenticated new completion receipts and supported intake
+metadata outputs. It excludes other-session, unknown and mixed changes, keeping
+the full selected/excluded partition. It does not yet authenticate generic
+documents or prove source/objet byte custody. No eligible outputs is a completed
+classification, not a successful backup. Do not use metadata backup to justify
+source deletion or whole-archive completion.
+
+MCP output contains fixed status, count, digest and verification fields, not
+private paths, selection documents or nested Git anchors. The original verified
+commit, current ownership, independent remote ref and final acknowledgement are
+reported separately. `backup_completion_verified` requires all completion
+evidence; a later ownership failure can still report an already verified commit.
+
+All modes wait in the shared serial lane and revalidate under the archive lock.
+Read-only requests can continue through the audited bypass. With a progress
+token, the server reports fixed stages and observed count pairs; a repeating
+heartbeat means it is awaiting another observation. Cancelling a waiting
+request does not terminate an already entered Git operation. Resume verifies
+the same original approval/context, not a fresh inventory or a replacement
+reviewer. Original re-review redisplays only that original decision when needed.
+
+This is an unreleased source interface. Integration minutes distinguish actual
+synthetic Git journeys, transport tests, installed acceptance and client results.

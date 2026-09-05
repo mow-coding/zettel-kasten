@@ -383,3 +383,43 @@ Tests must authenticate actual original record and establishment MACs, refuse
 wrong-family and linked outputs, and execute real selective commit/push with
 interruption and identifier-free original continuation. Source-level evidence,
 installed-wheel acceptance and client execution remain separate milestones.
+
+## Git continuation across CLI and MCP
+
+Expose the existing session-scoped Git service as `git_backup_reconcile_plan`;
+do not add another CLI command, writer, approval protocol or selection format.
+Fresh preview/apply needs the explicit claimed route. Original resume and
+original re-review accept the retained app/task route and optional same-session
+assertion, never replacement inputs, reviewer, approval IDs or expected hashes.
+Reject forbidden parameters by presence, including null/default values.
+
+Only the MCP presentation layer projects the result to fixed states, booleans,
+bounded counts and digests. Keep the original CLI result and private authority
+checks unchanged. Verified original commits, current ownership, independent
+remote observations and actor completion remain distinct facts. A late owner
+failure cannot erase a verified historical commit; eligible or empty selection
+is not backup completion. Never forward nested operation evidence, Git anchor
+documents, private paths or retained original locators to MCP output.
+
+All four Git modes use the existing serial management lane and archive lock.
+Select the progress family from a fixed tool name, not caller arguments. Reuse
+the closed Git event projector without invoking arbitrary mapping/document
+callbacks or the CLI stderr observer. A heartbeat repeats only the last
+observed stage and valid count pairs; it does not invent work or completion.
+Read-only requests can still use the audited bypass. Queue bounds, request/token
+identity checks and the cooperative waiting cancellation boundary remain.
+Do not terminate an entered Git process or dismiss a native approval dialog.
+
+The [MCP progress specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/progress)
+requires an active supplied token and monotonically increasing notifications;
+the existing sequence denotes notifications, while message counts denote
+observed work. Stop progress at the terminal boundary. The
+[MCP cancellation specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/cancellation)
+allows completion/cancellation races and operations that cannot be cancelled.
+Suppress only an observed, known wait-cancel failure, never an already verified
+original Git result. This is not the separate MCP task extension.
+
+Verify grammar/privacy/scheduling separately from actual cross-surface Git
+journeys. Real commit/push/ref/blob and excluded-change checks use isolated
+synthetic archives and local bare remotes; in-process JSON-RPC tests are not
+stdio, installed-wheel or client acceptance. Preserve those evidence labels.

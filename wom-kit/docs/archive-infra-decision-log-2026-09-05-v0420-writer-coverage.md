@@ -229,3 +229,19 @@ of completed writer families. Single-record CLI/MCP parity remains separate
 from Git's currently CLI-only public route. Actual synthetic Git journey and
 regression evidence belongs in the integration minutes; version, installed
 acceptance and client execution are not implied by this source checkpoint.
+
+## Subsequent Git MCP source checkpoint
+
+The existing scoped Git family now has an MCP route calling the same service.
+Joined source tests cross CLI/MCP at interruption and completed replay, with
+real isolated commit/push/ref/blob and excluded-change checks. This adds no
+writer family or approval protocol. The scoped batch route remains CLI-only;
+single record and Git have their own MCP parity evidence. Installed acceptance,
+comprehensive writer/effect coverage and client results remain unfinished.
+
+Relative to the preceding feature checkpoint, the only additional MCP tool is
+`git_backup_reconcile_plan`; the current total is 135. It accepts no private
+original locator, approval identifier, selection or replacement reviewer for
+continuation. The public result preserves historical commit verification apart
+from current ownership and final completion. Metadata-only Git backup still
+does not attest source capture or generic document ownership.
