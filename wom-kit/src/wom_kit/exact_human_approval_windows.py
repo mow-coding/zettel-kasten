@@ -28,7 +28,9 @@ from contextlib import contextmanager
 from ctypes import wintypes
 from dataclasses import dataclass
 from enum import Enum
-from typing import Iterator, Protocol
+from typing import Callable, Iterator, Protocol
+
+from .target_collection_preview import TargetCollectionPreview
 
 
 TASK_DIALOG_TITLE = "WOM · 실행 확인"
@@ -45,6 +47,21 @@ LEGACY_INTERACTIVE_INTENT_MECHANISMS = frozenset(
 
 APPROVE_BUTTON_ID = 1001
 IDCANCEL = 2
+TARGET_DETAILS_BUTTON_ID = 1002
+TARGET_PREVIOUS_BUTTON_ID = 1003
+TARGET_NEXT_BUTTON_ID = 1004
+TARGET_RETURN_BUTTON_ID = 1005
+
+# Values and pointer-sized callback types follow the Windows SDK CommCtrl.h.
+TDN_NAVIGATED = 1
+TDN_BUTTON_CLICKED = 2
+TDN_DESTROYED = 5
+TDM_NAVIGATE_PAGE = 0x0400 + 101
+TDM_CLICK_BUTTON = 0x0400 + 102
+_TASKDIALOG_CALLBACK = getattr(ctypes, "WINFUNCTYPE", ctypes.CFUNCTYPE)(
+    ctypes.c_long, wintypes.HWND, wintypes.UINT,
+    ctypes.c_size_t, ctypes.c_ssize_t, ctypes.c_ssize_t,
+)
 
 TDF_ALLOW_DIALOG_CANCELLATION = 0x0008
 TDF_POSITION_RELATIVE_TO_WINDOW = 0x1000
@@ -174,6 +191,7 @@ class ExactHumanApprovalOperation(Enum):
     object_storage_formal_adoption = "object_storage_formal_adoption"
     local_recovery = "local_recovery"
     local_recovery_revert = "local_recovery_revert"
+    work_session = "work_session"
 
 
 def _validated_target_preview_text(value: str | None) -> str | None:
@@ -429,6 +447,7 @@ _OPERATION_LABELS = {
     ),
     ExactHumanApprovalOperation.local_recovery: "검증된 로컬 복구",
     ExactHumanApprovalOperation.local_recovery_revert: "로컬 복구 되돌리기",
+    ExactHumanApprovalOperation.work_session: "앱과 작업 연결",
 }
 
 _OPERATION_QUESTIONS = {
@@ -618,6 +637,39 @@ _OPERATION_APPROVE_BUTTONS = {
 }
 
 
+_WORK_SESSION_ACTION_COPY = {
+    "work_session_start": (
+        "이 앱에서 새 작업을 시작할까요?",
+        "선택한 앱과 새 작업을 연결합니다. 기존 자료의 작성자는 바꾸지 않습니다.",
+        "작업 시작",
+    ),
+    "work_session_handoff": (
+        "이 작업을 다른 앱으로 넘길까요?",
+        "같은 작업을 선택한 앱으로 넘길 준비를 합니다. 기존 자료와 작업 기록은 유지합니다.",
+        "작업 넘기기",
+    ),
+    "work_session_accept": (
+        "이 앱에서 넘겨받은 작업을 이어갈까요?",
+        "넘겨받은 작업을 이 앱에서 이어갈 수 있도록 연결합니다. 이전 작업 기록은 유지합니다.",
+        "작업 이어받기",
+    ),
+    "work_session_recover": (
+        "중단된 작업을 이 앱에서 다시 맡을까요?",
+        "중단된 작업을 이어갈 책임을 이 앱에 배정합니다. 이전 승인이나 작성 기록은 바꾸지 않습니다.",
+        "중단 작업 맡기",
+    ),
+}
+
+
+def _work_session_action_copy(warning_codes: tuple[str, ...]) -> tuple[str, str, str]:
+    # The fixed action code is already included in the historical context hash.
+    # Never infer a start/handoff/recovery from private labels or an unknown code.
+    actions = tuple(code for code in warning_codes if code.startswith("work_session_"))
+    if len(actions) != 1 or actions[0] not in _WORK_SESSION_ACTION_COPY:
+        raise _fail("exact_human_approval_context_invalid")
+    return _WORK_SESSION_ACTION_COPY[actions[0]]
+
+
 class ExactHumanApprovalWindowsError(RuntimeError):
     """Fixed-code error that never retains native text or private values."""
 
@@ -627,6 +679,8 @@ class ExactHumanApprovalWindowsError(RuntimeError):
         "exact_human_approval_activation_context_required",
         "exact_human_approval_native_load_failed",
         "exact_human_approval_native_call_failed",
+        "exact_human_approval_target_changed",
+        "exact_human_approval_target_observation_failed",
     }
 
     def __init__(self, code: str) -> None:
@@ -683,6 +737,8 @@ class ExactHumanApprovalContext:
             raise _fail("exact_human_approval_context_invalid")
         _validate_codes(self.review_binding_codes)
         _validate_codes(self.warning_codes)
+        if self.operation is ExactHumanApprovalOperation.work_session:
+            _work_session_action_copy(self.warning_codes)
         if self.target_preview is not None and type(self.target_preview) is not ExactHumanApprovalTargetPreview:
             raise _fail("exact_human_approval_context_invalid")
 
@@ -727,6 +783,69 @@ class _ExactHumanApprovalNative(Protocol):
     ) -> tuple[int, bool]: ...
 
 
+class _TargetCollectionDialogSession:
+    """Private view state; detail buttons can never authorize an operation."""
+
+    def __init__(
+        self,
+        preview: TargetCollectionPreview,
+        *,
+        expected_target_binding: str,
+        observe_target_binding: Callable[[], str],
+    ) -> None:
+        self.preview = preview
+        self.expected_target_binding = expected_target_binding
+        self.observe_target_binding = observe_target_binding
+        self.page_index: int | None = None
+        self.approved = False
+        self.closed = False
+
+    def __repr__(self) -> str:
+        return "<_TargetCollectionDialogSession values=local-only>"
+
+    def verify_current(self) -> None:
+        failed = False
+        try:
+            observed = self.observe_target_binding()
+        except BaseException:
+            failed = True
+            observed = None
+        # Raise outside the handler: even __context__ must not retain a private
+        # exception produced by an archive-specific observation callback.
+        if failed:
+            raise _fail("exact_human_approval_target_observation_failed")
+        if type(observed) is not str or observed != self.expected_target_binding:
+            raise _fail("exact_human_approval_target_changed")
+
+    def button_clicked(self, button_id: int) -> str:
+        if self.closed:
+            return "ignore"
+        if button_id == IDCANCEL:
+            self.approved = False
+            self.closed = True
+            return "close"
+        if button_id == APPROVE_BUTTON_ID:
+            if self.page_index is not None:
+                return "ignore"
+            self.verify_current()
+            self.approved = True
+            self.closed = True
+            return "close"
+        if self.page_index is None:
+            if button_id != TARGET_DETAILS_BUTTON_ID:
+                return "ignore"
+            self.page_index = 0
+        elif button_id == TARGET_RETURN_BUTTON_ID:
+            self.page_index = None
+        elif button_id == TARGET_PREVIOUS_BUTTON_ID and self.page_index > 0:
+            self.page_index -= 1
+        elif button_id == TARGET_NEXT_BUTTON_ID and self.page_index + 1 < self.preview.page_count:
+            self.page_index += 1
+        else:
+            return "ignore"
+        return "navigate"
+
+
 class _TASKDIALOG_BUTTON(ctypes.Structure):
     # CommCtrl.h surrounds the task-dialog declarations with pshpack1.h.
     _pack_ = 1
@@ -765,6 +884,120 @@ class _TASKDIALOGCONFIG(ctypes.Structure):
         ("lpCallbackData", ctypes.c_ssize_t),
         ("cxWidth", wintypes.UINT),
     ]
+
+
+class _TaskDialogCollectionNavigation:
+    """Keep callback/config memory alive across native page reconstruction.
+
+    TDM_NAVIGATE_PAGE replaces controls and loses control state. Authority is
+    therefore tracked outside those controls, never in a checkbox or navigation
+    return value. Navigation must report TDN_NAVIGATED before it is trusted.
+    """
+
+    def __init__(
+        self, config: _TASKDIALOGCONFIG,
+        session: _TargetCollectionDialogSession, user32: object,
+    ) -> None:
+        self.session = session
+        self.error_code: str | None = None
+        self.destroyed = False
+        self.navigation_pending = False
+        self._base = config
+        self._send = user32.SendMessageW
+        self._send.argtypes = [wintypes.HWND, wintypes.UINT, ctypes.c_size_t, ctypes.c_ssize_t]
+        self._send.restype = ctypes.c_ssize_t
+        self._callback = _TASKDIALOG_CALLBACK(self._on_notification)
+        self._configs: dict[int | None, _TASKDIALOGCONFIG] = {}
+        self._buttons: dict[int | None, object] = {}
+        self.initial = self._page_config()
+
+    def __repr__(self) -> str:
+        return "<_TaskDialogCollectionNavigation values=local-only>"
+
+    def _page_config(self) -> _TASKDIALOGCONFIG:
+        page = self.session.page_index
+        if page in self._configs:
+            return self._configs[page]
+        config = _TASKDIALOGCONFIG(**{
+            name: getattr(self._base, name) for name, _ in _TASKDIALOGCONFIG._fields_
+        })
+        if page is None:
+            button_rows = [
+                (APPROVE_BUTTON_ID, self._base.pButtons[0].pszButtonText),
+                (TARGET_DETAILS_BUTTON_ID, "대상 자세히 보기"),
+            ]
+        else:
+            button_rows = []
+            if page > 0:
+                button_rows.append((TARGET_PREVIOUS_BUTTON_ID, "이전"))
+            if page + 1 < self.session.preview.page_count:
+                button_rows.append((TARGET_NEXT_BUTTON_ID, "다음"))
+            button_rows.append((TARGET_RETURN_BUTTON_ID, "승인 화면으로 돌아가기"))
+            config.pszMainInstruction = (
+                f"대상 자세히 보기 · {page + 1}/{self.session.preview.page_count}"
+            )
+            config.pszContent = self.session.preview.native_page_text(page)
+            config.pszFooter = "읽기 전용입니다. 실행하려면 승인 화면으로 돌아가세요."
+            config.pszExpandedInformation = None
+            config.pszExpandedControlText = None
+            config.pszCollapsedControlText = None
+        buttons = (_TASKDIALOG_BUTTON * len(button_rows))(*(
+            _TASKDIALOG_BUTTON(button_id, text) for button_id, text in button_rows
+        ))
+        config.cButtons = len(button_rows)
+        config.pButtons = buttons
+        # Pressing Enter after reading a page must not accidentally approve.
+        config.nDefaultButton = IDCANCEL
+        config.pfCallback = ctypes.cast(self._callback, ctypes.c_void_p).value
+        self._buttons[page] = buttons
+        self._configs[page] = config
+        return config
+
+    def _on_notification(
+        self, hwnd: object, message: int, wparam: int, lparam: int, refdata: int,
+    ) -> int:
+        if message == TDN_DESTROYED:
+            self.destroyed = True
+            return 0
+        if self.destroyed:
+            return 1
+        if message == TDN_NAVIGATED:
+            self.navigation_pending = False
+            return 0
+        if message != TDN_BUTTON_CLICKED:
+            return 0
+        # Even after a callback failure, cancellation must remain possible.
+        if self.error_code is not None:
+            return 0 if wparam == IDCANCEL else 1
+        # SendMessage is synchronous and can re-enter the callback while native
+        # controls are being replaced. No action except cancellation is valid
+        # until TDN_NAVIGATED confirms the destination page is established.
+        if self.navigation_pending and wparam != IDCANCEL:
+            return 1
+        try:
+            action = self.session.button_clicked(int(wparam))
+            if action == "close":
+                return 0
+            if action == "navigate":
+                config = self._page_config()
+                self.navigation_pending = True
+                self._send(hwnd, TDM_NAVIGATE_PAGE, 0, ctypes.addressof(config))
+                if self.navigation_pending or self.destroyed:
+                    raise _fail("exact_human_approval_native_call_failed")
+            return 1  # S_FALSE: navigation/unknown buttons cannot close/approve.
+        except BaseException as error:
+            self.error_code = (
+                error.code if type(error) is ExactHumanApprovalWindowsError
+                else "exact_human_approval_native_call_failed"
+            )
+            self.session.approved = False
+            self.session.closed = True
+            if not self.destroyed:
+                try:
+                    self._send(hwnd, TDM_CLICK_BUTTON, IDCANCEL, 0)
+                except BaseException:
+                    pass
+            return 1
 
 
 class _ACTCTXW(ctypes.Structure):
@@ -922,6 +1155,7 @@ class _CtypesTaskDialogNative:
         collapsed_control_text: str,
         footer: str,
         approve_button_text: str,
+        _collection_session: _TargetCollectionDialogSession | None = None,
     ) -> tuple[int, bool]:
         try:
             with _activate_comctl32_v6(loader=self._loader):
@@ -974,6 +1208,10 @@ class _CtypesTaskDialogNative:
                     lpCallbackData=0,
                     cxWidth=0,
                 )
+                navigation = None
+                if _collection_session is not None:
+                    navigation = _TaskDialogCollectionNavigation(config, _collection_session, user32)
+                    config = navigation.initial
                 result = int(
                     task_dialog(
                         ctypes.byref(config),
@@ -982,16 +1220,34 @@ class _CtypesTaskDialogNative:
                         None,
                     )
                 )
+                if navigation is not None and navigation.error_code is not None:
+                    raise _fail(navigation.error_code)
+        except ExactHumanApprovalWindowsError as error:
+            if _collection_session is not None and error.code in {
+                "exact_human_approval_target_changed",
+                "exact_human_approval_target_observation_failed",
+            }:
+                raise
+            raise _fail("exact_human_approval_native_call_failed") from None
         except BaseException:
             raise _fail("exact_human_approval_native_call_failed") from None
         if result < 0:
             raise _fail("exact_human_approval_native_call_failed")
         return int(button.value), False
 
+    def show_collection(
+        self, *, session: _TargetCollectionDialogSession, **kwargs: object,
+    ) -> tuple[int, bool]:
+        return self.show(**kwargs, _collection_session=session)
 
-def _dialog_content(context: ExactHumanApprovalContext) -> str:
+
+def _dialog_content(
+    context: ExactHumanApprovalContext,
+    *,
+    target_collection: TargetCollectionPreview | None = None,
+) -> str:
     target_preview = ""
-    preview = context.target_preview
+    preview = context.target_preview if target_collection is None else None
     if preview is not None:
         if preview.kind == "draft":
             preview_lines = [
@@ -1042,9 +1298,16 @@ def _dialog_content(context: ExactHumanApprovalContext) -> str:
         if preview.source_preview is not None:
             preview_lines.extend(["", f"짧은 내용 미리보기: {preview.source_preview}"])
         target_preview = "확인할 대상\n" + "\n".join(preview_lines) + "\n\n"
+    if target_collection is not None:
+        target_preview = target_collection.native_main_text() + "\n\n"
+    summary = (
+        _work_session_action_copy(context.warning_codes)[1]
+        if context.operation is ExactHumanApprovalOperation.work_session
+        else _OPERATION_SUMMARIES[context.operation]
+    )
     return (
         "WOM이 대상, 현재 상태, 적용할 변경을 자동으로 검증했습니다.\n\n"
-        f"{_OPERATION_SUMMARIES[context.operation]}\n\n"
+        f"{summary}\n\n"
         f"{target_preview}"
         "사람이 결정할 일은 이 작업을 지금 실행할지 여부뿐입니다. "
         "대상이나 상태가 달라지면 WOM이 쓰기 전에 자동으로 중단합니다."
@@ -1073,6 +1336,8 @@ def _request_exact_human_approval_core(
     *,
     intent: ExactHumanApprovalIntent,
     native: _ExactHumanApprovalNative | None = None,
+    target_collection: TargetCollectionPreview | None = None,
+    observe_target_binding: Callable[[], str] | None = None,
 ) -> _ExactHumanApprovalDecision:
     """Internal fakeable review core; production callers never inject native."""
 
@@ -1080,23 +1345,47 @@ def _request_exact_human_approval_core(
         raise _fail("exact_human_approval_context_invalid")
     if type(intent) is not ExactHumanApprovalIntent:
         raise _fail("exact_human_approval_context_invalid")
+    session = None
+    if target_collection is not None:
+        if type(target_collection) is not TargetCollectionPreview or not callable(observe_target_binding):
+            raise _fail("exact_human_approval_context_invalid")
+        session = _TargetCollectionDialogSession(
+            target_collection,
+            expected_target_binding=context.target_binding_sha256,
+            observe_target_binding=observe_target_binding,
+        )
+        session.verify_current()
+    elif observe_target_binding is not None:
+        raise _fail("exact_human_approval_context_invalid")
     selected = native if native is not None else _CtypesTaskDialogNative()
+    session_copy = (
+        _work_session_action_copy(context.warning_codes)
+        if context.operation is ExactHumanApprovalOperation.work_session
+        else None
+    )
     instruction = (
-        _OPERATION_QUESTIONS[context.operation]
+        (session_copy[0] if session_copy is not None else _OPERATION_QUESTIONS[context.operation])
         if intent is ExactHumanApprovalIntent.live_write
         else SYNTHETIC_MAIN_INSTRUCTION
     )
     try:
-        button, checked = selected.show(
+        dialog_kwargs = dict(
             title=TASK_DIALOG_TITLE,
             main_instruction=instruction,
-            content=_dialog_content(context),
+            content=_dialog_content(context, target_collection=target_collection),
             expanded_information=_dialog_advanced_information(context),
             expanded_control_text=ADVANCED_DETAILS_EXPANDED_TEXT,
             collapsed_control_text=ADVANCED_DETAILS_COLLAPSED_TEXT,
             footer=SAFE_CANCEL_FOOTER,
-            approve_button_text=_OPERATION_APPROVE_BUTTONS[context.operation],
+            approve_button_text=(
+                session_copy[2] if session_copy is not None
+                else _OPERATION_APPROVE_BUTTONS[context.operation]
+            ),
         )
+        if session is None:
+            button, checked = selected.show(**dialog_kwargs)
+        else:
+            button, checked = selected.show_collection(session=session, **dialog_kwargs)
     except ExactHumanApprovalWindowsError:
         raise
     except BaseException:
@@ -1108,6 +1397,10 @@ def _request_exact_human_approval_core(
     # ``checked`` is intentionally ignored for compatibility with the native
     # return shape and older injected test facades.
     acknowledged = button == APPROVE_BUTTON_ID
+    if session is not None:
+        acknowledged = acknowledged and session.approved and session.closed
+        if acknowledged:
+            session.verify_current()
     if intent is ExactHumanApprovalIntent.synthetic_acceptance:
         return _ExactHumanApprovalDecision(
             approved=False,
@@ -1137,6 +1430,8 @@ def _request_exact_human_approval(
     context: ExactHumanApprovalContext,
     *,
     intent: ExactHumanApprovalIntent,
+    target_collection: TargetCollectionPreview | None = None,
+    observe_target_binding: Callable[[], str] | None = None,
 ) -> _ExactHumanApprovalDecision:
     """Run the production native boundary without an injectable facade."""
 
@@ -1144,6 +1439,8 @@ def _request_exact_human_approval(
         context,
         intent=intent,
         native=None,
+        target_collection=target_collection,
+        observe_target_binding=observe_target_binding,
     )
 
 

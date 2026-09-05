@@ -168,6 +168,11 @@ class ExactHumanApprovalWindowsTests(unittest.TestCase):
                     target_binding_sha256=SHA_C,
                     reviewer_claim="person:local-operator",
                     review_binding_codes=("machine_verified",),
+                    warning_codes=(
+                        ("work_session_start",)
+                        if operation is ExactHumanApprovalOperation.work_session
+                        else ()
+                    ),
                 )
                 native = _FakeNative((2, False))
                 request_exact_human_approval(

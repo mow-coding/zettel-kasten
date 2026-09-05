@@ -31,6 +31,7 @@ from . import git_backup_plan as planning
 from .exact_human_approval import (
     _ClaimedExactHumanApproval,
     exact_human_approval_archive_identity_sha256,
+    exact_human_approval_context_sha256,
 )
 from .exact_human_approval_windows import (
     ExactHumanApprovalContext,
@@ -55,9 +56,19 @@ from .exact_operation_manifest import (
     hash_field_value,
 )
 from .operation_approval_binding import exact_operation_manifest_approval_binding
+from .work_session_binding import WorkSessionBinding, WorkSessionBindingError
 
 
 GIT_BACKUP_SELECTION_SCHEMA = "wom-kit/git-backup-selection/v1"
+GIT_BACKUP_SELECTION_V2_SCHEMA = "wom-kit/git-backup-selection/v2"
+# Explicit declarations supplied by the session-aware planner, not ownership
+# inferred from a filename, timestamp, author or the current caller.
+GIT_BACKUP_EXCLUSION_REASONS = {
+    "other_session": "other_session_change",
+    "mixed": "mixed_session_change",
+    "legacy_unattributed": "legacy_unattributed_change",
+    "unknown": "ownership_unverified",
+}
 GIT_BACKUP_EXACT_PLAN_SCHEMA = "wom-kit/git-backup-exact-plan/v1"
 GIT_BACKUP_DOMAIN_RECEIPT_SCHEMA = "wom-kit/git-backup-completion/v1"
 
@@ -102,6 +113,8 @@ class GitBackupWriterError(RuntimeError):
         "git_backup_selection_invalid",
         "git_backup_selection_unstable",
         "git_backup_selection_incomplete",
+        "git_backup_no_selected_changes",
+        "git_backup_work_session_binding_invalid",
         "git_backup_selection_plan_mismatch",
         "git_backup_repository_relation_unsafe",
         "git_backup_manifest_drifted",
@@ -274,9 +287,11 @@ class PreparedGitBackup:
     manifest: ExactOperationManifest
     max_changes: int
     max_changed_bytes: int
+    selection_schema: str = GIT_BACKUP_SELECTION_SCHEMA
+    excluded_changes: tuple[Mapping[str, Any], ...] = ()
 
     def public_plan(self) -> dict[str, Any]:
-        return {
+        result = {
             "schema": GIT_BACKUP_EXACT_PLAN_SCHEMA,
             "ok": True,
             "dry_run": True,
@@ -323,6 +338,23 @@ class PreparedGitBackup:
             ],
             "blockers": [],
         }
+        if self.selection_schema == GIT_BACKUP_SELECTION_V2_SCHEMA:
+            selected_count = sum(len(group.change_refs) for group in self.groups)
+            result.update(
+                selection_schema=self.selection_schema,
+                selected_change_count=selected_count,
+                excluded_change_count=len(self.excluded_changes),
+                classified_change_count=selected_count + len(self.excluded_changes),
+                exclusion_scope_counts={
+                    scope: sum(row["scope"] == scope for row in self.excluded_changes)
+                    for scope in GIT_BACKUP_EXCLUSION_REASONS
+                },
+                exclusion_scope_source="explicit_declaration_not_ownership_attestation",
+                excluded_index_and_worktree_preservation_required=True,
+            )
+        if self.manifest.work_session_binding is not None:
+            result["work_session_binding"] = self.manifest.work_session_binding.document()
+        return result
 
 
 def _selection_groups(
@@ -398,6 +430,117 @@ def _selection_groups(
     return tuple(groups), selection_sha256
 
 
+def _selection_partition(
+    document: Mapping[str, Any],
+    *,
+    expected_plan_sha256: str,
+    observed_change_refs: Sequence[str],
+) -> tuple[tuple[_SelectionGroup, ...], str, tuple[Mapping[str, str], ...]]:
+    """Keep v1 strict-all-selected; v2 binds every explicit exclusion as well."""
+
+    if document.get("schema") != GIT_BACKUP_SELECTION_V2_SCHEMA:
+        groups, selection_sha256 = _selection_groups(
+            document,
+            expected_plan_sha256=expected_plan_sha256,
+            observed_change_refs=observed_change_refs,
+        )
+        return groups, selection_sha256, ()
+    if set(document) != {
+        "schema", "expected_plan_sha256", "selected_groups", "excluded_changes"
+    }:
+        raise _fail("git_backup_selection_invalid")
+    if document.get("expected_plan_sha256") != expected_plan_sha256:
+        raise _fail("git_backup_selection_plan_mismatch")
+    exclusions = document.get("excluded_changes")
+    if not isinstance(exclusions, list) or len(exclusions) > len(observed_change_refs):
+        raise _fail("git_backup_selection_invalid")
+    excluded_refs: list[str] = []
+    for row in exclusions:
+        if (
+            not isinstance(row, Mapping)
+            or set(row) != {"change_ref", "scope", "reason"}
+            or type(row.get("change_ref")) is not str
+            or _CHANGE_REF_RE.fullmatch(row["change_ref"]) is None
+            or type(row.get("scope")) is not str
+            or row["scope"] not in GIT_BACKUP_EXCLUSION_REASONS
+            or row.get("reason") != GIT_BACKUP_EXCLUSION_REASONS[row["scope"]]
+        ):
+            raise _fail("git_backup_selection_invalid")
+        excluded_refs.append(row["change_ref"])
+    if (
+        excluded_refs != sorted(set(excluded_refs))
+        or not set(excluded_refs).issubset(observed_change_refs)
+    ):
+        raise _fail("git_backup_selection_incomplete")
+    if document.get("selected_groups") == [] and set(excluded_refs) == set(observed_change_refs):
+        raise _fail("git_backup_no_selected_changes")
+    # Reuse the unchanged v1 group validator against precisely the complement;
+    # it still rejects missing refs, overlap, duplicates and unknown changes.
+    groups, _ = _selection_groups(
+        {
+            "schema": GIT_BACKUP_SELECTION_SCHEMA,
+            "expected_plan_sha256": expected_plan_sha256,
+            "groups": document.get("selected_groups"),
+        },
+        expected_plan_sha256=expected_plan_sha256,
+        observed_change_refs=tuple(sorted(set(observed_change_refs) - set(excluded_refs))),
+    )
+    return groups, _sha256_json(dict(document)), tuple(dict(row) for row in exclusions)
+
+
+def _change_paths(row: Mapping[str, Any]) -> tuple[str, ...]:
+    paths = [row.get("path")]
+    if row.get("original_path") is not None:
+        paths.append(row["original_path"])
+    if (
+        any(type(path) is not str or not path for path in paths)
+        or len(set(paths)) != len(paths)
+        or not archive_services.wom_kit_project_update_safe_worktree_paths(paths)
+    ):
+        raise _fail("git_backup_manifest_drifted")
+    return tuple(sorted(paths))
+
+
+def _validated_work_session_binding(
+    value: WorkSessionBinding | Mapping[str, Any] | None, archive_id: str,
+) -> WorkSessionBinding | None:
+    if value is None:
+        return None
+    try:
+        if type(value) is WorkSessionBinding:
+            binding = WorkSessionBinding.from_document(value.document())
+        elif isinstance(value, Mapping):
+            binding = WorkSessionBinding.from_document(value)
+        else:
+            raise WorkSessionBindingError()
+        if binding.archive_identity_sha256 != exact_human_approval_archive_identity_sha256(archive_id):
+            raise WorkSessionBindingError()
+    except (WorkSessionBindingError, TypeError, ValueError):
+        raise _fail("git_backup_work_session_binding_invalid") from None
+    return binding
+
+
+def _commit_message(
+    subject: str, selection_sha256: str, ordinal: int, source_sha256: str,
+    work_session_binding: WorkSessionBinding | None = None,
+) -> bytes:
+    message = (
+        subject + "\n\n"
+        + f"WOM-Git-Backup-Selection: {selection_sha256}\n"
+        + f"WOM-Git-Backup-Group: {ordinal + 1:06d}\n"
+        + f"WOM-Git-Backup-Source: {source_sha256}\n"
+    )
+    if work_session_binding is not None:
+        message += (
+            f"WOM-Client-App: {work_session_binding.client_app_ref}\n"
+            f"WOM-Workstream: {work_session_binding.workstream_ref}\n"
+            f"WOM-Work-Session: {work_session_binding.work_session_ref}\n"
+            f"WOM-Work-Session-Revision: {work_session_binding.revision}\n"
+            f"WOM-Work-Session-Binding: {work_session_binding.binding_sha256}\n"
+        )
+    return message.encode("utf-8")
+
+
 def _literal_path_argv_metrics(paths: Sequence[str]) -> tuple[int, int]:
     """Return private UTF-8 bytes and Windows-quoted argv characters."""
 
@@ -422,6 +565,7 @@ def _build_exact_manifest(
     groups: Sequence[_PreparedGroup],
     push_source_payload: bytes,
     push_target_identity_sha256: str,
+    work_session_binding: WorkSessionBinding | None = None,
 ) -> ExactOperationManifest:
     items: list[ExactOperationItem] = []
     for group in groups:
@@ -466,6 +610,7 @@ def _build_exact_manifest(
             archive_id
         ),
         items=items,
+        work_session_binding=work_session_binding,
     )
 
 
@@ -480,6 +625,7 @@ def prepare_git_backup(
     max_changes: int = planning.GIT_BACKUP_PLAN_DEFAULT_MAX_CHANGES,
     max_changed_bytes: int = planning.GIT_BACKUP_PLAN_DEFAULT_MAX_CHANGED_BYTES,
     progress_hook: Callable[[Mapping[str, Any]], None] | None = None,
+    work_session_binding: WorkSessionBinding | Mapping[str, Any] | None = None,
 ) -> PreparedGitBackup:
     """Prepare one private exact operation without returning paths or prose."""
 
@@ -489,6 +635,16 @@ def prepare_git_backup(
         or credential_mode != "stored"
     ):
         raise _fail("git_backup_selection_plan_mismatch")
+    binding = None
+    if work_session_binding is not None:
+        # Bound calls must reject another archive before planning can query its
+        # configured remote. Freeze the supplied document before any callback.
+        try:
+            bound_root = archive_services.require_existing_archive_root(Path(archive_root))
+            bound_archive_id = archive_services.read_archive_id(bound_root)
+        except (archive_services.ArchiveServiceError, OSError):
+            raise _fail("git_backup_exact_plan_blocked") from None
+        binding = _validated_work_session_binding(work_session_binding, bound_archive_id)
     capture: dict[str, Any] = {}
     public_plan = planning.git_backup_plan(
         archive_root,
@@ -537,11 +693,14 @@ def prepare_git_backup(
         if type(change_ref) is not str or change_ref in by_ref:
             raise _fail("git_backup_exact_plan_blocked")
         by_ref[change_ref] = row
-    groups, selection_sha256 = _selection_groups(
+    groups, selection_sha256, exclusions = _selection_partition(
         selection_document,
         expected_plan_sha256=expected_plan_sha256,
         observed_change_refs=tuple(sorted(by_ref)),
     )
+    binding = _validated_work_session_binding(binding, capture["archive_id"])
+    if binding is not None and selection_document["schema"] != GIT_BACKUP_SELECTION_V2_SCHEMA:
+        raise _fail("git_backup_work_session_binding_invalid")
 
     prepared_groups: list[_PreparedGroup] = []
     all_paths: set[str] = set()
@@ -573,6 +732,9 @@ def prepare_git_backup(
             "commit_subject": group.commit_subject,
             "changes": [dict(row) for row in selected_rows],
         }
+        if binding is not None:
+            group_basis["schema"] = "wom-kit/git-backup-commit-group-source/v2"
+            group_basis["work_session_binding"] = binding.document()
         source_payload = _canonical(group_basis)
         source_sha256 = _sha256_bytes(source_payload)
         target_identity_sha256 = _sha256_json(
@@ -582,13 +744,9 @@ def prepare_git_backup(
                 "path_set_sha256": _sha256_json(exact_paths),
             }
         )
-        commit_message = (
-            group.commit_subject
-            + "\n\n"
-            + f"WOM-Git-Backup-Selection: {selection_sha256}\n"
-            + f"WOM-Git-Backup-Group: {group.ordinal + 1:06d}\n"
-            + f"WOM-Git-Backup-Source: {source_sha256}\n"
-        ).encode("utf-8")
+        commit_message = _commit_message(
+            group.commit_subject, selection_sha256, group.ordinal, source_sha256, binding
+        )
         prepared_groups.append(
             _PreparedGroup(
                 ordinal=group.ordinal,
@@ -604,6 +762,15 @@ def prepare_git_backup(
             )
         )
 
+    prepared_exclusions: list[Mapping[str, Any]] = []
+    for exclusion in exclusions:
+        row = by_ref[exclusion["change_ref"]]
+        paths = _change_paths(row)
+        if any(path in all_paths for path in paths):
+            raise _fail("git_backup_selection_invalid")
+        all_paths.update(paths)
+        prepared_exclusions.append({**exclusion, "private_change": dict(row)})
+
     push_basis = {
         "schema": "wom-kit/git-backup-push-source/v1",
         "expected_plan_sha256": expected_plan_sha256,
@@ -617,6 +784,11 @@ def prepare_git_backup(
             group.source_sha256 for group in prepared_groups
         ],
     }
+    if selection_document["schema"] == GIT_BACKUP_SELECTION_V2_SCHEMA:
+        push_basis["schema"] = "wom-kit/git-backup-push-source/v2"
+        push_basis["excluded_changes"] = prepared_exclusions
+    if binding is not None:
+        push_basis["work_session_binding"] = binding.document()
     push_source_payload = _canonical(push_basis)
     push_source_sha256 = _sha256_bytes(push_source_payload)
     push_target_identity_sha256 = _sha256_json(
@@ -630,6 +802,7 @@ def prepare_git_backup(
         groups=prepared_groups,
         push_source_payload=push_source_payload,
         push_target_identity_sha256=push_target_identity_sha256,
+        work_session_binding=binding,
     )
     return PreparedGitBackup(
         root=Path(capture["root"]),
@@ -650,6 +823,8 @@ def prepare_git_backup(
         manifest=manifest,
         max_changes=max_changes,
         max_changed_bytes=max_changed_bytes,
+        selection_schema=selection_document["schema"],
+        excluded_changes=tuple(prepared_exclusions),
     )
 
 
@@ -713,6 +888,13 @@ def _bundle_document(prepared: PreparedGitBackup) -> dict[str, Any]:
         "push_target_identity_sha256": prepared.push_target_identity_sha256,
         "manifest": prepared.manifest.document(),
     }
+    if prepared.selection_schema == GIT_BACKUP_SELECTION_V2_SCHEMA:
+        basis["schema"] = "wom-kit/git-backup-private-execution-bundle/v2"
+        basis["excluded_changes"] = [dict(row) for row in prepared.excluded_changes]
+    if prepared.manifest.work_session_binding is not None:
+        if prepared.selection_schema != GIT_BACKUP_SELECTION_V2_SCHEMA:
+            raise _fail("git_backup_manifest_drifted")
+        basis["work_session_binding"] = prepared.manifest.work_session_binding.document()
     return {**basis, "bundle_sha256": _sha256_json(basis)}
 
 
@@ -778,7 +960,17 @@ def load_private_git_backup_bundle(
     if not raw.endswith(b"\n"):
         raise _fail("git_backup_manifest_drifted")
     document = _strict_json(raw[:-1])
-    if set(document) != {
+    return _decode_private_git_backup_bundle(root, document, manifest_sha256=manifest_sha256)
+
+
+def _decode_private_git_backup_bundle(
+    root: Path, document: Mapping[str, Any], *, manifest_sha256: str,
+) -> PreparedGitBackup:
+    """Reconstruct exact execution facts without trusting convenience views."""
+
+    is_v2 = document.get("schema") == "wom-kit/git-backup-private-execution-bundle/v2"
+    has_binding = is_v2 and "work_session_binding" in document
+    expected_keys = {
         "schema",
         "archive_id",
         "remote_name",
@@ -798,13 +990,21 @@ def load_private_git_backup_bundle(
         "push_target_identity_sha256",
         "manifest",
         "bundle_sha256",
-    }:
+    }
+    if is_v2:
+        expected_keys.add("excluded_changes")
+    if has_binding:
+        expected_keys.add("work_session_binding")
+    if set(document) != expected_keys:
         raise _fail("git_backup_manifest_drifted")
     basis = dict(document)
     supplied_bundle = basis.pop("bundle_sha256")
     if (
         document.get("schema")
-        != "wom-kit/git-backup-private-execution-bundle/v1"
+        != (
+            "wom-kit/git-backup-private-execution-bundle/v2"
+            if is_v2 else "wom-kit/git-backup-private-execution-bundle/v1"
+        )
         or type(supplied_bundle) is not str
         or not hmac.compare_digest(supplied_bundle, _sha256_json(basis))
         or document.get("credential_mode") != "stored"
@@ -843,6 +1043,16 @@ def load_private_git_backup_bundle(
         )
     ):
         raise _fail("git_backup_manifest_drifted")
+    binding = None
+    if has_binding:
+        if document["work_session_binding"] is None:
+            raise _fail("git_backup_manifest_drifted")
+        try:
+            binding = _validated_work_session_binding(
+                document["work_session_binding"], document["archive_id"]
+            )
+        except GitBackupWriterError:
+            raise _fail("git_backup_manifest_drifted") from None
     raw_groups = document.get("groups")
     if (
         not isinstance(raw_groups, list)
@@ -911,7 +1121,12 @@ def load_private_git_backup_bundle(
         if (
             not isinstance(source, Mapping)
             or source.get("schema")
-            != "wom-kit/git-backup-commit-group-source/v1"
+            != (
+                "wom-kit/git-backup-commit-group-source/v2"
+                if has_binding else "wom-kit/git-backup-commit-group-source/v1"
+            )
+            or ("work_session_binding" in source) != has_binding
+            or (has_binding and source.get("work_session_binding") != binding.document())
             or source.get("git_content_policy") != GIT_BACKUP_CONTENT_POLICY
             or source.get("expected_plan_sha256")
             != document["expected_plan_sha256"]
@@ -921,6 +1136,22 @@ def load_private_git_backup_bundle(
             or source.get("commit_subject") != subject
             or source.get("changes") != private_changes
         ):
+            raise _fail("git_backup_manifest_drifted")
+        source_refs: list[str] = []
+        source_paths: list[str] = []
+        for row in private_changes:
+            public = row.get("public_observation")
+            if not isinstance(public, Mapping) or type(public.get("change_ref")) is not str:
+                raise _fail("git_backup_manifest_drifted")
+            source_refs.append(public["change_ref"])
+            for key in ("path", "original_path"):
+                path_value = row.get(key)
+                if path_value is None and key == "original_path":
+                    continue
+                if type(path_value) is not str or not path_value:
+                    raise _fail("git_backup_manifest_drifted")
+                source_paths.append(path_value)
+        if source_refs != change_refs or sorted(set(source_paths)) != paths:
             raise _fail("git_backup_manifest_drifted")
         target_identity = _sha256_json(
             {
@@ -934,13 +1165,9 @@ def load_private_git_backup_bundle(
             target_identity,
         ):
             raise _fail("git_backup_manifest_drifted")
-        commit_message = (
-            subject
-            + "\n\n"
-            + f"WOM-Git-Backup-Selection: {document['selection_sha256']}\n"
-            + f"WOM-Git-Backup-Group: {ordinal + 1:06d}\n"
-            + f"WOM-Git-Backup-Source: {source_sha256}\n"
-        ).encode("utf-8")
+        commit_message = _commit_message(
+            subject, document["selection_sha256"], ordinal, source_sha256, binding
+        )
         groups.append(
             _PreparedGroup(
                 ordinal=ordinal,
@@ -955,12 +1182,62 @@ def load_private_git_backup_bundle(
                 private_changes=tuple(dict(row) for row in private_changes),
             )
         )
+    excluded_changes: tuple[Mapping[str, Any], ...] = ()
+    if is_v2:
+        raw_exclusions = document.get("excluded_changes")
+        if not isinstance(raw_exclusions, list) or len(raw_exclusions) > document["max_changes"]:
+            raise _fail("git_backup_manifest_drifted")
+        exclusion_declarations: list[Mapping[str, str]] = []
+        for row in raw_exclusions:
+            if (
+                not isinstance(row, Mapping)
+                or set(row) != {"change_ref", "scope", "reason", "private_change"}
+                or not isinstance(row.get("private_change"), Mapping)
+            ):
+                raise _fail("git_backup_manifest_drifted")
+            private_change = row["private_change"]
+            public = private_change.get("public_observation")
+            if (
+                not isinstance(public, Mapping)
+                or public.get("change_ref") != row["change_ref"]
+            ):
+                raise _fail("git_backup_manifest_drifted")
+            paths = _change_paths(private_change)
+            if any(path in seen_paths for path in paths):
+                raise _fail("git_backup_manifest_drifted")
+            seen_paths.update(paths)
+            exclusion_declarations.append({
+                key: row[key] for key in ("change_ref", "scope", "reason")
+            })
+        selection_document = {
+            "schema": GIT_BACKUP_SELECTION_V2_SCHEMA,
+            "expected_plan_sha256": document["expected_plan_sha256"],
+            "selected_groups": [
+                {"group_id": group.group_id, "change_refs": list(group.change_refs),
+                 "commit_subject": group.commit_subject}
+                for group in groups
+            ],
+            "excluded_changes": exclusion_declarations,
+        }
+        try:
+            _, selection_sha256, _ = _selection_partition(
+                selection_document,
+                expected_plan_sha256=document["expected_plan_sha256"],
+                observed_change_refs=tuple(sorted(
+                    seen_change_refs | {row["change_ref"] for row in exclusion_declarations}
+                )),
+            )
+        except (GitBackupWriterError, TypeError, ValueError):
+            raise _fail("git_backup_manifest_drifted") from None
+        if not hmac.compare_digest(selection_sha256, document["selection_sha256"]):
+            raise _fail("git_backup_manifest_drifted")
+        excluded_changes = tuple(dict(row) for row in raw_exclusions)
     push_source_payload = _canonical(document.get("push_source"))
     push_source = document.get("push_source")
     if (
         not isinstance(push_source, Mapping)
         or set(push_source)
-        != {
+        != ({
             "schema",
             "expected_plan_sha256",
             "selection_sha256",
@@ -970,8 +1247,14 @@ def load_private_git_backup_bundle(
             "initial_head_oid",
             "initial_remote_oid",
             "commit_group_source_sha256",
-        }
-        or push_source.get("schema") != "wom-kit/git-backup-push-source/v1"
+        } | ({"excluded_changes"} if is_v2 else set())
+          | ({"work_session_binding"} if has_binding else set()))
+        or push_source.get("schema") != (
+            "wom-kit/git-backup-push-source/v2"
+            if is_v2 else "wom-kit/git-backup-push-source/v1"
+        )
+        or (is_v2 and push_source.get("excluded_changes") != list(excluded_changes))
+        or (has_binding and push_source.get("work_session_binding") != binding.document())
         or push_source.get("expected_plan_sha256")
         != document["expected_plan_sha256"]
         or push_source.get("selection_sha256") != document["selection_sha256"]
@@ -1000,6 +1283,7 @@ def load_private_git_backup_bundle(
         groups=groups,
         push_source_payload=push_source_payload,
         push_target_identity_sha256=push_target,
+        work_session_binding=binding,
     )
     supplied_manifest = ExactOperationManifest.from_document(document["manifest"])
     if (
@@ -1026,7 +1310,39 @@ def load_private_git_backup_bundle(
         manifest=manifest,
         max_changes=document["max_changes"],
         max_changed_bytes=document["max_changed_bytes"],
+        selection_schema=(GIT_BACKUP_SELECTION_V2_SCHEMA if is_v2 else GIT_BACKUP_SELECTION_SCHEMA),
+        excluded_changes=excluded_changes,
     )
+
+
+def _freeze_validated_prepared(prepared: PreparedGitBackup) -> PreparedGitBackup:
+    """Deeply detach execution observations only after all source bindings match.
+
+    The historical bundle decoder already checks source observations, paths,
+    commit subjects, remote facts and the reconstructed manifest. Reuse it in
+    memory before any operation file or Git mutation; a frozen dataclass alone
+    does not freeze the nested dictionaries held by a caller.
+    """
+
+    try:
+        if type(prepared) is not PreparedGitBackup:
+            raise _fail("git_backup_manifest_drifted")
+        raw = _canonical(_bundle_document(prepared))
+        if len(raw) + 1 > GIT_BACKUP_MAX_PRIVATE_BUNDLE_BYTES:
+            raise _fail("git_backup_manifest_drifted")
+        root = archive_services.require_existing_archive_root(prepared.root)
+        frozen = _decode_private_git_backup_bundle(
+            root, _strict_json(raw), manifest_sha256=prepared.manifest.manifest_sha256,
+        )
+        # Includes derived commit-message bytes, which the bundle deliberately
+        # reconstructs rather than retaining as another independent authority.
+        if frozen != prepared:
+            raise _fail("git_backup_manifest_drifted")
+        return frozen
+    except Exception:
+        pass
+    # Do not retain a rejected private value through exception chaining.
+    raise _fail("git_backup_manifest_drifted")
 
 
 def _private_change_projection(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -1522,18 +1838,74 @@ class _GitBackupBackend:
             if commits is not None
             else set()
         )
+        excluded_match = self._excluded_changes_match(by_path)
+        if excluded_match:
+            expected_pending_paths.update(self._excluded_paths())
         self._cache = {
             "commits": commits,
             "changes": current_changes,
             "by_path": by_path,
             "runtime_binding_matches": runtime_binding_matches,
+            "excluded_changes_match": excluded_match,
             "classification_complete": bool(
                 commits is not None
                 and current_changes is not None
                 and current_paths == expected_pending_paths
+                and excluded_match
             ),
         }
         return self._cache
+
+    def _excluded_paths(self) -> set[str]:
+        return {
+            path
+            for row in self.prepared.excluded_changes
+            for path in _change_paths(row["private_change"])
+        }
+
+    def _excluded_changes_match(
+        self, by_path: Mapping[tuple[str, str | None], Mapping[str, Any]]
+    ) -> bool:
+        if self.prepared.selection_schema == GIT_BACKUP_SELECTION_V2_SCHEMA:
+            # Mutable caller-owned dictionaries cannot substitute observations
+            # after approval; the source bytes, not these convenience views,
+            # are the authority bound into the exact manifest.
+            source = json.loads(self.prepared.push_source_payload.decode("ascii"))
+            if (
+                source.get("schema") != "wom-kit/git-backup-push-source/v2"
+                or source.get("excluded_changes") != list(self.prepared.excluded_changes)
+                or _sha256_bytes(self.prepared.push_source_payload)
+                != self.prepared.manifest.items[-1].fields[0].source_sha256
+            ):
+                return False
+            binding = self.prepared.manifest.work_session_binding
+            binding_document = binding.document() if binding is not None else None
+            if (
+                ("work_session_binding" in source) != (binding is not None)
+                or source.get("work_session_binding") != binding_document
+            ):
+                return False
+            for group in self.prepared.groups:
+                group_source = json.loads(group.source_payload.decode("ascii"))
+                if (
+                    ("work_session_binding" in group_source) != (binding is not None)
+                    or group_source.get("work_session_binding") != binding_document
+                    or group.commit_message != _commit_message(
+                        group.commit_subject, self.prepared.selection_sha256,
+                        group.ordinal, group.source_sha256, binding,
+                    )
+                ):
+                    return False
+        elif self.prepared.excluded_changes:
+            return False
+        for exclusion in self.prepared.excluded_changes:
+            expected = exclusion["private_change"]
+            current = by_path.get((expected["path"], expected.get("original_path")))
+            # Ordinal refs are regenerated after selected commits disappear.
+            # Every actual index/worktree value and identity remains bound.
+            if current is None or _private_change_projection(current) != _private_change_projection(expected):
+                return False
+        return True
 
     def _worktree_matches_group(self, group: _PreparedGroup) -> bool:
         def matches(
@@ -1602,8 +1974,12 @@ class _GitBackupBackend:
             for pending in self.prepared.groups[len(commits) :]
             for path in pending.paths
         }
+        expected_pending_paths.update(self._excluded_paths())
         return bool(
             current_paths == expected_pending_paths
+            and self._excluded_changes_match({
+                (row["path"], row.get("original_path")): row for row in changes
+            })
             and self._worktree_matches_group(group)
             and self._index_matches_group(group)
         )
@@ -1836,6 +2212,10 @@ class _GitBackupBackend:
             )
             or not self._worktree_matches_group(group)
             or not self._index_matches_group(group)
+            or (
+                self.prepared.selection_schema == GIT_BACKUP_SELECTION_V2_SCHEMA
+                and self._refresh().get("classification_complete") is not True
+            )
         ):
             raise _fail("git_backup_exact_add_failed")
         descriptor, message_name = tempfile.mkstemp(prefix="wom-git-backup-", suffix=".msg")
@@ -1895,7 +2275,15 @@ class _GitBackupBackend:
             return
         commits = self._refresh()["commits"]
         head = self._head()
-        if commits is None or len(commits) != len(self.prepared.groups) or head is None:
+        if (
+            commits is None
+            or len(commits) != len(self.prepared.groups)
+            or head is None
+            or (
+                self.prepared.selection_schema == GIT_BACKUP_SELECTION_V2_SCHEMA
+                and self._refresh().get("classification_complete") is not True
+            )
+        ):
             raise _fail("git_backup_git_state_drifted")
         remote_state, remote_oid = self._remote_observation()
         if (
@@ -2148,6 +2536,16 @@ def _persist_domain_receipt(
         "common_final_receipt_sha256": final_receipt_sha256,
         "private_values_echoed": False,
     }
+    if prepared.selection_schema == GIT_BACKUP_SELECTION_V2_SCHEMA:
+        basis.update(
+            selection_schema=prepared.selection_schema,
+            selected_change_count=sum(len(group.change_refs) for group in prepared.groups),
+            excluded_change_count=len(prepared.excluded_changes),
+            excluded_index_and_worktree_observations_verified=True,
+            exclusion_scope_source="explicit_declaration_not_ownership_attestation",
+        )
+    if prepared.manifest.work_session_binding is not None:
+        basis["work_session_binding"] = prepared.manifest.work_session_binding.document()
     receipt_sha256 = _sha256_json(basis)
     document = {**basis, "receipt_sha256": receipt_sha256}
     raw = _canonical(document) + b"\n"
@@ -2191,6 +2589,7 @@ def _git_backup_post_decision_boundary(
     prepared: PreparedGitBackup,
     lock_box: dict[str, ExactOperationWriterLock],
 ):
+    _freeze_validated_prepared(prepared)
     claims_parent = (
         prepared.root
         / "profiles"
@@ -2233,6 +2632,15 @@ def _apply_prepared_with_claim(
     resume: bool,
     progress_hook: Callable[[ExactOperationProgress], None] | None,
 ) -> dict[str, Any]:
+    prepared = _freeze_validated_prepared(prepared)
+    expected_context = _git_backup_approval_context(
+        prepared, reviewer_claim=context.reviewer_claim,
+    )
+    if not hmac.compare_digest(
+        exact_human_approval_context_sha256(context),
+        exact_human_approval_context_sha256(expected_context),
+    ):
+        raise _fail("git_backup_manifest_drifted")
     reference = claim.assert_ready_for_context(context)
     authority = ExactOperationApprovalAuthority.from_reference(reference)
     _persist_private_bundle(prepared, writer_lock=writer_lock)
@@ -2259,7 +2667,7 @@ def _apply_prepared_with_claim(
         result=result,
         backend=backend,
     )
-    return {
+    response = {
         **result,
         "ok": True,
         "lifecycle_action": "git_backup_exact_apply",
@@ -2272,6 +2680,31 @@ def _apply_prepared_with_claim(
         "credential_values_echoed": False,
         "private_values_echoed": False,
     }
+    if prepared.selection_schema == GIT_BACKUP_SELECTION_V2_SCHEMA:
+        response.update(
+            selection_schema=prepared.selection_schema,
+            selected_change_count=sum(len(group.change_refs) for group in prepared.groups),
+            excluded_change_count=len(prepared.excluded_changes),
+            excluded_index_and_worktree_observations_verified=True,
+        )
+    if prepared.manifest.work_session_binding is not None:
+        response["work_session_binding"] = prepared.manifest.work_session_binding.document()
+    return response
+
+
+def _git_backup_approval_context(
+    prepared: PreparedGitBackup, *, reviewer_claim: str,
+) -> ExactHumanApprovalContext:
+    binding = exact_operation_manifest_approval_binding(
+        prepared.manifest,
+        operation=ExactHumanApprovalOperation.git_backup,
+        archive_id=prepared.archive_id,
+        warnings=(
+            "git_backup_push_has_no_automatic_revert",
+            "completion_receipt_is_written_after_push",
+        ),
+    )
+    return binding.context(archive_id=prepared.archive_id, reviewer_claim=reviewer_claim)
 
 
 def execute_git_backup(
@@ -2285,19 +2718,8 @@ def execute_git_backup(
 ) -> dict[str, Any]:
     """Show one native approval, then re-observe, commit, push, and verify."""
 
-    binding = exact_operation_manifest_approval_binding(
-        prepared.manifest,
-        operation=ExactHumanApprovalOperation.git_backup,
-        archive_id=prepared.archive_id,
-        warnings=(
-            "git_backup_push_has_no_automatic_revert",
-            "completion_receipt_is_written_after_push",
-        ),
-    )
-    context = binding.context(
-        archive_id=prepared.archive_id,
-        reviewer_claim=reviewer_claim,
-    )
+    _freeze_validated_prepared(prepared)
+    context = _git_backup_approval_context(prepared, reviewer_claim=reviewer_claim)
     lock_box: dict[str, ExactOperationWriterLock] = {}
 
     def writer(claim: _ClaimedExactHumanApproval) -> Mapping[str, Any]:
@@ -2350,19 +2772,8 @@ def resume_git_backup(
 ) -> dict[str, Any]:
     """Resume one authenticated started claim and its exact checkpoint only."""
 
-    binding = exact_operation_manifest_approval_binding(
-        prepared.manifest,
-        operation=ExactHumanApprovalOperation.git_backup,
-        archive_id=prepared.archive_id,
-        warnings=(
-            "git_backup_push_has_no_automatic_revert",
-            "completion_receipt_is_written_after_push",
-        ),
-    )
-    context = binding.context(
-        archive_id=prepared.archive_id,
-        reviewer_claim=reviewer_claim,
-    )
+    _freeze_validated_prepared(prepared)
+    context = _git_backup_approval_context(prepared, reviewer_claim=reviewer_claim)
     lock_box: dict[str, ExactOperationWriterLock] = {}
     authority_box: dict[str, ExactOperationApprovalAuthority] = {}
 
@@ -2420,6 +2831,8 @@ def resume_git_backup(
 __all__ = [
     "GIT_BACKUP_EXACT_PLAN_SCHEMA",
     "GIT_BACKUP_SELECTION_SCHEMA",
+    "GIT_BACKUP_SELECTION_V2_SCHEMA",
+    "GIT_BACKUP_EXCLUSION_REASONS",
     "GitBackupWriterError",
     "PreparedGitBackup",
     "execute_git_backup",

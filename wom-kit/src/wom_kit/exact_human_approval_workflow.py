@@ -45,6 +45,7 @@ from .exact_human_approval_windows import (
     _ExactHumanApprovalNative,
     _request_exact_human_approval_core,
 )
+from .target_collection_preview import TargetCollectionPreview
 
 
 _T = TypeVar("_T")
@@ -335,8 +336,15 @@ def _execute_exact_human_approved_write_core(
         Callable[[], AbstractContextManager[Any]] | None
     ) = None,
     claim_succeeded_finalizer: _ClaimSucceededFinalizer | None = None,
+    target_collection: TargetCollectionPreview | None = None,
+    observe_target_binding: Callable[[], str] | None = None,
 ) -> dict[str, Any]:
-    """Internal fakeable orchestration core for production and bounded tests."""
+    """Internal fakeable orchestration core for production and bounded tests.
+
+    Optional native-only previews are not claim data. Legacy callers retain
+    their exact request shape; resume continues to authenticate its original
+    context without attaching a new preview or work-session binding.
+    """
 
     if (
         type(context) is not ExactHumanApprovalContext
@@ -351,11 +359,18 @@ def _execute_exact_human_approved_write_core(
         )
     ):
         raise _fail("exact_human_approval_writer_result_invalid")
+    review_options: dict[str, Any] = {}
+    if target_collection is not None or observe_target_binding is not None:
+        review_options = {
+            "target_collection": target_collection,
+            "observe_target_binding": observe_target_binding,
+        }
     try:
         decision = _request_exact_human_approval_core(
             context,
             intent=ExactHumanApprovalIntent.live_write,
             native=native,
+            **review_options,
         )
     except ExactHumanApprovalWindowsError:
         raise _fail("exact_human_approval_operation_failed") from None

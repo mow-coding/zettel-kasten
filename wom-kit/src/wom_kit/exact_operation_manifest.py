@@ -15,6 +15,7 @@ revert authority.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import hmac
 import json
@@ -27,8 +28,11 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Iterable, Literal, Mapping, Protocol, Sequence
 
+from .work_session_binding import WorkSessionBinding, WorkSessionBindingError
+
 
 MANIFEST_SCHEMA = "wom-kit/exact-operation-manifest/v1"
+EXTENSION_SCHEMA = "wom-kit/exact-operation-extension/v1"
 CHECKPOINT_SCHEMA = "wom-kit/exact-operation-checkpoint/v1"
 FIELD_RECEIPT_SCHEMA = "wom-kit/exact-operation-field-receipt/v1"
 VERIFICATION_SCHEMA = "wom-kit/exact-operation-verification/v1"
@@ -408,12 +412,20 @@ class ExactOperationManifest:
     effect_set_sha256: str
     manifest_sha256: str
     operation_evidence: ExactOperationEvidence | None = None
+    work_session_binding: WorkSessionBinding | None = None
 
     def __post_init__(self) -> None:
         """Reject forged direct construction as strictly as JSON loading."""
 
         operation = _bounded_text(self.operation, code_pattern=_CODE_RE)
         archive_identity_sha256 = _digest(self.archive_identity_sha256)
+        if self.work_session_binding is not None and type(
+            self.work_session_binding
+        ) is not WorkSessionBinding:
+            raise _fail("exact_operation_manifest_invalid")
+        _normalized_work_session_binding(
+            self.work_session_binding, archive_identity_sha256
+        )
         if self.operation_evidence is not None and type(
             self.operation_evidence
         ) is not ExactOperationEvidence:
@@ -431,6 +443,7 @@ class ExactOperationManifest:
             archive_identity_sha256=archive_identity_sha256,
             items=self.items,
             operation_evidence=self.operation_evidence,
+            work_session_binding=self.work_session_binding,
             **component_digests,
         )
         supplied_manifest = _digest(self.manifest_sha256)
@@ -445,9 +458,13 @@ class ExactOperationManifest:
         archive_identity_sha256: str,
         items: Iterable[ExactOperationItem],
         operation_evidence: Mapping[str, Any] | ExactOperationEvidence | None = None,
+        work_session_binding: Mapping[str, Any] | WorkSessionBinding | None = None,
     ) -> "ExactOperationManifest":
         normalized_operation = _bounded_text(operation, code_pattern=_CODE_RE)
         normalized_archive = _digest(archive_identity_sha256)
+        normalized_binding = _normalized_work_session_binding(
+            work_session_binding, normalized_archive
+        )
         normalized_items = tuple(items)
         if operation_evidence is None:
             normalized_evidence = None
@@ -466,6 +483,7 @@ class ExactOperationManifest:
             archive_identity_sha256=normalized_archive,
             items=normalized_items,
             operation_evidence=normalized_evidence,
+            work_session_binding=normalized_binding,
             **digests,
         )
         return cls(
@@ -474,6 +492,7 @@ class ExactOperationManifest:
             items=normalized_items,
             manifest_sha256=_digest_document(basis),
             operation_evidence=normalized_evidence,
+            work_session_binding=normalized_binding,
             **digests,
         )
 
@@ -494,9 +513,17 @@ class ExactOperationManifest:
         if not isinstance(value, Mapping) or frozenset(value) not in {
             frozenset(required_keys),
             frozenset(required_keys | {"operation_evidence"}),
+            frozenset(required_keys | {"work_session_binding", "extension_sha256"}),
+            frozenset(required_keys | {
+                "operation_evidence", "work_session_binding", "extension_sha256",
+            }),
         }:
             raise _fail("exact_operation_manifest_invalid")
         if value.get("schema") != MANIFEST_SCHEMA or type(value.get("items")) is not list:
+            raise _fail("exact_operation_manifest_invalid")
+        if "work_session_binding" in value and not isinstance(
+            value["work_session_binding"], Mapping
+        ):
             raise _fail("exact_operation_manifest_invalid")
         parsed_items: list[ExactOperationItem] = []
         for raw_item in value["items"]:
@@ -547,6 +574,7 @@ class ExactOperationManifest:
             archive_identity_sha256=value.get("archive_identity_sha256"),
             items=parsed_items,
             operation_evidence=value.get("operation_evidence"),
+            work_session_binding=value.get("work_session_binding"),
         )
         expected_counts = (
             len(rebuilt.items),
@@ -567,6 +595,11 @@ class ExactOperationManifest:
             supplied = _digest(value.get(name))
             if not hmac.compare_digest(supplied, getattr(rebuilt, name)):
                 raise _fail("exact_operation_manifest_digest_mismatch")
+        if (
+            "extension_sha256" in value
+            and _digest(value["extension_sha256"]) != rebuilt.extension_sha256
+        ):
+            raise _fail("exact_operation_manifest_digest_mismatch")
         return rebuilt
 
     def document(self) -> dict[str, Any]:
@@ -575,11 +608,18 @@ class ExactOperationManifest:
             archive_identity_sha256=self.archive_identity_sha256,
             items=self.items,
             operation_evidence=self.operation_evidence,
+            work_session_binding=self.work_session_binding,
             target_set_sha256=self.target_set_sha256,
             source_set_sha256=self.source_set_sha256,
             effect_set_sha256=self.effect_set_sha256,
         )
         return {**basis, "manifest_sha256": self.manifest_sha256}
+
+    @property
+    def extension_sha256(self) -> str | None:
+        if self.work_session_binding is None:
+            return None
+        return _work_session_extension_sha256(self.work_session_binding)
 
     def approval_digest_context(self) -> dict[str, Any]:
         """Return only the digest context consumed by the existing broker."""
@@ -601,7 +641,54 @@ class ExactOperationManifest:
             context["operation_evidence_sha256"] = (
                 self.operation_evidence.evidence_sha256
             )
+        context.update(_work_session_digest_fields(self))
         return context
+
+
+def _normalized_work_session_binding(
+    value: Any, archive_identity_sha256: str,
+) -> WorkSessionBinding | None:
+    if value is None:
+        return None
+    try:
+        if type(value) is WorkSessionBinding:
+            binding = WorkSessionBinding.from_document(value.document())
+        elif isinstance(value, Mapping):
+            binding = WorkSessionBinding.from_document(value)
+        else:
+            raise WorkSessionBindingError()
+    except WorkSessionBindingError:
+        raise _fail("exact_operation_manifest_invalid") from None
+    if binding.archive_identity_sha256 != archive_identity_sha256:
+        raise _fail("exact_operation_manifest_invalid")
+    return binding
+
+
+def _work_session_extension_sha256(binding: WorkSessionBinding) -> str:
+    return _digest_document({
+        "schema": EXTENSION_SCHEMA, "work_session_binding": binding.document(),
+    })
+
+
+def _work_session_digest_fields(manifest: ExactOperationManifest) -> dict[str, str]:
+    if manifest.work_session_binding is None:
+        return {}
+    return {
+        "work_session_binding_sha256": manifest.work_session_binding.binding_sha256,
+        "extension_sha256": _work_session_extension_sha256(manifest.work_session_binding),
+    }
+
+
+def _validated_work_session_digest_fields(
+    value: Mapping[str, Any], *, code: str,
+) -> dict[str, str]:
+    keys = {"work_session_binding_sha256", "extension_sha256"}
+    present = keys.intersection(value)
+    if not present:
+        return {}
+    if present != keys:
+        raise _fail(code)
+    return {key: _digest(value[key], code=code) for key in keys}
 
 
 def _validate_item_set(items: tuple[ExactOperationItem, ...]) -> None:
@@ -675,6 +762,7 @@ def _manifest_basis(
     target_set_sha256: str,
     source_set_sha256: str,
     effect_set_sha256: str,
+    work_session_binding: WorkSessionBinding | None = None,
 ) -> dict[str, Any]:
     basis = {
         "schema": MANIFEST_SCHEMA,
@@ -689,6 +777,9 @@ def _manifest_basis(
     }
     if operation_evidence is not None:
         basis["operation_evidence"] = operation_evidence.document()
+    if work_session_binding is not None:
+        basis["work_session_binding"] = work_session_binding.document()
+        basis["extension_sha256"] = _work_session_extension_sha256(work_session_binding)
     return basis
 
 
@@ -1030,45 +1121,53 @@ class ExactOperationWriterLock:
             self._handle = self._open()
         except OSError:
             raise _fail("exact_operation_writer_lock_invalid") from None
-        deadline = time.monotonic() + self.timeout_seconds
-        while True:
-            try:
-                self._handle.seek(0)
-                if os.name == "nt":
-                    import msvcrt
-
-                    msvcrt.locking(self._handle.fileno(), msvcrt.LK_NBLCK, 1)
-                else:
-                    import fcntl
-
-                    fcntl.flock(
-                        self._handle.fileno(),
-                        fcntl.LOCK_EX | fcntl.LOCK_NB,
-                    )
-                break
-            except OSError:
-                if time.monotonic() >= deadline:
-                    self._handle.close()
-                    self._handle = None
-                    raise _fail("exact_operation_writer_busy") from None
-                self.heartbeat()
-                time.sleep(0.02)
-        opened = os.fstat(self._handle.fileno())
-        named = os.lstat(self.path)
-        self._handle.seek(0)
-        raw = self._handle.read(len(_LOCK_BYTES) + 1)
-        if not (
-            _safe_regular_stat(opened, max_bytes=len(_LOCK_BYTES))
-            and _safe_regular_stat(named, max_bytes=len(_LOCK_BYTES))
-            and _same_file_identity(opened, named)
-            and opened.st_size == named.st_size == len(_LOCK_BYTES)
-            and raw == _LOCK_BYTES
-        ):
+        try:
+            deadline = time.monotonic() + self.timeout_seconds
+            while True:
+                try:
+                    self._try_os_lock()
+                    break
+                except OSError as error:
+                    # Only documented nonblocking contention is waitable. An
+                    # invalid descriptor or unavailable primitive is not a
+                    # running owner, and must never cause an endless wait.
+                    if error.errno not in {errno.EACCES, errno.EAGAIN}:
+                        raise _fail("exact_operation_writer_lock_invalid") from None
+                    if time.monotonic() >= deadline:
+                        raise _fail("exact_operation_writer_busy") from None
+                    self.heartbeat()
+                    time.sleep(0.02)
+            opened = os.fstat(self._handle.fileno())
+            named = os.lstat(self.path)
+            self._handle.seek(0)
+            raw = self._handle.read(len(_LOCK_BYTES) + 1)
+            if not (
+                _safe_regular_stat(opened, max_bytes=len(_LOCK_BYTES))
+                and _safe_regular_stat(named, max_bytes=len(_LOCK_BYTES))
+                and _same_file_identity(opened, named)
+                and opened.st_size == named.st_size == len(_LOCK_BYTES)
+                and raw == _LOCK_BYTES
+            ):
+                raise _fail("exact_operation_writer_lock_invalid")
+            self._identity = (opened.st_dev, opened.st_ino)
+            self.held = True
+            return self
+        except BaseException:
+            # Includes cancelled progress callbacks and failures after the OS
+            # granted the lock. Closing our descriptor releases only our lock.
             self.__exit__(None, None, None)
-            raise _fail("exact_operation_writer_lock_invalid")
-        self._identity = (opened.st_dev, opened.st_ino)
-        self.held = True
-        return self
+            raise
+
+    def _try_os_lock(self) -> None:
+        self._handle.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(self._handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(self._handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
 
     def verify_held(self) -> None:
         if not self.held or self._handle is None or self._identity is None:
@@ -1696,7 +1795,8 @@ def validate_exact_operation_final_receipt_document(
         else None
     )
     if (
-        normalized.get("schema") != FINAL_RECEIPT_SCHEMA
+        set(normalized) != {"schema", "result", "receipt_sha256"}
+        or normalized.get("schema") != FINAL_RECEIPT_SCHEMA
         or not isinstance(result, Mapping)
         or type(normalized.get("receipt_sha256")) is not str
         or (
@@ -1963,6 +2063,10 @@ def _validate_final_checkpoint_evidence(
         "previous_checkpoint_sha256",
         "checkpoint_sha256",
     }
+    binding_fields = _validated_work_session_digest_fields(
+        result, code="exact_operation_result_receipt_failed"
+    )
+    expected_keys.update(binding_fields)
     previous: str | None = None
     approval_document: dict[str, Any] | None = None
     checkpoint_authority: ExactOperationApprovalAuthority | None = None
@@ -1977,6 +2081,10 @@ def _validate_final_checkpoint_evidence(
             raise _fail("exact_operation_result_receipt_failed")
         row = dict(raw_row)
         if set(row) != expected_keys:
+            raise _fail("exact_operation_result_receipt_failed")
+        if _validated_work_session_digest_fields(
+            row, code="exact_operation_result_receipt_failed"
+        ) != binding_fields:
             raise _fail("exact_operation_result_receipt_failed")
         if (
             row.get("schema") != CHECKPOINT_SCHEMA
@@ -2173,6 +2281,7 @@ def _execution_sha256(
     return _digest_document(
         {
             "schema": "wom-kit/exact-operation-execution/v1",
+            **_work_session_digest_fields(manifest),
             "manifest_sha256": manifest.manifest_sha256,
             "mode": mode,
             "approval_binding_sha256": (
@@ -2323,6 +2432,7 @@ def _field_receipt_sha256(
     return _digest_document(
         {
             "schema": FIELD_RECEIPT_SCHEMA,
+            **_work_session_digest_fields(manifest),
             "manifest_sha256": manifest.manifest_sha256,
             "execution_sha256": execution_sha256,
             "mode": mode,
@@ -2536,11 +2646,16 @@ def _validate_stable_result_document(value: Mapping[str, Any]) -> dict[str, Any]
             "operation_evidence",
             "checkpoint_chain_sha256",
             "completion_authentication",
+            "work_session_binding_sha256",
+            "extension_sha256",
         }
     )
     extras = frozenset(result) - frozenset(required_keys)
     if not required_keys.issubset(result) or not extras.issubset(optional_keys):
         raise _fail("exact_operation_result_receipt_failed")
+    _validated_work_session_digest_fields(
+        result, code="exact_operation_result_receipt_failed"
+    )
     if (
         result.get("schema") != RESULT_SCHEMA
         or result.get("status") != "completed"
@@ -2619,9 +2734,11 @@ def _checkpoint_basis(
     field_receipt_sha256: str | None,
     previous_checkpoint_sha256: str | None,
     approval_authority: ExactOperationApprovalAuthority | None,
+    work_session_digest_fields: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     return {
         "schema": CHECKPOINT_SCHEMA,
+        **(work_session_digest_fields or {}),
         "manifest_sha256": manifest_sha256,
         "execution_sha256": execution_sha256,
         "sequence": sequence,
@@ -2673,6 +2790,7 @@ def _load_checkpoint_state(
     previous: str | None = None
     expected_item_position = 0
     selection_ordinals = [item.ordinal for item, _ in selection]
+    binding_fields = _work_session_digest_fields(manifest)
     for sequence, raw_row in enumerate(raw_rows):
         if not isinstance(raw_row, Mapping):
             raise _fail("exact_operation_checkpoint_invalid")
@@ -2692,7 +2810,11 @@ def _load_checkpoint_state(
             "field_receipt_sha256",
             "previous_checkpoint_sha256",
             "checkpoint_sha256",
-        }:
+        } | set(binding_fields):
+            raise _fail("exact_operation_checkpoint_invalid")
+        if _validated_work_session_digest_fields(
+            row, code="exact_operation_checkpoint_invalid"
+        ) != binding_fields:
             raise _fail("exact_operation_checkpoint_invalid")
         ordinal = row.get("item_ordinal")
         if type(ordinal) is not int or ordinal not in by_ordinal:
@@ -2910,6 +3032,7 @@ def _append_checkpoint(
         field_receipt_sha256=field_receipt_sha256,
         previous_checkpoint_sha256=state.last_checkpoint_sha256,
         approval_authority=approval_authority,
+        work_session_digest_fields=_work_session_digest_fields(manifest),
     )
     row = {**basis, "checkpoint_sha256": _digest_document(basis)}
     try:
@@ -3073,6 +3196,7 @@ def verify_exact_operation(
         all_match = all_match and item_match
     result_basis = {
         "schema": VERIFICATION_SCHEMA,
+        **_work_session_digest_fields(manifest),
         "manifest_sha256": manifest.manifest_sha256,
         "expected_state": state,
         "item_count": len(selection),
@@ -3258,6 +3382,7 @@ def inspect_exact_operation_state(
         state = "partially_written"
     result_basis = {
         "schema": "wom-kit/exact-operation-state-inspection/v1",
+        **_work_session_digest_fields(manifest),
         "state": state,
         "mode": mode,
         "manifest_sha256": manifest.manifest_sha256,
@@ -3568,6 +3693,7 @@ def _run_exact_operation(
     ]
     stable_result_basis = {
         "schema": RESULT_SCHEMA,
+        **_work_session_digest_fields(manifest),
         "status": "completed",
         "mode": mode,
         "manifest_sha256": manifest.manifest_sha256,
@@ -3732,6 +3858,7 @@ __all__ = [
     "CompletionAuthenticator",
     "FileExactOperationCheckpointStore",
     "MANIFEST_SCHEMA",
+    "EXTENSION_SCHEMA",
     "RESULT_SCHEMA",
     "VERIFICATION_SCHEMA",
     "apply_exact_operation",
