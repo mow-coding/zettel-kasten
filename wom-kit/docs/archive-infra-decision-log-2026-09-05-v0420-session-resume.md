@@ -183,3 +183,25 @@ approval; old completed evidence is not migrated during read-only replay.
 Source and genuine child-process results are recorded in the integration
 minutes. Public human lifecycle routing, installed-wheel acceptance and private
 client execution remain incomplete; this contract is not a release claim.
+
+## Public handoff and acceptance integration
+
+The public service now connects explicit human handoff and successor acceptance,
+including original resume and explicit original re-review. CLI and MCP share
+one exact mode classifier and bounded private request contract. Handoff binds
+both apps and the outgoing session; acceptance binds the explicit predecessor
+on a new caller-retained task route. Original accept continuation selects that
+route's saved decision rather than accepting a replacement predecessor.
+
+Extract the existing claim-presence/native re-review protocol into one private
+engine shared by create, accept and handoff. Only genuinely absent claim
+evidence on the pending original permits another native review of the same
+context. Existing started/succeeded claims use original execution; corrupt or
+ambiguous evidence is not absence. Publication rechecks the exact current actor
+and source after review. A completed handoff followed by acceptance keeps the
+old verified commitment but does not report current ownership or write again.
+
+Public native/key injection remains unavailable. All five service entrypoints
+reuse the existing runtime guard and one OS lock. This source checkpoint and
+its process-loss tests do not establish installed-wheel or client completion;
+recovery, all-writer binding and session Git backup remain unfinished.

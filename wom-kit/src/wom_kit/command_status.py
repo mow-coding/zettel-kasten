@@ -1343,7 +1343,7 @@ def _selected_canonical_parser_path(
 _AUDITED_INVOCATION_OPTIONS = {
     "work-session": ("--action --kind --ref --client-app-ref --workstream-ref --page-size --cursor "
                      "--dry-run --approve --apply --resume --review-original --task-route-ref "
-                     "--work-session-ref --request-stdin --progress --no-progress --format"),
+                     "--work-session-ref --target-app-ref --request-stdin --progress --no-progress --format"),
     "index": "--format --output --progress",
     "index-health": "--dry-run --format --max-items --output --progress",
     "staged-cleanup-check": (

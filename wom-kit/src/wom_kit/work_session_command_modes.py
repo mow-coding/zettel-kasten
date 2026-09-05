@@ -53,6 +53,13 @@ def resolve_work_session_mode(
                 (True, False, True): "original_rereview",
                 (False, True, False): "original_create_resume",
             }.get((approve, resume, review_original))
+    elif action in {"accept", "handoff"}:
+        if not dry_run and not apply:
+            mode = {
+                (True, False, False): action,
+                (True, False, True): "original_" + action + "_rereview",
+                (False, True, False): "original_" + action + "_resume",
+            }.get((approve, resume, review_original))
     elif action == "claim":
         if not dry_run and not approve and not review_original:
             mode = {
@@ -73,7 +80,8 @@ def resolve_work_session_mode(
         "available": True,
         "mode": mode,
         "read_only": read_only,
-        "native_approval_required": mode in {"create", "original_rereview"},
+        "native_approval_required": mode in {"create", "original_rereview", "accept", "handoff",
+                                             "original_accept_rereview", "original_handoff_rereview"},
         "potential_write": not read_only,
         "reason_code": None,
     }

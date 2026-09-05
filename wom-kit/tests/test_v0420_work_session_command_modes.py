@@ -19,7 +19,7 @@ UNAVAILABLE = {
 
 
 class WorkSessionCommandModeTests(unittest.TestCase):
-    def test_complete_boolean_matrix_has_only_the_twenty_explicit_inputs(self):
+    def test_complete_boolean_matrix_has_only_the_twenty_six_explicit_inputs(self):
         # This declarative oracle specifies every accepted input independently
         # of the classifier's branches, including query --dry-run equivalence.
         expected = {
@@ -43,9 +43,15 @@ class WorkSessionCommandModeTests(unittest.TestCase):
             ("resume", False, False, False, True, False): ("original_state_transition_resume", False, False),
             ("complete", False, False, True, False, False): ("state_transition_apply", False, False),
             ("complete", False, False, False, True, False): ("original_state_transition_resume", False, False),
+            ("accept", False, True, False, False, False): ("accept", False, True),
+            ("accept", False, True, False, False, True): ("original_accept_rereview", False, True),
+            ("accept", False, False, False, True, False): ("original_accept_resume", False, False),
+            ("handoff", False, True, False, False, False): ("handoff", False, True),
+            ("handoff", False, True, False, False, True): ("original_handoff_rereview", False, True),
+            ("handoff", False, False, False, True, False): ("original_handoff_resume", False, False),
         }
         observed_available = set()
-        for action in ("list", "inspect", "request-init", "register-app", "create", "claim", "pause", "resume", "complete"):
+        for action in ("list", "inspect", "request-init", "register-app", "create", "claim", "pause", "resume", "complete", "handoff", "accept"):
             for values in product((False, True), repeat=len(FLAGS)):
                 key = (action, *values)
                 with self.subTest(action=action, flags=values):
@@ -72,12 +78,12 @@ class WorkSessionCommandModeTests(unittest.TestCase):
             "available": True, "mode": "task_request_init", "read_only": True,
             "native_approval_required": False, "potential_write": False, "reason_code": None,
         })
-        for action in ("register-app", "create", "claim", "pause", "resume", "complete"):
+        for action in ("register-app", "create", "claim", "pause", "resume", "complete", "handoff", "accept"):
             self.assertEqual(resolve_work_session_mode(action=action), UNAVAILABLE)
         self.assertEqual(resolve_work_session_mode(action="create", dry_run=True), UNAVAILABLE)
 
     def test_future_unknown_alias_and_private_actions_are_fixed_unavailable(self):
-        for action in ("handoff", "accept", "recover",
+        for action in ("recover",
                        "register_app", "LIST", " create ", "", "PRIVATE_ACTION_DO_NOT_ECHO"):
             for values in product((False, True), repeat=len(FLAGS)):
                 result = resolve_work_session_mode(action=action, **dict(zip(FLAGS, values)))
@@ -113,7 +119,7 @@ class WorkSessionCommandModeTests(unittest.TestCase):
         self.assertEqual(resolve_work_session_mode(action=CustomAction("create"), approve=True), UNAVAILABLE)
 
     def test_resume_never_requests_new_native_approval(self):
-        for action in ("register-app", "create", "claim", "pause", "resume", "complete"):
+        for action in ("register-app", "create", "claim", "pause", "resume", "complete", "handoff", "accept"):
             result = resolve_work_session_mode(action=action, resume=True)
             self.assertTrue(result["available"])
             self.assertFalse(result["native_approval_required"])

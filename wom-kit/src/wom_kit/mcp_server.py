@@ -95,7 +95,11 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "without creating, approving or saving a task. Retain it before create; "
             "resume uses that original reference and never another request-init. "
             "humans never copy hashes or JSON. Private labels are input only, not output. "
-            "Create dry-run and handoff or other later actions are not supported. "
+            "Create/accept/handoff dry-run and recover are not supported. "
+            "Handoff approve uses the original current session and target_app_ref. "
+            "Accept approve uses a new task route and work_session_ref of the predecessor; "
+            "it creates an unclaimed successor and does not transfer artifact responsibility. "
+            "Accept resume/review_original uses app and original task route only, without a replacement predecessor. "
             "Action pause/resume/complete with apply starts a state transition; the resume flag instead "
             "continues only the original operation and never creates a new claim or human approval."
             " Completion closes only session metadata, never deleting or cleaning up archive data."
@@ -106,7 +110,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "type": "object", "additionalProperties": False,
             "properties": {
                 "archive_root": {"type": "string"},
-                "action": {"type": "string", "enum": ["register-app", "request-init", "create", "claim", "pause", "resume", "complete"]},
+                "action": {"type": "string", "enum": ["register-app", "request-init", "create", "claim", "pause", "resume", "complete", "handoff", "accept"]},
                 "dry_run": {"type": "boolean", "default": False},
                 "approve": {"type": "boolean", "default": False},
                 "apply": {"type": "boolean", "default": False},
@@ -115,6 +119,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "client_app_ref": {"type": "string"},
                 "task_route_ref": {"type": "string"},
                 "work_session_ref": {"type": "string"},
+                "target_app_ref": {"type": "string"},
                 "request": {
                     "type": "object", "additionalProperties": False,
                     "properties": {
@@ -3918,12 +3923,12 @@ def tool_archive_work_session_manage(arguments: dict[str, Any]) -> dict[str, Any
     from .work_session_command import REQUEST_LIMIT_BYTES, dispatch_work_session_management
 
     flags = {"dry_run", "approve", "apply", "resume", "review_original"}
-    refs = {"client_app_ref", "task_route_ref", "work_session_ref"}
+    refs = {"client_app_ref", "task_route_ref", "work_session_ref", "target_app_ref"}
     allowed = {"archive_root", "action", "request", *flags, *refs}
     if (type(arguments) is not dict or any(type(key) is not str for key in arguments)
             or set(arguments) - allowed
             or type(arguments.get("action")) is not str
-            or arguments["action"] not in {"register-app", "request-init", "create", "claim", "pause", "resume", "complete"}):
+            or arguments["action"] not in {"register-app", "request-init", "create", "claim", "pause", "resume", "complete", "handoff", "accept"}):
         raise InvalidParamsError()
     if (any(type(arguments[key]) is not bool for key in flags if key in arguments)
             or any(type(arguments[key]) is not str for key in refs if key in arguments)

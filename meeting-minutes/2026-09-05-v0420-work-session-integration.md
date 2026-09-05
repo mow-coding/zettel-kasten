@@ -887,6 +887,63 @@ bump, PR, tag, wheel or client application has occurred.
   original native re-review after a handoff pre-claim cut remain unfinished.
   Automatic approval or a successful resume is not inferred from that cut.
 
+## Public human lifecycle integration in progress
+
+- The existing management service, CLI and MCP routing now compose handoff
+  and accept through the same mode classifier, runtime guard and held facades.
+  Fresh accept takes a new caller-retained task route and explicit predecessor;
+  original accept resume/re-review takes only its original app and route.
+  Handoff always retains the exact source session and target app. Only fresh
+  human decisions accept the private reviewer field; original continuation
+  rejects replacement reviewer, target, context and secret inputs.
+- Native pre-claim re-review is shared rather than duplicated. The original
+  claim scanner must exit its key consumer before the broker can run. Existing
+  claim evidence resumes the same selected operation; genuinely absent evidence
+  permits only explicit review of that original pending context. Handoff
+  preserves committed evidence separately from later current-state changes.
+  The shared-core and service cohorts are still being collected.
+- Adding the target-app option initially invalidated the strict invocation
+  option audit as intended. After reviewing its effects, the exact one-option
+  whitelist was updated without weakening the parser comparison. Nine mode and
+  grammar tests passed; the independent oracle covers 352 flag combinations
+  across eleven actions and exactly twenty-six supported combinations.
+- Root's frozen public cohort then passed nineteen tests in 162.802 seconds.
+  Actual synthetic CLI/MCP calls covered two registered apps, outgoing handoff,
+  original replay, successor acceptance, claim, pause, resume and completion.
+  A second journey exercised a genuine pre-claim handoff cut with explicit
+  original re-review and a started accept cut with original resume. The old
+  public registration/create/claim/state path still passed. Private labels and
+  claims were not returned; archive metadata bytes were unchanged. A stale
+  outgoing replay after acceptance retained old committed evidence but did not
+  claim current handoff state. These are public source dispatch tests, not an
+  installed wheel, interactive host UI or private client execution result.
+
+## Public human lifecycle checkpoint validation
+
+- The frozen service slice passed eight new tests plus the existing exported
+  signature test in separate focused runs: nine unique tests and 43 subtests.
+  One initial test incorrectly blocked the original bundle loader's pure
+  manifest reconstruction. The test, not production code, was corrected to
+  forbid fresh execution and generated references while preserving exact old
+  bundle bytes and the claim set; that selected test then passed.
+- Shared original re-review now serves create, accept and handoff. The final
+  single cohort passed 24 tests in 311.02 seconds: nine new handoff tests,
+  twelve existing create tests and three accept tests. A genuine child exit
+  before claim publication followed by original re-review in a fresh process
+  passed. Existing started/succeeded records continue through original resume;
+  absence, corrupt evidence and ambiguous evidence are not interchangeable.
+- Independent cross-review of the shared engine/handoff wrapper and the public
+  service found no actionable blocker. Review checked native/key lifetime
+  separation, original manifest/context identity, post-click actor/source CAS,
+  strict public arguments, and old committed evidence versus current ownership.
+  Readiness's four gates, 169-file resource synchronization and diff checks
+  passed. These results supplement, not replace, the public 19-test source
+  cohort above. Test counts from overlapping earlier runs are not added again.
+- This checkpoint exposes handoff and acceptance through existing CLI/MCP
+  entrypoints. It does not yet complete recovery routing, all-writer session
+  binding, session Git selection, installed-wheel acceptance or v0.4.20 release.
+  Existing client data and the public v0.4.18 release remain unchanged.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)

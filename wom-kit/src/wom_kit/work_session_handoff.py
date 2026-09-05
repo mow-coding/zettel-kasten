@@ -17,6 +17,7 @@ from . import work_session_establishment as establishment
 from . import work_session_execution as execution
 from . import work_session_lifecycle as lifecycle
 from . import work_session_registry as registry
+from . import work_session_rereview as rereview
 from . import work_session_state as state
 
 
@@ -44,7 +45,7 @@ def _safe_call(call):
     except WorkSessionHandoffError as error:
         code, committed = error.code, error.original_commit_verified
     except (lifecycle.WorkSessionLifecycleError, actor_guard.WorkSessionTaskSelectionError,
-            workflow.ExactHumanApprovalWorkflowError) as error:
+            workflow.ExactHumanApprovalWorkflowError, rereview.WorkSessionRereviewError) as error:
         if type(error.code) is str and error.code in _ERRORS:
             code = error.code
     except actor.WorkSessionActorError as error:
@@ -247,4 +248,68 @@ def _handoff_task_held(root, *, held, client_app_ref, task_route_ref, work_sessi
             "manifest_sha256": document["pending_manifest_sha256"],
             "context_sha256": document["pending_context_sha256"]}, **scope)
         return _finish(store, routing, selected, bound, result, held=held, publish=True, **scope)
+    return _safe_call(run)
+
+
+def _review_original_handoff_held(root, *, held, client_app_ref, task_route_ref,
+                                   work_session_ref, target_app_ref):
+    """Explicit original re-review only when its pending claim is truly absent.
+
+    Original origin authentication finishes before the shared scanner/broker
+    consumes any key. Existing claims use only their original resume path.
+    No replacement reviewer, target, private claim or authority is accepted.
+    """
+    def run():
+        for value, prefix in ((work_session_ref, "work_session"), (target_app_ref, "client_app")):
+            if value is None:
+                raise WorkSessionHandoffError("work_session_task_context_required")
+            if not registry._ref(value, prefix):
+                raise WorkSessionHandoffError("work_session_task_context_mismatch")
+        store, routing = lifecycle._routing(root, held=held, client_app_ref=client_app_ref, task_route_ref=task_route_ref)
+        selected = routing._read(current=False)
+        if selected is None:
+            raise WorkSessionHandoffError("work_session_original_operation_missing")
+        document = selected.document()
+        if document["work_session_ref"] != work_session_ref:
+            raise WorkSessionHandoffError("work_session_task_context_mismatch")
+        if document.get("pending_registry_intent_plan_sha256") is not None:
+            raise WorkSessionHandoffError("work_session_original_operation_pending")
+        pending = document["pending_manifest_sha256"] is not None
+        pointer = ({"kind": "human_session_decision", "manifest_sha256": document["pending_manifest_sha256"],
+                    "context_sha256": document["pending_context_sha256"]} if pending
+                   else document.get("last_completed_operation"))
+        if pointer is None:
+            raise WorkSessionHandoffError("work_session_original_operation_missing")
+        scope = dict(app=client_app_ref, route=task_route_ref, session=work_session_ref, target=target_app_ref)
+        bound = _bound_handoff(store, pointer, **scope)
+        origin = _verify_origin(root, store, routing, selected, held=held,
+                                app=client_app_ref, route=task_route_ref, session=work_session_ref)
+        origin_bound = establishment.load_original_establishment(store, selector=origin,
+            client_app_ref=client_app_ref, task_route_ref=task_route_ref, work_session_ref=work_session_ref)
+
+        def assert_selected():
+            _assert_selected(routing, selected)
+            if _bound_handoff(store, pointer, **scope) != bound:
+                raise WorkSessionHandoffError("work_session_original_operation_changed")
+            if pending:
+                _pending_predecessor(store, selected, bound, held=held, session=work_session_ref)
+            # Pure bundle checks only: this closure also runs in the existing
+            # publication key consumer and may not authenticate with another.
+            if establishment.load_original_establishment(store, selector=origin,
+                    client_app_ref=client_app_ref, task_route_ref=task_route_ref,
+                    work_session_ref=work_session_ref) != origin_bound:
+                raise WorkSessionHandoffError("work_session_original_operation_changed")
+            store._require_held_lock(held)
+
+        def finalize_original(result):
+            return _finish(store, routing, selected, bound, result, held=held, publish=pending, **scope)
+
+        def resume_original():
+            assert_selected()
+            result = execution._resume_session_decision_held(root, held=held,
+                manifest_sha256=bound.prepared.manifest.manifest_sha256, completed_only=not pending)
+            return finalize_original(result)
+
+        return rereview._review_bound_original_held(store, routing, selected, bound, held=held, pending=pending,
+            assert_selected=assert_selected, resume_original=resume_original, finalize_original=finalize_original)
     return _safe_call(run)

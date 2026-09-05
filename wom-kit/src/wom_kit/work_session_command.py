@@ -56,7 +56,7 @@ def management_failure(reason_code, *, original_commit_verified=False):
 def dispatch_work_session_management(root, *, action, dry_run=False, approve=False,
                                      apply=False, resume=False, review_original=False,
                                      client_app_ref=None, task_route_ref=None,
-                                     work_session_ref=None, request=None,
+                                     work_session_ref=None, target_app_ref=None, request=None,
                                      cancel_requested=lambda: False, progress=lambda _event: None):
     """Route only a supported invocation; never infer an app or task selector."""
     resolved = resolve_work_session_mode(action=action, dry_run=dry_run, approve=approve,
@@ -69,13 +69,19 @@ def dispatch_work_session_management(root, *, action, dry_run=False, approve=Fal
         "registration_apply": {"selection", "label"},
         "registration_resume": {"selection", "label"},
         "create": {"label", "reviewer_claim"},
+        "accept": {"reviewer_claim"},
+        "handoff": {"reviewer_claim"},
     }.get(mode, set())
     value = {} if request is None else request
     needs_session = mode.startswith("claim_") or mode in {
         "state_transition_apply", "original_state_transition_resume",
+        "accept", "handoff", "original_handoff_resume", "original_handoff_rereview",
     }
     if (type(value) is not dict or any(type(key) is not str for key in value)
             or set(value) != required_request):
+        return management_failure("work_session_request_invalid")
+    if ((action == "handoff" and type(target_app_ref) is not str)
+            or (action != "handoff" and target_app_ref is not None)):
         return management_failure("work_session_request_invalid")
     if mode.startswith("registration_"):
         if any(item is not None for item in (client_app_ref, task_route_ref, work_session_ref)):
@@ -106,6 +112,20 @@ def dispatch_work_session_management(root, *, action, dry_run=False, approve=Fal
             result = service.resume_task_create(root, **selected, **wait)
         elif mode == "original_rereview":
             result = service.review_original_task_create(root, **selected, **wait)
+        elif mode == "accept":
+            result = service.accept_task(root, **selected, predecessor_work_session_ref=work_session_ref,
+                                         reviewer_claim=value["reviewer_claim"], **wait)
+        elif mode == "original_accept_resume":
+            result = service.resume_task_accept(root, **selected, **wait)
+        elif mode == "original_accept_rereview":
+            result = service.review_original_task_accept(root, **selected, **wait)
+        elif mode in {"handoff", "original_handoff_resume"}:
+            result = service.handoff_task(root, **selected, work_session_ref=work_session_ref,
+                target_app_ref=target_app_ref, original_resume=mode == "original_handoff_resume",
+                reviewer_claim=value.get("reviewer_claim"), **wait)
+        elif mode == "original_handoff_rereview":
+            result = service.review_original_task_handoff(root, **selected, work_session_ref=work_session_ref,
+                                                         target_app_ref=target_app_ref, **wait)
         elif mode in {"state_transition_apply", "original_state_transition_resume"}:
             result = service.transition_task_state(root, **selected, action=action,
                 original_resume=mode == "original_state_transition_resume",

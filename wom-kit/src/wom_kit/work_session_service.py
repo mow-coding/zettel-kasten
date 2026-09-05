@@ -1,8 +1,9 @@
 """Bounded public management using the original work-session authorities.
 
 App registration, human task creation, original continuation/re-review,
-claiming, pause, paused-session resume and completion are connected. No implicit latest
-selector, create preview, other lifecycle action or key injection is exposed.
+claiming, pause, paused-session resume, completion, handoff and acceptance are
+connected. No implicit latest selector, create preview, recovery or key injection
+is exposed. Handoff does not assign responsibility for existing artifacts.
 Every mutation waits once, checks the actual loaded runtime under that lock,
 then calls the existing held runner. A successful registration is self-declared;
 an original receipt is not proof of present claim ownership.
@@ -15,6 +16,7 @@ from . import exact_human_approval_windows as native_approval
 from . import project_runtime
 from . import work_session_actor as actor
 from . import work_session_claim as claim
+from . import work_session_handoff as handoff
 from . import work_session_lifecycle as lifecycle
 from . import work_session_registration as registration
 from . import work_session_registry as registry
@@ -31,7 +33,7 @@ _RUNTIME_BLOCKERS = frozenset({
 _ERRORS = (frozenset({"work_session_service_invalid", "work_session_service_unavailable",
                      "work_session_wait_cancelled", "work_session_wait_root_changed"})
            | _RUNTIME_BLOCKERS | registration._ERRORS | lifecycle._ERRORS
-           | claim._ERRORS | rereview._ERRORS | session_state._ERRORS)
+           | claim._ERRORS | rereview._ERRORS | session_state._ERRORS | handoff._ERRORS)
 
 
 class WorkSessionServiceError(ValueError):
@@ -51,9 +53,10 @@ def _safe_call(call):
         code, committed = error.code, error.original_commit_verified
     except (registration.WorkSessionRegistrationError, lifecycle.WorkSessionLifecycleError,
             claim.WorkSessionClaimError, rereview.WorkSessionRereviewError,
-            session_state.WorkSessionStateError) as error:
+            session_state.WorkSessionStateError, handoff.WorkSessionHandoffError) as error:
         code = error.code if type(error.code) is str and error.code in _ERRORS else code
-        committed = (isinstance(error, (claim.WorkSessionClaimError, session_state.WorkSessionStateError))
+        committed = (isinstance(error, (claim.WorkSessionClaimError, session_state.WorkSessionStateError,
+                                       handoff.WorkSessionHandoffError))
                      and error.original_commit_verified is True)
     except WorkSessionWaitError as error:
         if error.args in (("work_session_wait_cancelled",), ("work_session_wait_root_changed",)):
@@ -229,6 +232,93 @@ def apply_or_resume_task_claim(root, *, client_app_ref, task_route_ref, work_ses
     return _safe_call(run)
 
 
+def accept_task(root, *, client_app_ref, task_route_ref, predecessor_work_session_ref,
+                reviewer_claim, cancel_requested=lambda: False, progress=lambda _event: None):
+    """Accept an explicit predecessor into a new, caller-retained task route.
+
+    The original held facade requires that route to be blank. Acceptance does
+    not itself claim the successor or assign responsibility for old artifacts.
+    """
+    def run():
+        _refs(client_app_ref, task_route_ref, predecessor_work_session_ref, require_session=True)
+        if (type(reviewer_claim) is not str
+                or native_approval._REVIEWER_CLAIM_RE.fullmatch(reviewer_claim) is None):
+            raise WorkSessionServiceError()
+        resolved = _root(root)
+        return _write(resolved, cancel_requested=cancel_requested, progress=progress,
+            run=lambda held: lifecycle._establish_task_held(
+                resolved, held=held, action="accept", client_app_ref=client_app_ref,
+                task_route_ref=task_route_ref, predecessor_work_session_ref=predecessor_work_session_ref,
+                reviewer_claim=reviewer_claim))
+    return _safe_call(run)
+
+
+def resume_task_accept(root, *, client_app_ref, task_route_ref,
+                       cancel_requested=lambda: False, progress=lambda _event: None):
+    """Continue only this route's original acceptance, without new selectors."""
+    def run():
+        _refs(client_app_ref, task_route_ref)
+        resolved = _root(root)
+        return _write(resolved, cancel_requested=cancel_requested, progress=progress,
+            run=lambda held: lifecycle._resume_task_establishment_held(
+                resolved, held=held, action="accept", client_app_ref=client_app_ref,
+                task_route_ref=task_route_ref))
+    return _safe_call(run)
+
+
+def review_original_task_accept(root, *, client_app_ref, task_route_ref,
+                                cancel_requested=lambda: False, progress=lambda _event: None):
+    """Explicit original acceptance re-review; an existing claim is resumed."""
+    def run():
+        _refs(client_app_ref, task_route_ref)
+        resolved = _root(root)
+        return _write(resolved, cancel_requested=cancel_requested, progress=progress,
+            run=lambda held: rereview._review_original_session_decision_held(
+                resolved, held=held, action="accept", client_app_ref=client_app_ref,
+                task_route_ref=task_route_ref))
+    return _safe_call(run)
+
+
+def handoff_task(root, *, client_app_ref, task_route_ref, work_session_ref,
+                  target_app_ref, original_resume, reviewer_claim=None,
+                  cancel_requested=lambda: False, progress=lambda _event: None):
+    """Offer this exact claimed session, or resume its original handoff only."""
+    def run():
+        if type(original_resume) is not bool:
+            raise WorkSessionServiceError()
+        _refs(client_app_ref, task_route_ref, work_session_ref, require_session=True)
+        if not registry._ref(target_app_ref, "client_app"):
+            raise WorkSessionServiceError("work_session_task_context_mismatch")
+        if original_resume:
+            if reviewer_claim is not None:
+                raise WorkSessionServiceError("work_session_task_context_mismatch")
+        elif (type(reviewer_claim) is not str
+                or native_approval._REVIEWER_CLAIM_RE.fullmatch(reviewer_claim) is None):
+            raise WorkSessionServiceError()
+        resolved = _root(root)
+        return _write(resolved, cancel_requested=cancel_requested, progress=progress,
+            run=lambda held: handoff._handoff_task_held(
+                resolved, held=held, client_app_ref=client_app_ref, task_route_ref=task_route_ref,
+                work_session_ref=work_session_ref, target_app_ref=target_app_ref,
+                original_resume=original_resume, reviewer_claim=reviewer_claim))
+    return _safe_call(run)
+
+
+def review_original_task_handoff(root, *, client_app_ref, task_route_ref, work_session_ref,
+                                 target_app_ref, cancel_requested=lambda: False, progress=lambda _event: None):
+    """Explicit original handoff re-review, with no replacement reviewer."""
+    def run():
+        _refs(client_app_ref, task_route_ref, work_session_ref, require_session=True)
+        if not registry._ref(target_app_ref, "client_app"):
+            raise WorkSessionServiceError("work_session_task_context_mismatch")
+        resolved = _root(root)
+        return _write(resolved, cancel_requested=cancel_requested, progress=progress,
+            run=lambda held: handoff._review_original_handoff_held(
+                resolved, held=held, client_app_ref=client_app_ref, task_route_ref=task_route_ref,
+                work_session_ref=work_session_ref, target_app_ref=target_app_ref))
+    return _safe_call(run)
+
+
 def transition_task_state(root, *, action, original_resume, client_app_ref,
                           task_route_ref, work_session_ref,
                           cancel_requested=lambda: False, progress=lambda _event: None):
@@ -253,4 +343,5 @@ def transition_task_state(root, *, action, original_resume, client_app_ref,
 
 __all__ = ["WorkSessionServiceError", "preview_registration", "initialize_task_request", "apply_or_resume_registration",
            "create_task", "resume_task_create", "review_original_task_create", "apply_or_resume_task_claim",
-           "transition_task_state"]
+           "transition_task_state", "accept_task", "resume_task_accept", "review_original_task_accept",
+           "handoff_task", "review_original_task_handoff"]
