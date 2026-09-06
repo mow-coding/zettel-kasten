@@ -217,7 +217,7 @@ extension below must not be confused with source capture or a provider API.
 
 Status: source implementation and synthetic verification; not released and
 not proof of a client recovery. This section describes the explicit scoped
-CLI route, not MCP parity or replacement of the existing unscoped calls.
+CLI route and its MCP extension, not replacement of the existing unscoped calls.
 
 An AI with an established, claimed work session supplies its retained app/task/
 session references and prepares the private request. The human reviews the
@@ -235,6 +235,26 @@ and an optional same-session assertion. It rejects replacement requests,
 reviewers, execution/approval identifiers and reconciliation flags. No explicit
 original re-review option is available in this first slice: missing original
 approval evidence is a blocker, not permission to manufacture another claim.
+
+MCP `source_intake_batch` uses that same batch service with `mode` set to
+`preview`, `apply` or `resume`. Every call supplies `archive_root`,
+`client_app_ref` and `task_route_ref`. Fresh calls also supply `manifest` and
+`work_session_ref`; only fresh apply supplies `reviewed_by`. Relative manifest
+paths are resolved against the archive root. Both paths must pass the existing
+MCP allowed-root policy. Inputs are bounded to 64 KiB of ASCII JSON; the
+private manifest file retains its separate existing domain limits.
+
+Resume accepts an optional same-session assertion but rejects any manifest or
+reviewer parameter, even a null/default value. It does not accept replacement
+hashes, approval IDs, native/key callbacks or a caller-selected operation family.
+The existing single-record route keeps its schema and missing-field outcomes.
+
+Record and batch share one serial intake transport. A fixed starting message
+precedes the first domain observation; the existing five-second heartbeat
+repeats only the last observed status. Tokenless, cancelled and terminal calls
+emit no further progress. Read-only requests retain the audited bypass, while
+mutation waits for the archive lock and revalidates before native approval.
+Neither a progress message nor a prepared capture request proves byte custody.
 
 Resume uses retained original input and authenticated checkpoints. Completed
 replay verifies output receipts and the prepared capture request, not absent
@@ -277,6 +297,10 @@ no public key-provider, native-dialog, claim or execution override parameters.
 Its serial lane retains cancellation while waiting and content-free stage/count
 progress. A heartbeat repeating the last observed state is liveness, not proof
 that additional items completed.
+
+The shared record/batch transport now also reports a fixed starting state
+before its first domain observation. This does not change the record's input
+schema, exact operation or original continuation behavior.
 
 This is development-source integration, not a release or client result. The
 single record has its own authenticated metadata-output Git producer; it does

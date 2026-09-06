@@ -50,7 +50,8 @@ def is_management_request(message):
     return (type(message) is dict and message.get("method") == "tools/call"
             and type(message.get("params")) is dict
             and message["params"].get("name") in (
-                "archive_work_session_manage", "source_intake_record", "git_backup_reconcile_plan"))
+                "archive_work_session_manage", "source_intake_record", "source_intake_batch",
+                "git_backup_reconcile_plan"))
 
 
 def management_metadata(params):
@@ -74,7 +75,7 @@ def _managed_mutation(message):
         # Every scoped Git mode, including preview, needs the held serial lane.
         return type(arguments.get("mode")) is str and arguments["mode"] in {
             "preview", "apply", "resume", "review_original"}
-    if message["params"].get("name") == "source_intake_record":
+    if message["params"].get("name") in ("source_intake_record", "source_intake_batch"):
         # Even preview acquires the existing held lane for a consistent plan.
         # Scheduling is not availability or authority; the service validates
         # every argument, current runtime/session and exact native approval.
@@ -222,10 +223,11 @@ class SessionRequest:
     def enter_execution(self):
         with self._lock:
             self._queued = False
-            if self._progress_family is _ProgressFamily.GIT and not self._terminal and not self._cancel:
+            if self._domain_enabled and not self._terminal and not self._cancel:
                 # This is transport liveness, not a claim that a planner,
                 # approval dialog or mutation has already completed a step.
-                self._domain_status = {"stage": "starting"}
+                self._domain_status = ({"stage": "starting"} if self._progress_family is _ProgressFamily.GIT
+                                       else ("starting", None, None))
                 if self._token is not None:
                     self._emit_progress(message=self._domain_message())
                     self._last_domain_progress = time.monotonic()
@@ -362,6 +364,7 @@ class SessionStdioTransport:
             return
         context = (SessionRequest(token, self.send, _progress_family={
             "source_intake_record": _ProgressFamily.INTAKE,
+            "source_intake_batch": _ProgressFamily.INTAKE,
             "git_backup_reconcile_plan": _ProgressFamily.GIT,
         }.get(message["params"].get("name"), _ProgressFamily.LEGACY)) if managed else None)
         with self._condition:

@@ -282,9 +282,10 @@ class RecordTransportTests(unittest.TestCase):
                 context.progress(progress_event(stage=stage, completed_items=1))
             for phase in ("intake_preflight", "intake_revalidation", "waiting_for_writer", "writer_acquired_revalidation_required"):
                 context.progress({"phase": phase, "message": PRIVATE, "total": PRIVATE, "path": PRIVATE})
-        self.assertEqual(len(sent), 10)
-        self.assertEqual([row["params"]["progress"] for row in sent], list(range(1, 11)))
-        for row in sent[:6]:
+        self.assertEqual(len(sent), 11)
+        self.assertEqual([row["params"]["progress"] for row in sent], list(range(1, 12)))
+        self.assertEqual(sent[0]["params"]["message"], "source-intake: starting")
+        for row in sent[1:7]:
             self.assertEqual(set(row["params"]), {"progressToken", "progress", "message"})
             self.assertIn("completed items 1/1", row["params"]["message"])
         self.assertNotIn(PRIVATE, json.dumps(sent))
@@ -312,7 +313,7 @@ class RecordTransportTests(unittest.TestCase):
         invalid += [progress_event(total_items=value) for value in (False, -1, 1.0, 1 << 63)]
         for event in invalid:
             context.progress(event)
-        self.assertEqual(len(sent), 10)
+        self.assertEqual(len(sent), 11)
 
     def test_domain_heartbeat_uses_monotonic_boundary_and_repeats_only_observed_facts(self):
         sent = []
@@ -322,31 +323,32 @@ class RecordTransportTests(unittest.TestCase):
             self.assertEqual(sent, [])
             context.enter_execution()
             context.execution_heartbeat()
-            self.assertEqual(sent, [])
+            self.assertEqual(len(sent), 1)
+            self.assertEqual(sent[0]["params"]["message"], "source-intake: starting")
             context.progress(progress_event())
             original = sent[-1]["params"]["message"]
             for now in (104.999, 99.0):
                 monotonic.return_value = now
                 context.execution_heartbeat()
-            self.assertEqual(len(sent), 1)
+            self.assertEqual(len(sent), 2)
             monotonic.return_value = 105.0
             context.execution_heartbeat()
-            self.assertEqual(len(sent), 2)
+            self.assertEqual(len(sent), 3)
             self.assertEqual(sent[-1]["params"]["message"], "Awaiting next observed status; " + original)
             self.assertIn("completed items 0/1", sent[-1]["params"]["message"])
             context.queued_progress()
             monotonic.return_value = 109.999
             context.execution_heartbeat()
-            self.assertEqual(len(sent), 2)
+            self.assertEqual(len(sent), 3)
             monotonic.return_value = 110.0
             context.execution_heartbeat()
-            self.assertEqual(len(sent), 3)
+            self.assertEqual(len(sent), 4)
             context.progress(progress_event(stage="item_verified", completed_items=1))
             monotonic.return_value = 115.0
             context.execution_heartbeat()
-            self.assertEqual(len(sent), 5)
+            self.assertEqual(len(sent), 6)
             self.assertIn("exact-operation-item_verified; completed items 1/1", sent[-1]["params"]["message"])
-        self.assertEqual([row["params"]["progress"] for row in sent], [1, 2, 3, 4, 5])
+        self.assertEqual([row["params"]["progress"] for row in sent], [1, 2, 3, 4, 5, 6])
         self.assertNotIn(PRIVATE, json.dumps(sent))
 
     def test_no_domain_progress_after_terminal_cancel_without_token_or_for_legacy_management(self):
@@ -360,7 +362,7 @@ class RecordTransportTests(unittest.TestCase):
                 context.progress(progress_event(stage="completed", completed_items=1))
                 context.execution_heartbeat()
                 context.queued_progress()
-            self.assertEqual(len(sent), 1)
+            self.assertEqual(len(sent), 2)
         for token, enabled in ((None, True), ("token", False), ("token", 1)):
             sent = []
             context = transport.SessionRequest(token, sent.append, domain_progress=enabled)
@@ -409,8 +411,10 @@ class RecordTransportTests(unittest.TestCase):
         lane.close()
         self.assertEqual(enabled, [("source_intake_record", True), ("archive_work_session_manage", False)])
         domain = [row for row in sent if "message" in row.get("params", {})]
-        self.assertEqual(len(domain), 1)
-        self.assertEqual(domain[0]["params"]["progressToken"], "record")
+        self.assertEqual(len(domain), 2)
+        self.assertEqual(domain[0]["params"]["message"], "source-intake: starting")
+        self.assertEqual(domain[1]["params"]["message"], "source-intake: exact-operation-completed; completed items 1/1")
+        self.assertTrue(all(row["params"]["progressToken"] == "record" for row in domain))
         self.assertNotIn(PRIVATE, json.dumps(sent))
 
     def test_unhashable_and_nonstring_tool_names_never_activate_managed_lane(self):

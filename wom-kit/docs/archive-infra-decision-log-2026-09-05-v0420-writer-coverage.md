@@ -245,3 +245,21 @@ original locator, approval identifier, selection or replacement reviewer for
 continuation. The public result preserves historical commit verification apart
 from current ownership and final completion. Metadata-only Git backup still
 does not attest source capture or generic document ownership.
+
+## Subsequent batch MCP source checkpoint
+
+The existing scoped batch family now calls its same held dispatcher through
+`source_intake_batch`. Actual source journeys cross CLI/MCP after partial
+receipt publication and verify original continuation and immutable completed
+replay. Existing single-record journeys pass after sharing the fixed-family
+MCP helper and intake starting notification. This gives the three existing
+scoped domain families their own CLI/MCP evidence; it does not increase the
+writer denominator or establish comprehensive effect ownership.
+
+MCP is now 136 tools; only the batch definition was added and existing record
+schema/response/error behavior is preserved. The original missing-approval
+blocker remains explicit for intake; automatic resume cannot silently request
+a new human decision. Prepared capture requests and metadata backup do not
+close source custody, generic document ownership, cleanup responsibility,
+installed acceptance or any client recovery. Those remaining boundaries are
+still tracked rather than relabelled as completed coverage.

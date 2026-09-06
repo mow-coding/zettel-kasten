@@ -129,9 +129,9 @@ CURRENT_CLI_COUNT = 576
 CURRENT_CLI_CANONICAL_SHA256 = (
     "18287b38efa279b4a2c096234e762d66fbc8f426a1e74859b7e921cc90e809b7"
 )
-CURRENT_MCP_COUNT = 135
+CURRENT_MCP_COUNT = 136
 CURRENT_MCP_CANONICAL_SHA256 = (
-    "4a8d1a01a04bdf004198df08cc039e14908ac7d2ed6855dfbcc65e69064bd26a"
+    "334963a16b2d255483deca29672d782253c0541a8382a52d711375062d53ca66"
 )
 MCP_ADDITIONS = {
     "archive_capabilities",
@@ -146,6 +146,7 @@ MCP_ADDITIONS = {
     "human_artifact_registry_scan",
     "human_artifact_root_registration_plan",
     "human_artifact_transition_plan",
+    "source_intake_batch",
     "source_intake_record",
     "zettel_objet_link_receipts",
 }

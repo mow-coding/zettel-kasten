@@ -1859,6 +1859,41 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "source_intake_batch",
+        "description": (
+            "Preview or record a source-intake batch in the explicit app/task work session with exact native human approval. "
+            "Fresh preview/apply require work_session_ref and manifest; apply also requires reviewed_by. "
+            "This records metadata receipts and, when prepared, a capture request; it does not capture source bytes. "
+            "Resume selects only the retained original by app/task (optional work-session); omit manifest and reviewer "
+            "entirely, including null values. No replacement approval, original re-review, hashes or approval IDs are accepted."
+        ),
+        "annotations": {"readOnlyHint": False, "destructiveHint": False,
+                        "idempotentHint": False, "openWorldHint": False},
+        "inputSchema": {
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                "archive_root": {"type": "string", "minLength": 1, "maxLength": 65536},
+                "mode": {"type": "string", "enum": ["preview", "apply", "resume"]},
+                "client_app_ref": {"type": "string", "minLength": 1},
+                "task_route_ref": {"type": "string", "minLength": 1},
+                "work_session_ref": {"type": "string", "minLength": 1},
+                "manifest": {"type": "string", "minLength": 1,
+                             "description": "Existing batch request JSON, relative to archive_root or absolute; fresh modes only."},
+                "reviewed_by": {"type": "string", "minLength": 1,
+                                "description": "Safe reviewer reference for fresh apply only."},
+            },
+            "required": ["archive_root", "mode", "client_app_ref", "task_route_ref"],
+            "allOf": [
+                {"if": {"properties": {"mode": {"enum": ["preview", "apply"]}}},
+                 "then": {"required": ["work_session_ref", "manifest"]},
+                 "else": {"not": {"required": ["manifest"]}}},
+                {"if": {"properties": {"mode": {"const": "apply"}}},
+                 "then": {"required": ["reviewed_by"]},
+                 "else": {"not": {"required": ["reviewed_by"]}}},
+            ],
+        },
+    },
+    {
         "name": "source_intake_record",
         "description": (
             "Record one redacted source-intake plan using its explicit app/task session and native exact approval. "
@@ -3728,6 +3763,11 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         if not management_metadata(params)[0]:
             raise InvalidParamsError()
         return tool_source_intake_record(arguments)
+    if name == "source_intake_batch":
+        from ._mcp_session_transport import management_metadata
+        if not management_metadata(params)[0]:
+            raise InvalidParamsError()
+        return tool_source_intake_batch(arguments)
     if name == "git_backup_reconcile_plan":
         from ._mcp_session_transport import management_metadata
         if not management_metadata(params)[0]:
@@ -5448,40 +5488,68 @@ def tool_git_backup_reconcile_plan(arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 def tool_source_intake_record(arguments: dict[str, Any]) -> dict[str, Any]:
-    from ._mcp_session_transport import current_session_request
-    from .source_intake_session_command import dispatch_session_source_intake_record
+    return _tool_session_source_intake(arguments, family="record")
 
+
+def tool_source_intake_batch(arguments: dict[str, Any]) -> dict[str, Any]:
+    return _tool_session_source_intake(arguments, family="batch")
+
+
+def _tool_session_source_intake(arguments: dict[str, Any], *, family: str) -> dict[str, Any]:
+    """Two fixed public routes; no caller-supplied dispatch or family authority."""
+    from ._mcp_session_transport import current_session_request
+    from .source_intake_session_command import dispatch_session_source_intake, dispatch_session_source_intake_record
+
+    if type(family) is not str or family not in {"record", "batch"}:
+        raise InvalidParamsError()
+    record = family == "record"
+    input_key = "source_intake_plan" if record else "manifest"
     allowed = {"archive_root", "mode", "client_app_ref", "task_route_ref", "work_session_ref",
-               "source_intake_plan", "reviewed_by"}
+               input_key, "reviewed_by"}
     required = {"archive_root", "mode", "client_app_ref", "task_route_ref"}
+    if not record and (type(arguments) is not dict or any(type(key) is not str for key in arguments)):
+        raise InvalidParamsError()
     if (type(arguments) is not dict or set(arguments) - allowed or not required <= set(arguments)
             or any(type(arguments[key]) is not str for key in arguments)
             or arguments["mode"] not in {"preview", "apply", "resume"}):
+        raise InvalidParamsError()
+    # Keep the record route's original missing/empty-field error ordering. Its
+    # existing command owns those structured failures; only the new batch tool
+    # requires every fresh input at the MCP grammar boundary.
+    if not record and (any(not value.strip() or len(value) > 65536 for value in arguments.values())
+            or arguments["mode"] != "resume" and not {"manifest", "work_session_ref"} <= set(arguments)
+            or arguments["mode"] == "apply" and "reviewed_by" not in arguments):
         raise InvalidParamsError()
     # Bound both the direct call and asynchronous transport input. Do not echo
     # rejected path/identity values or let extra approval knobs reach a writer.
     if len(json.dumps(arguments, ensure_ascii=True).encode("utf-8")) > 65536:
         raise InvalidParamsError()
-    if (arguments["mode"] == "resume" and {"source_intake_plan", "reviewed_by"} & set(arguments)
+    if (arguments["mode"] == "resume" and {input_key, "reviewed_by"} & set(arguments)
             or arguments["mode"] == "preview" and "reviewed_by" in arguments):
         raise InvalidParamsError()
     archive_root = require_path_arg(arguments, "archive_root")
-    value = arguments.get("source_intake_plan")
+    value = arguments.get(input_key)
     plan_path = None
     if value is not None:
         candidate = Path(value)
         candidate = candidate if candidate.is_absolute() else archive_root / candidate
-        plan_path = require_path_arg({"plan": str(candidate)}, "plan")
+        path_label = "plan" if record else "manifest"
+        plan_path = require_path_arg({path_label: str(candidate)}, path_label)
     context = current_session_request()
     callbacks = {} if context is None else {"cancel_requested": context.cancel_requested, "progress": context.progress}
-    result = dispatch_session_source_intake_record(archive_root, mode=arguments["mode"],
+    dispatch = dispatch_session_source_intake_record if record else dispatch_session_source_intake
+    input_path = {"plan_path": plan_path} if record else {"request_path": plan_path}
+    result = dispatch(archive_root, mode=arguments["mode"],
         client_app_ref=arguments["client_app_ref"], task_route_ref=arguments["task_route_ref"],
-        work_session_ref=arguments.get("work_session_ref"), plan_path=plan_path,
-        reviewer_claim=arguments.get("reviewed_by"), **callbacks)
+        work_session_ref=arguments.get("work_session_ref"),
+        reviewer_claim=arguments.get("reviewed_by"), **input_path, **callbacks)
     if result.get("ok") is not True:
-        return {"content": [{"type": "text", "text": "Source-intake record could not be completed."}],
+        message = "Source-intake record could not be completed." if record else "Source-intake batch could not be completed."
+        return {"content": [{"type": "text", "text": message}],
                 "structuredContent": result, "isError": True}
-    return tool_success_result("Source-intake metadata record returned; source bytes are not captured.", result)
+    message = ("Source-intake metadata record returned; source bytes are not captured." if record else
+               "Source-intake batch metadata returned; any prepared capture request needs separate approval to capture bytes.")
+    return tool_success_result(message, result)
 
 
 def tool_source_intake_plan(arguments: dict[str, Any]) -> dict[str, Any]:

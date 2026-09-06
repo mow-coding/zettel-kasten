@@ -2307,6 +2307,80 @@ bump, PR, tag, wheel or client application has occurred.
   the canonical plus unfinished feature worktrees. No client or global runtime
   was modified. This slice is ready for a development commit, not a release.
 
+## Batch intake MCP parity after the Git checkpoint
+
+- The Git MCP slice was committed and pushed as
+  `c3828e8f471357c7f287cb784fa270d85e3de190`; local HEAD, tracking ref and
+  the independently queried remote ref matched, and the feature tree was
+  clean. Continue the train with the existing batch intake, not a new writer.
+- Add `source_intake_batch` with preview/apply/resume and its existing manifest
+  input. Reuse the common intake command result, exact actor/approval/checkpoint
+  engine and serial MCP lane. A fixed private record/batch helper may share
+  input handling, but must preserve the existing single-record tool definition,
+  response text, relative-path policy and missing-field failure behavior.
+  Stricter fresh-field admission belongs only to the new batch tool.
+- Original continuation uses app/task and an optional same-session assertion;
+  reject replacement manifests/reviewers by presence. It does not expose
+  original re-review: missing original approval remains an explicit blocker.
+  A prepared capture request is metadata, not evidence of preserved source
+  bytes. Do not bridge legacy capture by accepting another schema.
+- Seed the shared intake transport with an internal fixed `starting` tuple,
+  then replace it only with real observations. Reuse the existing five-second
+  heartbeat and token/cancellation rules without widening the domain event
+  projector. Inspection confirmed wait/acquired observations already occur
+  before runtime verification; this closes the earlier transport-entry gap,
+  not a previously missing runtime heartbeat. Preserve Git/legacy behavior.
+- Work ownership remains separated: MCP helper/schema and command tests;
+  transport plus intentional record-starting expectation changes; actual
+  batch cross-surface journeys and existing record regressions; root durable
+  records, independent review and hygiene. Run at most two isolated functional
+  cohorts. All results below this point are pending until their terminal output.
+- The new handler and compatibility cohort passed all 15 cases in 0.668
+  seconds, exit 0, no skips: ten new command tests and five current-surface
+  checks. Exact old record definition, response text, empty/missing-field
+  structured failures and relative/empty input-path behavior are retained.
+  New batch strict grammar rejects cross-family inputs, replacement original
+  parameters, extra authority and oversized payloads before the domain route.
+  No common command/writer or CLI implementation was changed.
+- The transport/regression cohort passed 76/76 in 15.421 seconds, exit 0,
+  no skips: ten new transport cases, 17 existing batch command, 18 existing
+  record command/transport, 17 shared transport and 14 Git transport cases.
+  Four record expectations intentionally include the new initial notification;
+  their domain-count, privacy, cancellation and terminal assertions remain.
+  Independent final transport review is clear, with no further source delta.
+- Current MCP is 136 tools; removing only `source_intake_batch` reproduces
+  the previous 135-tool digest exactly. Existing tool definitions, historical
+  fixtures and all other privacy/predecessor gate ASTs are unchanged. Syntax
+  checks use Python 3.10 grammar; functional tests run on Windows Python 3.12.
+- Four actual source journeys are running serially on the frozen helper and
+  transport: two new batch CLI/MCP cases and both existing single-record public
+  cases. They are separate from grammar/scheduling proof and must complete
+  before this source checkpoint is considered verified. No installed-wheel,
+  full CI, release, capture-custody or client-recovery claim is made here.
+- All four actual journeys passed in 145.224 seconds, exit 0, no skips, on
+  unchanged candidate source. The new batch pair interrupts after a real first
+  receipt publication and before its checkpoint, resumes through the other
+  surface without caller JSON, verifies the same original claim/context and
+  independently checks common MAC/checkpoint plus exact receipt/capture-request
+  bytes. The already-published receipt keeps its bytes and file identity rather
+  than being written again. Completed replay after fixture source removal
+  forbids concrete publication/writer/planning/actor/new-approval paths and
+  preserves the full remaining file snapshot. Both existing record journeys
+  also pass; no fixture correction was needed in this cohort.
+- Frozen MCP helper is
+  `098615dd995f2a99ea1f784f2d662836c91a21b6315eb3f43449541fca295a94`;
+  transport `214050248a5e85773e89e0e876fc51acda5321f1984b5ea4ccd5446acc2613b0`;
+  new command test `ce8204db8a5d5a2b6e04a163543a66093dcabc562add23aab4a1a610d55f79e2`;
+  new transport test `a35cc3d2bd6472486075c76d55ccdcb977322de66be0bcd1b4280a906c625f94`;
+  new actual journey test `1c2529cb99a2b6d0edd95007322d0f0242a725ba9cfe837ac3d85bedac5893ee`.
+  The existing record public test remains
+  `c6224ebe109d2a646a7417d25f29a20beb28ca1c14e0ad5b885faa2ddeea639a`.
+- The four public readiness gates passed and independent handler/transport/
+  journey review is clear. Source verification is complete for this bounded
+  MCP mapping, not for the whole release or all writers. The only approved
+  schema addition is the new batch tool; no client, provider, global executable,
+  legacy approval or source-byte preservation state was changed.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)

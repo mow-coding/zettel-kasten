@@ -423,3 +423,24 @@ Verify grammar/privacy/scheduling separately from actual cross-surface Git
 journeys. Real commit/push/ref/blob and excluded-change checks use isolated
 synthetic archives and local bare remotes; in-process JSON-RPC tests are not
 stdio, installed-wheel or client acceptance. Preserve those evidence labels.
+
+## Batch metadata uses the same intake transport
+
+Expose the existing batch dispatcher through `source_intake_batch`, retaining
+its exact original-input and historical-completion rules. Share only the fixed
+record/batch MCP admission helper and transport family. Preserve existing record
+schema, responses and legacy missing-field outcomes; the new batch may require
+its fresh manifest/session/reviewer earlier without changing that old contract.
+There is no caller-selected implementation, new writer or generic callback.
+
+Seed a fixed intake `starting` status at transport entry and use the existing
+last-observation heartbeat. Existing wait/acquired observations already protect
+the runtime-verification interval. No domain stage/count is invented, and
+tokenless, cancelled or terminal calls remain silent. The next real observation
+replaces the initial status; Git and legacy behavior remain unchanged.
+
+Test real receipt publication interrupted before checkpoint, continuation from
+the other public surface without caller JSON, and read-only completed replay
+after source removal. Authenticate retained originals and check the metadata
+outputs independently. The existence of a capture-request file is not capture
+or custody. Missing original approval is not permission for a fresh claim.
