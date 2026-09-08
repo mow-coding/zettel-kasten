@@ -20813,6 +20813,12 @@ def command_zet_title_remap_write(args: argparse.Namespace) -> int:
     resume_recovery = bool(getattr(args, "resume_recovery", False))
     revert_recovery = bool(getattr(args, "revert_recovery", False))
     recovery_mode = bool(source_mirror or resume_recovery or revert_recovery)
+    if not recovery_mode and any(getattr(args, name, None) is not None for name in (
+            "client_app_ref", "task_route_ref", "work_session_ref")):
+        return _recognized_command_cli_error(args, command="zet-title-remap-write",
+            lifecycle_action="zet_title_local_recovery", error_class="usage",
+            reason_code="local_recovery_session_mode_required",
+            text_message="Session title recovery requires source evidence or original recovery resume.", exit_code=2)
     if recovery_mode:
         if bool(args.dry_run) == bool(args.approve):
             return _recognized_command_cli_error(
@@ -23871,6 +23877,30 @@ def _execute_local_recovery_cli_mode(
         or "person:local-recovery-operator"
     )
     exact_progress = _local_recovery_exact_progress(reporter)
+    if any(getattr(args, name, None) is not None for name in (
+            "client_app_ref", "task_route_ref", "work_session_ref")):
+        from .local_recovery_session import _dispatch_session_local_recovery
+
+        if revert or expected_manifest_sha256 or (resume and getattr(args, "reviewed_by", None) is not None):
+            return ({"schema_version": "wom-kit/local-recovery-execution-result/v0.1", "ok": False,
+                "state": "blocked", "reason_codes": ["local_recovery_session_original_inputs_invalid"],
+                "effects_state": "none", "private_values_echoed": False, "paths_echoed": False}, False)
+
+        def session_progress(event):
+            if type(event) is ExactOperationProgress:
+                exact_progress(event)
+            elif type(event) is dict and event.get("phase") in {
+                    "waiting_for_writer", "writer_acquired_revalidation_required"}:
+                reporter.progress("local-recovery-" + event["phase"], "apply", None, None)
+
+        result = _dispatch_session_local_recovery(archive_root,
+            mode="resume" if resume else "preview" if bool(args.dry_run) else "apply",
+            client_app_ref=getattr(args, "client_app_ref", None),
+            task_route_ref=getattr(args, "task_route_ref", None),
+            work_session_ref=getattr(args, "work_session_ref", None),
+            plan_factory=plan_factory, allowed_domains=allowed_domains,
+            reviewer_claim=None if resume else reviewer, progress=session_progress)
+        return result, result.get("effects_state") != "none"
     if resume or revert:
         control_discovery = None
         if expected_manifest_sha256:
@@ -39933,6 +39963,9 @@ def build_parser() -> argparse.ArgumentParser:
             "recovery; its path and values are never echoed."
         ),
     )
+    zet_title_remap_write.add_argument("--client-app-ref", help="Explicit app for session-owned local title recovery.")
+    zet_title_remap_write.add_argument("--task-route-ref", help="Retained caller task for local title recovery or original resume.")
+    zet_title_remap_write.add_argument("--work-session-ref", help="Current session for fresh recovery; optional assertion on original resume.")
     zet_title_remap_write.add_argument(
         "--expected-identifier-title-count",
         type=int,
@@ -47650,6 +47683,8 @@ def main(argv: list[str] | None = None) -> int:
         and raw_argv[0]
         in {
             "credential-adopt",
+            "zet-title-remap-write",
+            "title-remap-write",
             "credential-secure-list",
             "credential-lifecycle",
             "notion-page-recovery-plan",
@@ -47668,7 +47703,7 @@ def main(argv: list[str] | None = None) -> int:
             "work-session",
         }
     )
-    if raw_argv and raw_argv[0] in {"source-intake-batch", "source-intake-record"}:
+    if raw_argv and raw_argv[0] in {"source-intake-batch", "source-intake-record", "zet-title-remap-write", "title-remap-write"}:
         option_tokens = raw_argv[:raw_argv.index("--")] if "--" in raw_argv else raw_argv
         privacy_sensitive_command = privacy_sensitive_command or any(
             token.split("=", 1)[0] in {"--client-app-ref", "--task-route-ref", "--work-session-ref", "--review-original"}

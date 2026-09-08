@@ -2648,6 +2648,76 @@ backup evidence. Neither the human-artifact registry's caller-supplied hash
 nor a field receipt alone proves ownership of an entire changed document.
 The remaining v0.4.20 coverage and later release batches remain open.
 
+## Caller-held local recovery and session execution in progress
+
+The binding-preservation checkpoint was committed as `afdbbd35` on the same
+feature branch. The next change reuses the existing local recovery writer,
+checkpoint store, index lifecycle, native broker and session authority helpers.
+It does not add another public command or another archive/key/approval store.
+
+First, `_execute_core` and the legacy resume implementation gained an internal
+caller-held lock path. It verifies the actual OS lock, physical archive and
+archive identity without acquiring or releasing the caller's lock. Four new
+held-boundary cases and the existing 12 recovery regressions passed, 16 tests
+in 13.351 seconds, exit 0. Independent read-only review found no defect in
+that isolated change. Subsequent session integration changes the same module,
+so that earlier pass is a checkpoint rather than final-code acceptance.
+
+The in-progress `local_recovery_session.py` retains the original actor/claim,
+authenticated establishment, unbound manifest/control digest and native
+context in an optional `work_session_context` extension of the existing
+private local-recovery control. The field payloads and control location stay
+with the existing recovery engine; unbound controls omit the extension. The
+actor's closed domain selector adds `local_recovery`. Source code now joins
+fresh apply, original started resume and completed replay. The existing title
+write CLI and its alias now expose this route using retained app/task/session
+references. MCP is not yet joined. Scoped revert and explicit missing-
+claim original review remain work to finish before claiming complete coverage.
+
+The existing concrete session-current/origin guards are reused at write,
+progress callback and completion boundaries. An unchanged session remains
+valid after unrelated app registration. Stored control bytes are compared
+without rebuilding every plan on each guard. Legacy entry points reject
+scoped plans before requesting approval, so they cannot create a second claim
+for an already pending scoped original.
+
+Intermediate verification exposed an omitted nonempty evidence count and an
+incorrect heartbeat keyword passed to the exact engine; both were corrected.
+The synthetic pause test also needed the registry's required claim selector.
+These failed runs are not counted as passing evidence. The isolated real-title
+interruption/unrelated-app/resume/completed-replay case then passed in 38.590
+seconds, exit 0, before the final review corrections below.
+
+Independent review identified three material boundaries in the intermediate
+code: field-final/index-final interruption could be falsely marked complete;
+legacy execution could mint another scoped claim; and callback-time control
+changes needed rejection before the next effect. The current correction
+finishes only the original index generation under the held session guard,
+requires a current index before actor completion, rejects scoped legacy
+entry, and checks retained bytes on the current-owner guard. Independent
+follow-up confirmed all three findings resolved with no further actionable
+core defect. The final session/binding/held/existing-recovery cohort passed
+28 tests in 234.921 seconds, exit 0. Existing actor Git/intake pending guards
+passed 11 tests in 34.433 seconds, exit 0.
+
+The actual title CLI journey and malformed argument case passed two tests in
+184.318 seconds, exit 0: real session lifecycle, preview, interrupted field
+write, actual unrelated app registration, source mirror removal, original
+resume and completed alias replay. The initial public fixture accidentally
+passed an intake-only progress option; the fixture was corrected without
+adding an unnecessary product flag. Public-adapter review then found that
+abbreviated session options could bypass private argument error suppression.
+Both title command spellings now always suppress argument values on parse
+errors. Two grammar tests passed in 4.364 seconds, exit 0, including abbreviated
+options with both default and JSON output. No domain code changed for that fix.
+Follow-up independent review accepted the correction. Public privacy reported
+zero findings; public links, Korean product language and runtime skill checks
+also passed on the staged checkpoint, with a clean staged diff check.
+
+This remains a partial writer integration checkpoint. It does not prove
+whole-document Git ownership from field receipts or finish v0.4.20. The full
+accepted train continues without an approval stop at this checkpoint.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)

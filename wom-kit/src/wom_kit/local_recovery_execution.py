@@ -20,6 +20,7 @@ import json
 import os
 import re
 import stat
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable, Mapping
@@ -53,6 +54,7 @@ from .exact_operation_manifest import (
     ExactOperationManifest,
     ExactOperationManifestError,
     ExactOperationProgress,
+    ExactOperationWriterLock,
     FileExactOperationCheckpointStore,
     apply_exact_operation,
     _validate_stable_result_document,
@@ -107,6 +109,9 @@ class LocalRecoveryError(RuntimeError):
         "local_recovery_field_unsupported",
         "local_recovery_write_failed",
         "local_recovery_partial_revert_blocked",
+        "local_recovery_lock_required",
+        "local_recovery_session_context_invalid",
+        "local_recovery_session_ownership_changed",
     }
 
     def __init__(self, code: str) -> None:
@@ -361,6 +366,7 @@ class LocalRecoveryPlan:
     warning_codes: tuple[str, ...] = ()
     public_summary: Mapping[str, Any] | None = None
     loaded_from_control: bool = False
+    session_context: bytes | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -391,6 +397,9 @@ class LocalRecoveryPlan:
                 or item.fields[0].source_sha256 != hash_field_value(spec.source_value)
             ):
                 raise _fail("local_recovery_plan_invalid")
+        if self.session_context is not None:
+            from .local_recovery_session import _validate_session_context
+            _validate_session_context(self)
 
     @property
     def approveable(self) -> bool:
@@ -554,6 +563,8 @@ def _control_document(plan: LocalRecoveryPlan) -> dict[str, Any]:
         "public_summary": dict(plan.public_summary or {}),
         "private_control_document": True,
     }
+    if plan.session_context is not None:
+        basis["work_session_context"] = json.loads(plan.session_context)
     return {**basis, "control_sha256": _sha(_canonical_bytes(basis))}
 
 
@@ -641,7 +652,8 @@ def load_local_recovery_plan(
         "private_control_document",
         "control_sha256",
     }
-    if not isinstance(document, dict) or set(document) != expected:
+    if (not isinstance(document, dict)
+            or set(document) not in (expected, expected | {"work_session_context"})):
         raise _fail("local_recovery_control_invalid")
     supplied = document.pop("control_sha256", None)
     if (
@@ -670,6 +682,10 @@ def load_local_recovery_plan(
             warning_codes=tuple(document["warning_codes"]),
             public_summary=document["public_summary"],
             loaded_from_control=True,
+            session_context=(
+                _canonical_bytes(document["work_session_context"])
+                if "work_session_context" in document else None
+            ),
         )
     except (LocalRecoveryError, ExactOperationManifestError):
         raise
@@ -1303,9 +1319,11 @@ class _Writer(_Boundary):
         self,
         plan: LocalRecoveryPlan,
         index_lifecycle: ZettelIndexBatchLifecycle,
+        session_guard: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(plan)
         self.index_lifecycle = index_lifecycle
+        self.session_guard = session_guard or (lambda: None)
 
     def write_field(
         self,
@@ -1317,6 +1335,7 @@ class _Writer(_Boundary):
         heartbeat: Callable[[], None],
     ) -> None:
         heartbeat()
+        self.session_guard()
         spec = self.spec(target_kind, target_ref, field_ref)
         if hash_field_value(value) not in {
             hash_field_value(spec.pre_value),
@@ -1388,6 +1407,7 @@ class _Writer(_Boundary):
         else:
             raise ValueError("target")
         heartbeat()
+        self.session_guard()
 
 
 def _zettel_index_entries(
@@ -2357,8 +2377,36 @@ def _run_with_store(
     progress_hook: Callable[[ExactOperationProgress], None] | None,
     completion_authenticator: Callable[[bytes], Mapping[str, Any]] | None = None,
     index_lifecycle: ZettelIndexBatchLifecycle | None = None,
+    _session_claim: _ClaimedExactHumanApproval | None = None,
 ) -> dict[str, Any]:
     manifest = _operation_manifest(plan, mode=mode)
+    session_guard = lambda: None
+    if plan.manifest.work_session_binding is not None:
+        if plan.session_context is None or mode != "apply":
+            raise _fail("local_recovery_session_context_invalid")
+        from .local_recovery_session import _view, _require_pending_recovery_owner
+        view = _view(plan)
+        session_guard = lambda: _require_pending_recovery_owner(
+            view, claim=_session_claim, held=checkpoints.writer_lock)
+        session_guard()
+        if authority != _authority(plan, _session_claim, view.context, mode="apply"):
+            raise _fail("local_recovery_approval_required")
+        original_authenticator = _completion_authenticator(_session_claim)
+
+        def authenticate(payload):
+            session_guard()
+            return original_authenticator(payload)
+
+        completion_authenticator = authenticate
+        original_progress = progress_hook
+
+        def guarded_progress(event):
+            session_guard()
+            if original_progress is not None:
+                original_progress(event)
+            session_guard()
+
+        progress_hook = guarded_progress
     payloads = _Payloads(plan.specs)
     index_lifecycle = index_lifecycle or ZettelIndexBatchLifecycle.inspect(
         plan.archive_root,
@@ -2380,7 +2428,7 @@ def _run_with_store(
             mode=mode,
             lifecycle=index_lifecycle,
         )
-    writer = _Writer(plan, index_lifecycle)
+    writer = _Writer(plan, index_lifecycle, session_guard)
     verifier = _Verifier(plan)
     selected_fields = (
         tuple(
@@ -2417,6 +2465,7 @@ def _run_with_store(
                 progress_hook=progress_hook,
             )
     except Exception as error:
+        session_guard()
         index_truth = index_lifecycle.interrupted()
         try:
             inspection = inspect_exact_operation_state(
@@ -2516,6 +2565,7 @@ def _run_with_store(
             "paths_echoed": False,
             **index_truth,
         }
+    session_guard()
     try:
         index_entries = (
             _zettel_index_entries(plan)
@@ -2524,7 +2574,9 @@ def _run_with_store(
         )
         index_truth = index_lifecycle.finalize(index_entries)
     except Exception:
+        session_guard()
         index_truth = index_lifecycle.delta_failed()
+    session_guard()
     result = {
         "schema_version": RESULT_SCHEMA,
         "ok": core.get("status") == "completed",
@@ -2564,6 +2616,40 @@ def _run_with_store(
     return result
 
 
+@contextmanager
+def _local_recovery_writer_lock(plan: LocalRecoveryPlan, held=None):
+    """Reuse the caller's exact archive lane without taking or releasing it.
+
+    This is only a lock boundary, not session or approval authority. Legacy
+    callers still acquire their own lock; a held workflow retains its lock
+    across ownership checks, approval, recovery and completion publication.
+    """
+    if held is None:
+        with exact_operation_writer_lock(plan.archive_root) as acquired:
+            yield acquired
+        return
+
+    def require():
+        try:
+            if type(held) is not ExactOperationWriterLock:
+                raise ValueError("lock")
+            held.verify_held()
+            root = archive_services.require_existing_archive_root(plan.archive_root)
+            if (not os.path.samefile(root, held.archive_root)
+                    or archive_services.read_archive_id(root) != plan.archive_id):
+                raise ValueError("archive")
+            return
+        except Exception:
+            pass
+        # Rejected filesystem observations must not retain private paths in
+        # the exception chain seen by an outer command adapter.
+        raise _fail("local_recovery_lock_required")
+
+    require()
+    yield held
+    require()
+
+
 def _execute_core(
     plan: LocalRecoveryPlan,
     claim: _ClaimedExactHumanApproval,
@@ -2572,10 +2658,16 @@ def _execute_core(
     mode: str,
     resume: bool,
     progress_hook: Callable[[ExactOperationProgress], None] | None,
+    writer_lock: ExactOperationWriterLock | None = None,
 ) -> dict[str, Any]:
     authority = _authority(plan, claim, context, mode=mode)
     manifest = _operation_manifest(plan, mode=mode)
-    with exact_operation_writer_lock(plan.archive_root) as writer_lock:
+    with _local_recovery_writer_lock(plan, writer_lock) as writer_lock:
+        if plan.manifest.work_session_binding is not None:
+            if plan.session_context is None or mode != "apply":
+                raise _fail("local_recovery_session_context_invalid")
+            from .local_recovery_session import _view, _require_pending_recovery_owner
+            _require_pending_recovery_owner(_view(plan), claim=claim, held=writer_lock)
         index_lifecycle = ZettelIndexBatchLifecycle.inspect(
             plan.archive_root,
             has_zettel_targets=any(
@@ -2629,6 +2721,7 @@ def _execute_core(
             progress_hook=progress_hook,
             completion_authenticator=_completion_authenticator(claim),
             index_lifecycle=index_lifecycle,
+            _session_claim=claim,
         )
         if supersession is not None and result.get("ok") is True:
             parent, pending = supersession
@@ -2646,6 +2739,10 @@ def execute_local_recovery(
 ) -> dict[str, Any]:
     if type(plan) is not LocalRecoveryPlan or not plan.approveable:
         raise _fail("local_recovery_plan_blocked")
+    if plan.manifest.work_session_binding is not None:
+        # A scoped original must go through its actor/claim dispatcher; this
+        # legacy entry point must never mint a second claim for that context.
+        raise _fail("local_recovery_session_context_invalid")
     if mode == "revert" and not plan.loaded_from_control:
         raise _fail("local_recovery_control_invalid")
     manifest = _operation_manifest(plan, mode=mode)
@@ -2986,6 +3083,7 @@ def resume_local_recovery(
     reviewer_claim: str = "person:local-recovery-operator",
     progress_hook: Callable[[ExactOperationProgress], None] | None = None,
     key_provider: Any = None,
+    _writer_lock: ExactOperationWriterLock | None = None,
 ) -> dict[str, Any]:
     if (
         type(plan) is not LocalRecoveryPlan
@@ -2993,12 +3091,14 @@ def resume_local_recovery(
         or mode not in {"apply", "revert"}
     ):
         raise _fail("local_recovery_resume_invalid")
+    if plan.manifest.work_session_binding is not None:
+        raise _fail("local_recovery_session_context_invalid")
     context = local_recovery_context(
         plan,
         mode=mode,
         reviewer_claim=reviewer_claim,
     )
-    with exact_operation_writer_lock(plan.archive_root) as writer_lock:
+    with _local_recovery_writer_lock(plan, _writer_lock) as writer_lock:
         checkpoints = FileExactOperationCheckpointStore(
             plan.archive_root,
             writer_lock=writer_lock,
