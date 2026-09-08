@@ -304,3 +304,14 @@ top-level command or tool. Whole writer/effect ownership, source capture,
 generic-document provenance, responsibility assignment, comprehensive coverage
 gates and final installed/release acceptance remain unfinished. No client
 archive, runtime, credentials, providers or feedback lifecycle was changed.
+
+## Local recovery transformation preservation
+
+The existing local recovery composite, revert and observed-post subset
+planners now preserve a supplied work-session binding. Composites refuse
+mixed identity/revision or bound/unbound members; subsets cannot relabel the
+historical parent. Legacy unbound approval and control digests remain byte
+compatible with the preceding development checkpoint. Six contract tests and
+12 existing local-recovery regressions passed; independent review found no
+actionable defect. This does not add a completed writer family: current-owner
+execution, original actor routing and whole-document Git proof remain pending.

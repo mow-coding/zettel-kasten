@@ -452,10 +452,12 @@ def combine_local_recovery_plans(
         raise _fail("local_recovery_plan_invalid")
     root = members[0].archive_root
     archive_id = members[0].archive_id
+    session_binding = members[0].manifest.work_session_binding
     if any(
         plan.archive_root != root
         or plan.archive_id != archive_id
         or plan.loaded_from_control
+        or plan.manifest.work_session_binding != session_binding
         for plan in members
     ):
         raise _fail("local_recovery_plan_invalid")
@@ -506,6 +508,7 @@ def combine_local_recovery_plans(
         ),
         items=items,
         operation_evidence=evidence,
+        work_session_binding=session_binding,
     )
     return LocalRecoveryPlan(
         archive_root=root,
@@ -530,6 +533,7 @@ def _operation_manifest(plan: LocalRecoveryPlan, *, mode: str) -> ExactOperation
         archive_identity_sha256=plan.manifest.archive_identity_sha256,
         items=plan.manifest.items,
         operation_evidence=plan.manifest.operation_evidence,
+        work_session_binding=plan.manifest.work_session_binding,
     )
 
 
@@ -945,6 +949,7 @@ def build_observed_post_subset_revert_plan(
         archive_identity_sha256=plan.manifest.archive_identity_sha256,
         items=items,
         operation_evidence=evidence,
+        work_session_binding=plan.manifest.work_session_binding,
     )
     return (
         LocalRecoveryPlan(
@@ -1024,6 +1029,7 @@ def _subset_parent_plan(
         parent.archive_id != plan.archive_id
         or parent.domain != plan.domain
         or not parent.loaded_from_control
+        or parent.manifest.work_session_binding != plan.manifest.work_session_binding
     ):
         raise _fail("local_recovery_partial_revert_blocked")
 

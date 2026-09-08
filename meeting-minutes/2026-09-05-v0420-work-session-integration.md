@@ -2615,6 +2615,39 @@ commit on the existing branch, then continue the unfinished v0.4.20 writer,
 effect, source-capture and backup ownership integration. A source checkpoint
 does not imply all-writer coverage or release completion.
 
+## Local recovery binding preservation checkpoint, 2026-09-08
+
+The verified continuation unit was committed and pushed as
+`35fb4e58dbb78436e72cd7606c97e2c7e4b6faaa`; the feature branch's remote ref
+matched that commit. Work continues under the user's complete-train approval.
+
+Before composing existing local title/locator/objet recovery with current
+session ownership, inspection found three existing manifest transformations
+that omitted the optional `WorkSessionBinding`: composite, revert, and
+observed-post subset compensation. Six product lines now preserve that exact
+binding, refuse mixed sessions/revisions and bound/unbound composite members,
+and require a subset's historical binding to match its retained parent. This
+does not retrofit a binding into any old approval or assign legacy documents
+to the caller. No new command, schema or approval mechanism was introduced.
+
+`test_v0420_local_recovery_binding` (six new cases) and
+`test_local_recovery_execution` (12 existing cases) passed together: 18 tests,
+11.320 seconds, exit 0. Tests include actual private-control round trips,
+one-field observed-post selection, mixed identity refusal, exact parent
+membership, and the existing interruption, native approval/resume, subset
+supersession and field-local revert preserving later unrelated body changes.
+Six unbound manifest/control/approval-context golden digests were obtained by
+executing the actual `35fb4e58` module against the synthetic fixtures, then
+matched against the final code. Independent read-only review found no
+actionable defect; it did not repeat tests.
+
+This is preservation of an existing data contract, not a completed session
+writer family. Local recovery still needs a caller-held session execution
+route, original context/actor integration, and authenticated whole-document
+backup evidence. Neither the human-artifact registry's caller-supplied hash
+nor a field receipt alone proves ownership of an entire changed document.
+The remaining v0.4.20 coverage and later release batches remain open.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)
