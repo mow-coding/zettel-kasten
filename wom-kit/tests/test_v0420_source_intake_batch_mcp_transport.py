@@ -141,12 +141,12 @@ class BatchSchedulerTests(unittest.TestCase):
         self.addCleanup(subject.close)
         return subject, sent
 
-    def test_only_fixed_batch_and_record_names_have_three_serial_modes(self):
+    def test_only_fixed_batch_and_record_names_have_four_serial_modes(self):
         for name in ("source_intake_batch", "source_intake_record"):
-            for mode in ("preview", "apply", "resume"):
+            for mode in ("preview", "apply", "resume", "review_original"):
                 self.assertTrue(transport.is_management_request(request(name=name, mode=mode)))
                 self.assertTrue(transport._managed_mutation(request(name=name, mode=mode)))
-            for mode in ("review_original", "unknown", None, False, []):
+            for mode in ("replace_original", "unknown", None, False, []):
                 self.assertFalse(transport._managed_mutation(request(name=name, mode=mode)))
         for name in ("source-intake-batch", "source_intake", [], {}, None):
             self.assertFalse(transport.is_management_request(request(name=name)))

@@ -203,6 +203,30 @@ class OriginalGitReviewTests(unittest.TestCase):
             self.assertNotEqual(changed, before)
             self.assertEqual(f.git("rev-parse", "HEAD").stdout.strip(), f.fixture.initial_head)
 
+    def test_unrelated_registry_transition_then_actual_pause_refuses_original_review(self):
+        f = self.f
+        with exact.ExactOperationWriterLock(f.root) as held:
+            original, pending = self.cut(held)
+            before_registry = f.store.read()
+            registration = registry.plan_transition(before_registry, action="register-app",
+                label="Synthetic unrelated Git app")
+            f.store.commit(registration, held_lock=held)
+            self.assertNotEqual(f.store.read().sha256, before_registry.sha256)
+            self.assertEqual(f.store.read().binding(f.session), before_registry.binding(f.session))
+            subject._current_scope(original.prepared, f.store, f.routing, pending, held)
+            paused = registry.plan_transition(f.store.read(), action="pause",
+                client_app_ref=f.app, work_session_ref=f.session, claim_ref=f.claim_ref)
+            f.store.commit(paused, held_lock=held)
+            before, calls = f.evidence(), f.native.calls
+            with patch.object(broker, "_request_exact_human_approval_core", side_effect=AssertionError("new review")), \
+                 patch.object(writer, "_run_git_backup_exact_operation", side_effect=AssertionError("Git effects")):
+                with self.assertRaises(subject.WorkSessionGitWorkflowError):
+                    self.review(held)
+            self.assertEqual(f.evidence(), before)
+            self.assertEqual(f.native.calls, calls)
+            self.assertEqual(f.routing._read(current=False)._raw, pending._raw)
+            self.assertEqual(f.git("rev-parse", "HEAD").stdout.strip(), f.fixture.initial_head)
+
 
 if __name__ == "__main__":
     unittest.main()

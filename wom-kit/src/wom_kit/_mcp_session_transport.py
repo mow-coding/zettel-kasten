@@ -79,7 +79,7 @@ def _managed_mutation(message):
         # Even preview acquires the existing held lane for a consistent plan.
         # Scheduling is not availability or authority; the service validates
         # every argument, current runtime/session and exact native approval.
-        return type(arguments.get("mode")) is str and arguments["mode"] in {"preview", "apply", "resume"}
+        return type(arguments.get("mode")) is str and arguments["mode"] in {"preview", "apply", "resume", "review_original"}
     mode = resolve_work_session_mode(action=arguments.get("action"), **{
         key: arguments.get(key, False)
         for key in ("dry_run", "approve", "apply", "resume", "review_original")

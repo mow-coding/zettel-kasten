@@ -227,27 +227,30 @@ native decision; they do not prepare JSON or copy identifiers.
 archive source-intake-batch <archive-root> --client-app-ref <app> --task-route-ref <task> --work-session-ref <session> --manifest <private-request.json> --dry-run --format json
 archive source-intake-batch <archive-root> --client-app-ref <app> --task-route-ref <task> --work-session-ref <session> --manifest <private-request.json> --approve --reviewed-by <reviewer> --format json
 archive source-intake-batch <archive-root> --client-app-ref <app> --task-route-ref <task> --resume --format json
+archive source-intake-batch <archive-root> --client-app-ref <app> --task-route-ref <task> --approve --review-original --format json
 ```
 
 Fresh preview/apply requires the private request; scoped apply does not take a
 copied expected-plan hash. Original resume accepts only the saved app/task route
 and an optional same-session assertion. It rejects replacement requests,
-reviewers, execution/approval identifiers and reconciliation flags. No explicit
-original re-review option is available in this first slice: missing original
-approval evidence is a blocker, not permission to manufacture another claim.
+reviewers, execution/approval identifiers and reconciliation flags. Ordinary
+resume never opens another approval window. Explicit original review is a
+separate action for the verified pre-claim interruption described below; missing
+or invalid approval evidence alone is not permission to manufacture a claim.
 
 MCP `source_intake_batch` uses that same batch service with `mode` set to
-`preview`, `apply` or `resume`. Every call supplies `archive_root`,
+`preview`, `apply`, `resume` or `review_original`. Every call supplies `archive_root`,
 `client_app_ref` and `task_route_ref`. Fresh calls also supply `manifest` and
 `work_session_ref`; only fresh apply supplies `reviewed_by`. Relative manifest
 paths are resolved against the archive root. Both paths must pass the existing
 MCP allowed-root policy. Inputs are bounded to 64 KiB of ASCII JSON; the
 private manifest file retains its separate existing domain limits.
 
-Resume accepts an optional same-session assertion but rejects any manifest or
+Both original modes accept an optional same-session assertion but reject any manifest or
 reviewer parameter, even a null/default value. It does not accept replacement
 hashes, approval IDs, native/key callbacks or a caller-selected operation family.
-The existing single-record route keeps its schema and missing-field outcomes.
+The existing single-record route keeps its previous modes and missing-field
+outcomes; it receives the same explicit original-review mode.
 
 Record and batch share one serial intake transport. A fixed starting message
 precedes the first domain observation; the existing five-second heartbeat
@@ -279,6 +282,7 @@ bodies and does not manufacture the batch's prepared capture request.
 archive source-intake-record <archive-root> --client-app-ref <app> --task-route-ref <task> --work-session-ref <session> --source-intake-plan <private-plan.json> --dry-run --format json
 archive source-intake-record <archive-root> --client-app-ref <app> --task-route-ref <task> --work-session-ref <session> --source-intake-plan <private-plan.json> --approve --reviewed-by <reviewer> --format json
 archive source-intake-record <archive-root> --client-app-ref <app> --task-route-ref <task> --resume --format json
+archive source-intake-record <archive-root> --client-app-ref <app> --task-route-ref <task> --approve --review-original --format json
 ```
 
 The AI retains the app/task route and prepares inputs; the person reviews the
@@ -289,8 +293,8 @@ authenticated receipt/checkpoint and current exact whole output; it does not
 turn a copied matching JSON file into an approved record.
 
 MCP `source_intake_record` uses the same service with `mode` set to `preview`,
-`apply` or `resume`, explicit `client_app_ref`/`task_route_ref` and optional
-same-session assertion on resume. Fresh calls supply `source_intake_plan` and
+`apply`, `resume` or `review_original`, explicit `client_app_ref`/`task_route_ref`
+and optional same-session assertion on original modes. Fresh calls supply `source_intake_plan` and
 the claimed `work_session_ref`; only fresh apply supplies `reviewed_by`.
 Both archive and input path must satisfy MCP allowed-root policy. There are
 no public key-provider, native-dialog, claim or execution override parameters.
@@ -299,8 +303,8 @@ progress. A heartbeat repeating the last observed state is liveness, not proof
 that additional items completed.
 
 The shared record/batch transport now also reports a fixed starting state
-before its first domain observation. This does not change the record's input
-schema, exact operation or original continuation behavior.
+before its first domain observation. Original review extends the mode enum;
+it does not change the exact operation or the existing modes' behavior.
 
 This is development-source integration, not a release or client result. The
 single record has its own authenticated metadata-output Git producer; it does
@@ -315,3 +319,29 @@ An interrupted unpublished stage remains preserved, not silently adopted or
 deleted. Unknown destination bytes, symlinks/reparse points and unexpected
 hardlinks block the scoped operation. The integration minutes distinguish
 synthetic source journeys from installed-wheel and client acceptance.
+
+## Explicit review after interruption before claim publication
+
+The fresh workflow can retain its exact original context and pending task,
+then stop before publishing its approval claim. Ordinary `--resume` remains
+non-interactive and reports that the original approval is missing. The AI can
+offer the explicit `--approve --review-original` action (MCP `review_original`)
+using the same saved app/task route; the person reviews the original change,
+not a regenerated request or copied identifier. This development extension is
+still subject to the separate fault and joined-journey checks in the integration
+minutes, not a released client capability.
+
+Only an unchanged, authenticated original pending operation with genuine claim
+absence qualifies. The original context and pending task are not republished.
+Existing authentic claims delegate to ordinary resume without a new dialog;
+invalid, ambiguous or failed evidence does not become replacement permission.
+The existing key must remain available. The native decision is followed by
+fresh current-owner, original-evidence and output-preimage checks, and the
+common broker checks absence again with the same active key before claiming.
+
+Batch review checks retained source identities and bytes again. Single-record
+review verifies its metadata-only operation without requiring the old caller
+JSON or source file. A pre-existing output, even matching bytes copied into
+place, is not accepted as an unpublished operation. Completed replay still
+requires the original authenticated completion evidence. Neither route proves
+source custody or authorizes source deletion.

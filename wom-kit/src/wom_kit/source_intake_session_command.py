@@ -20,7 +20,7 @@ _BOOLEANS = frozenset({
     "original_completion_verified", "actor_completion_published", "original_operation_already_completed",
     "prepared_capture_request_verified", "completion_authentication_verified", "independent_verification",
     "source_bytes_reverified", "requires_new_capture_approval", "domain_writer_reentered",
-    "prepared_capture_request_created",
+    "prepared_capture_request_created", "native_approval_redisplayed", "original_context_preserved",
 })
 _COUNTS = frozenset({"item_count", "completed_item_count"})
 _DIGESTS = frozenset({
@@ -109,19 +109,20 @@ def _dispatch_session_source_intake(
     code = "work_session_intake_command_unavailable"
     try:
         if (type(family) is not str or family not in {"batch", "record"}
-                or type(mode) is not str or mode not in {"preview", "apply", "resume"}
+                or type(mode) is not str or mode not in {"preview", "apply", "resume", "review_original"}
                 or not callable(cancel_requested) or not callable(progress)):
             return _failure("work_session_intake_command_invalid", mode=mode)
-        if mode == "resume" and (request_path is not None or reviewer_claim is not None):
+        original_mode = mode in {"resume", "review_original"}
+        if original_mode and (request_path is not None or reviewer_claim is not None):
             return _failure("work_session_intake_original_inputs_forbidden", mode=mode)
-        if mode != "resume" and (not (type(request_path) is str or isinstance(request_path, Path))
+        if not original_mode and (not (type(request_path) is str or isinstance(request_path, Path))
                                      or type(request_path) is str and not request_path):
             return _failure("work_session_intake_request_required", mode=mode)
         if mode != "apply" and reviewer_claim is not None:
             return _failure("work_session_intake_command_invalid", mode=mode)
         if mode == "apply" and (type(reviewer_claim) is not str or not reviewer_claim.strip()):
             return _failure("work_session_intake_reviewer_required", mode=mode)
-        sessions._refs(client_app_ref, task_route_ref, work_session_ref, require_session=mode != "resume")
+        sessions._refs(client_app_ref, task_route_ref, work_session_ref, require_session=not original_mode)
         if work_session_ref is not None:
             sessions._refs(client_app_ref, task_route_ref, work_session_ref, require_session=True)
         resolved = sessions._root(root)
@@ -156,6 +157,10 @@ def _dispatch_session_source_intake(
         def run(held):
             nonlocal started
             started = True
+            if mode == "review_original":
+                if family == "batch":
+                    return workflow._review_original_session_source_intake_batch_held(resolved, held=held, **common)
+                return workflow._review_original_session_source_intake_record_held(resolved, held=held, **common)
             if mode == "resume":
                 return resume(resolved, held=held, **common)
             if mode == "preview":

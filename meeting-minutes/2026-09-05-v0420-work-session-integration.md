@@ -2381,6 +2381,240 @@ bump, PR, tag, wheel or client application has occurred.
   schema addition is the new batch tool; no client, provider, global executable,
   legacy approval or source-byte preservation state was changed.
 
+## Explicit original review for the reachable pre-claim cut
+
+- The batch MCP slice was committed and pushed as
+  `4e0472091d863b5df29eed27db95f2ae6a7f184b`; local HEAD, tracking ref and
+  remote ref matched, and the feature tree was clean. Continue with the
+  remaining reachable interruption before durable approval-claim creation.
+- Inspection confirms that both intake families save their unchanged context
+  and pending actor immediately before the claim constructor. A failure there
+  can leave a retained original but no claim. Automatic resume must continue
+  to refuse; add an explicit original re-review instead of manufacturing
+  approval from absence or leaving that operation without a continuation path.
+- Reuse the existing original-review broker with its noncreating key consumer
+  and final authenticated same-key presence scan. One private closed-family
+  intake module and two fixed wrappers compose existing loaders, typed views,
+  current-owner guards, concrete writers and completion verifiers. Do not alter
+  original manifest/context bytes, fresh/automatic-resume implementations or
+  the broker. The registry-transition-specific re-review helper is not an
+  intake writer and will not be adapted by pretending its preimage is compatible.
+- A present original claim follows unchanged automatic resume without another
+  native decision. A malformed, failed, ambiguous or unverifiable claim is
+  not absence. New native review requires genuinely absent original approval,
+  a pending original selector, authenticated unchanged establishment evidence,
+  unchanged current ownership and every original output still absent.
+- Batch revalidates retained source locations, physical identity and bytes;
+  record revalidates its retained metadata and strict receipt preimage without
+  newly requiring external source bytes or the caller JSON. A copied output,
+  even if byte-identical, blocks a new review. Guard source/target/actor/origin
+  evidence before and after native/provider callbacks; never nest key consumers
+  or save a new context/pending actor over the original.
+- Extend only the two existing CLI/MCP routes. CLI requires explicit
+  `--approve --review-original`; MCP uses `review_original`. Both accept the
+  saved app/task route and optional same-session assertion, not a replacement
+  input, reviewer, digest or approval ID. Preserve existing unscoped batch
+  resume, old mode behavior and the same transport family/lock. No new command
+  or tool name is added. Native acceptance alone is not completion evidence.
+- Assign the private engine/fault matrix, public surface/compatibility and
+  actual public journeys to separate owners. Root records decisions and
+  independently reviews integration. All new implementation and validation
+  results remain pending; client and provider boundaries are unchanged.
+- Root also identified a separate pre-release concurrency question in current
+  code: scoped intake and Git `_current` guards compare the whole registry
+  digest as well as the exact current claimed binding. A different app's
+  registration after an interruption could therefore block original
+  continuation even if the selected session is unchanged. The whole-digest
+  comparison is confirmed in code; the cross-app interrupted journey still
+  needs an actual synthetic reproduction. Do not silently relax this guard
+  during original-review implementation or claim two-app recovery acceptance
+  before resolving and documenting its intended scope.
+
+## Original-review verification checkpoint (not release acceptance)
+
+- The public routing and transport cohort passed 101 tests in 26.268 seconds,
+  no skips. It includes ten new original-review grammar/held-routing tests,
+  unchanged-mode compatibility, legacy unscoped batch resume, private error
+  envelopes and the existing completion-authentication requirements. This is
+  routing evidence, not proof that a mocked domain performed a write.
+- Root's four public-readiness checks passed: public links, Korean product
+  language, public privacy and the runtime skill package. This is not a
+  guarantee that historical public material never exposed information.
+- The first private positive run failed because its test observer used the
+  wrong positional argument for the native request. Exact source inspection
+  confirmed the contract is `(context, *, intent, native, ...)`; the public
+  journey's observer was already correct. The private test was corrected,
+  including its direct synthetic-decision call, without product changes.
+- Review also removed a blanket test prohibition on terminal MAC calculation:
+  existing historical establishment verification legitimately recomputes that
+  MAC without writing. Concrete claim construction, receipt finalization,
+  domain writer and actor mutation remain prohibited during completed replay.
+  A corrected both-family positive test passed in 76.120 seconds. The expanded
+  fault cohort and independent public journeys are still pending at this point.
+- Source is frozen for those runs: shared review engine
+  `3704ce520b35cf5e660984c43838ed9ef508b35af10800445068d8c5a0a42e9b`,
+  batch wrapper module
+  `5420498edb159820ecb636c8c52289f30e47f4fedb660dee12177e5f01203895`,
+  record wrapper module
+  `1dc5cc64a1c9cedd7269317351e635aa5b6a2eb48c41966e6180137cda77abc6`.
+  Existing fresh/resume definitions and broker source are unchanged.
+- The separate cross-app whole-registry diagnostic is prepared to use real
+  public app registration after the original pre-claim cut. It must report the
+  actual refusal without treating that refusal as desirable concurrency UX or
+  silently changing approved scope. No client archive or provider is involved.
+
+## User-requested new-session handoff, 2026-09-08
+
+The user requested a planning-only handoff to a fresh session, with execution
+after plan approval using their selected Astra/high setting. Stop further
+implementation and tests; preserve the dirty worktree. The handoff records
+verified results separately from the interrupted fault/public-journey cohorts,
+whose final outcomes were not recovered. The unrelated-app registration
+diagnostic reproduced a whole-registry prerequisite refusal without any
+selected-session drift; this is still an unfixed behavior, not acceptance.
+
+The local starting instructions, `2026-09-08-new-session-plan-handoff.md`,
+contain the current local/remote SHAs, release state, remaining work, minimal
+reading order and the developer/client boundary. No new commit, push, release,
+client mutation or cleanup was performed for this handoff. Earlier agent work
+was interrupted; a targeted process-name/argument check found none of the
+recent original-review/concurrency test processes still running.
+
+## Approved continuation-scope completion, 2026-09-08
+
+The user approved the planning-only reassessment and requested implementation
+of one bounded unit: complete the pending intake original-review extension and
+allow original intake/Git continuation after unrelated app registration. Keep
+the existing six-release train and unfinished branch at `4e047209`; preserve
+the 16 modified and five new files already present. Execution uses the user's
+selected GPT-6 Astra / High setting without raising it.
+
+Remove only the whole-registry equality prerequisite in intake `_current` and
+Git `_current_scope`. Retain current claimed binding, actor/pending/original
+evidence, held lock and all domain preimage checks. Stored original registry
+digests and approval bytes remain immutable; registry transition CAS is not
+changed. The record workflow already uses the intake guard. No new production
+command, format, authentication layer or client operation is introduced.
+
+Acceptance is the existing pending eight-case private review cohort, two
+public review journeys, actual unrelated-app original resume/review in batch,
+record and Git, current-owner/CAS and affected Git interruption regressions,
+followed by bounded independent review and updated acceptance records. Reuse
+the unchanged public routing/transport result (101 passed) and avoid full
+suite, installed-wheel and scale repetitions for this development slice.
+All new test outcomes are pending until their terminal exit is recorded.
+
+No client archive, runtime, credential, provider, feedback ledger or shared
+PATH executable is changed. Completion of this unit is not v0.4.20 release
+acceptance. Previously failed diagnostic evidence remains historical evidence.
+
+- The previously unfinished private original-review cohort completed all eight
+  tests in 387.956 seconds, exit 0, no skips, on the corrected current-owner
+  guards. Both intake families exercise approval absence/presence, cancellation,
+  repeated preclaim cuts, existing started claims, source and copied-output
+  preimages, corrupt/ambiguous/failed claims, missing keys, provider-entry claim
+  insertion and origin/evidence drift. No private-test correction was needed.
+- Independent read-only review found no actionable defect in the two guards,
+  pending original-review implementation, public routing and changed journey
+  tests. This is static review, separate from the public functional run now
+  pending. Python 3.10 grammar checks passed for the three relevant production
+  modules; functional execution is Windows Python 3.12, not cross-platform CI.
+- All nine actual public/registry journeys passed in 778.690 seconds, exit 0,
+  no skips, without further product or test corrections. The two previously
+  unverified original-review journeys now include real unrelated-app public
+  registration after the retained preclaim cut. Existing batch and record
+  CLI/MCP pairs likewise register an unrelated app after receipt publication
+  and before original resume. A's binding, actor, claims and original bytes
+  are unchanged by registration. Completed replay remains read-only.
+- The Git MCP pair registers an additional unrelated app after A's original
+  pre-push or preclaim interruption. Both retain the exact Git bundle/context,
+  verify real local-bare remote refs/blobs and exclusions, and forbid replanning,
+  replacement context/claim and duplicate commit or completed-replay effects.
+  The converted registry diagnostic also proves the corrected guard admits
+  unrelated registration but actual pause still prevents native review and
+  domain writes. Historical refusal evidence was not relabelled as success.
+- The remaining current-scope, Git review/interruption and registry-CAS cohort
+  is running serially. Full release/platform/installed/scale checks and client
+  execution are not included in these source-functional outcomes.
+
+Reproduction uses Python 3.12.10 from `wom-kit`, with source/test import roots
+`src;tests` and UTF-8 enabled. Each cohort runs through `python -m unittest -v`
+(public and regression cohorts additionally use fail-fast):
+
+| Cohort | Exact modules or selectors |
+| --- | --- |
+| Private review | `test_v0420_source_intake_original_review` |
+| Public and registry | `test_v0420_source_intake_original_review_public_workflow`, `test_v0420_source_intake_registry_concurrency_diagnostic`, `test_v0420_source_intake_batch_mcp_public_workflow`, `test_v0420_source_intake_record_public_workflow`, `test_v0420_git_backup_mcp_public_workflow` |
+| Current scope | `test_v0420_work_session_scope.CurrentSessionScopeTests` |
+| Git review | `test_v0420_session_git_original_review.OriginalGitReviewTests` |
+| Git interruption | `test_v0420_work_session_git_workflow.SessionGitWorkflowTests`: `test_started_before_first_checkpoint_resumes_exact_original_without_planner`, `test_partial_commit_cut_resumes_without_second_commit_or_new_review`, `test_underlying_writer_refuses_changed_pending_selector_before_git_effect`, `test_proven_git_completion_survives_later_ownership_loss_without_actor_cas` |
+| Registry CAS | `test_v0420_work_session_registry.SessionRegistryTests.test_duplicate_claim_cas_does_not_replace_first_owner` |
+
+Frozen production SHA-256 for these runs:
+
+| Module | SHA-256 |
+| --- | --- |
+| `work_session_source_intake_workflow.py` | `b14b395016fc57a210df1a60c98863f587e65e8b0e8592aa20351f61ddd00dc2` |
+| `work_session_git_workflow.py` | `9eb216328f176bc99884d058d9da9f85b90a91af8035ad66b91b69a4a8adb1d9` |
+| `work_session_source_intake_rereview.py` | `3704ce520b35cf5e660984c43838ed9ef508b35af10800445068d8c5a0a42e9b` |
+
+The shared review engine hash is identical to the handoff. The previously
+passing 101 routing/transport tests and their unchanged public source are
+reused as supporting evidence, not added to this run's executed test count.
+
+- The final current-scope/Git/CAS cohort passed all 28 tests in 863.320
+  seconds, exit 0, no skips. This includes 17 current-owner tests, the five
+  existing Git original-review cases plus a new real unrelated-registration/
+  pause refusal, four existing Git interruption/pending/completion cases and
+  the duplicate-claim CAS case. There were no failed runs or runtime fixture
+  corrections in any of this unit's three cohorts.
+- Total newly executed functional coverage is 45 tests, all passed. Registry
+  CAS, the common approval broker and the three original bundle codecs were
+  independently compared with HEAD and are unchanged. The review engine still
+  has the handoff hash; only the two excessive live-registry comparisons were
+  removed from product behavior in this turn. Existing uncommitted routes and
+  wrappers were preserved and verified rather than recreated.
+- The acceptance register now reflects v0.4.19's completed release/evidence
+  merge and the actual v0.4.20 partial milestones. It does not present the
+  historical `planned` rows as missing implementations. The bounded original
+  continuation unit is development verified; all-writer/effect coverage,
+  source capture/general document backup and final v0.4.20 release conditions
+  remain unfinished. No version bump, commit, push, PR, release, client mutation
+  or unfinished-worktree cleanup is part of this closeout.
+- Final hygiene initially found two Markdown links to the local handoff, which
+  is excluded by the existing `/meeting-minutes/` ignore rule. The handoff was
+  preserved locally; only those public-link presentations were changed to
+  plain code references. No ignore rule or checker was weakened, and no private
+  handoff was force-added. Korean language, public privacy (zero findings) and
+  runtime skill checks passed. Only the failed link check needs a rerun.
+- The targeted link-check rerun passed, exit 0. All four final hygiene checks
+  now pass; functional tests were not repeated for this link-only correction.
+  The reviewed development unit and its acceptance records are complete.
+  Changes remain uncommitted in the preserved feature worktree for the next
+  approved development checkpoint, with v0.4.20 release gates still pending.
+
+## User correction: continue the complete approved train
+
+The user clarified that the completed continuation unit must not be confused
+with completion of v0.4.20 or the accumulated recovery work. They explicitly
+authorized continuing the existing v0.4.19-v0.4.24 plan without stopping to ask
+again at each development unit or release: "아니야 그냥 쭉 해도괜찮아".
+The preceding unit-only stop is superseded by this instruction.
+
+Continue implementation, focused verification, independent review and each
+release's full required acceptance/merge/tag/public artifact/evidence closeout
+in the accepted dependency order. Keep short milestone records rather than
+replanning or asking for routine permission. Preserve all unfinished work and
+reuse verified source evidence. The selected Astra/high setting and developer/
+client boundary remain: no client archive, runtime, credential, provider or
+feedback-ledger writes and no shared PATH replacement. Actual client execution
+and independent client outcomes still follow the public product release.
+
+First preserve the verified original-review/continuation slice in a development
+commit on the existing branch, then continue the unfinished v0.4.20 writer,
+effect, source-capture and backup ownership integration. A source checkpoint
+does not imply all-writer coverage or release completion.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)

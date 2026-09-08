@@ -227,8 +227,9 @@ def _selected_scope(prepared, context, held, *, completed=False):
 
 def _current_scope(prepared, store, routing, selected, held):
     scope, binding = prepared.session_scope.document(), prepared.manifest.work_session_binding
-    if (store.read().sha256 != scope["registry_preimage_sha256"]
-            or store.require_claimed_binding(client_app_ref=binding.client_app_ref,
+    # Preserve the approved registry preimage, but use the existing session
+    # guard for current ownership after unrelated app registry transitions.
+    if (store.require_claimed_binding(client_app_ref=binding.client_app_ref,
                 work_session_ref=binding.work_session_ref, claim_ref=scope["claim_ref"],
                 held_lock=held, expected_binding=binding) != binding):
         raise WorkSessionGitWorkflowError("work_session_git_ownership_unavailable")

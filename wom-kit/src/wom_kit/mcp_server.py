@@ -1865,7 +1865,9 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "Fresh preview/apply require work_session_ref and manifest; apply also requires reviewed_by. "
             "This records metadata receipts and, when prepared, a capture request; it does not capture source bytes. "
             "Resume selects only the retained original by app/task (optional work-session); omit manifest and reviewer "
-            "entirely, including null values. No replacement approval, original re-review, hashes or approval IDs are accepted."
+            "entirely, including null values. No replacement approval, hashes or approval IDs are accepted. "
+            "Explicit review_original may reopen only the retained original whose claim was never published; "
+            "normal resume never opens a new approval dialog."
         ),
         "annotations": {"readOnlyHint": False, "destructiveHint": False,
                         "idempotentHint": False, "openWorldHint": False},
@@ -1873,7 +1875,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "type": "object", "additionalProperties": False,
             "properties": {
                 "archive_root": {"type": "string", "minLength": 1, "maxLength": 65536},
-                "mode": {"type": "string", "enum": ["preview", "apply", "resume"]},
+                "mode": {"type": "string", "enum": ["preview", "apply", "resume", "review_original"]},
                 "client_app_ref": {"type": "string", "minLength": 1},
                 "task_route_ref": {"type": "string", "minLength": 1},
                 "work_session_ref": {"type": "string", "minLength": 1},
@@ -1898,7 +1900,9 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "description": (
             "Record one redacted source-intake plan using its explicit app/task session and native exact approval. "
             "This preserves metadata only, not source bytes, and creates no capture request. "
-            "Resume selects the original approval using only app/task references; omit plan, reviewer, hashes and approval IDs."
+            "Resume selects the original approval using only app/task references; omit plan, reviewer, hashes and approval IDs. "
+            "Explicit review_original may reopen only the retained original whose claim was never published; "
+            "normal resume never opens a new approval dialog."
         ),
         "annotations": {"readOnlyHint": False, "destructiveHint": False,
                         "idempotentHint": False, "openWorldHint": False},
@@ -1906,7 +1910,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "type": "object", "additionalProperties": False,
             "properties": {
                 "archive_root": {"type": "string"},
-                "mode": {"type": "string", "enum": ["preview", "apply", "resume"]},
+                "mode": {"type": "string", "enum": ["preview", "apply", "resume", "review_original"]},
                 "client_app_ref": {"type": "string"}, "task_route_ref": {"type": "string"},
                 "work_session_ref": {"type": "string"},
                 "source_intake_plan": {"type": "string", "description": "Existing redacted plan JSON path; omitted on original resume."},
@@ -5511,20 +5515,21 @@ def _tool_session_source_intake(arguments: dict[str, Any], *, family: str) -> di
         raise InvalidParamsError()
     if (type(arguments) is not dict or set(arguments) - allowed or not required <= set(arguments)
             or any(type(arguments[key]) is not str for key in arguments)
-            or arguments["mode"] not in {"preview", "apply", "resume"}):
+            or arguments["mode"] not in {"preview", "apply", "resume", "review_original"}):
         raise InvalidParamsError()
     # Keep the record route's original missing/empty-field error ordering. Its
     # existing command owns those structured failures; only the new batch tool
     # requires every fresh input at the MCP grammar boundary.
+    original_mode = arguments["mode"] in {"resume", "review_original"}
     if not record and (any(not value.strip() or len(value) > 65536 for value in arguments.values())
-            or arguments["mode"] != "resume" and not {"manifest", "work_session_ref"} <= set(arguments)
+            or not original_mode and not {"manifest", "work_session_ref"} <= set(arguments)
             or arguments["mode"] == "apply" and "reviewed_by" not in arguments):
         raise InvalidParamsError()
     # Bound both the direct call and asynchronous transport input. Do not echo
     # rejected path/identity values or let extra approval knobs reach a writer.
     if len(json.dumps(arguments, ensure_ascii=True).encode("utf-8")) > 65536:
         raise InvalidParamsError()
-    if (arguments["mode"] == "resume" and {input_key, "reviewed_by"} & set(arguments)
+    if (original_mode and {input_key, "reviewed_by"} & set(arguments)
             or arguments["mode"] == "preview" and "reviewed_by" in arguments):
         raise InvalidParamsError()
     archive_root = require_path_arg(arguments, "archive_root")

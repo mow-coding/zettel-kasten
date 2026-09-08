@@ -1,6 +1,6 @@
 # Recovery and operations acceptance register
 
-Updated: 2026-09-05
+Updated: 2026-09-08
 Status: accepted implementation register; not a client-resolution ledger
 
 ## Evidence contract
@@ -20,15 +20,15 @@ in their original private custody. The developer does not update their lifecycle
 
 | Ref | Release | Required complete outcome | Current train state |
 | --- | --- | --- | --- |
-| RT-01 | v0.4.19 | Runtime and source directory allocation-size changes do not imply byte drift; real file/membership/identity/reparse changes still fail | corrected; focused development tests passed; full CI pending |
-| RT-02 | v0.4.19 | Trusted healthy same-version runtime terminates before candidate download/build; damaged state repairs atomically | actual-wheel no-op/follow-on preview diagnostic passed; four real closeout fault tests passed; final candidate verification pending |
-| RT-03 | v0.4.19 | Actual released interruption states resume or safely abandon with exact evidence; unknown states are preserved | candidate, full verification pending |
-| RT-04 | v0.4.19 | Four-state checks, command availability, requested modes, index readiness, and actual dispatch agree | focused development tests and bounded independent review passed; installed candidate/full CI pending |
-| RT-05 | v0.4.19 | Operational Doctor <=180 s, initial status <=2 s, heartbeat <=10 s; count and byte-scale evidence distinguished; no background console flashes | count and mixed local measurements passed on separate runs; first mixed operational failure retained; directory identity/startup fixes and independent focused review passed; exact final CI/installed-wheel pending |
-| WS-01 | v0.4.20 | Opaque app/workstream/session identity, CAS claims, one cancellable OS writer lock, consistent generation reads, and context handoff | planned |
-| WS-02 | v0.4.20 | New writes carry session binding; old approved operations resume without rewriting their authority | planned |
-| WS-03 | v0.4.20 | Local-only count-first target preview with 20-item pages and safe title/filename/short-ID fallback | planned |
-| WS-04 | v0.4.20 | Complete cursor pagination and exact selected/excluded Git coverage; selected-session non-force commit/push plus independent remote-ref proof | planned |
+| RT-01 | v0.4.19 | Runtime and source directory allocation-size changes do not imply byte drift; real file/membership/identity/reparse changes still fail | development verified and released; client execution independently pending |
+| RT-02 | v0.4.19 | Trusted healthy same-version runtime terminates before candidate download/build; damaged state repairs atomically | released with installed public workflow evidence; original local timeout retained separately from successful supplement; client execution independently pending |
+| RT-03 | v0.4.19 | Actual released interruption states resume or safely abandon with exact evidence; unknown states are preserved | development verified and released; client execution independently pending |
+| RT-04 | v0.4.19 | Four-state checks, command availability, requested modes, index readiness, and actual dispatch agree | development verified and released; client execution independently pending |
+| RT-05 | v0.4.19 | Operational Doctor <=180 s, initial status <=2 s, heartbeat <=10 s; count and byte-scale evidence distinguished; no background console flashes | released with supported-platform candidate and installed observations; count/mixed evidence and failed observations retained separately; client execution independently pending |
+| WS-01 | v0.4.20 | Opaque app/workstream/session identity, CAS claims, one cancellable OS writer lock, consistent generation reads, and context handoff | public CLI/MCP lifecycle implemented with development evidence; final installed/release acceptance pending |
+| WS-02 | v0.4.20 | New writes carry session binding; old approved operations resume without rewriting their authority | batch/record intake and Git have scoped CLI/MCP source evidence; explicit intake original review and unrelated-app continuation development verified (45 focused tests and independent review); all-writer/effect coverage unfinished |
+| WS-03 | v0.4.20 | Local-only count-first target preview with 20-item pages and safe title/filename/short-ID fallback | preview and paging components implemented with focused evidence; complete writer integration and installed acceptance pending |
+| WS-04 | v0.4.20 | Complete cursor pagination and exact selected/excluded Git coverage; selected-session non-force commit/push plus independent remote-ref proof | pagination and authenticated receipt/metadata selective Git source journeys verified; generic document ownership, responsibility integration and installed/release acceptance pending |
 | LR-01 | v0.4.21 | Draft discard/restore, semantic revision/restore, mint/retire/edge batches work through exact approval | planned |
 | LR-02 | v0.4.21 | Source-property backfill classifies every mirror page and supports apply/resume/independent comparison/field revert | older domain exists; client closure unconfirmed |
 | LR-03 | v0.4.21 | Identifier-like title proposals and historical title receipts are individually classified; insufficient evidence remains review | older planner exists; client writes unconfirmed |
@@ -50,6 +50,12 @@ in their original private custody. The developer does not update their lifecycle
 | QC-05 | v0.4.24 | Final session backup and all feedback outcomes are evidence-backed; drafts and corrected report lineages stay distinct | client-run closure pending |
 
 ## Preservation and non-goals
+
+The RT rows reflect the [published v0.4.19 evidence](../../meeting-minutes/2026-09-06-v0419-release-evidence.md)
+and its completed evidence merge. Earlier pending entries in the chronological
+log below remain historical. WS source checkpoints are detailed in the
+[writer coverage record](archive-infra-decision-log-2026-09-05-v0420-writer-coverage.md).
+None of these developer statuses updates a client feedback lifecycle.
 
 - Preserve confirmed single publication/capture/link/edge workflows and the
   existing source-intake/capture batches; do not describe them as absent.
@@ -102,3 +108,26 @@ approval exposure annotations, and the actual no-op-followed-by-preview
 failure. The historical count fixture passed; the expanded fixture did not
 complete inside its bounded investigation window and is retained solely for
 synthetic profiling. Neither full CI nor release/client completion is claimed.
+
+### 2026-09-08 original continuation checkpoint
+
+The user approved completing the pending intake original-review extension and
+correcting the unrelated-app registration blocker in the existing worktree.
+Only the two extra whole-registry current-owner comparisons were removed;
+the existing claimed-binding guard, actor/pending checks, original evidence,
+domain preimages, registry CAS and original bundle formats are retained.
+
+Development verification passed 45 focused tests in three serial cohorts:
+eight private original-review cases, nine actual public/registry journeys, and
+28 current-scope/Git/CAS regressions. All exited 0 with no skips. Public journeys
+register an unrelated app after A's retained-original interruption, then
+continue batch, record and Git through CLI/MCP. Actual pause remains a refusal.
+Git checks use isolated real commit/push/ref/blob evidence; source custody and
+generic document ownership are not inferred from metadata backup.
+
+Independent read-only review found no actionable defect. Exact selectors,
+durations, frozen source hashes and retained earlier evidence are in the
+[implementation record](../../meeting-minutes/2026-09-05-v0420-work-session-integration.md).
+The previous 101 routing/transport passes are reused, not counted as rerun.
+This closes the bounded development unit, not WS-02 all-writer acceptance,
+v0.4.20 installed/platform/release acceptance or any client feedback outcome.

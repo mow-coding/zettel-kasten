@@ -369,3 +369,11 @@ def _resume_session_source_intake_record_held(root, *, held, client_app_ref, tas
                 "native_approval_redisplayed": False, "automatic_resume_discovery": True,
                 "writes_performed": outcome.get("writes_performed") is True}
     return _safe_call(resume)
+
+
+def _review_original_session_source_intake_record_held(root, *, held, client_app_ref, task_route_ref,
+        work_session_ref=None, native=None, key_provider=None, progress_hook=None):
+    from .work_session_source_intake_rereview import _IntakeFamily, _review_original_session_source_intake_held
+    return _review_original_session_source_intake_held(root, family=_IntakeFamily.RECORD, held=held,
+        client_app_ref=client_app_ref, task_route_ref=task_route_ref, work_session_ref=work_session_ref,
+        native=native, key_provider=key_provider, progress_hook=progress_hook)

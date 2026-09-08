@@ -221,7 +221,7 @@ class RecordMcpGrammarTests(unittest.TestCase):
     def test_closed_schema_and_callbacks_are_transport_owned_only(self):
         tool = next(value for value in mcp.TOOL_DEFINITIONS if value["name"] == "source_intake_record")
         self.assertFalse(tool["inputSchema"]["additionalProperties"])
-        self.assertEqual(tool["inputSchema"]["properties"]["mode"]["enum"], ["preview", "apply", "resume"])
+        self.assertEqual(tool["inputSchema"]["properties"]["mode"]["enum"], ["preview", "apply", "resume", "review_original"])
         self.assertIn("metadata only", tool["description"])
         for key in ("native", "key_provider", "claim", "context", "progress", "cancel_requested", "approval_id", "expected_plan_sha256"):
             with patch.object(command, "dispatch_session_source_intake_record") as dispatch:

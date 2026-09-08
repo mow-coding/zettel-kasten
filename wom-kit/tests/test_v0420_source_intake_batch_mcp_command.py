@@ -91,16 +91,24 @@ class BatchMcpGrammarTests(unittest.TestCase):
         record.assert_not_called()
         self.assertNotIn(PRIVATE, json.dumps(response))
 
-    def test_batch_schema_is_closed_and_record_definition_bytes_are_unchanged(self):
+    def test_batch_schema_is_closed_and_record_definition_has_only_explicit_review_delta(self):
         tool = next(row for row in mcp.TOOL_DEFINITIONS if row["name"] == TOOL)
         schema = tool["inputSchema"]
         self.assertFalse(schema["additionalProperties"])
         self.assertEqual(set(schema["properties"]), set(self.arguments("apply")))
-        self.assertEqual(schema["properties"]["mode"]["enum"], ["preview", "apply", "resume"])
+        self.assertEqual(schema["properties"]["mode"]["enum"], ["preview", "apply", "resume", "review_original"])
         self.assertIn("does not capture source bytes", tool["description"])
         self.assertIn("including null", tool["description"])
         self.assertIn("No replacement approval", tool["description"])
         record = next(row for row in mcp.TOOL_DEFINITIONS if row["name"] == "source_intake_record")
+        # Original re-review is the sole approved additive mode/description
+        # delta. Stripping it must recover the prior full-definition golden.
+        record = json.loads(json.dumps(record))
+        record["inputSchema"]["properties"]["mode"]["enum"].remove("review_original")
+        addition = (" Explicit review_original may reopen only the retained original whose claim was never published; "
+                    "normal resume never opens a new approval dialog.")
+        self.assertTrue(record["description"].endswith(addition))
+        record["description"] = record["description"][:-len(addition)]
         raw = (json.dumps(record, ensure_ascii=True, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
         # Existing record name/schema/description/annotations, not a newly
         # generated self-comparison or a relaxed predecessor fixture.
@@ -145,7 +153,7 @@ class BatchMcpGrammarTests(unittest.TestCase):
             for value in (None, "", " ", PRIVATE, False, {}, []):
                 self.invalid(self.arguments("resume", **{key: value}))
         self.invalid(self.arguments("preview", reviewed_by="person:synthetic-reviewer"))
-        self.invalid(self.arguments("review_original"))
+        self.invalid(self.arguments("replace_original"))
 
     def test_exact_primitives_keys_and_total_byte_budget(self):
         for key in self.arguments("apply"):

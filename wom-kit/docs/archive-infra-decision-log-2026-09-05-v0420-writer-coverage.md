@@ -263,3 +263,44 @@ a new human decision. Prepared capture requests and metadata backup do not
 close source custody, generic document ownership, cleanup responsibility,
 installed acceptance or any client recovery. Those remaining boundaries are
 still tracked rather than relabelled as completed coverage.
+
+## Explicit intake original-review extension under verification
+
+Both existing scoped intake families now expose explicit original review via
+their existing CLI/MCP routes. This addresses the reachable interruption after
+the retained original/pending task was published but before its approval claim
+was created. Ordinary resume stays non-interactive; explicit review requires
+authenticated original evidence, unchanged pending ownership and genuine claim
+absence. Existing claims return to their original resume path. The extension
+reuses the common broker and each family's existing writer and does not widen
+metadata recording into source capture.
+
+CLI remains 576 command spellings and MCP remains 136 tools. The only schema
+delta from the prior checkpoint is the additional original-review mode on the
+two intake tools; descriptions explain the explicit action. Routing and
+transport tests are separate from the private-engine fault matrix and actual
+CLI/MCP write/interruption/review/replay journeys. No additional writer family,
+release, installed runtime, client recovery or universal ownership coverage is
+claimed by this extension.
+
+## Original-review and unrelated-app continuation development closeout
+
+On 2026-09-08 the pending intake original-review extension and the existing
+intake/Git current-owner correction passed 45 focused source tests: eight
+private review cases, nine public/registry journeys and 28 scope/Git/CAS
+regressions. Independent read-only review found no actionable defect. The
+previous 101 public routing/transport passes are retained as unchanged-source
+evidence rather than repeated or counted again.
+
+The public journeys register an unrelated app after A's original interruption,
+then verify exact original resume/review across CLI/MCP, real metadata outputs
+and local-bare Git refs/blobs, plus read-only completed replay. Actual session
+pause, claim/actor/target/evidence drift and registry write conflicts remain
+refused. The original `registry_preimage_sha256` and approvals are preserved;
+current ownership uses the existing session-specific claimed-binding guard.
+
+This completes those bounded source paths, with no additional writer family,
+top-level command or tool. Whole writer/effect ownership, source capture,
+generic-document provenance, responsibility assignment, comprehensive coverage
+gates and final installed/release acceptance remain unfinished. No client
+archive, runtime, credentials, providers or feedback lifecycle was changed.

@@ -70,6 +70,37 @@ class GitBackupMcpPublicWorkflowTests(unittest.TestCase):
     def remote_head(self):
         return self.base.fixture.git_dir(self.base.fixture.remote, "rev-parse", "refs/heads/main").stdout.strip()
 
+    def register_unrelated_app_after_cut(self, case, original, pointer):
+        # A and the existing B already have metadata. Register a third,
+        # unrelated app only AFTER A's original Git approval scope was saved.
+        before = self.base.store.read()
+        pending = self.base.routing(case["a"])._read(current=False)._raw
+        claims = {path.name: path.read_bytes() for path in
+                  self.root.joinpath(approval.CLAIMS_RELATIVE_ROOT).glob("*.json")}
+        native_calls, head, remote = self.base.native.calls, self.git("rev-parse", "HEAD").stdout, self.remote_head()
+        frozen = writer._canonical(writer._bundle_document(original.prepared))
+        label = "SYNTHETIC_PRIVATE_CONCURRENT_APP_C"
+        preview = self.base.session_call("--action", "register-app", "--dry-run", "--request-stdin",
+            request={"label": label})
+        self.base.session_call("--action", "register-app", "--apply", "--request-stdin",
+            request={"selection": preview, "label": label})
+        after = self.base.store.read()
+        self.assertNotIn(preview["client_app_ref"], (case["a"]["app"], case["b"]["app"]))
+        self.assertNotEqual(before.sha256, after.sha256)
+        self.assertEqual(original.prepared.session_scope.document()["registry_preimage_sha256"], before.sha256)
+        for task in (case["a"], case["b"]):
+            self.assertEqual(after.binding(task["session"]), before.binding(task["session"]))
+        self.assertEqual(self.base.routing(case["a"])._read(current=False)._raw, pending)
+        current, current_pointer = self.journey.verify_original_and_exclusions(case)
+        self.assertEqual(current_pointer, pointer)
+        self.assertEqual(current.context, original.context)
+        self.assertEqual(writer._canonical(writer._bundle_document(current.prepared)), frozen)
+        self.assertEqual({path.name: path.read_bytes() for path in
+                          self.root.joinpath(approval.CLAIMS_RELATIVE_ROOT).glob("*.json")}, claims)
+        self.assertEqual((self.base.native.calls, self.git("rev-parse", "HEAD").stdout, self.remote_head()),
+                         (native_calls, head, remote))
+        case["registry"] = after.sha256  # Expected live registry, never rewrite original evidence.
+
     def frozen_state(self):
         return {"files": self.base.files(), "index": self.git("ls-files", "--stage").stdout,
                 "head": self.git("rev-parse", "HEAD").stdout.strip(), "remote": self.remote_head(),
@@ -120,6 +151,7 @@ class GitBackupMcpPublicWorkflowTests(unittest.TestCase):
         self.assertNotEqual(committed, case["baseline"])
         self.assertEqual(self.remote_head(), case["baseline"])
         original, pointer = self.journey.verify_original_and_exclusions(case)
+        self.register_unrelated_app_after_cut(case, original, pointer)
         native_before = self.base.native.calls
         with self.journey.forbid_discovery(), \
              patch.object(writer._GitBackupBackend, "_commit_group", side_effect=AssertionError("second commit")), \
@@ -143,6 +175,7 @@ class GitBackupMcpPublicWorkflowTests(unittest.TestCase):
         self.assertEqual(set(self.root.joinpath(approval.CLAIMS_RELATIVE_ROOT).glob("*.json")), case["claims"])
         self.assertEqual(self.git("rev-parse", "HEAD").stdout.strip(), case["baseline"])
         self.assertEqual(self.remote_head(), case["baseline"])
+        self.register_unrelated_app_after_cut(case, original, pointer)
         observed = []
         request_native = broker._request_exact_human_approval_core
 

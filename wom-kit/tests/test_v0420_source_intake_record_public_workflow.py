@@ -93,6 +93,9 @@ class PublicSingleRecordJourneyTests(unittest.TestCase):
         self.assertEqual(len(checkpoints), 1)
         self.assertEqual([json.loads(row)["stage"] for row in checkpoints[0].splitlines()], ["started"])
         receipt_before = (self.root / calls[0]).read_bytes()
+        self.assertEqual(self.fixture.store.read().sha256, registry_before)
+        registry_before = self.fixture.register_unrelated_app()
+        self.assertEqual(bundle._read_raw(self.root, pointer["manifest_sha256"]), bound_raw)
         self.input.unlink()
         with ExitStack() as stack:
             for owner, name in ((record, "plan_source_intake_record"),

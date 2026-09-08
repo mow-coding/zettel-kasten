@@ -444,3 +444,58 @@ the other public surface without caller JSON, and read-only completed replay
 after source removal. Authenticate retained originals and check the metadata
 outputs independently. The existence of a capture-request file is not capture
 or custody. Missing original approval is not permission for a fresh claim.
+
+## Explicit intake original review, never automatic replacement approval
+
+The pre-claim-construction cut is reachable after the native answer and saved
+pending original. Give it an explicit original-review action through the same
+two command families. Ordinary resume remains noninteractive and refuses a
+missing approval. If authenticated presence exists, original review delegates
+to that same original resume rather than asking again or replacing the claim.
+
+Use the existing original-review broker, including its noncreating key and
+same-key absence scan. Freeze and authenticate original establishment evidence;
+validate current ownership and output absence around native/provider callbacks.
+Reuse concrete family runners and authenticated completion. Do not rewrite
+the context or pending actor, widen a registry-transition writer, accept a
+caller-supplied implementation or open a second key consumer inside the first.
+
+Batch's approved operation includes source identity/hash observations, so its
+retained source preimage must still match. The single record is metadata-only:
+do not invent source hashing or require a missing caller JSON. A present output
+is not an absent preimage even when bytes match. Corrupt/failed/ambiguous claims,
+lost keys, changed evidence and completed selectors lacking approval all block.
+Cancellation or another interruption preserves the original continuation.
+
+## Planning handoff and execution budget, 2026-09-08
+
+At the user's request, pause implementation and preserve the current worktree
+for a fresh planning session. Keep the accepted recovery outcomes and current
+evidence; do not restart finished work or inflate completed-source checks into
+release/client acceptance. After approval, respect the user's selected
+Astra/high setting. Reuse bounded evidence and choose independent delegation
+only where it reduces total work. Unfinished test outcomes remain unverified.
+
+The local handoff, `meeting-minutes/2026-09-08-new-session-plan-handoff.md`,
+is the short entry point and is not published; the chronological record is supporting evidence,
+not a requirement to reload the entire history on every continuation.
+
+## Current session ownership after unrelated app registration
+
+The approved continuation fix removes the extra whole-registry equality test
+from the intake and Git current-owner guards. Their existing
+`require_claimed_binding` checks already distinguish an unrelated registry
+generation from a changed session revision, owner, active claim, labels or
+archive identity. The single-record workflow reuses the intake guard.
+
+Keep `registry_preimage_sha256` in the original scope and retain its exact
+serialization and approved context. It describes historical evidence, not a
+requirement that no other app may register before original continuation.
+Original actor/pending, establishment, claim authentication, source/output and
+Git selection checks still apply at their existing boundaries. Registry
+`commit()` retains all whole-preimage CAS checks to prevent lost updates.
+
+This decision covers retained-original resume and explicit original review.
+Fresh planning still freezes and compares its existing complete approval
+scope; callback-time scope drift is not newly accepted. No new command, mode,
+approval mechanism or storage migration is required by this correction.

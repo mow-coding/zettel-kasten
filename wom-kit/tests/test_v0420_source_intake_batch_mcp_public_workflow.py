@@ -144,6 +144,9 @@ class SourceIntakeBatchMcpPublicWorkflowTests(unittest.TestCase):
             self.assertEqual([json.loads(row)["stage"] for row in raw.splitlines()], ["started"])
         self.assertEqual(self.fixture.request.read_bytes(), self.fixture.original_request_bytes)
         self.assertEqual({path: path.read_bytes() for path in self.fixture.sources}, self.fixture.source_bytes)
+        self.assertEqual(bound.prepared.scope.document()["registry_preimage_sha256"], registry_before)
+        registry_before = self.fixture.register_unrelated_app()
+        self.assertEqual(self.fixture.retained(pointer)._raw, bound._raw)
         self.fixture.request.unlink()  # Delete only the original caller's fixture JSON.
         writes = []
 

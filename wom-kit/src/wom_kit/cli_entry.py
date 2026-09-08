@@ -98,7 +98,7 @@ def startup_progress_requested(argv: list[str]) -> bool:
         # actual parsing and the original unscoped mode remain unchanged.
         return True
     if argv[0] == "source-intake-record" and any(
-        option.split("=", 1)[0] in {"--client-app-ref", "--task-route-ref", "--work-session-ref"}
+        option.split("=", 1)[0] in {"--client-app-ref", "--task-route-ref", "--work-session-ref", "--review-original"}
         for option in options
     ):
         return True

@@ -94,6 +94,24 @@ class PublicSessionSourceIntakeJourneyTests(unittest.TestCase):
     def session_command(self, *flags, request=None):
         return self.call("work-session", *flags, request=request)["result"]
 
+    def register_unrelated_app(self):
+        """Real public registration after A's cut, without changing A's claim."""
+        before, selected = self.store.read(), self.routing._read(current=False)
+        claims, native_calls = self.claims(), self.native.calls
+        label = "SYNTHETIC_PRIVATE_CONCURRENT_APP_B"
+        preview = self.session_command("--action", "register-app", "--dry-run", "--request-stdin",
+            request={"label": label})
+        self.session_command("--action", "register-app", "--apply", "--request-stdin",
+            request={"selection": preview, "label": label})
+        after = self.store.read()
+        self.assertNotEqual(preview["client_app_ref"], self.app)
+        self.assertNotEqual(after.sha256, before.sha256)
+        self.assertEqual(after.binding(self.session), before.binding(self.session))
+        self.assertEqual(self.routing._read(current=False)._raw, selected._raw)
+        self.assertEqual(self.claims(), claims)
+        self.assertEqual(self.native.calls, native_calls)
+        return after.sha256
+
     def claims(self):
         return {path.name: path.read_bytes()
                 for path in self.root.joinpath(approval.CLAIMS_RELATIVE_ROOT).glob("*.json")}

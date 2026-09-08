@@ -3,7 +3,7 @@
 The retained scope is data, never authority. Every domain mutation requires
 the original pending actor, current claim ownership and authenticated origin.
 Original continuation selects retained context only. Missing approval remains
-an explicit blocker; this module does not yet expose original re-review.
+an auto-resume blocker; explicit original re-review uses the shared broker.
 """
 
 from contextlib import contextmanager
@@ -102,8 +102,9 @@ def _source_intake_operation_view(prepared, context, held):
 
 def _current(prepared, store, routing, selected, held):
     scope, binding = prepared.scope.document(), prepared.plan.manifest.work_session_binding
-    if (store.read().sha256 != scope["registry_preimage_sha256"]
-            or store.require_claimed_binding(client_app_ref=binding.client_app_ref,
+    # The retained registry preimage is historical approval evidence. Unrelated
+    # app changes do not change this session's current ownership contract.
+    if (store.require_claimed_binding(client_app_ref=binding.client_app_ref,
                 work_session_ref=binding.work_session_ref, claim_ref=scope["claim_ref"],
                 expected_binding=binding, held_lock=held) != binding):
         raise WorkSessionIntakeWorkflowError("work_session_intake_ownership_unavailable")
@@ -466,3 +467,11 @@ def _resume_session_source_intake_batch_held(root, *, held, client_app_ref, task
                 "native_approval_redisplayed": False, "automatic_resume_discovery": True,
                 "writes_performed": outcome.get("writes_performed") is True}
     return _safe_call(resume)
+
+
+def _review_original_session_source_intake_batch_held(root, *, held, client_app_ref, task_route_ref,
+        work_session_ref=None, native=None, key_provider=None, progress_hook=None):
+    from .work_session_source_intake_rereview import _IntakeFamily, _review_original_session_source_intake_held
+    return _review_original_session_source_intake_held(root, family=_IntakeFamily.BATCH, held=held,
+        client_app_ref=client_app_ref, task_route_ref=task_route_ref, work_session_ref=work_session_ref,
+        native=native, key_provider=key_provider, progress_hook=progress_hook)
