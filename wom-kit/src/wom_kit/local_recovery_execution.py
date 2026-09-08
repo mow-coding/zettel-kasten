@@ -2691,7 +2691,8 @@ def _execute_core(
         # Revert may use an observed-post subset manifest that did not exist
         # until after the original interruption. Persist its exact private
         # values only after native approval, just like an initial apply.
-        persist_local_recovery_control(plan)
+        if plan.manifest.work_session_binding is None:
+            persist_local_recovery_control(plan)
         _resume_relative_path, execution_sha256 = _persist_resume_locator(
             plan,
             manifest,

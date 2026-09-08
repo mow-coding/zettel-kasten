@@ -315,3 +315,22 @@ compatible with the preceding development checkpoint. Six contract tests and
 12 existing local-recovery regressions passed; independent review found no
 actionable defect. This does not add a completed writer family: current-owner
 execution, original actor routing and whole-document Git proof remain pending.
+
+## Partial session title recovery checkpoint
+
+At `6088a434` the existing local title recovery CLI supports held session apply,
+original approved resume, and read-only completed replay. The scoped control
+retains the original actor/origin/approval context; concrete current-owner and
+retained-byte checks protect field writes, progress, index completion and actor
+publication. Core/binding/held/legacy recovery passed 28 tests, actor pending
+regressions 11, and an actual title CLI journey plus argument privacy checks
+passed. Independent review corrections were verified and the checkpoint pushed.
+
+Explicit missing-claim original review and the title CLI's MCP counterpart now
+have development evidence: 25 private/public/legacy recovery tests and 30
+grammar/transport tests passed, including both directions of actual CLI/MCP
+continuation. Independent review corrections were verified. This adds one fixed MCP tool definition
+(137 total), not a new top-level CLI command or generic execution framework.
+It is not yet a fully covered family: scoped revert, complete whole-document
+provenance/backup and final installed/release acceptance remain unfinished.
+Field-level receipts explicitly do not attest whole-document ownership.

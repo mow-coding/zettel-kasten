@@ -28,6 +28,7 @@ class _ProgressFamily(Enum):
     LEGACY = "legacy"
     INTAKE = "intake"
     GIT = "git"
+    RECOVERY = "recovery"
 
 
 def current_session_request():
@@ -51,7 +52,7 @@ def is_management_request(message):
             and type(message.get("params")) is dict
             and message["params"].get("name") in (
                 "archive_work_session_manage", "source_intake_record", "source_intake_batch",
-                "git_backup_reconcile_plan"))
+                "git_backup_reconcile_plan", "zet_title_remap_write"))
 
 
 def management_metadata(params):
@@ -75,7 +76,7 @@ def _managed_mutation(message):
         # Every scoped Git mode, including preview, needs the held serial lane.
         return type(arguments.get("mode")) is str and arguments["mode"] in {
             "preview", "apply", "resume", "review_original"}
-    if message["params"].get("name") in ("source_intake_record", "source_intake_batch"):
+    if message["params"].get("name") in ("source_intake_record", "source_intake_batch", "zet_title_remap_write"):
         # Even preview acquires the existing held lane for a consistent plan.
         # Scheduling is not availability or authority; the service validates
         # every argument, current runtime/session and exact native approval.
@@ -149,7 +150,16 @@ class SessionRequest:
                 projected = _project(event)
             else:
                 from .source_intake_session_command import _project_progress
+                if self._progress_family is _ProgressFamily.RECOVERY and type(event) is dict:
+                    if (any(type(key) is not str for key in event)
+                            or type(event.get("phase", event.get("stage"))) is not str
+                            or event.get("phase", event.get("stage")) not in {
+                                "waiting_for_writer", "writer_acquired_revalidation_required"}):
+                        return
                 projected = _project_progress(event)
+                if projected is not None and self._progress_family is _ProgressFamily.RECOVERY:
+                    stage, current, total = projected
+                    projected = (stage.replace("source-intake-session-", "local-recovery-session-"), current, total)
             if projected is None:
                 return
             with self._lock:
@@ -196,7 +206,8 @@ class SessionRequest:
             return message
         stage, current, total = self._domain_status
         counts = "" if current is None else f"; completed items {current}/{total}"
-        return "source-intake: " + stage + counts
+        prefix = "local-recovery: " if self._progress_family is _ProgressFamily.RECOVERY else "source-intake: "
+        return prefix + stage + counts
 
     def execution_heartbeat(self):
         """Liveness with last observed facts, never invented item completion."""
@@ -247,6 +258,11 @@ class SessionRequest:
                         and content.get("reason_code") == "work_session_wait_cancelled"
                         and not (content.get("schema") == "wom-kit/git-backup-session-command/v1"
                                  and content.get("original_commit_verified") is True))
+            accepted = accepted or (self._observed_cancel and type(content) is dict
+                and content.get("schema_version") == "wom-kit/local-recovery-execution-result/v0.1"
+                and content.get("ok") is False and content.get("effects_state") == "none"
+                and content.get("reason_codes") == ["work_session_wait_cancelled"]
+                and content.get("original_completion_verified") is not True)
             # Release this exact routing entry before a client can observe the
             # terminal response and reuse its now-completed progress token.
             retire()
@@ -366,6 +382,7 @@ class SessionStdioTransport:
             "source_intake_record": _ProgressFamily.INTAKE,
             "source_intake_batch": _ProgressFamily.INTAKE,
             "git_backup_reconcile_plan": _ProgressFamily.GIT,
+            "zet_title_remap_write": _ProgressFamily.RECOVERY,
         }.get(message["params"].get("name"), _ProgressFamily.LEGACY)) if managed else None)
         with self._condition:
             if self._closed:

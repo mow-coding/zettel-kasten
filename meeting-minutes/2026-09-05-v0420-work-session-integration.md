@@ -2718,6 +2718,56 @@ This remains a partial writer integration checkpoint. It does not prove
 whole-document Git ownership from field receipts or finish v0.4.20. The full
 accepted train continues without an approval stop at this checkpoint.
 
+## Local recovery original review and MCP integration in progress
+
+The title apply/resume checkpoint and the preceding binding checkpoint were
+pushed together as `6088a43489af435e91d38803b99e26a5ac84b0c7`; local and remote
+feature refs matched. The main checkout and client environment were untouched.
+
+The next incremental change joins explicit original review for the reachable
+preclaim interruption. It reuses the existing broker's authenticated absence
+scan and existing bounded origin/claim evidence readers. Existing started or
+succeeded claims delegate to original resume; an absent claim is reviewable
+only for the unchanged pending original, current owner, authentic establishment
+and exact field preimage. No source re-planning, replacement reviewer/context,
+control rewrite or pending predecessor rewrite is used during review. Origin,
+claim generation and control evidence are rechecked after the native decision
+and again under the broker's active key before claim publication.
+
+The initial three-case private run passed changed-evidence refusal and repeated
+cut/cancellation, then failed its no-control-rewrite sentinel: the existing core
+still attempted an idempotent persistence call. Independent review identified
+the same mismatch. The core now skips that call for scoped plans, whose retained
+control was already required by the concrete pending-owner admission. Unbound
+control persistence is unchanged. That failed run (335.498 seconds, exit 1) is
+diagnostic evidence, not acceptance. The fixed core cohort passed 25 tests in
+1074.014 seconds, exit 0: three original-review cases, two actual CLI/MCP
+journeys and two grammar cases, six session recovery boundaries, and 12 existing
+local recovery regressions. The actual journeys cross CLI to MCP on started
+resume and MCP to CLI on explicit preclaim original review, remove only their
+synthetic source mirrors, register unrelated apps and verify read-only completed
+replay. Existing field revert still preserves later unrelated body changes.
+
+The existing title CLI gains its original-review flag; its one MCP counterpart
+`zet_title_remap_write` joins the same dispatcher rather than another writer.
+MCP tool definitions increase from 136 to 137; command spellings are unchanged.
+The public grammar forbids replacement inputs on original continuation. The
+existing serial MCP lane gains this fixed family, content-free exact item
+counts, wait progress and observed pre-effect cancellation. Independent review
+found two adapter gaps: actual wait exceptions needed fixed cancellation/root
+error mapping, and CLI wait progress needed the actual `stage` key as well as
+`phase`. The new title grammar/dispatch/progress/cancel/serial-lane cases plus
+existing batch and Git transport regressions passed 30 tests in 1.289 seconds,
+exit 0. This includes an actual waiter cancellation before runtime/domain
+entry and a blocked serial worker with a live ping. The transport tests are
+adapter/scheduling evidence, not additional domain completion journeys.
+Follow-up independent review found both corrections resolved. They affect only
+the wait-error and wait-progress adapter branches and are checked separately
+from the preceding fixed domain cohort; no unchanged domain rerun is needed.
+No scoped revert, whole-document backup ownership or release closure is claimed.
+The staged checkpoint also passed public privacy (zero findings), public
+links, Korean product language, runtime skill validation and the diff check.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)

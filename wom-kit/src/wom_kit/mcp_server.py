@@ -1896,6 +1896,42 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "zet_title_remap_write",
+        "description": (
+            "Preview or apply local title recovery in the explicit app/task session with native human approval. "
+            "Fresh modes require source_mirror and work_session_ref; apply requires reviewed_by. "
+            "Resume or explicit review_original takes only retained app/task references and never replacement source evidence, "
+            "reviewer, approval identifiers or hashes. Existing approval resumes without a new dialog. "
+            "This verifies changed fields and index completion, not whole-document Git ownership."
+        ),
+        "annotations": {"readOnlyHint": False, "destructiveHint": False,
+                        "idempotentHint": False, "openWorldHint": False},
+        "inputSchema": {
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                "archive_root": {"type": "string", "minLength": 1},
+                "mode": {"type": "string", "enum": ["preview", "apply", "resume", "review_original"]},
+                "client_app_ref": {"type": "string", "minLength": 1},
+                "task_route_ref": {"type": "string", "minLength": 1},
+                "work_session_ref": {"type": "string", "minLength": 1},
+                "source_mirror": {"type": "string", "minLength": 1},
+                "reviewed_by": {"type": "string", "minLength": 1},
+                "max_items": {"type": "integer", "minimum": 1, "maximum": 5000},
+                "expected_identifier_title_count": {"type": "integer", "minimum": 0},
+            },
+            "required": ["archive_root", "mode", "client_app_ref", "task_route_ref"],
+            "allOf": [
+                {"if": {"properties": {"mode": {"enum": ["preview", "apply"]}}},
+                 "then": {"required": ["source_mirror", "work_session_ref"]},
+                 "else": {"not": {"anyOf": [{"required": ["source_mirror"]}, {"required": ["max_items"]},
+                                               {"required": ["expected_identifier_title_count"]}]}}},
+                {"if": {"properties": {"mode": {"const": "apply"}}},
+                 "then": {"required": ["reviewed_by"]},
+                 "else": {"not": {"required": ["reviewed_by"]}}},
+            ],
+        },
+    },
+    {
         "name": "source_intake_record",
         "description": (
             "Record one redacted source-intake plan using its explicit app/task session and native exact approval. "
@@ -3767,6 +3803,11 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         if not management_metadata(params)[0]:
             raise InvalidParamsError()
         return tool_source_intake_record(arguments)
+    if name == "zet_title_remap_write":
+        from ._mcp_session_transport import management_metadata
+        if not management_metadata(params)[0]:
+            raise InvalidParamsError()
+        return tool_zet_title_remap_write(arguments)
     if name == "source_intake_batch":
         from ._mcp_session_transport import management_metadata
         if not management_metadata(params)[0]:
@@ -5489,6 +5530,53 @@ def tool_git_backup_reconcile_plan(arguments: dict[str, Any]) -> dict[str, Any]:
         return {"content": [{"type": "text", "text": "Session Git backup could not be completed."}],
                 "structuredContent": result, "isError": True}
     return tool_success_result("Session Git backup result returned; completion is reported separately from eligibility.", result)
+
+
+def tool_zet_title_remap_write(arguments: dict[str, Any]) -> dict[str, Any]:
+    from ._mcp_session_transport import current_session_request
+    from .local_recovery_session import _dispatch_session_local_recovery
+    from .local_title_recovery import zet_title_recovery_execution_plan
+
+    strings = {"archive_root", "mode", "client_app_ref", "task_route_ref",
+               "work_session_ref", "source_mirror", "reviewed_by"}
+    counts = {"max_items", "expected_identifier_title_count"}
+    required = {"archive_root", "mode", "client_app_ref", "task_route_ref"}
+    if (type(arguments) is not dict or any(type(key) is not str for key in arguments)
+            or set(arguments) - strings - counts or not required <= set(arguments)
+            or any(type(value) is not str or not value.strip() or len(value) > 65536
+                   for key, value in arguments.items() if key in strings)
+            or any(type(value) is not int or not 0 <= value <= 2**63 - 1
+                   for key, value in arguments.items() if key in counts)
+            or arguments["mode"] not in {"preview", "apply", "resume", "review_original"}
+            or len(json.dumps(arguments, ensure_ascii=True).encode("utf-8")) > 65536):
+        raise InvalidParamsError()
+    mode = arguments["mode"]
+    original = mode in {"resume", "review_original"}
+    if (original and ({"source_mirror", "reviewed_by"} | counts) & set(arguments)
+            or not original and not {"work_session_ref", "source_mirror"} <= set(arguments)
+            or mode == "apply" and "reviewed_by" not in arguments
+            or mode == "preview" and "reviewed_by" in arguments
+            or not 1 <= arguments.get("max_items", archive_services.ZET_TITLE_REMAP_MAX_ITEMS) <= 5000):
+        raise InvalidParamsError()
+    root = require_path_arg(arguments, "archive_root")
+    context = current_session_request()
+    callbacks = {} if context is None else {"cancel_requested": context.cancel_requested, "progress": context.progress}
+    planner = None
+    if not original:
+        mirror = Path(arguments["source_mirror"])
+        mirror = require_path_arg({"mirror": str(mirror if mirror.is_absolute() else root / mirror)}, "mirror")
+        planner = lambda: zet_title_recovery_execution_plan(root, source_mirror=mirror,
+            max_items=arguments.get("max_items", archive_services.ZET_TITLE_REMAP_MAX_ITEMS),
+            expected_identifier_title_count=arguments.get("expected_identifier_title_count"))
+    result = _dispatch_session_local_recovery(root, mode=mode,
+        client_app_ref=arguments["client_app_ref"], task_route_ref=arguments["task_route_ref"],
+        work_session_ref=arguments.get("work_session_ref"), plan_factory=planner,
+        allowed_domains={"zet_title_recovery"},
+        reviewer_claim=None if original else arguments.get("reviewed_by", "person:local-recovery-operator"), **callbacks)
+    if result.get("ok") is not True:
+        return {"content": [{"type": "text", "text": "Session title recovery could not be completed."}],
+                "structuredContent": result, "isError": True}
+    return tool_success_result("Session title recovery returned; field completion and file backup ownership are separate.", result)
 
 
 def tool_source_intake_record(arguments: dict[str, Any]) -> dict[str, Any]:

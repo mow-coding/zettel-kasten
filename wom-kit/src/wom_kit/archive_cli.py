@@ -20812,7 +20812,14 @@ def command_zet_title_remap_write(args: argparse.Namespace) -> int:
     source_mirror = getattr(args, "source_mirror", None)
     resume_recovery = bool(getattr(args, "resume_recovery", False))
     revert_recovery = bool(getattr(args, "revert_recovery", False))
-    recovery_mode = bool(source_mirror or resume_recovery or revert_recovery)
+    review_original = bool(getattr(args, "review_original", False))
+    recovery_mode = bool(source_mirror or resume_recovery or revert_recovery or review_original)
+    if review_original and (resume_recovery or revert_recovery or not getattr(args, "client_app_ref", None)
+                            or not getattr(args, "task_route_ref", None)):
+        return _recognized_command_cli_error(args, command="zet-title-remap-write",
+            lifecycle_action="zet_title_local_recovery", error_class="usage",
+            reason_code="local_recovery_session_original_inputs_invalid",
+            text_message="Original review requires the retained app/task and cannot be combined with resume or revert.", exit_code=2)
     if not recovery_mode and any(getattr(args, name, None) is not None for name in (
             "client_app_ref", "task_route_ref", "work_session_ref")):
         return _recognized_command_cli_error(args, command="zet-title-remap-write",
@@ -20871,7 +20878,7 @@ def command_zet_title_remap_write(args: argparse.Namespace) -> int:
                 text_message="The local-recovery manifest SHA-256 is invalid.",
                 exit_code=2,
             )
-        if resume_recovery and not args.approve:
+        if (resume_recovery or review_original) and not args.approve:
             return _recognized_command_cli_error(
                 args,
                 command="zet-title-remap-write",
@@ -20881,7 +20888,7 @@ def command_zet_title_remap_write(args: argparse.Namespace) -> int:
                 text_message="Recovery resume requires --approve.",
                 exit_code=2,
             )
-        if (resume_recovery or revert_recovery) and source_mirror:
+        if (resume_recovery or revert_recovery or review_original) and source_mirror:
             return _recognized_command_cli_error(
                 args,
                 command="zet-title-remap-write",
@@ -20894,7 +20901,7 @@ def command_zet_title_remap_write(args: argparse.Namespace) -> int:
                 ),
                 exit_code=2,
             )
-        if not (resume_recovery or revert_recovery) and not source_mirror:
+        if not (resume_recovery or revert_recovery or review_original) and not source_mirror:
             return _recognized_command_cli_error(
                 args,
                 command="zet-title-remap-write",
@@ -20935,7 +20942,7 @@ def command_zet_title_remap_write(args: argparse.Namespace) -> int:
                 allowed_domains={"zet_title_recovery"},
                 plan_factory=(
                     None
-                    if resume_recovery or revert_recovery
+                    if resume_recovery or revert_recovery or review_original
                     else plan_factory
                 ),
                 expected_manifest_sha256=expected_manifest,
@@ -23881,7 +23888,10 @@ def _execute_local_recovery_cli_mode(
             "client_app_ref", "task_route_ref", "work_session_ref")):
         from .local_recovery_session import _dispatch_session_local_recovery
 
-        if revert or expected_manifest_sha256 or (resume and getattr(args, "reviewed_by", None) is not None):
+        review_original = bool(getattr(args, "review_original", False))
+        original_mode = resume or review_original
+        if (revert or expected_manifest_sha256 or (resume and review_original)
+                or (original_mode and getattr(args, "reviewed_by", None) is not None)):
             return ({"schema_version": "wom-kit/local-recovery-execution-result/v0.1", "ok": False,
                 "state": "blocked", "reason_codes": ["local_recovery_session_original_inputs_invalid"],
                 "effects_state": "none", "private_values_echoed": False, "paths_echoed": False}, False)
@@ -23889,17 +23899,17 @@ def _execute_local_recovery_cli_mode(
         def session_progress(event):
             if type(event) is ExactOperationProgress:
                 exact_progress(event)
-            elif type(event) is dict and event.get("phase") in {
+            elif type(event) is dict and event.get("phase", event.get("stage")) in {
                     "waiting_for_writer", "writer_acquired_revalidation_required"}:
-                reporter.progress("local-recovery-" + event["phase"], "apply", None, None)
+                reporter.progress("local-recovery-" + event.get("phase", event.get("stage")), "apply", None, None)
 
         result = _dispatch_session_local_recovery(archive_root,
-            mode="resume" if resume else "preview" if bool(args.dry_run) else "apply",
+            mode="review_original" if review_original else "resume" if resume else "preview" if bool(args.dry_run) else "apply",
             client_app_ref=getattr(args, "client_app_ref", None),
             task_route_ref=getattr(args, "task_route_ref", None),
             work_session_ref=getattr(args, "work_session_ref", None),
             plan_factory=plan_factory, allowed_domains=allowed_domains,
-            reviewer_claim=None if resume else reviewer, progress=session_progress)
+            reviewer_claim=None if original_mode else reviewer, progress=session_progress)
         return result, result.get("effects_state") != "none"
     if resume or revert:
         control_discovery = None
@@ -39966,6 +39976,8 @@ def build_parser() -> argparse.ArgumentParser:
     zet_title_remap_write.add_argument("--client-app-ref", help="Explicit app for session-owned local title recovery.")
     zet_title_remap_write.add_argument("--task-route-ref", help="Retained caller task for local title recovery or original resume.")
     zet_title_remap_write.add_argument("--work-session-ref", help="Current session for fresh recovery; optional assertion on original resume.")
+    zet_title_remap_write.add_argument("--review-original", action="store_true",
+        help="Explicitly review the retained session original only when its approval was never created; existing approval resumes directly.")
     zet_title_remap_write.add_argument(
         "--expected-identifier-title-count",
         type=int,
@@ -40007,6 +40019,7 @@ def build_parser() -> argparse.ArgumentParser:
                 "--source-mirror",
                 "--resume-recovery",
                 "--revert-recovery",
+                "--review-original",
             ],
             "outside_scope_status": "approval_fixed_closed",
             "outside_scope_reason_code": (

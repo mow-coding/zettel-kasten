@@ -23,6 +23,7 @@ from . import work_session_execution as session_execution
 from . import work_session_lifecycle as lifecycle
 from . import work_session_registry as registry
 from . import work_session_source_intake_workflow as ownership
+from . import work_session_source_intake_completion as evidence_readers
 from . import work_session_state as session_state
 from .work_session_binding import WorkSessionBinding
 
@@ -395,29 +396,37 @@ def _started_state(view, claim, held):
     return "authenticated_before_first_checkpoint"
 
 
+def _load_selected_original(root, *, held, client_app_ref, task_route_ref,
+        work_session_ref, allowed_domains):
+    store, routing = lifecycle._routing(root, held=held,
+        client_app_ref=client_app_ref, task_route_ref=task_route_ref)
+    selected = routing._read(current=False)
+    if selected is None:
+        raise recovery.LocalRecoveryError("local_recovery_resume_invalid")
+    document = selected.document()
+    if work_session_ref is not None and document["work_session_ref"] != work_session_ref:
+        raise recovery.LocalRecoveryError("local_recovery_session_ownership_changed")
+    pending = selected.pending_operation()
+    completed = pending is None
+    pointer = document.get("last_completed_operation") if completed else pending.document()
+    if type(pointer) is not dict or pointer.get("kind") != "local_recovery":
+        raise recovery.LocalRecoveryError("local_recovery_resume_invalid")
+    view = _view(recovery.load_local_recovery_plan(root, manifest_sha256=pointer["manifest_sha256"]))
+    if allowed_domains is not None and view.plan.domain not in allowed_domains:
+        raise recovery.LocalRecoveryError("local_recovery_session_context_invalid")
+    if (_pointer(view) != pointer or view.scope.document()["task_route_ref"] != task_route_ref
+            or view.plan.manifest.work_session_binding.client_app_ref != client_app_ref
+            or view.plan.manifest.work_session_binding.work_session_ref != document["work_session_ref"]):
+        raise recovery.LocalRecoveryError("local_recovery_session_context_invalid")
+    return view, store, completed
+
+
 def _resume_session_local_recovery_held(root, *, held, client_app_ref, task_route_ref,
         work_session_ref=None, key_provider=None, progress_hook=None, allowed_domains=None):
     def resume():
-        store, routing = lifecycle._routing(root, held=held,
-            client_app_ref=client_app_ref, task_route_ref=task_route_ref)
-        selected = routing._read(current=False)
-        if selected is None:
-            raise recovery.LocalRecoveryError("local_recovery_resume_invalid")
-        document = selected.document()
-        if work_session_ref is not None and document["work_session_ref"] != work_session_ref:
-            raise recovery.LocalRecoveryError("local_recovery_session_ownership_changed")
-        pending = selected.pending_operation()
-        completed = pending is None
-        pointer = document.get("last_completed_operation") if completed else pending.document()
-        if type(pointer) is not dict or pointer.get("kind") != "local_recovery":
-            raise recovery.LocalRecoveryError("local_recovery_resume_invalid")
-        view = _view(recovery.load_local_recovery_plan(root, manifest_sha256=pointer["manifest_sha256"]))
-        if allowed_domains is not None and view.plan.domain not in allowed_domains:
-            raise recovery.LocalRecoveryError("local_recovery_session_context_invalid")
-        if (_pointer(view) != pointer or view.scope.document()["task_route_ref"] != task_route_ref
-                or view.plan.manifest.work_session_binding.client_app_ref != client_app_ref
-                or view.plan.manifest.work_session_binding.work_session_ref != document["work_session_ref"]):
-            raise recovery.LocalRecoveryError("local_recovery_session_context_invalid")
+        view, store, completed = _load_selected_original(root, held=held,
+            client_app_ref=client_app_ref, task_route_ref=task_route_ref,
+            work_session_ref=work_session_ref, allowed_domains=allowed_domains)
         results, states = {}, {}
 
         def started_guard(claim):
@@ -450,6 +459,138 @@ def _resume_session_local_recovery_held(root, *, held, client_app_ref, task_rout
     return _safe(resume)
 
 
+@dataclass(frozen=True, repr=False)
+class _OriginEvidence:
+    """Data-only inputs to the existing bounded origin/claim image readers."""
+    plan: object
+    store: object
+    scope: object
+    origin: object
+
+
+def _review_original_session_local_recovery_held(root, *, held, client_app_ref,
+        task_route_ref, work_session_ref=None, native=None, key_provider=None,
+        progress_hook=None, allowed_domains=None):
+    def review():
+        view, store, completed = _load_selected_original(root, held=held,
+            client_app_ref=client_app_ref, task_route_ref=task_route_ref,
+            work_session_ref=work_session_ref, allowed_domains=allowed_domains)
+        scope, binding = view.scope.document(), view.plan.manifest.work_session_binding
+        _store, _routing, selected = _selected(view, held, completed=completed)
+
+        def current():
+            _retained(view, held)
+            values = _selected(view, held, completed=completed)
+            if values[2]._raw != selected._raw:
+                raise recovery.LocalRecoveryError("local_recovery_session_ownership_changed")
+            return values
+
+        def presence():
+            current()
+            absent = {"ok": False, "original_claim_absent": True}
+
+            def missing(reason):
+                if reason not in {"authenticated_candidate_missing", "claim_store_absent"}:
+                    raise recovery.LocalRecoveryError("local_recovery_session_context_invalid")
+                return dict(absent)
+
+            found = broker._discover_exact_human_approved_transaction_resume_core(root, view.context,
+                lambda _claim: True, lambda _claim: True, key_provider=key_provider,
+                candidate_missing_handler=missing,
+                resume_boundary=lambda: session_execution._claim_boundary(store, held, create=False))
+            current()
+            if type(found) is str:
+                return "existing"
+            if type(found) is dict and found == absent:
+                return "absent"
+            raise recovery.LocalRecoveryError("local_recovery_session_context_invalid")
+
+        if presence() == "existing":
+            result = _resume_session_local_recovery_held(root, held=held,
+                client_app_ref=client_app_ref, task_route_ref=task_route_ref,
+                work_session_ref=work_session_ref, key_provider=key_provider,
+                progress_hook=progress_hook, allowed_domains=allowed_domains)
+            return {**result, "original_context_preserved": True}
+        if completed:
+            raise recovery.LocalRecoveryError("local_recovery_approval_required")
+
+        selector = establishment.EstablishmentSelector.from_document(scope["original_establishment"])
+        origin = establishment.load_original_establishment(store, selector=selector,
+            client_app_ref=client_app_ref, task_route_ref=task_route_ref,
+            work_session_ref=binding.work_session_ref)
+        original = _OriginEvidence(view.plan, store, view.scope, origin)
+
+        def proof_image():
+            current()
+            raw = controls._read_bundle_raw(store, selector.manifest_sha256)
+            final, _path, receipt, checkpoint, claim = evidence_readers._final_image(
+                store.root, scope["establishment_execution_sha256"], held)
+            evidence_readers._origin_evidence(original, final)
+            current()
+            return raw, receipt, checkpoint, claim
+
+        def authenticate_origin():
+            _store, routing, actor_state = current()
+            image = proof_image()
+            generation = evidence_readers._claim_generation(original, held)
+            session_claim._verify_original_establishment(root, store, routing, actor_state,
+                held=held, client_app_ref=client_app_ref, task_route_ref=task_route_ref,
+                work_session_ref=binding.work_session_ref, key_provider=key_provider,
+                original_establishment_selector=selector)
+            result = session_execution._resume_session_decision_held(root, held=held,
+                manifest_sha256=selector.manifest_sha256, completed_only=True, key_provider=key_provider)
+            if (result.get("ok") is not True or result.get("independent_post_verification") is not True
+                    or result.get("execution_sha256") != scope["establishment_execution_sha256"]
+                    or result.get("receipt_sha256") != scope["establishment_receipt_sha256"]
+                    or proof_image() != image
+                    or evidence_readers._claim_generation(original, held) != generation):
+                raise recovery.LocalRecoveryError("local_recovery_session_context_invalid")
+            current()
+            return image, generation
+
+        proof, generation = authenticate_origin()
+
+        def unchanged():
+            # No callback/provider is allowed after the final retained read.
+            current()
+            if (proof_image() != proof or evidence_readers._claim_generation(original, held) != generation
+                    or recovery.verify_local_recovery_state(view.plan, state="pre").get("all_match") is not True):
+                raise recovery.LocalRecoveryError("local_recovery_plan_changed")
+            current()
+
+        unchanged()
+
+        @contextmanager
+        def post_decision():
+            if authenticate_origin() != (proof, generation) or presence() != "absent":
+                raise recovery.LocalRecoveryError("local_recovery_plan_changed")
+            unchanged()
+            with session_execution._claim_boundary(store, held, create=True) as boundary:
+                yield boundary
+
+        @contextmanager
+        def publication():
+            unchanged()
+            # Preserve control and actor predecessor; the broker rechecks
+            # authenticated absence with the same key before publishing claim.
+            yield
+
+        def apply(claim):
+            _require_pending_recovery_owner(view, claim=claim, held=held)
+            if proof_image() != proof:
+                raise recovery.LocalRecoveryError("local_recovery_plan_changed")
+            return recovery._execute_core(view.plan, claim, view.context, mode="apply", resume=False,
+                progress_hook=progress_hook, writer_lock=held)
+
+        finished = {}
+        outcome = broker._execute_exact_human_approved_original_review_core(root, view.context, apply,
+            native=native, key_provider=key_provider, post_decision_boundary=post_decision,
+            claim_publication_boundary=publication,
+            claim_succeeded_finalizer=lambda claim: finished.update(_finish(view, claim, held, completed=False)))
+        return {**outcome, **finished, "native_approval_redisplayed": True, "original_context_preserved": True}
+    return _safe(review)
+
+
 def _dispatch_session_local_recovery(root, *, mode, client_app_ref, task_route_ref,
         work_session_ref=None, plan_factory=None, allowed_domains, reviewer_claim=None,
         cancel_requested=lambda: False, progress=lambda _event: None):
@@ -463,19 +604,20 @@ def _dispatch_session_local_recovery(root, *, mode, client_app_ref, task_route_r
     started = False
     code = "local_recovery_session_context_invalid"
     try:
-        if (type(mode) is not str or mode not in {"preview", "apply", "resume"}
+        if (type(mode) is not str or mode not in {"preview", "apply", "resume", "review_original"}
                 or not callable(cancel_requested) or not callable(progress)
                 or type(allowed_domains) not in {set, frozenset} or not allowed_domains
                 or any(type(value) is not str or recovery._DOMAIN_RE.fullmatch(value) is None
                        for value in allowed_domains)):
             raise recovery.LocalRecoveryError(code)
         domains = frozenset(allowed_domains)
-        if mode == "resume":
+        original_mode = mode in {"resume", "review_original"}
+        if original_mode:
             if plan_factory is not None or reviewer_claim is not None:
                 raise recovery.LocalRecoveryError(code)
         elif not callable(plan_factory) or type(reviewer_claim) is not str or not reviewer_claim.strip():
             raise recovery.LocalRecoveryError(code)
-        sessions._refs(client_app_ref, task_route_ref, work_session_ref, require_session=mode != "resume")
+        sessions._refs(client_app_ref, task_route_ref, work_session_ref, require_session=not original_mode)
         if work_session_ref is not None:
             sessions._refs(client_app_ref, task_route_ref, work_session_ref, require_session=True)
         actual = sessions._root(root)
@@ -491,8 +633,10 @@ def _dispatch_session_local_recovery(root, *, mode, client_app_ref, task_route_r
             started = True
             common = dict(held=held, client_app_ref=client_app_ref, task_route_ref=task_route_ref,
                           work_session_ref=work_session_ref)
-            if mode == "resume":
-                return _resume_session_local_recovery_held(actual, **common,
+            if original_mode:
+                continuation = (_review_original_session_local_recovery_held if mode == "review_original"
+                                else _resume_session_local_recovery_held)
+                return continuation(actual, **common,
                     progress_hook=progress, allowed_domains=domains)
             if mode == "preview":
                 plan = _prepare_local_recovery_session_held(actual, checked_plan, **common,
@@ -536,6 +680,7 @@ def _dispatch_session_local_recovery(root, *, mode, client_app_ref, task_route_r
         for key in ("writes_performed", "current_claim_ownership_verified", "original_completion_verified",
                     "completion_authentication_verified", "independent_verification", "whole_document_ownership_verified",
                     "actor_completion_published", "original_operation_already_completed", "native_approval_redisplayed",
+                    "original_context_preserved",
                     "index_current", "index_rebuild_required", "generated_index_updated", "resume_supported"):
             if key in result:
                 if type(result[key]) is not bool:
@@ -553,6 +698,9 @@ def _dispatch_session_local_recovery(root, *, mode, client_app_ref, task_route_r
         code = error.code
     except sessions.WorkSessionServiceError as error:
         code = error.code if error.code in sessions._ERRORS else code
+    except sessions.WorkSessionWaitError as error:
+        if error.args in (("work_session_wait_cancelled",), ("work_session_wait_root_changed",)):
+            code = error.args[0]
     except Exception:
         pass
     return {"schema_version": recovery.RESULT_SCHEMA, "ok": False, "state": "blocked",
