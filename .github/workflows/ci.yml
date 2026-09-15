@@ -100,10 +100,13 @@ jobs:
           # needs 90 minutes of honest job headroom. Linux zero shards retain
           # 75 minutes. The second Windows shard contains process-heavy MCP
           # subprocess suites and also needs 75 minutes instead of a near-zero
-          # 45-minute margin. The third Windows shard now carries the v0.4.20
-          # work-session Git workflow suites over real repositories; it took
-          # 42.8 minutes at unit ε and was cancelled at 45 minutes on the
-          # release candidate, so it gets 75 minutes as well.
+          # 45-minute margin. The v0.4.20 work-session suites drive real
+          # subprocesses and Git repositories, so they cost far more time per
+          # source byte than the balancer assumes: on the release candidate
+          # the second Windows shard reached 94 of 114 modules at its 75-minute
+          # limit and the third took 55 minutes against 45. The second shard
+          # gets 120 minutes and the third 75 until the balancer weighs
+          # measured durations instead of bytes.
           - os: windows-latest
             python-version: '3.12'
             shard_index: 1
@@ -115,7 +118,7 @@ jobs:
             shard_index: 2
             shard_index_zero: 1
             shard_count: 4
-            timeout-minutes: 75
+            timeout-minutes: 120
           - os: windows-latest
             python-version: '3.12'
             shard_index: 3

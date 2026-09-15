@@ -3239,6 +3239,29 @@ rerun from a locally built `wom_kit-0.4.20` wheel in a fresh venv returned
 `ok: true` with the expected evidence; the pending-publication module 14
 tests OK with the source tree only on the parent path.
 
+## 2026-09-16 Release candidate CI: Windows shard budgets
+
+Executing model: Claude Opus 5 at effort high, solo.
+
+After the gate fix (`bb94b150`) every Ubuntu shard, the installed public
+workflow gate, both Doctor gates, the link-index gate and the readiness
+gate passed. Two Windows shards were cancelled by their own job limits:
+the third at 45 minutes (it had taken 42.8 minutes at unit ε) and, once
+the third was given 75 minutes, the second at 75 minutes with 94 of its
+114 modules finished. In both cancellations one test printed `FAIL`
+seven to eight seconds before the runner's cancel line; each of those
+tests passes locally (the Git workflow module 26 tests 694.049 s OK) and
+the pattern matches the cancel signal interrupting the in-flight test.
+They are not treated as product failures; the rerun with adequate budget
+is the evidence.
+
+Decision: the v0.4.20 work-session suites drive real subprocesses and Git
+repositories, so they cost far more time per source byte than the
+deterministic byte balancer assumes. The second Windows shard gets 120
+minutes and the third 75; the first (90) and fourth (45) already fit at
+54 and 33 minutes. The sharding test pins the new budgets. Rebalancing by
+measured duration is deferred to the v0.4.21+ train.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)
