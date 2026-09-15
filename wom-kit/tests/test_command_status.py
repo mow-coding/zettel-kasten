@@ -489,6 +489,7 @@ class CommandStatusArchiveParserTests(unittest.TestCase):
             "zet-title-remap-write": [
                 "--resume-recovery",
                 "--revert-recovery",
+                "--review-original",
                 "--source-mirror",
             ],
             "zet-title-remap-revert": [

@@ -172,11 +172,11 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(self.t.domain_files(), before)
         self.assertEqual(self.t.claims(), claims)
         self.t.native.approve = True
-        contexts, original = [], workflow._execute_exact_human_approved_write_core
+        contexts, original = [], workflow._execute_exact_human_approved_original_review_core
         def observe(root, context, writer, **kwargs):
             contexts.append(context)
             return original(root, context, writer, **kwargs)
-        with patch.object(workflow, "_execute_exact_human_approved_write_core", new=observe), \
+        with patch.object(workflow, "_execute_exact_human_approved_original_review_core", new=observe), \
              patch.object(registry, "_new_ref", side_effect=AssertionError("new refs")), \
              patch.object(bundle, "save_context_bound_session_decision", side_effect=AssertionError("rewritten bundle")):
             result = self.review()

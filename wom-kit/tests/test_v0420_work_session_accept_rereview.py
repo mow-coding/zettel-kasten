@@ -68,13 +68,13 @@ class AcceptRereviewTests(unittest.TestCase):
         original = bundle.load_context_bound_session_decision(t.store,
             manifest_sha256=selected["pending_manifest_sha256"])
         contexts = []
-        execute = workflow._execute_exact_human_approved_write_core
+        execute = workflow._execute_exact_human_approved_original_review_core
 
         def observe(root, context, writer, **kwargs):
             contexts.append(context)
             return execute(root, context, writer, **kwargs)
 
-        with patch.object(workflow, "_execute_exact_human_approved_write_core", new=observe), \
+        with patch.object(workflow, "_execute_exact_human_approved_original_review_core", new=observe), \
                 patch.object(registry, "_new_ref", side_effect=AssertionError("regenerated successor")), \
                 patch.object(bundle, "save_context_bound_session_decision", side_effect=AssertionError("replaced bundle")):
             result = self.review()
