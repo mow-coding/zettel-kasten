@@ -1442,6 +1442,62 @@ def _zettel_index_entries(
     return tuple(entries)
 
 
+def local_recovery_target_collection(plan: LocalRecoveryPlan):
+    """Local-only count-first preview of the plan's canonical documents.
+
+    Labels come from the plan's own already-bound values: the current title
+    (the pre value of a title field) and the target filename. Nothing is read
+    from disk here; the dialog session re-verifies the target binding through
+    ``local_recovery_observe_target_binding`` before and while paging. Plans
+    without zettel targets (ledgers, locators) keep the plain dialog.
+    """
+    from .target_collection_preview import TargetCollectionItem, TargetCollectionPreview
+
+    items: dict[str, TargetCollectionItem] = {}
+    titles: dict[str, str] = {}
+    for spec in plan.specs:
+        if spec.target_kind != "zettel":
+            continue
+        if spec.field_ref == "frontmatter.title":
+            try:
+                titles[spec.target_identity_sha256] = spec.pre_value.decode("utf-8")
+            except UnicodeDecodeError:
+                pass
+    for spec in plan.specs:
+        if spec.target_kind != "zettel" or spec.target_identity_sha256 in items:
+            continue
+        relative = spec.target_relative
+        kind = "draft" if relative.startswith("inbox/") else "zet"
+        try:
+            items[spec.target_identity_sha256] = TargetCollectionItem(
+                identity_sha256=spec.target_identity_sha256,
+                kind=kind,
+                title=titles.get(spec.target_identity_sha256),
+                filename=relative.rsplit("/", 1)[-1],
+            )
+        except ValueError:
+            return None
+    if not items:
+        return None
+    try:
+        return TargetCollectionPreview(items=tuple(items.values()))
+    except ValueError:
+        return None
+
+
+def local_recovery_observe_target_binding(plan: LocalRecoveryPlan, *, mode: str, held=None):
+    """Return the approval target binding only while the pre state still holds."""
+
+    def observe() -> str:
+        if held is not None:
+            held.verify_held()
+        if verify_local_recovery_state(plan, state="pre").get("all_match") is not True:
+            raise _fail("local_recovery_plan_changed")
+        return _binding(plan, mode=mode).target_binding_sha256
+
+    return observe
+
+
 def _binding(plan: LocalRecoveryPlan, *, mode: str):
     manifest = _operation_manifest(plan, mode=mode)
     operation = (
@@ -2791,6 +2847,8 @@ def execute_local_recovery(
             resume=False,
             progress_hook=progress_hook,
         ),
+        target_collection=local_recovery_target_collection(plan),
+        observe_target_binding=local_recovery_observe_target_binding(plan, mode=mode),
     )
 
 

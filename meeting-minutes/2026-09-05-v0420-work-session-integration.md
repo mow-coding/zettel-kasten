@@ -3049,6 +3049,34 @@ grammar. Cohort with session/document/MCP recovery tests: 21 tests in
 173.205 s; title CLI grammar 48 tests in 27.331 s; legacy locator/title and
 execution regressions 37 tests in 30.554 s. All exit 0.
 
+## 2026-09-16 Unit δ: count-first target preview reaches local recovery writers
+
+Executing model: Claude Opus 5 at effort high. Unit γ was committed and pushed
+as `b25d8b5da150`; the observed remote ref matched.
+
+WS-03's preview and paging components existed but only the session decision
+dialog used them. Local recovery now builds a local-only
+`TargetCollectionPreview` from its own plan (`local_recovery_target_collection`):
+one item per canonical document, kind zet or draft by folder, labelled by the
+current title (a title field's pre value) or the filename, never a path. Both
+the legacy apply (`execute_local_recovery`) and the session-scoped apply pass
+it to the approval boundary together with an observer
+(`local_recovery_observe_target_binding`) that re-derives the approval target
+binding only while the exact pre state still holds; the session variant also
+requires the held lock, the prepared scope's actor and registry generation and
+current ownership, because the control and pending pointer exist only after
+the decision. The native boundary keeps injected show-only facades working:
+the binding is verified, the count-first content is shown in one dialog and
+the facade's button decides. Plans without zettel targets keep the plain
+dialog. The production wrapper gained the two optional keywords.
+
+Verification: a new session test drives the paged facade (`SessionNative`):
+main text `대상 1개`, page labelled by the current title, no path, observer
+agrees with the binding before and refuses after the write; legacy test
+fakes were extended to accept the keywords. Cohorts: session/execution/legacy
+title/preview/native-boundary/original-review 81 tests in 172.061 s, exit 0.
+Not claimed: previews for ledger/locator targets, or any client execution.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)

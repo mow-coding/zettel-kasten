@@ -392,12 +392,29 @@ def _execute_session_local_recovery_held(root, plan_factory, *, held, client_app
             _retained(view, held)
             yield
 
+        def observe_target_binding():
+            # The control and pending pointer exist only after the human
+            # decision; before and while paging, verify the held lock, the
+            # unchanged registry generation behind the prepared scope, the
+            # current actor selection and the exact pre state instead.
+            scope = view.scope.document()
+            store, routing = lifecycle._routing(root, held=held,
+                client_app_ref=client_app_ref, task_route_ref=task_route_ref)
+            selected = routing._read(current=False)
+            if (selected is None or selected.sha256 != scope["actor_sha256"]
+                    or store.read().sha256 != scope["registry_preimage_sha256"]):
+                raise recovery.LocalRecoveryError("local_recovery_session_ownership_changed")
+            ownership._current(view, store, routing, selected, held)
+            return recovery.local_recovery_observe_target_binding(plan, mode="apply", held=held)()
+
         outcome = broker._execute_exact_human_approved_write_core(root, view.context,
             lambda claim: recovery._execute_core(plan, claim, view.context, mode="apply", resume=False,
                 progress_hook=progress_hook, writer_lock=held),
             native=native, key_provider=key_provider, post_decision_boundary=post_decision,
             claim_publication_boundary=publication,
-            claim_succeeded_finalizer=lambda claim: results.update(_finish(view, claim, held, completed=False)))
+            claim_succeeded_finalizer=lambda claim: results.update(_finish(view, claim, held, completed=False)),
+            target_collection=recovery.local_recovery_target_collection(plan),
+            observe_target_binding=observe_target_binding)
         return {**outcome, **results, "native_approval_redisplayed": False}
     return _safe(execute)
 

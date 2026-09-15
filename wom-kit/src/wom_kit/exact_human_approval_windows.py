@@ -1358,6 +1358,11 @@ def _request_exact_human_approval_core(
     elif observe_target_binding is not None:
         raise _fail("exact_human_approval_context_invalid")
     selected = native if native is not None else _CtypesTaskDialogNative()
+    if session is not None and not callable(getattr(selected, "show_collection", None)):
+        # Injected legacy facades expose only ``show``. The target binding was
+        # verified above; they receive the count-first content in one dialog
+        # and their button decides, as before paging existed.
+        session = None
     session_copy = (
         _work_session_action_copy(context.warning_codes)
         if context.operation is ExactHumanApprovalOperation.work_session

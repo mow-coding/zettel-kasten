@@ -178,6 +178,34 @@ class SessionLocalRecoveryTests(unittest.TestCase):
                         recovery.resume_local_recovery(candidate, key_provider=self.f.key)
             self.assertEqual(self.f.files(), before)
 
+    def test_native_approval_shows_count_first_target_preview_and_legacy_facade_still_works(self):
+        from test_v0420_work_session_execution import SessionNative
+        from wom_kit.target_collection_preview import TARGET_COLLECTION_PAGE_SIZE
+        paged = SessionNative()
+        plan = self.factory()
+        self.assertIsNotNone(recovery.local_recovery_target_collection(plan))
+        self.assertEqual(recovery.local_recovery_target_collection(plan).count, 1)
+        observe = recovery.local_recovery_observe_target_binding(plan, mode="apply")
+        self.assertEqual(observe(), recovery._binding(plan, mode="apply").target_binding_sha256)
+        with exact.ExactOperationWriterLock(self.root) as held:
+            result = subject._execute_session_local_recovery_held(self.root, self.factory,
+                **self.options(held), native=paged)
+            self.assertTrue(result["ok"], result)
+        self.assertEqual(paged.calls, 1)
+        self.assertEqual(paged.main, ["대상 1개"])
+        page = paged.pages[0]
+        frontmatter = archive_services.require_readable_zettel_text(
+            archive_services.decode_utf8_with_universal_newlines(
+                (self.root / "zettels" / (recovery_fixture.ZETTEL_ID + ".md")).read_bytes()))[0]
+        self.assertNotIn(frontmatter["title"], page)  # the post title is not the current label
+        self.assertIn("1. Fake thought while eating alone", page)  # the pre title labels the page
+        self.assertNotIn("zettels/", page)  # no path is shown
+        self.assertEqual(TARGET_COLLECTION_PAGE_SIZE, 20)
+        # The legacy show-only facade used by other fixtures still approves.
+        self.assertEqual(self.f.native.calls, 0)
+        with self.assertRaises(recovery.LocalRecoveryError):
+            observe()  # the pre state no longer holds after the recovery
+
 
 if __name__ == "__main__":
     unittest.main()
