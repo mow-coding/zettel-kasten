@@ -4044,6 +4044,20 @@ def read_zettel_content_boundary(path: Path) -> dict[str, Any]:
     return parse_zettel_content_boundary(text)
 
 
+def exact_zettel_body_after_frontmatter(text: str) -> str:
+    """Return the exact Markdown body suffix after the frontmatter block.
+
+    Writers that re-serialize a zettel must preserve every body byte the
+    file already has, including the blank separator line that create-draft
+    writes after the closing ``---``. The tolerant boundary parser strips
+    leading whitespace for reading; it must not feed a rewrite.
+    """
+    match = FRONTMATTER_RE.match(text[1:] if text.startswith("\ufeff") else text)
+    if match is None:
+        raise ArchiveServiceError("Zettel frontmatter boundary is unavailable for rewrite.")
+    return (text[1:] if text.startswith("\ufeff") else text)[match.end():]
+
+
 def require_readable_zettel_text(text: str) -> tuple[dict[str, Any], str]:
     """Unwrap a validated non-redacted zettel text or raise a static error."""
     boundary = parse_zettel_content_boundary(text)
@@ -35813,6 +35827,39 @@ def _source_fidelity_value_contains_private_authority(
     )
 
 
+def _source_fidelity_frontmatter_without_source_assets(
+    frontmatter: Any,
+    source: Any,
+) -> Any:
+    """Drop asset rows that only name the declared fidelity source object.
+
+    Linking the evidence object of a draft as one of its assets (letter 159
+    ②) is the same document's own material, not an exposure of private
+    approval authority. Digest values and any other spelling of the object
+    id elsewhere in the frontmatter stay subject to the exposure check.
+    """
+    if not isinstance(frontmatter, dict) or not isinstance(source, dict):
+        return frontmatter
+    object_id = source.get("object_id")
+    assets = frontmatter.get("assets")
+    if (
+        not isinstance(object_id, str)
+        or OBJECT_ID_RE.fullmatch(object_id) is None
+        or not isinstance(assets, list)
+    ):
+        return frontmatter
+    kept: list[Any] = []
+    for item in assets:
+        if isinstance(item, dict) and item.get("object_id") == object_id:
+            remainder = {key: value for key, value in item.items() if key != "object_id"}
+            kept.append(remainder)
+            continue
+        kept.append(item)
+    view = dict(frontmatter)
+    view["assets"] = kept
+    return view
+
+
 def _source_fidelity_private_authority_values(
     source: Any,
 ) -> set[str]:
@@ -37207,7 +37254,10 @@ def create_draft_zettel(
         fidelity_private_authority_values
         and _source_fidelity_value_contains_private_authority(
             {
-                "frontmatter": frontmatter,
+                "frontmatter": _source_fidelity_frontmatter_without_source_assets(
+                    frontmatter,
+                    source_fidelity.get("source") if isinstance(source_fidelity, dict) else None,
+                ),
                 "draft_approved_by": draft_approved_by,
                 "expected_archive_id": expected_archive_id,
                 "expected_type": expected_type,
@@ -37468,6 +37518,15 @@ def create_draft_zettel(
         write_preflight = {"state": "passed", "reason_code": "draft_index_delta_not_required"}
     elif is_ai_draft:
         write_preflight = {"state": "not_reached", "reason_code": "draft_input_validation_blocked"}
+        if "source_fidelity_source_not_utf8" in blockers:
+            # Letter 160 ②: the fidelity contract compares normalized UTF-8
+            # text, so a binary original cannot be the fidelity source yet.
+            write_next_safe_actions = [
+                "Use a UTF-8 text objet (for example the extracted or transcribed text) as "
+                "--fidelity-source-object-id; source fidelity compares normalized text only.",
+                "Link the binary original (PDF, spreadsheet, image) to the draft afterwards with "
+                "zettel-objet-link --role source_document instead of naming it as the fidelity source.",
+            ]
 
     approval_replay = {
         "draft_id": (
@@ -37487,6 +37546,11 @@ def create_draft_zettel(
         "expected_type": expected_type or archive_type,
         "profile_id": profile_id,
     }
+    if blockers:
+        # A blocked dry-run must not hand out replay values that look ready
+        # (letter 160 ③): automation that forwards them reaches --approve and
+        # only then learns the preflight was blocked.
+        approval_replay = {key: None for key in approval_replay}
     target_archive = {
         "archive_id": resolved_archive_id,
         "archive_type": archive_type,
@@ -37805,8 +37869,11 @@ def _source_fidelity_raw_draft_snapshot(
         cursor = newline + 1
     if closing_start is None or closing_end is None:
         return blocked("source_fidelity_draft_frontmatter_boundary_invalid")
-    if raw[closing_end : closing_end + 1] != b"\n":
-        return blocked("source_fidelity_draft_body_separator_invalid")
+    # A blank line after the closing ``---`` is WOM's own serialization
+    # convention, not user content. Older zettel-edge rewrites dropped it
+    # (letter 159 ①); the body bytes are identical either way, so normalize
+    # instead of blocking and report the observation.
+    body_separator_present = raw[closing_end : closing_end + 1] == b"\n"
     try:
         frontmatter_text = raw[4:closing_start].decode("utf-8")
         loaded = load_approval_yaml_without_duplicate_keys(frontmatter_text)
@@ -37819,7 +37886,7 @@ def _source_fidelity_raw_draft_snapshot(
         return blocked("source_fidelity_draft_frontmatter_invalid")
     if not isinstance(frontmatter, dict):
         return blocked("source_fidelity_draft_frontmatter_not_object")
-    body_start = closing_end + 1
+    body_start = closing_end + 1 if body_separator_present else closing_end
     body_bytes = raw[body_start:]
     try:
         body_bytes.decode("utf-8")
@@ -37831,6 +37898,7 @@ def _source_fidelity_raw_draft_snapshot(
         "frontmatter": frontmatter,
         "body_bytes": body_bytes,
         "body_start": body_start,
+        "body_separator_normalized": not body_separator_present,
         "raw": raw,
         "raw_sha256": _source_fidelity_digest_bytes(raw),
     }
@@ -38584,7 +38652,9 @@ def _source_fidelity_verify_for_mint(
     )
     public_frontmatter_authority = {
         key: value
-        for key, value in frontmatter.items()
+        for key, value in _source_fidelity_frontmatter_without_source_assets(
+            frontmatter, source_meta
+        ).items()
         if key not in {"source_fidelity", "draft_creation"}
     }
     draft_creation = (
@@ -76036,9 +76106,12 @@ def zettel_edge_write(
         try:
             source_path = resolve_zettel_path(root, zettel_id=from_zettel, relative_path=from_path, zettel_path_index=zettel_path_index)
             source_bytes = source_path.read_bytes()
-            source_frontmatter, source_body = require_readable_zettel_text(
-                decode_utf8_with_universal_newlines(source_bytes)
-            )
+            source_text = decode_utf8_with_universal_newlines(source_bytes)
+            source_frontmatter, _parsed_body = require_readable_zettel_text(source_text)
+            # Keep the exact body suffix (letter 159 ①): the reading parser
+            # strips the blank separator line, and rewriting without it made
+            # mint-zet reject WOM's own edge output.
+            source_body = exact_zettel_body_after_frontmatter(source_text)
             source_zettel_id = str(source_frontmatter.get("id") or source_zettel_id).strip()
             source_relative = archive_relative_path(source_path, root)
             source_summary = {
@@ -77353,7 +77426,9 @@ def zettel_edge_revert(
                 else:
                     try:
                         source_original_bytes = source_path.read_bytes()
-                        source_frontmatter, source_body = require_readable_zettel_content(source_path)
+                        source_text = decode_utf8_with_universal_newlines(source_original_bytes)
+                        source_frontmatter, _parsed_body = require_readable_zettel_text(source_text)
+                        source_body = exact_zettel_body_after_frontmatter(source_text)
                     except ArchiveServiceError as exc:
                         blockers.append(str(exc))
                         source_frontmatter, source_body = {}, ""

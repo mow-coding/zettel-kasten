@@ -157,3 +157,23 @@ This closes the bounded observation unit only. Authenticated Git producer
 integration (original HEAD/index bytes versus approved preimage, current file
 versus approved postimage) is the next unit; WS-02/WS-04 whole-document
 ownership, scoped revert and installed/release acceptance remain unfinished.
+
+### 2026-09-16 letters 159/160 writer-defect checkpoint (plan addition)
+
+Beta-tester letters 159 and 160 arrived after the 2026-09-05 audit. They
+report two defects created by WOM's own writers on v0.4.18: zettel-edge
+rewrote drafts without the blank separator line and mint-zet then refused
+them, and linking the declared fidelity source object as an asset made
+mint-zet report private authority exposure. Both are corrected inside the
+v0.4.20 train as a bounded unit with no new command or approval system:
+exact body preservation in edge write/revert, separator normalization in the
+mint verifier, a one-row asset exemption, truthful blocked responses for
+create-draft and zettel-edge, and the selection file path from the exact
+objet-capture-selection. Development verified (5 new tests, 185 regression
+tests). Client execution depends on the next release and their pin update.
+
+Plan addition recorded for v0.4.21 LR-01: letter 160 measured 42 approval
+popups for three drafts because each intake runs record → selection →
+capture as three approvals; the batch reopening must include one approval
+plan for that intake chain. Letter 160 ④ (create-draft --approve behaving
+differently under a PowerShell scriptblock wrapper) remains unreproduced.

@@ -16505,6 +16505,7 @@ def _zettel_edge_blocked_preview_projection(
         "receipt_path": receipt_path,
         "blockers": blockers,
         "reason_codes": ["zettel_edge_preflight_blocked"],
+        "detail_reason_code": _zettel_edge_detail_reason_code(blockers),
         "warnings": [],
         "would_change": [],
         "files_written": [],
@@ -16515,6 +16516,33 @@ def _zettel_edge_blocked_preview_projection(
         },
         "private_values_echoed": False,
     }
+
+
+_ZETTEL_EDGE_DETAIL_REASON_CODES: tuple[tuple[str, str], ...] = (
+    ("edge already exists on the source zettel.", "zettel_edge_already_exists"),
+    ("edge receipt already exists.", "zettel_edge_receipt_already_exists"),
+    ("source and target must be different.", "zettel_edge_self_reference"),
+    ("target zettel id was not found.", "zettel_edge_target_missing"),
+    ("target zettel content is unavailable.", "zettel_edge_target_unavailable"),
+    ("target object_id was not found in objects/manifests/files.jsonl.", "zettel_edge_target_missing"),
+    ("target principal id is ambiguous.", "zettel_edge_target_ambiguous"),
+    ("source zettel frontmatter edges must be a list.", "zettel_edge_source_frontmatter_invalid"),
+    ("edge_type must be defined in zettel-kasten/types.yml.", "zettel_edge_type_unknown"),
+)
+
+
+def _zettel_edge_detail_reason_code(blockers: list[str]) -> str:
+    """Name the first blocked condition with a fixed code (letter 160 ⑥)."""
+
+    for blocker in blockers:
+        for sentence, code in _ZETTEL_EDGE_DETAIL_REASON_CODES:
+            if blocker == sentence:
+                return code
+        if blocker.startswith("Active link type contract"):
+            return "zettel_edge_type_contract_blocked"
+        if blocker.startswith("target_ref must be"):
+            return "zettel_edge_target_ref_invalid"
+    return "zettel_edge_preflight_blocked"
 
 
 def command_zettel_edge(args: argparse.Namespace) -> int:
@@ -25628,19 +25656,45 @@ def _binding_with_primary_bound_zettel_preview(
         return binding
 
 
+def _bounded_preflight_blockers(blockers: Any) -> list[str]:
+    """Keep only short plain blocker sentences the dry-run already exposes."""
+
+    if not isinstance(blockers, (list, tuple)):
+        return []
+    kept: list[str] = []
+    for item in blockers:
+        if not isinstance(item, str):
+            continue
+        text = " ".join(item.split())
+        if not text or len(text) > 160 or len(text.encode("utf-8")) > 640:
+            continue
+        kept.append(text)
+        if len(kept) == 8:
+            break
+    return kept
+
+
 def _exact_human_approval_cli_error(
     args: argparse.Namespace,
     *,
     lifecycle_action: str,
     reason_code: str,
+    preflight_blockers: Any = None,
 ) -> int:
-    """Emit only a fixed code after an approval-boundary failure."""
+    """Emit only a fixed code after an approval-boundary failure.
+
+    ``preflight_blockers`` are the same fixed dry-run sentences the caller
+    already computed for this request; repeating them here (letter 160 ③)
+    saves the operator a second --format json round trip. They are bounded
+    and never carry raw input values.
+    """
 
     safe_reason = (
         reason_code
         if re.fullmatch(r"[a-z][a-z0-9_]{0,95}", str(reason_code or ""))
         else "exact_human_approval_state_unknown"
     )
+    blockers = _bounded_preflight_blockers(preflight_blockers)
     if getattr(args, "format", None) == "json":
         command = str(getattr(args, "command", "") or "")
         print_json(
@@ -25657,6 +25711,7 @@ def _exact_human_approval_cli_error(
                 "lifecycle_action": lifecycle_action,
                 "error_class": "policy",
                 "reason_codes": [safe_reason],
+                "blockers": blockers,
                 "exit_code": 1,
                 "effects_state": "none",
                 "files_written": [],
@@ -25670,9 +25725,17 @@ def _exact_human_approval_cli_error(
         )
     elif safe_reason == "exact_human_approval_preflight_blocked":
         print(
-            "Exact human approval preflight was blocked; the write did not start.",
+            "Exact human approval preflight was blocked; the write did not start. "
+            "reason_codes: exact_human_approval_preflight_blocked",
             file=sys.stderr,
         )
+        for blocker in blockers:
+            print(f"BLOCKED: {blocker}", file=sys.stderr)
+        if not blockers:
+            print(
+                "Run the same command with --dry-run --format json to see the blockers.",
+                file=sys.stderr,
+            )
     elif safe_reason == "compound_exact_human_approval_binding_required":
         print(
             "Exact compound human-approval binding is not implemented for "
@@ -26187,6 +26250,11 @@ def command_create_draft(args: argparse.Namespace) -> int:
                     args,
                     lifecycle_action="create_draft",
                     reason_code="exact_human_approval_preflight_blocked",
+                    preflight_blockers=(
+                        preview.get("blockers")
+                        if isinstance(preview, dict)
+                        else None
+                    ),
                 )
             context = _exact_human_approval_context(
                 archive_root,
@@ -30933,7 +31001,11 @@ def print_objet_capture_selection_exact_result(
             else "no"
         )
     )
-    print("- paths shown: no")
+    selection_path = result.get("selection_path")
+    if isinstance(selection_path, str) and selection_path:
+        print(f"- selection file: {selection_path}")
+    else:
+        print("- paths shown: no")
     for blocker in result.get("blockers", []):
         print(f"BLOCKED: {blocker}")
 
@@ -42800,7 +42872,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--fidelity-source-object-id",
         help=(
             "Content-addressed source object id in "
-            "sha256:<64 lowercase hex> form; no local source path is accepted."
+            "sha256:<64 lowercase hex> form; no local source path is accepted. "
+            "The object must be UTF-8 text: source fidelity compares normalized "
+            "text, so link a binary original (PDF, spreadsheet, image) with "
+            "zettel-objet-link instead of naming it here."
         ),
     )
     fidelity_authority.add_argument(

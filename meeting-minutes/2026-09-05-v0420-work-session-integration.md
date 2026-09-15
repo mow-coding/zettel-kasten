@@ -2859,6 +2859,94 @@ work-owned files plus these two docs were staged explicitly; the local
 handoff remains ignored and unpublished. Hygiene results for the staged
 checkpoint are recorded in the next section together with the commit.
 
+## Authenticated document Git producer in progress
+
+The transition checkpoint was committed and pushed as
+`f45c58cebb181c09006147b936010ec4eecc64bd`; the observed remote feature ref
+matched. No release tag was created and the full train continues.
+
+Design for the next unit, chosen after reading the existing receipt and
+intake producers rather than inventing a new authentication system:
+
+- A third closed producer, `authenticated_local_recovery_document_output`,
+  proves two output kinds of one authenticated completed session title
+  recovery: each canonical zettel whose whole preimage/postimage the session
+  control recorded, and that recovery's common completion receipt. The scope
+  codec gains a v3 schema for scopes carrying such proofs; v1/v2 documents
+  keep their exact bytes and validators.
+- A new completion reader mirrors the intake reader's three modes (data-only
+  image, active same-archive claim, key discovery) over the existing retained
+  local recovery control, common final receipt, checkpoint, claim bytes and
+  establishment evidence. It reuses the existing `_completion` gate for own
+  succeeded discovery and `exact_terminal_record_matches` for cross-operation
+  MAC checks. Image-less historical controls are never candidates.
+- Ownership of a modified canonical document requires all of: Git HEAD blob
+  bytes/digest equal the approved preimage, worktree bytes equal the approved
+  postimage, the index equals either HEAD or the worktree, no rename, and the
+  current file still matches the approved postimage under the held lock.
+  Anything else, including two completed recoveries claiming the same path,
+  stays `ownership_unverified`; pre-existing uncommitted body edits are never
+  attributed to the title operation.
+- The existing Git workflow gains the third proof bucket in fresh selection,
+  claim-time authentication, original-review images/key revalidation and the
+  finish result; the public projection gains bounded document counts only.
+
+## 2026-09-16 Unit α: draft promotion unblocked for letters 159/160
+
+Executing model: planning Claude Fable 5.1; implementation Claude Opus 5 at
+effort high. Before this unit the user asked for a plan verification against
+beta-tester letters 150-160 (local record
+`2026-09-15-claude-letters-150-160-plan-verification.md`). Its decisive
+findings: clients are still pinned to v0.4.18 and have not received any
+v0.4.19 fix (including the NTFS directory st_size guard misfire, verified
+present in the v0.4.19 tag); letters 159/160 arrived after the 09-05 audit and
+report two blockers created by WOM's own writers that no plan document names;
+eleven drafts can no longer be minted. The user delegated the ordering
+decision; Claude chose to close those writer defects first as a bounded unit
+inside the v0.4.20 train, without any new approval system or command.
+
+Changes (all under existing commands):
+
+- `zettel-edge` write and revert now re-serialize with the exact body suffix
+  after the frontmatter (`exact_zettel_body_after_frontmatter`), preserving
+  the blank separator line that create-draft writes, like objet-link already
+  did. `_source_fidelity_raw_draft_snapshot` treats a missing separator as a
+  normalization (`body_separator_normalized`) instead of the blocker
+  `source_fidelity_draft_body_separator_invalid`; body bytes are identical
+  either way, so approved body digests still match. A damaged boundary is
+  still blocked.
+- Mint and create-draft exposure checks exempt exactly one thing: an
+  `assets[].object_id` equal to the declared fidelity source object
+  (`_source_fidelity_frontmatter_without_source_assets`). Labels, other
+  spellings (`objet:`, bare hex) and all source digests still block.
+- A blocked create-draft dry-run returns `approval_replay` with null values
+  and stage `blocked`; a blocked text-mode `--approve` prints the fixed reason
+  code and the bounded dry-run blockers (`_bounded_preflight_blockers`, max 8
+  x 160 chars) instead of one opaque line; JSON gains `blockers`.
+- `zettel-edge` blocked results carry a closed `detail_reason_code`
+  (`zettel_edge_already_exists`, `_receipt_already_exists`, `_self_reference`,
+  `_target_missing`, `_target_unavailable`, `_target_ambiguous`,
+  `_type_unknown`, `_type_contract_blocked`, `_target_ref_invalid`).
+- Exact `objet-capture-selection --approve` returns `selection_path` and
+  `files_written` (digest-named archive-internal receipt path only; no staged
+  or operator path) and reports `paths_echoed` truthfully; text mode prints
+  the selection file.
+- `source_fidelity_source_not_utf8` now carries `next_safe_actions`; the CLI
+  help and the source-fidelity doc state the UTF-8 text requirement and the
+  asset-link route for binary originals.
+
+Verification: new `test_v0420_letter159_draft_promotion` (5 tests: real edge
+write keeps separator and body bytes, older no-separator draft normalized and
+damaged boundary still blocked, asset link allowed while three other
+exposures still block, blocked dry-run/approve outputs, edge detail codes)
+passed in 3.131 s. Regressions: fidelity/preflight/exact-selection/blocked-CLI
+cohorts 82 tests in 54.139 s; name-selected edge/objet-link/create-draft tests
+from the CLI, workflow and MCP suites 103 tests in 65.762 s; all exit 0.
+Not claimed: client execution (they still need to update their pin), the
+non-interactive create-draft difference from letter 160 ④ (unreproduced; the
+new blocked output now names the reason so it can be diagnosed), intake-chain
+approval batching (letter 160 ⑦, to be added to the v0.4.21 batch scope).
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)
