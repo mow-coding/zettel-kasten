@@ -3077,6 +3077,33 @@ fakes were extended to accept the keywords. Cohorts: session/execution/legacy
 title/preview/native-boundary/original-review 81 tests in 172.061 s, exit 0.
 Not claimed: previews for ledger/locator targets, or any client execution.
 
+## 2026-09-16 Unit ε: writer-session coverage gate (decision 7)
+
+Executing model: Claude Opus 5 at effort high. Unit δ was committed and pushed
+as `2d2091be008d`; draft PR #99 was opened so the full CI matrix runs on the
+branch (13 checks pending at open).
+
+`tools/check_writer_session_coverage.py` derives the approval inventory from
+the real parser (`capabilities --machine`, no archive read) and compares it
+with `docs/writer-session-coverage.json`. Every approval-available path must be
+classified: `session_integrated` (must expose session refs itself or via a
+named route, and cite existing test modules), `pending` (with a release
+target on the train) or `legacy_exception` (with the decision-6 reason:
+bootstrap updater, emergency feedback preservation, local records and plans,
+closed IMAP provider writers). Unclassified, stale and misclassified paths
+fail. The gate exits 0 while paths are pending but prints the denominator
+and reports all-writer scope NOT complete; it joins the release readiness
+gate as its fifth checker (CI runs that gate). Current classification: 6
+integrated, 21 pending, 20 documented exceptions of 47.
+
+Verification: `test_v0420_writer_session_coverage_gate` (manifest matches the
+parser, denominator honest; an edited manifest with an unclassified, a
+stale, a misclassified-pending and a false-integrated path is blocked with
+the exact messages) and the updated `test_release_readiness`: 7 tests in
+32.225 s; the readiness gate passes all five checkers; package resources
+remain synchronized. Not claimed: all-writer session coverage — the 21
+pending paths are the remaining WS-02 denominator.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)

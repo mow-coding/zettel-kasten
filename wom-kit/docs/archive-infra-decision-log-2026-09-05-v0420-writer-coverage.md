@@ -365,3 +365,15 @@ same producer. Scope schema v3 carries these proofs; v1/v2 are unchanged.
 Development verified with 7 tests over a real repository and bare remote.
 This does not prove ownership of locator/ledger/index outputs, chains of
 overlapping approvals, or installed/release acceptance.
+
+## Writer-session coverage gate
+
+Decision 7 is now mechanical: `tools/check_writer_session_coverage.py`
+compares the parser's approval-available paths with
+`docs/writer-session-coverage.json` on every release readiness run. A path
+is session-integrated only with exposed session refs and cited tests;
+pending paths carry a train release target; legacy exceptions carry their
+decision-6 reason. The gate blocks unclassified, stale or misclassified
+paths and prints the honest denominator (6 integrated, 21 pending, 20
+exceptions of 47 at this checkpoint). It never declares all-writer scope
+complete while a pending path remains.

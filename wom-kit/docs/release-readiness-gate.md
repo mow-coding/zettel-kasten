@@ -11,12 +11,13 @@ Run it from the repository root:
 python wom-kit\tools\check_release_readiness.py
 ```
 
-The gate runs the four current public-release readiness checkers:
+The gate runs the five current public-release readiness checkers:
 
 - `wom-kit/tools/check_public_links.py`
 - `wom-kit/tools/check_korean_product_language.py`
 - `wom-kit/tools/check_public_privacy.py`
 - `wom-kit/tools/check_runtime_skill.py`
+- `wom-kit/tools/check_writer_session_coverage.py` — compares the parser's approval-available paths with `docs/writer-session-coverage.json`; every path must be classified as session-integrated (with test evidence), pending (with a release target) or a documented legacy exception, and stale classifications fail. It prints the honest denominator and never reports all-writer coverage while paths are pending.
 
 It prints a compact pass/fail summary and exits with `0` only when every child checker passes.
 
