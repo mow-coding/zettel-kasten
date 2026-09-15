@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.4.19 runtime, updater, capability, and Windows child-process truth
+Status: v0.4.20 session-owned writes, selective Git ownership, and draft promotion truth
 
 Previous checkpoint: Status: v0.4.18 terminal-original cleanup and claim-reference cleanup authority
 
@@ -306,7 +306,7 @@ archive capabilities --machine --format json
 
 Its `data.approval_status_inventory` distinguishes
 `approval_available`, `approval_fixed_closed`, and `approval_not_exposed` for
-every canonical executable command path and its aliases. The current v0.4.19
+every canonical executable command path and its aliases. The current v0.4.20
 working-tree parser reports 315 canonical executable paths, 259 alias paths,
 and 574 total invocation paths: 47 operation-specific approval routes, 67
 fixed-closed routes, and 201 routes without an approval mode. Nine paths have
@@ -349,17 +349,17 @@ environment:
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0419-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0420-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.19/wom_kit-0.4.19-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.20/wom_kit-0.4.20-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-Require exactly `archive 0.4.19` from a new process. This does not update the
+Require exactly `archive 0.4.20` from a new process. This does not update the
 project-local WOM-kit source mirror or change a project pin. Those effects
 require the separate reviewed `project-version-update` plan and native
 approval, or its authenticated same-context resume after interruption.

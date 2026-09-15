@@ -129,11 +129,12 @@ CURRENT_CLI_COUNT = 576
 CURRENT_CLI_CANONICAL_SHA256 = (
     "18287b38efa279b4a2c096234e762d66fbc8f426a1e74859b7e921cc90e809b7"
 )
-CURRENT_MCP_COUNT = 136
+CURRENT_MCP_COUNT = 137
 CURRENT_MCP_CANONICAL_SHA256 = (
-    "3118c370e500c516163f17382d9f58030a8268a0d5f1060c215f82a794ca37d2"
+    "9aff69868e11f6982cdb91014c9bd905be36574d6005d9cb624231c3217b3619"
 )
 MCP_ADDITIONS = {
+    "zet_title_remap_write",
     "archive_capabilities",
     "archive_work_session",
     "archive_work_session_manage",
@@ -155,7 +156,7 @@ CURRENT_DATABASE_CANONICAL_SHA256 = (
     "d9a42f08ee12a6d42e40214cfb12441e4077bf50c38c25b2692ec1344328294a"
 )
 RESOURCE_ADDITIONS = {
-    "release-notes/v0.4.19.md",
+    "release-notes/v0.4.20.md",
     "schemas/agent-instruction-policy-v0.1.schema.json",
     "schemas/approval-handoff-v0.1.schema.json",
     "schemas/approval-integrity-audit-result-v0.1.schema.json",
@@ -218,7 +219,7 @@ RESOURCE_ADDITIONS = {
 RESOURCE_REMOVALS = {"release-notes/v0.3.297.md"}
 CURRENT_RESOURCE_COUNT = 169
 CURRENT_RESOURCE_CANONICAL_SHA256 = (
-    "fb5605d4236b02736c33f0c09bef4844f9ab313e91cd99f83adfe735557e92fa"
+    "bedae27bccf947f05f524812d0ed3696f2861edcbce169fff405f773b192cc93"
 )
 
 
@@ -576,10 +577,10 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             actual,
             expected,
             "Current package-resource paths must be the full v0.3.297 set plus "
-            "the exact cumulative v0.3.298 through v0.4.19 delta. "
+            "the exact cumulative v0.3.298 through v0.4.20 delta. "
             f"missing={compact(missing)}; extra={compact(extra)}",
         )
-        self.assertEqual(manifest["version"], "0.4.19")
+        self.assertEqual(manifest["version"], "0.4.20")
         self.assertEqual(len(actual), CURRENT_RESOURCE_COUNT)
         self.assertEqual(
             canonical_sha256(actual),
@@ -599,13 +600,13 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         self.assertNotIn("C:\\Users\\", predecessor_text)
 
     def test_v0419_release_note_is_current_and_older_notes_remain_historical(self) -> None:
-        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.4.19.md"
+        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.4.20.md"
         current_packaged_release = (
             SRC_ROOT
             / "wom_kit"
             / "_resources"
             / "release-notes"
-            / "v0.4.19.md"
+            / "v0.4.20.md"
         )
         self.assertEqual(
             current_source_release.read_bytes(),
@@ -614,10 +615,10 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         current_text = current_source_release.read_text(encoding="utf-8")
         current_flat = " ".join(current_text.split())
         for token in (
-            "v0.4.19",
+            "v0.4.20",
             "project-version-update",
             "Publishing or installing this release does not read or modify a client archive",
-            "wom_kit-0.4.19-py3-none-any.whl",
+            "wom_kit-0.4.20-py3-none-any.whl",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, current_flat)

@@ -177,3 +177,12 @@ popups for three drafts because each intake runs record → selection →
 capture as three approvals; the batch reopening must include one approval
 plan for that intake chain. Letter 160 ④ (create-draft --approve behaving
 differently under a PowerShell scriptblock wrapper) remains unreproduced.
+
+### 2026-09-16 v0.4.20 release candidate
+
+The version bump and release documents for v0.4.20 were prepared in the
+work-session branch after independent review of the bounded units. This
+register still records development evidence only: WS-01 through WS-04 keep
+their pending installed/platform/release acceptance until the public
+artifact, anonymous download and fresh-venv installation evidence exist,
+and no client outcome is claimed by publication.

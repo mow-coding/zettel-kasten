@@ -3155,6 +3155,47 @@ letter-159, fidelity, execution, legacy title, readiness, predecessor and
 runtime cohorts rerun after the fixes (see the bump section below for the
 predecessor test, which is version-bound). All exit 0.
 
+## 2026-09-16 v0.4.20 version bump and release candidate
+
+Executing model: Claude Opus 5 at effort high, solo (no agent fan-out).
+The user's standing approval covers the release ritual; no new client
+material was read for this step.
+
+Bump surfaces follow the v0.4.19 pattern exactly: `pyproject.toml`, both
+`__init__` shims, `CITATION.cff` (0.4.20, released 2026-09-16), the supply
+lock `project-runtime-supply-lock-v0.4.20.json` (the v0.4.19 lock with only
+`target_tag` changed; SHA-256
+`5b41edfcdf278e6d6f3393a1b3e06178af501a86d9779d6c3782a0c757c5d492`), the
+policy JSON and the matching constants in `project_runtime.py`, the packaged
+release note (v0.4.19 note removed from the package, kept under
+`docs/releases/`), README/README.ko/UPGRADE/UPGRADE.ko/VERSIONING/CHANGELOG,
+the bootstrap block (`bootstrap-v0420-`, `wom_kit-0.4.20-py3-none-any.whl`)
+in every install guide, and the kit status lines (runtime entrypoints,
+version truth, python tool install, agent-operator capabilities with the
+316/575/47/11/273 inventory, capability matrix, exact approval contract).
+The MCP tool count is 137 after `zet_title_remap_write`.
+
+The release note states the client boundary: publishing or installing this
+release does not read or modify a client archive, and a client-run result
+plus a new-process verification are the only proof of client repair. The
+letters 159/160 fixes ship in this version; the 21 pending writer paths
+and the intake-chain approval batching stay on v0.4.21+.
+
+Historical release-docs tests keep the house rule: assertions about the
+*current* version (package version, current baseline, packaged note, lock
+sha, bootstrap block) move to v0.4.20 while each release's own contract
+assertions stay. `test_v0420_release_docs.py` pins the new facts, the
+coverage manifest counts (47 = 5 + 1 + 21 + 20) and the private-safety scan
+of the current public documents.
+
+Verification before commit: release-docs group (v0.3.320, v0.4.2/3,
+v0.4.12–v0.4.20, wheel install, predecessor surfaces, capability docs)
+312 tests OK; `sync_package_resources.py --check` synchronized (169 files);
+release readiness gate 5/5 PASS (links, Korean product language, public
+privacy, runtime skill, writer-session coverage). The full suite runs on
+PR #99 CI; its result and the public artifact evidence are recorded in
+`meeting-minutes/2026-09-16-v0420-release-evidence.md` when they exist.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)

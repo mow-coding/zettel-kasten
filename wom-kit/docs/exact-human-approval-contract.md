@@ -173,7 +173,7 @@ and does not infer success, failure, or cancellation, automatically retry, or
 delete that evidence. A full authenticated terminal handoff and terminal
 cleanup outcome reconstruction remain a v0.4.16 follow-up.
 
-The current parser-derived inventory is 46 approval-available, 68 fixed-closed,
+The current parser-derived inventory is 47 approval-available, 68 fixed-closed,
 and 201 not-exposed paths. The fixed-closed set includes 67 compound-approval
 migrations and the separately unsupported `operation-control` cancel writer,
 whose reason is `operation_cancel_not_supported`. Its status, wait, and
