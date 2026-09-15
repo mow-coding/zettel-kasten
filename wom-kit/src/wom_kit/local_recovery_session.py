@@ -482,6 +482,66 @@ def _resume_session_local_recovery_held(root, *, held, client_app_ref, task_rout
     return _safe(resume)
 
 
+SESSION_SUBSET_REVERT_EVIDENCE_SCHEMA = "wom-kit/local-recovery-session-subset-revert-evidence/v1"
+
+
+def _session_subset_revert_plan(original):
+    """Compensate a completed session recovery as a new unbound apply plan.
+
+    The existing observed-post subset planner selects exactly the fields that
+    still hold the approved post value and refuses divergent or unreadable
+    fields, so later unrelated changes survive. The returned plan writes the
+    original pre values as its post values; it is then bound to the current
+    session by the ordinary prepare step and approved natively like any apply.
+    The evidence names the compensated manifest. No original control,
+    receipt, claim or checkpoint is rewritten.
+    """
+    if type(original) is not recovery.LocalRecoveryPlan or original.session_context is None:
+        raise recovery.LocalRecoveryError("local_recovery_session_context_invalid")
+    subset, report = recovery.build_observed_post_subset_revert_plan(original)
+    if subset is None:
+        return None, report
+    items, specs = [], []
+    for item, spec in zip(subset.manifest.items, subset.specs):
+        field = item.fields[0]
+        items.append(exact.ExactOperationItem(
+            ordinal=item.ordinal, item_id=item.item_id, target_kind=item.target_kind,
+            target_ref=item.target_ref, target_identity_sha256=item.target_identity_sha256,
+            fields=(exact.ExactFieldEffect(field_ref=field.field_ref, pre_sha256=field.post_sha256,
+                                           post_sha256=field.pre_sha256, source_sha256=field.source_sha256),)))
+        specs.append(replace(spec, pre_value=spec.post_value, post_value=spec.pre_value))
+    evidence = subset.manifest.operation_evidence
+    manifest = exact.ExactOperationManifest.build(
+        operation=recovery.APPLY_OPERATION,
+        archive_identity_sha256=original.manifest.archive_identity_sha256,
+        items=tuple(items),
+        operation_evidence=exact.ExactOperationEvidence(
+            schema=SESSION_SUBSET_REVERT_EVIDENCE_SCHEMA,
+            counts=evidence.counts,
+            digests=tuple(sorted({**dict(evidence.digests),
+                                  "compensated_manifest_sha256": original.manifest.manifest_sha256}.items())),
+        ),
+    )
+    plan = recovery.LocalRecoveryPlan(
+        archive_root=original.archive_root, archive_id=original.archive_id, domain=original.domain,
+        manifest=manifest, specs=tuple(specs), warning_codes=subset.warning_codes,
+        public_summary=subset.public_summary)
+    return plan, report
+
+
+def _load_completed_original_for_revert(root, *, held, client_app_ref, task_route_ref,
+                                        work_session_ref, allowed_domains):
+    view, _store, completed = _load_selected_original(root, held=held, client_app_ref=client_app_ref,
+        task_route_ref=task_route_ref, work_session_ref=work_session_ref, allowed_domains=allowed_domains)
+    if not completed:
+        # A pending original is resumed or reviewed, never compensated.
+        raise recovery.LocalRecoveryError("local_recovery_resume_invalid")
+    _retained(view, held)
+    if recovery.verify_local_recovery_state(view.plan, state="post").get("all_match") is not True:
+        raise recovery.LocalRecoveryError("local_recovery_partial_revert_blocked")
+    return view
+
+
 @dataclass(frozen=True, repr=False)
 class _OriginEvidence:
     """Data-only inputs to the existing bounded origin/claim image readers."""
@@ -630,7 +690,7 @@ def _dispatch_session_local_recovery(root, *, mode, client_app_ref, task_route_r
     started = False
     code = "local_recovery_session_context_invalid"
     try:
-        if (type(mode) is not str or mode not in {"preview", "apply", "resume", "review_original"}
+        if (type(mode) is not str or mode not in {"preview", "apply", "resume", "review_original", "revert"}
                 or not callable(cancel_requested) or not callable(progress)
                 or type(allowed_domains) not in {set, frozenset} or not allowed_domains
                 or any(type(value) is not str or recovery._DOMAIN_RE.fullmatch(value) is None
@@ -640,6 +700,9 @@ def _dispatch_session_local_recovery(root, *, mode, client_app_ref, task_route_r
         original_mode = mode in {"resume", "review_original"}
         if original_mode:
             if plan_factory is not None or reviewer_claim is not None:
+                raise recovery.LocalRecoveryError(code)
+        elif mode == "revert":
+            if plan_factory is not None or type(reviewer_claim) is not str or not reviewer_claim.strip():
                 raise recovery.LocalRecoveryError(code)
         elif not callable(plan_factory) or type(reviewer_claim) is not str or not reviewer_claim.strip():
             raise recovery.LocalRecoveryError(code)
@@ -656,7 +719,9 @@ def _dispatch_session_local_recovery(root, *, mode, client_app_ref, task_route_r
 
         def run(held):
             nonlocal started
-            started = True
+            # Compensation loads and inspects the completed original before
+            # any effect; refusals there leave the archive untouched.
+            started = mode != "revert"
             common = dict(held=held, client_app_ref=client_app_ref, task_route_ref=task_route_ref,
                           work_session_ref=work_session_ref)
             if original_mode:
@@ -664,6 +729,28 @@ def _dispatch_session_local_recovery(root, *, mode, client_app_ref, task_route_r
                                 else _resume_session_local_recovery_held)
                 return continuation(actual, **common,
                     progress_hook=progress, allowed_domains=domains)
+            if mode == "revert":
+                original = _load_completed_original_for_revert(actual, **common, allowed_domains=domains)
+                evidence = original.plan.manifest.operation_evidence
+                if evidence is not None and evidence.schema == SESSION_SUBSET_REVERT_EVIDENCE_SCHEMA:
+                    # The latest completed operation is itself a compensation:
+                    # its parent is already reverted. Compensating a
+                    # compensation is a new apply the operator plans explicitly.
+                    return {"ok": True, "state": "already_reverted", "domain": original.plan.domain,
+                            "manifest_sha256": original.plan.manifest.manifest_sha256,
+                            "item_count": 0, "field_count": 0, "writes_performed": False,
+                            "already_pre_field_count": len(original.plan.specs),
+                            "current_claim_ownership_verified": True, "original_completion_verified": False}
+                compensation, report = _session_subset_revert_plan(original.plan)
+                if compensation is None:
+                    return {"ok": True, "state": "already_reverted", "domain": original.plan.domain,
+                            "manifest_sha256": original.plan.manifest.manifest_sha256,
+                            "item_count": 0, "field_count": 0, "writes_performed": False,
+                            "already_pre_field_count": report["already_pre_field_count"],
+                            "current_claim_ownership_verified": True, "original_completion_verified": False}
+                started = True
+                return _execute_session_local_recovery_held(actual, lambda: compensation, **common,
+                    reviewer_claim=reviewer_claim, progress_hook=progress)
             if mode == "preview":
                 plan = _prepare_local_recovery_session_held(actual, checked_plan, **common,
                     reviewer_claim=reviewer_claim)
@@ -681,7 +768,8 @@ def _dispatch_session_local_recovery(root, *, mode, client_app_ref, task_route_r
                   "dry_run": mode == "preview", "mode": "apply",
                   "private_values_echoed": False, "paths_echoed": False}
         states = {"ready_for_native_approval", "applied", "applied_index_update_failed", "not_started",
-                  "partially_applied", "fully_applied_receipt_pending", "started_no_fields_changed", "requires_review"}
+                  "partially_applied", "fully_applied_receipt_pending", "started_no_fields_changed", "requires_review",
+                  "already_reverted"}
         state = result.get("state")
         if type(state) is not str or state not in states:
             raise recovery.LocalRecoveryError(code)
@@ -697,7 +785,7 @@ def _dispatch_session_local_recovery(root, *, mode, client_app_ref, task_route_r
                     raise recovery.LocalRecoveryError(code)
                 public[key] = result[key]
         for key in ("item_count", "field_count", "written_field_count", "resumed_field_count",
-                    "whole_document_count",
+                    "whole_document_count", "already_pre_field_count",
                     "applied_field_count", "remaining_field_count", "divergent_field_count",
                     "unreadable_field_count", "checkpointed_field_count", "written_before_checkpoint_field_count"):
             if key in result:
@@ -714,11 +802,14 @@ def _dispatch_session_local_recovery(root, *, mode, client_app_ref, task_route_r
                 if type(result[key]) is not bool:
                     raise recovery.LocalRecoveryError(code)
                 public[key] = result[key]
-        if result["ok"] and mode != "preview" and not all(public.get(key) is True for key in (
-                "original_completion_verified", "completion_authentication_verified", "independent_verification")):
+        if (result["ok"] and mode != "preview" and state != "already_reverted"
+                and not all(public.get(key) is True for key in (
+                "original_completion_verified", "completion_authentication_verified", "independent_verification"))):
             raise recovery.LocalRecoveryError(code)
-        if mode == "preview" or not result["ok"]:
-            public["effects_state"] = "none" if mode == "preview" else "unknown"
+        if mode == "revert":
+            public["mode"] = "revert"
+        if mode == "preview" or state == "already_reverted" or not result["ok"]:
+            public["effects_state"] = "none" if mode == "preview" or state == "already_reverted" else "unknown"
         return public
     except KeyboardInterrupt:
         code = "work_session_wait_cancelled"

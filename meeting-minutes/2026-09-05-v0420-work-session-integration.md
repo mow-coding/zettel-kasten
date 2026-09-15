@@ -3016,6 +3016,39 @@ Not claimed: WS-04 generic document ownership for files outside canonical
 zettels (locator/ledger/index outputs), consecutive-chain evidence for
 overlapping approvals, installed/release acceptance, any client execution.
 
+## 2026-09-16 Unit γ: session-scoped title revert
+
+Executing model: Claude Opus 5 at effort high. Unit β was committed and pushed
+as `bbd3b67db43b`; the observed remote ref matched.
+
+The session dispatcher gains mode `revert`. It loads the session's selected
+completed original (a pending original is refused with
+`local_recovery_resume_invalid`), requires its post state to still hold, and
+reuses the existing observed-post subset planner so only fields still at the
+approved post value are compensated and divergent or unreadable fields refuse
+the whole plan (`local_recovery_partial_revert_blocked`). The compensation is
+emitted as a new unbound apply plan whose fields are the subset's pre/post
+swapped, with evidence schema
+`wom-kit/local-recovery-session-subset-revert-evidence/v1` carrying the
+compensated manifest digest; the ordinary prepare step binds it to the
+current session, it is natively approved like any apply, captures its own
+whole-document images and completes through the unchanged execute/resume
+path. No original control, receipt, claim or checkpoint is rewritten. A
+completed compensation is reported `already_reverted` (effects none) rather
+than compensated again; an explicit new apply is the operator's decision.
+Refusals before execution report `effects_state: none`. The write CLI's
+existing `--revert-recovery` flag now reaches this mode when session refs are
+supplied; the legacy receipt-bound revert route is unchanged.
+
+Verification: `test_v0420_local_recovery_session_revert` 3 tests — real
+approved recovery, unrelated later body edit, real natively approved
+compensation restoring the title while the edit survives, original control
+and pre state intact, second call already_reverted with no writes; pending
+original and divergent field refused with no file changes; planner/reviewer
+grammar. Cohort with session/document/MCP recovery tests: 21 tests in
+173.205 s; title CLI grammar 48 tests in 27.331 s; legacy locator/title and
+execution regressions 37 tests in 30.554 s. All exit 0.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)

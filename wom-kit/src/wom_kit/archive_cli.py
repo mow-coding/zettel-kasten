@@ -23918,7 +23918,7 @@ def _execute_local_recovery_cli_mode(
 
         review_original = bool(getattr(args, "review_original", False))
         original_mode = resume or review_original
-        if (revert or expected_manifest_sha256 or (resume and review_original)
+        if (expected_manifest_sha256 or (resume and review_original) or (revert and original_mode)
                 or (original_mode and getattr(args, "reviewed_by", None) is not None)):
             return ({"schema_version": "wom-kit/local-recovery-execution-result/v0.1", "ok": False,
                 "state": "blocked", "reason_codes": ["local_recovery_session_original_inputs_invalid"],
@@ -23932,11 +23932,12 @@ def _execute_local_recovery_cli_mode(
                 reporter.progress("local-recovery-" + event.get("phase", event.get("stage")), "apply", None, None)
 
         result = _dispatch_session_local_recovery(archive_root,
-            mode="review_original" if review_original else "resume" if resume else "preview" if bool(args.dry_run) else "apply",
+            mode=("review_original" if review_original else "resume" if resume else "revert" if revert
+                  else "preview" if bool(args.dry_run) else "apply"),
             client_app_ref=getattr(args, "client_app_ref", None),
             task_route_ref=getattr(args, "task_route_ref", None),
             work_session_ref=getattr(args, "work_session_ref", None),
-            plan_factory=plan_factory, allowed_domains=allowed_domains,
+            plan_factory=None if revert else plan_factory, allowed_domains=allowed_domains,
             reviewer_claim=None if original_mode else reviewer, progress=session_progress)
         return result, result.get("effects_state") != "none"
     if resume or revert:
