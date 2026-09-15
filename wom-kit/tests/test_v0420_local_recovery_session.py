@@ -230,5 +230,27 @@ class SessionLocalRecoveryTests(unittest.TestCase):
         self.assertEqual(native.calls, 2)
 
 
+    def test_review_options_keep_the_plain_dialog_for_plans_without_zettel_targets(self):
+        from wom_kit.target_collection_preview import TargetCollectionPreview
+        plan = self.factory()
+        options = recovery.local_recovery_review_options(plan, mode="apply")
+        self.assertEqual(sorted(options), ["observe_target_binding", "target_collection"])
+        self.assertIs(type(options["target_collection"]), TargetCollectionPreview)
+        self.assertEqual(options["observe_target_binding"](),
+                         recovery._binding(plan, mode="apply").target_binding_sha256)
+        # A caller-supplied observer wraps the plan's own instead of being replaced.
+        sentinel = lambda: "sentinel"
+        self.assertIs(recovery.local_recovery_review_options(plan, mode="apply",
+                      observe_target_binding=sentinel)["observe_target_binding"], sentinel)
+        # Ledger and locator plans have no canonical zettel targets: no preview, no
+        # observer, so the approval core shows the plain dialog instead of refusing
+        # an observer without a collection (the v0.4.20 installed-wheel gate caught
+        # the locator apply failing with exact_human_approval_operation_failed).
+        with patch.object(recovery, "local_recovery_target_collection", return_value=None):
+            self.assertEqual(recovery.local_recovery_review_options(plan, mode="apply"), {})
+        with self.assertRaises(recovery.LocalRecoveryError):
+            recovery.local_recovery_review_options(plan, mode="preview")
+
+
 if __name__ == "__main__":
     unittest.main()

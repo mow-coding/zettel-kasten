@@ -1505,6 +1505,33 @@ def local_recovery_observe_target_binding(plan: LocalRecoveryPlan, *, mode: str,
     return observe
 
 
+def local_recovery_review_options(
+    plan: LocalRecoveryPlan,
+    *,
+    mode: str,
+    held=None,
+    observe_target_binding: Callable[[], str] | None = None,
+) -> dict[str, Any]:
+    """Keyword review options for the exact approval core.
+
+    A plan with canonical zettel targets gets the count-first paged preview
+    and a binding observer (the caller may supply a stricter observer that
+    wraps the plan's own). A plan without zettel targets (ledgers, locators)
+    gets no options at all, so it keeps the plain dialog: the approval core
+    refuses an observer without a collection, and the pre-state check for
+    those plans stays where it always was, inside the writer.
+    """
+    collection = local_recovery_target_collection(plan)
+    if collection is None:
+        return {}
+    observe = (
+        observe_target_binding
+        if observe_target_binding is not None
+        else local_recovery_observe_target_binding(plan, mode=mode, held=held)
+    )
+    return {"target_collection": collection, "observe_target_binding": observe}
+
+
 def _binding(plan: LocalRecoveryPlan, *, mode: str):
     manifest = _operation_manifest(plan, mode=mode)
     operation = (
@@ -2854,8 +2881,7 @@ def execute_local_recovery(
             resume=False,
             progress_hook=progress_hook,
         ),
-        target_collection=local_recovery_target_collection(plan),
-        observe_target_binding=local_recovery_observe_target_binding(plan, mode=mode),
+        **local_recovery_review_options(plan, mode=mode),
     )
 
 

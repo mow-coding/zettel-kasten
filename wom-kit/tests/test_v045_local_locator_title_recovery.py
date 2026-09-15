@@ -136,6 +136,7 @@ class V045LocalLocatorTitleRecoveryTests(unittest.TestCase):
                 writer,
                 native=_ApproveNative(),
                 key_provider=keys,
+                **preview,
             )
 
         with mock.patch.object(

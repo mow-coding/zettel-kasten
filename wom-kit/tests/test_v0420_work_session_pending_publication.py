@@ -198,8 +198,13 @@ class PendingPublicationTests(unittest.TestCase):
             "  reviewer_claim='person:synthetic-pending-reviewer', native=SessionNative(), key_provider=_Key(),\n"
             "  before_claim_publication=cut)\n"
         )
+        # The child imports the source tree and these test fixtures by name; CI
+        # shards put only the source tree on the parent's path.
+        kit = Path(__file__).resolve().parents[1]
+        environment = dict(os.environ)
+        environment["PYTHONPATH"] = os.pathsep.join((str(kit / "src"), str(kit / "tests")))
         completed = subprocess.run([sys.executable, "-B", "-c", script, str(self.root), self.app],
-                                   capture_output=True, text=True, timeout=60,
+                                   capture_output=True, text=True, timeout=60, env=environment,
                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         self.assertEqual(completed.returncode, 74, completed.stderr)
         self.assertEqual(completed.stdout, "")

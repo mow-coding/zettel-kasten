@@ -413,8 +413,8 @@ def _execute_session_local_recovery_held(root, plan_factory, *, held, client_app
             native=native, key_provider=key_provider, post_decision_boundary=post_decision,
             claim_publication_boundary=publication,
             claim_succeeded_finalizer=lambda claim: results.update(_finish(view, claim, held, completed=False)),
-            target_collection=recovery.local_recovery_target_collection(plan),
-            observe_target_binding=observe_target_binding)
+            **recovery.local_recovery_review_options(plan, mode="apply", held=held,
+                observe_target_binding=observe_target_binding))
         return {**outcome, **results, "native_approval_redisplayed": False}
     return _safe(execute)
 

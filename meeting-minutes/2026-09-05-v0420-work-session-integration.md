@@ -3196,6 +3196,49 @@ privacy, runtime skill, writer-session coverage). The full suite runs on
 PR #99 CI; its result and the public artifact evidence are recorded in
 `meeting-minutes/2026-09-16-v0420-release-evidence.md` when they exist.
 
+## 2026-09-16 Release candidate CI: installed-wheel gate caught a v0.4.20 defect
+
+Executing model: Claude Opus 5 at effort high, solo.
+
+The first full CI run of the bumped candidate (`7f9c8166`) passed the
+readiness, Doctor, link-index and three of four Ubuntu test shards, and
+failed two gates:
+
+- The installed public entrypoints and workflow gate (Windows) failed in
+  the installed v0.4.14 recovery contracts step. Reproduced locally from a
+  wheel built from the branch: the checker's synthetic approval executors
+  took exactly three positional arguments, and unit δ's local recovery
+  writer now forwards `target_collection` and `observe_target_binding`
+  keyword options. After the executors forwarded those options, the
+  locator (notion orphan recovery) apply still failed with
+  `exact_human_approval_operation_failed`: a plan without canonical zettel
+  targets has no target collection, but the writer still passed an
+  observer, and the approval core correctly refuses an observer without a
+  collection. This was a real v0.4.20 defect that would have broken every
+  ledger and locator recovery approval, and the unit tests had hidden it
+  because their approval helpers accepted `**preview` and dropped it.
+- Ubuntu shard 1 (py3.10 and py3.12) failed one pending-publication test
+  whose child process imports test fixtures by module name; CI shards put
+  only the source tree on the parent path.
+
+Corrections: `local_recovery_review_options(plan, mode, held, observer)`
+returns the preview and observer only when the plan has zettel targets and
+`{}` otherwise, so ledger and locator plans keep the plain dialog exactly
+as before; both the legacy writer and the session dispatcher use it. The
+five test approval helpers now forward the preview options so the tests
+exercise the real boundary (the locator recovery test therefore covers the
+defect end to end), and a new session test pins the options contract. The
+pending-publication test sets the child's path explicitly, like its
+siblings. The wheel checker's two synthetic executors forward the options
+with a comment naming v0.4.20.
+
+Verification: recovery cohorts (execution, locator title recovery, session)
+46 tests 90.455 s OK; wheel install, sealing, preview, broker and revert
+cohorts 105 tests 51.104 s OK; the exact installed v0.4.14 smoke program
+rerun from a locally built `wom_kit-0.4.20` wheel in a fresh venv returned
+`ok: true` with the expected evidence; the pending-publication module 14
+tests OK with the source tree only on the parent path.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)

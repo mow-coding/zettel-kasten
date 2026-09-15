@@ -340,6 +340,7 @@ class LocalRecoveryExecutionTests(unittest.TestCase):
                     writer,
                     native=native,
                     key_provider=keys,
+                    **preview,
                 )
 
             def crash_after_write(writer, **kwargs):
@@ -519,6 +520,7 @@ class LocalRecoveryExecutionTests(unittest.TestCase):
                     writer,
                     native=native,
                     key_provider=keys,
+                    **preview,
                 )
 
             def fail_before_third_write(writer, **kwargs):
@@ -627,6 +629,7 @@ class LocalRecoveryExecutionTests(unittest.TestCase):
                     writer,
                     native=native,
                     key_provider=keys,
+                    **preview,
                 )
 
             def fail_before_third_write(writer, **kwargs):
@@ -891,6 +894,7 @@ class LocalRecoveryExecutionTests(unittest.TestCase):
                     writer,
                     native=native,
                     key_provider=keys,
+                    **preview,
                 )
 
             def crash_after_write(writer, **kwargs):
