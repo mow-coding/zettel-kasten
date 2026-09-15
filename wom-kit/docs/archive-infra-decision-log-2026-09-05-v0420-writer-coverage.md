@@ -334,3 +334,17 @@ continuation. Independent review corrections were verified. This adds one fixed 
 It is not yet a fully covered family: scoped revert, complete whole-document
 provenance/backup and final installed/release acceptance remain unfinished.
 Field-level receipts explicitly do not attest whole-document ownership.
+
+## Canonical document transition observation
+
+The title recovery session control now optionally records actual canonical
+document preimage/postimage digests and sizes captured under the held writer
+lock, bound by the scope digest. The existing field CAS refuses a write whose
+observed input or replacement bytes differ from the approved images, and
+original review refuses a changed whole preimage. Old image-less controls keep
+their exact shape. Completion reports whole-document transition matching and
+a document count without echoing paths; whole-document ownership stays false.
+21 recovery tests and one MCP projection test passed; independent read-only
+review found no actionable defect. This is observation evidence for the next
+Git producer unit, not a new writer family, generic-document provenance or
+WS-04 selected/excluded coverage completion.

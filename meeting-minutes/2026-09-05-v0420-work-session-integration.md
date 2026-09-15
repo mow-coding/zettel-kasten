@@ -2768,6 +2768,97 @@ No scoped revert, whole-document backup ownership or release closure is claimed.
 The staged checkpoint also passed public privacy (zero findings), public
 links, Korean product language, runtime skill validation and the diff check.
 
+## Canonical document transition evidence in progress
+
+The original-review/MCP checkpoint was committed and pushed as
+`597ad81db94a6d758b71a6c410052951dcf11916`; the observed remote feature ref
+matched. No release tag was created and the full train continues.
+
+The next change captures actual canonical document preimages under the same
+held lock and predicts whole postimages using the existing field replacement
+function. It retains only digests, sizes and exact private target references
+in an optional extension of the existing session control, bound by its scope
+digest. The actual existing file CAS verifies that both its observed input and
+replacement bytes match these approved images. Original review checks the
+whole preimage; changed unrelated body text is not mistaken for an unchanged
+file merely because the title still matches.
+
+Old controls without document images retain their exact prior shape and do
+not receive inferred evidence. The new completion observation reports whole
+document transition matching separately and still reports whole-document
+ownership false. Git has not yet been connected: a future producer must also
+authenticate the original completion and compare original HEAD/index bytes
+and current file bytes. Pre-existing uncommitted changes cannot be attributed
+to this title operation by a field receipt or the new observation alone.
+
+Four isolated observation/CAS-input/changed-body/invalid-map/held-lock cases
+passed in 0.863 seconds, exit 0. An initial fixture scan tried to read the OS
+lock itself; excluding that non-domain lock file corrected the test without
+changing product behavior. Independent read-only review found no actionable
+defect in the optional codec, writer comparison or compatibility boundaries.
+Actual session admission, native-time/body drift, original review, old-shape
+control execution and existing local-recovery regressions passed together:
+21 tests in 283.249 seconds, exit 0. The historical-shape fixture removes only
+the optional image fields before obtaining a real native claim; it does not
+pre-seed approval or completion and is not a historical installed-run claim.
+
+## 2026-09-15 Claude handoff after interrupted Codex usage
+
+The user reported exhausted Codex usage and requested a handoff to Claude.
+This turn is documentation only: no product edits, tests, staging, commits,
+pushes or releases. The accepted full v0.4.19-v0.4.24 train and permission to
+continue between units/releases remain in force for the successor, together
+with the client archive/runtime/credential protection boundary. A completed
+development slice must not be described as full v0.4.20 or backlog completion.
+
+Read-only checks found feature HEAD and actual remote ref both at
+`597ad81db94a6d758b71a6c410052951dcf11916`; clean main and its actual remote ref
+both remain `84d55bd5871e852eef97da6e4b89dcba252d0d8b`. The four modified files
+and three new product/test files were preserved; the index was empty.
+
+The final pre-interruption MCP projection test,
+`TitleMcpTests.test_document_observation_projects_only_counts_and_flags`,
+passed one test in 0.007 seconds, exit 0. This records the earlier tool result,
+not a new run today. The preceding 21-test result remains the domain evidence.
+Current document-image changes still need final hygiene, record closure and
+commit/push. Authenticated whole-document Git producer integration remains
+unimplemented; transition observation still does not assert Git ownership.
+
+Created local-only `2026-09-15-claude-development-handoff.md` in this directory.
+It records the precise working tree, read order, six code/test file hashes,
+prior verification, pending checkpoint work, next Git integration boundaries,
+full remaining release scope and instructions to avoid duplicate work.
+The handoff is ignored local material and was not force-added or published.
+The old plan-only handoff is retained as historical evidence; its approval
+wait and old HEAD are superseded by the subsequent user authorization/state.
+
+## 2026-09-15 Claude closes the document transition checkpoint
+
+Claude took over implementation in the same worktree after the user's
+explicit standing approval to continue units and releases without per-step
+reconfirmation; the client archive/runtime/credential boundary is unchanged.
+The user had first supplied an unrelated project's handoff by mistake; it was
+read and discarded without any action in either repository.
+
+Read-only checks reproduced the handoff state: feature HEAD and actual remote
+ref `597ad81db94a6d758b71a6c410052951dcf11916`, main and its remote
+`84d55bd5871e852eef97da6e4b89dcba252d0d8b`, four modified and three new files,
+empty index. SHA-256 of all six code/test files matched the handoff baseline
+exactly, so the 21-test and one-test results above stand as the domain
+evidence for these bytes and were not rerun. A bounded filename search of the
+development, Documents, Downloads and Desktop trees found no client letter
+newer than the audited collection; the location of any post-158 originals
+still needs the user to point at it, and no unread letter is claimed.
+
+Record closure: the acceptance register gains a WS-02 note and a dated
+canonical document transition checkpoint; the writer-coverage log gains a
+transition-observation section. Both state that whole-document ownership,
+scoped revert and installed/release acceptance remain unfinished and that
+authenticated Git producer integration is the next unit. Only the seven
+work-owned files plus these two docs were staged explicitly; the local
+handoff remains ignored and unpublished. Hygiene results for the staged
+checkpoint are recorded in the next section together with the commit.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)

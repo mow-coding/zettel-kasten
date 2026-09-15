@@ -26,7 +26,7 @@ in their original private custody. The developer does not update their lifecycle
 | RT-04 | v0.4.19 | Four-state checks, command availability, requested modes, index readiness, and actual dispatch agree | development verified and released; client execution independently pending |
 | RT-05 | v0.4.19 | Operational Doctor <=180 s, initial status <=2 s, heartbeat <=10 s; count and byte-scale evidence distinguished; no background console flashes | released with supported-platform candidate and installed observations; count/mixed evidence and failed observations retained separately; client execution independently pending |
 | WS-01 | v0.4.20 | Opaque app/workstream/session identity, CAS claims, one cancellable OS writer lock, consistent generation reads, and context handoff | public CLI/MCP lifecycle implemented with development evidence; final installed/release acceptance pending |
-| WS-02 | v0.4.20 | New writes carry session binding; old approved operations resume without rewriting their authority | batch/record intake and Git have scoped CLI/MCP source evidence; intake original review and unrelated-app continuation development verified; title apply/original review/resume now has CLI/MCP development evidence (25 recovery plus 30 adapter/transport tests and independent review); scoped title revert and all-writer/effect coverage unfinished |
+| WS-02 | v0.4.20 | New writes carry session binding; old approved operations resume without rewriting their authority | batch/record intake and Git have scoped CLI/MCP source evidence; intake original review and unrelated-app continuation development verified; title apply/original review/resume now has CLI/MCP development evidence (25 recovery plus 30 adapter/transport tests and independent review); canonical document before/after transition observation development verified (21 recovery plus one MCP projection test, independent read-only review); whole-document Git ownership, scoped title revert and all-writer/effect coverage unfinished |
 | WS-03 | v0.4.20 | Local-only count-first target preview with 20-item pages and safe title/filename/short-ID fallback | preview and paging components implemented with focused evidence; complete writer integration and installed acceptance pending |
 | WS-04 | v0.4.20 | Complete cursor pagination and exact selected/excluded Git coverage; selected-session non-force commit/push plus independent remote-ref proof | pagination and authenticated receipt/metadata selective Git source journeys verified; generic document ownership, responsibility integration and installed/release acceptance pending |
 | LR-01 | v0.4.21 | Draft discard/restore, semantic revision/restore, mint/retire/edge batches work through exact approval | planned |
@@ -131,3 +131,29 @@ durations, frozen source hashes and retained earlier evidence are in the
 The previous 101 routing/transport passes are reused, not counted as rerun.
 This closes the bounded development unit, not WS-02 all-writer acceptance,
 v0.4.20 installed/platform/release acceptance or any client feedback outcome.
+
+### 2026-09-15 canonical document transition checkpoint
+
+The title recovery session control gains an optional whole-document image
+extension: actual canonical zettel preimages are read under the existing held
+writer lock, postimages are predicted with the existing field replacement
+function, and only digests, sizes and exact target references are retained,
+bound by the scope digest. The existing file CAS compares both its observed
+input and replacement bytes against these images; original review rejects a
+changed whole preimage even when the title field still matches. Controls
+without images keep their exact historical shape and receive no inferred
+evidence. Completion reports `whole_document_transition_verified` and
+`whole_document_count` separately and still reports
+`whole_document_ownership_verified` false.
+
+Development verification passed 21 tests in one serial run (four isolated
+observation cases, five actual session admission/drift/original-review/
+old-shape cases, and 12 existing local-recovery regressions) plus one MCP
+public projection test. Independent read-only review of the codec, writer
+comparison and compatibility boundaries found no actionable defect. Exact
+selectors, durations and frozen source hashes are in the
+[implementation record](../../meeting-minutes/2026-09-05-v0420-work-session-integration.md).
+This closes the bounded observation unit only. Authenticated Git producer
+integration (original HEAD/index bytes versus approved preimage, current file
+versus approved postimage) is the next unit; WS-02/WS-04 whole-document
+ownership, scoped revert and installed/release acceptance remain unfinished.

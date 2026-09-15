@@ -98,6 +98,23 @@ class TitleMcpTests(unittest.TestCase):
         self.assertEqual(result["effects_state"], "none")
         self.assertEqual(list(self.root.iterdir()), [])
 
+    def test_document_observation_projects_only_counts_and_flags(self):
+        result = {"ok": True, "state": "applied", "domain": "zet_title_recovery",
+            "original_completion_verified": True, "completion_authentication_verified": True,
+            "independent_verification": True, "whole_document_transition_verified": True,
+            "whole_document_ownership_verified": False, "whole_document_count": 2,
+            "document_images": [{"relative_path": PRIVATE, "private": PRIVATE}]}
+        with patch.object(sessions, "_root", return_value=self.root), \
+             patch.object(sessions, "_write", return_value=result):
+            public = command._dispatch_session_local_recovery(self.root, mode="resume",
+                client_app_ref=APP, task_route_ref=ROUTE, allowed_domains={"zet_title_recovery"})
+        self.assertTrue(public["ok"])
+        self.assertTrue(public["whole_document_transition_verified"])
+        self.assertFalse(public["whole_document_ownership_verified"])
+        self.assertEqual(public["whole_document_count"], 2)
+        self.assertNotIn("document_images", public)
+        self.assertNotIn(PRIVATE, json.dumps(public))
+
     def test_cli_projects_actual_wait_stage_without_private_values(self):
         observed = []
         reporter = SimpleNamespace(progress=lambda *values: observed.append(values))

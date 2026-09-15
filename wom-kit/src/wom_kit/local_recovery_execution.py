@@ -1324,6 +1324,11 @@ class _Writer(_Boundary):
         super().__init__(plan)
         self.index_lifecycle = index_lifecycle
         self.session_guard = session_guard or (lambda: None)
+        self.document_images = {}
+        if plan.session_context is not None:
+            from .local_recovery_session import _document_images
+            images = _document_images(plan)
+            self.document_images = {row["target_ref"]: row for row in images or ()}
 
     def write_field(
         self,
@@ -1345,6 +1350,9 @@ class _Writer(_Boundary):
         if target_kind == "zettel":
             path, raw, _frontmatter, _body = _zettel_snapshot(self.root, spec)
             replacement_bytes = _zettel_replacement(raw, spec, value)
+            if target_ref in self.document_images:
+                from .local_recovery_document_images import _assert_replacement
+                _assert_replacement(self.document_images[target_ref], before=raw, after=replacement_bytes)
             transaction = _sha(
                 _canonical_bytes(
                     {

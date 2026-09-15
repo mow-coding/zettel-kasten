@@ -14,6 +14,7 @@ from . import exact_human_approval as approval
 from . import exact_human_approval_workflow as broker
 from . import exact_operation_manifest as exact
 from . import local_recovery_execution as recovery
+from . import local_recovery_document_images as document_images
 from . import work_session_actor as actor
 from . import work_session_actor_execution as actor_selection
 from . import work_session_bundle as controls
@@ -76,12 +77,15 @@ def _decode(plan):
             or not 0 < len(plan.session_context) <= recovery.MAX_CONTROL_BYTES):
         raise recovery.LocalRecoveryError("local_recovery_session_context_invalid")
     value = controls._strict_document(plan.session_context)
-    if set(value) != {"schema", "scope", "unbound_manifest", "context"} or value["schema"] != _SCHEMA:
+    context_keys = {"schema", "scope", "unbound_manifest", "context"}
+    has_images = "document_images" in value
+    if set(value) != context_keys | ({"document_images"} if has_images else set()) or value["schema"] != _SCHEMA:
         raise recovery.LocalRecoveryError("local_recovery_session_context_invalid")
     scope = value["scope"]
-    if type(scope) is not dict or set(scope) != _SCOPE_KEYS:
+    scope_keys = _SCOPE_KEYS | ({"document_images_sha256"} if has_images else set())
+    if type(scope) is not dict or set(scope) != scope_keys:
         raise recovery.LocalRecoveryError("local_recovery_session_context_invalid")
-    for name in _SCOPE_KEYS:
+    for name in scope_keys:
         if name.endswith("_sha256") and not registry._is_digest(scope[name]):
             raise recovery.LocalRecoveryError("local_recovery_session_context_invalid")
     if (not registry._ref(scope["task_route_ref"], "task_route")
@@ -93,6 +97,10 @@ def _decode(plan):
     unbound = exact.ExactOperationManifest.from_document(value["unbound_manifest"])
     if unbound.work_session_binding is not None or _manifest(unbound, scope) != plan.manifest:
         raise recovery.LocalRecoveryError("local_recovery_session_context_invalid")
+    if has_images:
+        document_images._validate(plan, value["document_images"])
+        if scope["document_images_sha256"] != _sha(value["document_images"]):
+            raise recovery.LocalRecoveryError("local_recovery_session_context_invalid")
     original_plan = replace(plan, manifest=unbound, session_context=None)
     if recovery._control_document(original_plan)["control_sha256"] != scope["unbound_control_sha256"]:
         raise recovery.LocalRecoveryError("local_recovery_session_context_invalid")
@@ -107,6 +115,14 @@ def _decode(plan):
 
 def _validate_session_context(plan):
     return _safe(lambda: _decode(plan))
+
+
+def _document_images(plan):
+    # Only read an already validated plan. Legacy originals have no inferred
+    # whole-file evidence and keep their exact historical control/context.
+    if plan.session_context is None:
+        return None
+    return controls._strict_document(plan.session_context).get("document_images")
 
 
 @dataclass(frozen=True, repr=False)
@@ -157,6 +173,7 @@ def _prepare_local_recovery_session_held(root, plan_factory, *, held,
                 or not os.path.samefile(plan.archive_root, store.root)
                 or plan.manifest.archive_identity_sha256 != store.archive_identity_sha256):
             raise recovery.LocalRecoveryError("local_recovery_plan_invalid")
+        images = document_images._capture_held(plan, held)
         scope = {
             "task_route_ref": task_route_ref, "actor_sha256": selected.sha256,
             "registry_preimage_sha256": generation, "claim_ref": selected.document()["claim_ref"],
@@ -164,6 +181,7 @@ def _prepare_local_recovery_session_held(root, plan_factory, *, held,
             "establishment_execution_sha256": established["execution_sha256"],
             "establishment_receipt_sha256": established["receipt_sha256"],
             "unbound_control_sha256": recovery._control_document(plan)["control_sha256"],
+            "document_images_sha256": _sha(images),
         }
         scope["scope_sha256"] = _sha(scope)
         bound = replace(plan, manifest=_manifest(plan.manifest, scope))
@@ -171,6 +189,7 @@ def _prepare_local_recovery_session_held(root, plan_factory, *, held,
         prepared = replace(bound, session_context=recovery._canonical_bytes({
             "schema": _SCHEMA, "scope": scope, "unbound_manifest": plan.manifest.document(),
             "context": controls._context_document(context),
+            "document_images": images,
         }))
         ownership._current(_view(prepared), store, routing, selected, held)
         return prepared
@@ -278,11 +297,15 @@ def _completion(view, claim, held, *, started=False):
         _retained(view, held)
         if authenticated() != final:
             raise recovery.LocalRecoveryError("local_recovery_session_context_invalid")
+        images = _document_images(plan)
+        whole_observed = (bool(images) and document_images._matches_state_held(plan, images, state="post", held=held))
         return {"ok": True, "state": "applied", "domain": plan.domain, "manifest_sha256": plan.manifest.manifest_sha256,
                 "execution_sha256": execution, "common_final_receipt_sha256": final["receipt_sha256"],
                 "item_count": len(plan.specs), "field_count": len(plan.specs),
                 "original_completion_verified": True, "completion_authentication_verified": True,
                 "independent_verification": True, "whole_document_ownership_verified": False,
+                "whole_document_transition_verified": whole_observed,
+                "whole_document_count": 0 if images is None else len({row["relative_path"] for row in images}),
                 "private_values_echoed": False, "paths_echoed": False}
 
 
@@ -556,6 +579,9 @@ def _review_original_session_local_recovery_held(root, *, held, client_app_ref,
             if (proof_image() != proof or evidence_readers._claim_generation(original, held) != generation
                     or recovery.verify_local_recovery_state(view.plan, state="pre").get("all_match") is not True):
                 raise recovery.LocalRecoveryError("local_recovery_plan_changed")
+            images = _document_images(view.plan)
+            if images is not None and not document_images._matches_state_held(view.plan, images, state="pre", held=held):
+                raise recovery.LocalRecoveryError("local_recovery_plan_changed")
             current()
 
         unchanged()
@@ -671,6 +697,7 @@ def _dispatch_session_local_recovery(root, *, mode, client_app_ref, task_route_r
                     raise recovery.LocalRecoveryError(code)
                 public[key] = result[key]
         for key in ("item_count", "field_count", "written_field_count", "resumed_field_count",
+                    "whole_document_count",
                     "applied_field_count", "remaining_field_count", "divergent_field_count",
                     "unreadable_field_count", "checkpointed_field_count", "written_before_checkpoint_field_count"):
             if key in result:
@@ -679,6 +706,7 @@ def _dispatch_session_local_recovery(root, *, mode, client_app_ref, task_route_r
                 public[key] = result[key]
         for key in ("writes_performed", "current_claim_ownership_verified", "original_completion_verified",
                     "completion_authentication_verified", "independent_verification", "whole_document_ownership_verified",
+                    "whole_document_transition_verified",
                     "actor_completion_published", "original_operation_already_completed", "native_approval_redisplayed",
                     "original_context_preserved",
                     "index_current", "index_rebuild_required", "generated_index_updated", "resume_supported"):
