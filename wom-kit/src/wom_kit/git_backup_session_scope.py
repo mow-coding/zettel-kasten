@@ -23,6 +23,11 @@ _SCHEMA = "wom-kit/git-backup-session-scope/v1"
 _EVIDENCE_SCHEMA = "wom-kit/git-backup-session-scope-evidence/v1"
 _SCHEMA_V2 = "wom-kit/git-backup-session-scope/v2"
 _EVIDENCE_SCHEMA_V2 = "wom-kit/git-backup-session-scope-evidence/v2"
+# v3 additionally binds authenticated whole-document transitions of completed
+# session local recoveries. It never reinterprets v1/v2 bytes or validators.
+_SCHEMA_V3 = "wom-kit/git-backup-session-scope/v3"
+_EVIDENCE_SCHEMA_V3 = "wom-kit/git-backup-session-scope-evidence/v3"
+_LEVELS = {_SCHEMA: 1, _SCHEMA_V2: 2, _SCHEMA_V3: 3}
 _MAX_BYTES = 512 * 1024
 _MAX_V2_BYTES = 16 * 1024 * 1024
 _MAX_SELECTION_BYTES = 16 * 1024 * 1024
@@ -39,6 +44,8 @@ _INTAKE_PRODUCER = "authenticated_source_intake_batch_output"
 _RECORD_PRODUCER = "authenticated_source_intake_record_output"
 _INTAKE_KINDS = frozenset({"source_intake_receipt", "prepared_capture_request", "common_completion_receipt"})
 _RECORD_KINDS = frozenset({"source_intake_receipt", "common_completion_receipt"})
+_DOCUMENT_PRODUCER = "authenticated_local_recovery_document_output"
+_DOCUMENT_KINDS = frozenset({"canonical_zettel_document", "common_completion_receipt"})
 _KEYS = frozenset({
     "schema", "task_route_ref", "actor_sha256", "registry_preimage_sha256", "claim_ref",
     "work_session_binding", "selection_sha256", "selected_change_count", "excluded_change_count",
@@ -52,6 +59,10 @@ _INTAKE_DIGESTS = tuple(name for name in _PROOF_DIGESTS if name != "registry_gen
     "output_identity_sha256", "intake_scope_sha256")
 _INTAKE_KEYS = frozenset({"change_ref", "producer", "whole_file_bytes", "original_work_session_binding",
                          "output_kind", *_INTAKE_DIGESTS})
+_DOCUMENT_DIGESTS = ("whole_file_sha256", "execution_sha256", "receipt_sha256", "manifest_sha256",
+                     "context_sha256", "recovery_scope_sha256", "output_identity_sha256", "document_path_sha256")
+_DOCUMENT_KEYS = frozenset({"change_ref", "producer", "whole_file_bytes", "original_work_session_binding",
+                            "output_kind", "head_file_sha256", "head_file_bytes", *_DOCUMENT_DIGESTS})
 _ESTABLISHMENT_KEYS = frozenset({"manifest_sha256", "context_sha256", "execution_sha256", "receipt_sha256"})
 
 
@@ -79,7 +90,17 @@ def _session_identity(binding):
 
 
 def _scope_budget(value):
-    return _MAX_V2_BYTES if type(value) is dict and value.get("schema") == _SCHEMA_V2 else _MAX_BYTES
+    return _MAX_V2_BYTES if type(value) is dict and value.get("schema") in (_SCHEMA_V2, _SCHEMA_V3) else _MAX_BYTES
+
+
+def _sha_text(value):
+    if type(value) is not str:
+        raise GitBackupSessionScopeError()
+    return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _is_document_proof(proof):
+    return type(proof) is dict and type(proof.get("producer")) is str and proof["producer"] == _DOCUMENT_PRODUCER
 
 
 def _intake_output_kinds(producer):
@@ -96,6 +117,13 @@ def _proof_output_path(proof):
     """Derive one claimed target spelling; this is not producer authentication."""
     if proof["producer"] == _PRODUCER:
         return "receipts/ops/exact-operations/" + proof["execution_sha256"][7:] + ".json"
+    if _is_document_proof(proof):
+        # A canonical document path is private plan data, not derivable from
+        # digests. Callers compare its digest; the producer maps it from the
+        # retained original plan.
+        if proof["output_kind"] == "common_completion_receipt":
+            return "receipts/ops/exact-operations/" + proof["execution_sha256"][7:] + ".json"
+        raise GitBackupSessionScopeError()
     kinds = _intake_output_kinds(proof["producer"])
     if kinds is None or type(proof.get("output_kind")) is not str or proof["output_kind"] not in kinds:
         raise GitBackupSessionScopeError()
@@ -112,9 +140,10 @@ def _proof_output_path(proof):
 
 def _validate_document(value):
     if (type(value) is not dict or set(value) not in (_KEYS, _KEYS | {"establishment_proof"})
-            or value["schema"] not in {_SCHEMA, _SCHEMA_V2}):
+            or value["schema"] not in _LEVELS):
         raise GitBackupSessionScopeError()
-    version2 = value["schema"] == _SCHEMA_V2
+    level = _LEVELS[value["schema"]]
+    version2 = level >= 2
     if "establishment_proof" in value:
         origin = value["establishment_proof"]
         if (type(origin) is not dict or set(origin) != _ESTABLISHMENT_KEYS
@@ -135,10 +164,15 @@ def _validate_document(value):
     if (type(proofs) is not list or not 1 <= len(proofs) <= (_MAX_V2_PROOFS if version2 else _MAX_PROOFS)
             or not selected <= len(proofs) <= selected + excluded):
         raise GitBackupSessionScopeError()
-    refs, intake_count = [], 0
+    refs, intake_count, document_count = [], 0, 0
     for proof in proofs:
         if type(proof) is not dict:
             raise GitBackupSessionScopeError()
+        if level >= 3 and _is_document_proof(proof):
+            _validate_document_proof(proof, binding)
+            refs.append(proof["change_ref"])
+            document_count += 1
+            continue
         kinds = _intake_output_kinds(proof.get("producer"))
         intake = version2 and kinds is not None
         keys, digests = (_INTAKE_KEYS, _INTAKE_DIGESTS) if intake else (_PROOF_KEYS, _PROOF_DIGESTS)
@@ -160,12 +194,36 @@ def _validate_document(value):
         if original.archive_identity_sha256 != binding.archive_identity_sha256:
             raise GitBackupSessionScopeError()
         refs.append(proof["change_ref"])
-    if refs != sorted(set(refs)) or version2 and not intake_count:
+    if refs != sorted(set(refs)) or level == 2 and not intake_count or level == 3 and not document_count:
         raise GitBackupSessionScopeError()
     basis = {key: field for key, field in value.items() if key != "scope_sha256"}
     if not hmac.compare_digest(value["scope_sha256"], _sha(basis, max_bytes=_scope_budget(value))):
         raise GitBackupSessionScopeError()
     return value
+
+
+def _validate_document_proof(proof, binding):
+    """Closed whole-document proof shape; digests are data, not ownership."""
+    receipt = proof.get("output_kind") == "common_completion_receipt"
+    if (set(proof) != _DOCUMENT_KEYS
+            or type(proof["change_ref"]) is not str or not _CHANGE_REF.fullmatch(proof["change_ref"])
+            or type(proof["output_kind"]) is not str or proof["output_kind"] not in _DOCUMENT_KINDS
+            or any(not registry._is_digest(proof[name]) for name in _DOCUMENT_DIGESTS)
+            or type(proof["whole_file_bytes"]) is not int
+            or not 1 <= proof["whole_file_bytes"] <= _MAX_FILE_BYTES
+            or type(proof["original_work_session_binding"]) is not dict):
+        raise GitBackupSessionScopeError()
+    if receipt:
+        if (proof["head_file_sha256"] is not None or proof["head_file_bytes"] is not None
+                or proof["output_identity_sha256"] != proof["execution_sha256"]
+                or proof["document_path_sha256"] != _sha_text(_proof_output_path(proof))):
+            raise GitBackupSessionScopeError()
+    elif (not registry._is_digest(proof["head_file_sha256"]) or type(proof["head_file_bytes"]) is not int
+            or not 1 <= proof["head_file_bytes"] <= _MAX_FILE_BYTES):
+        raise GitBackupSessionScopeError()
+    original = WorkSessionBinding.from_document(proof["original_work_session_binding"])
+    if original.archive_identity_sha256 != binding.archive_identity_sha256:
+        raise GitBackupSessionScopeError()
 
 
 def _decode(raw):
@@ -208,9 +266,15 @@ class _GitBackupSessionScope:
         try:
             if type(work_session_binding) is not WorkSessionBinding or type(producer_proofs) is not list:
                 raise GitBackupSessionScopeError()
+            if any(_is_document_proof(proof) for proof in producer_proofs):
+                schema = _SCHEMA_V3
+            elif any(type(proof) is dict and _intake_output_kinds(proof.get("producer")) is not None
+                     for proof in producer_proofs):
+                schema = _SCHEMA_V2
+            else:
+                schema = _SCHEMA
             basis = {
-                "schema": (_SCHEMA_V2 if any(type(proof) is dict and _intake_output_kinds(proof.get("producer")) is not None
-                                             for proof in producer_proofs) else _SCHEMA),
+                "schema": schema,
                 "task_route_ref": task_route_ref, "actor_sha256": actor_sha256,
                 "registry_preimage_sha256": registry_preimage_sha256, "claim_ref": claim_ref,
                 "work_session_binding": work_session_binding.document(), "selection_sha256": selection_sha256,
@@ -243,7 +307,7 @@ class _GitBackupSessionScope:
     def operation_evidence(self):
         value = self.document()
         return ExactOperationEvidence(
-            schema=_EVIDENCE_SCHEMA_V2 if value["schema"] == _SCHEMA_V2 else _EVIDENCE_SCHEMA,
+            schema={1: _EVIDENCE_SCHEMA, 2: _EVIDENCE_SCHEMA_V2, 3: _EVIDENCE_SCHEMA_V3}[_LEVELS[value["schema"]]],
             counts=tuple(sorted({"selected_change_count": value["selected_change_count"],
                                  "excluded_change_count": value["excluded_change_count"],
                                  "producer_proof_count": len(value["producer_proofs"])}.items())),
@@ -288,6 +352,13 @@ class _GitBackupSessionScope:
                 row = rows[proof["change_ref"]]
                 public = row["public_observation"]
                 worktree, index = public["worktree"], public["index"]
+                if _is_document_proof(proof):
+                    if _sha_text(row["path"]) != proof["document_path_sha256"]:
+                        raise GitBackupSessionScopeError()
+                    if proof["output_kind"] == "canonical_zettel_document":
+                        if row["original_path"] is not None or not _modified_document_matches(public, proof):
+                            raise GitBackupSessionScopeError()
+                        continue
                 if (row["original_path"] is not None
                         or row["path"] != _proof_output_path(proof)
                         or public["operation"] not in {"added", "added_untracked"}
@@ -305,3 +376,18 @@ class _GitBackupSessionScope:
         except Exception:
             pass
         raise GitBackupSessionScopeError()
+
+def _modified_document_matches(public, proof):
+    """Whole modified-file predicate: HEAD is the approved preimage, the worktree
+    the approved postimage, and the index equals exactly one of them. Matching
+    bytes are still not ownership until the producer is authenticated."""
+    head, index, worktree = public["head"], public["index"], public["worktree"]
+    if (public["operation"] != "modified" or head["state"] != "blob" or head["mode"] != "regular_file"
+            or type(head["bytes"]) is not int or head["sha256"] != proof["head_file_sha256"]
+            or head["bytes"] != proof["head_file_bytes"]
+            or worktree["state"] != "regular_file" or type(worktree["bytes"]) is not int
+            or worktree["sha256"] != proof["whole_file_sha256"] or worktree["bytes"] != proof["whole_file_bytes"]
+            or index["state"] != "blob" or index["mode"] != "regular_file" or type(index["bytes"]) is not int):
+        return False
+    return ((index["sha256"], index["bytes"]) == (head["sha256"], head["bytes"])
+            or (index["sha256"], index["bytes"]) == (worktree["sha256"], worktree["bytes"]))

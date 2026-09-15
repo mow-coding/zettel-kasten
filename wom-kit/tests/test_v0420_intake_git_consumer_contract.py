@@ -63,7 +63,8 @@ class IntakeGitConsumerContractTests(unittest.TestCase):
     def test_closed_dispatch_preserves_producer_order_and_rejects_unknown(self):
         rows = self.selection(intake=True)._private_document()["proofs"]
         prepared = SimpleNamespace(session_scope=SimpleNamespace(document=lambda: {"producer_proofs": rows}))
-        human, intake = workflow._partition_producer_proofs(prepared)
+        human, intake, documents = workflow._partition_producer_proofs(prepared)
+        self.assertEqual(documents, [])
         self.assertEqual(human, rows[:1])
         self.assertEqual(intake, rows[1:])
         rows.append({"producer": "unrecognized_synthetic_producer"})

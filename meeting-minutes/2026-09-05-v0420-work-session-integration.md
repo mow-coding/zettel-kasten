@@ -2947,6 +2947,75 @@ non-interactive create-draft difference from letter 160 ④ (unreproduced; the
 new blocked output now names the reason so it can be diagnosed), intake-chain
 approval batching (letter 160 ⑦, to be added to the v0.4.21 batch scope).
 
+## 2026-09-16 Unit β: authenticated document Git producer (development verified)
+
+Executing model: Claude Opus 5 at effort high. Unit α was committed and pushed
+as `5122c8f50cda`; the observed remote ref matched. This unit implements the
+design recorded above ("Authenticated document Git producer in progress").
+
+Code:
+
+- `git_backup_session_scope`: schema v3 (`wom-kit/git-backup-session-scope/v3`,
+  evidence v3) for scopes carrying the closed producer
+  `authenticated_local_recovery_document_output` with output kinds
+  `canonical_zettel_document` and `common_completion_receipt`. Document proofs
+  carry HEAD preimage digest/size, worktree postimage digest/size, the
+  document path digest, the recovery manifest/context/execution/receipt/scope
+  digests and the original session binding. `validate_sources` requires a
+  modified regular file whose HEAD equals the preimage, worktree equals the
+  postimage and index equals exactly one of them (`_modified_document_matches`).
+  v1/v2 bytes and validators are unchanged; v3 must contain a document proof.
+- `local_recovery_completion` (new): three readers over the retained local
+  recovery control — data-only image, active same-archive claim audit, keyed
+  discovery of the exact succeeded original via the existing `_completion`
+  gate — mirroring the intake completion readers and reusing its final-image,
+  claim-generation and establishment-evidence helpers. Image-less historical
+  controls are unavailable, never inferred. The image also requires the current
+  file to match the approved postimage under the held lock.
+- `work_session_local_recovery_git_provenance` (new): bounded control-directory
+  discovery, per-original authentication, Git-side matching, partition, stored
+  proof revalidation in key/claim/image modes. Two authenticated originals over
+  one path are left `ownership_unverified` (`overlapping_document_count`).
+- `work_session_git_provenance._select_receipt_changes_held` merges the third
+  producer (receipt candidates exclude its proofs; commit subject names
+  documents); `public_summary` gains `selected_document_count`,
+  `document_provenance_evaluated`, `whole_document_ownership_verified` (false in
+  preview) and the four control counts.
+- `work_session_git_workflow`: three-way proof partition; claim-time,
+  original-review image and key revalidation; `_finish` reports
+  `session_documents_backed_up`, `selected_document_count` and
+  `whole_document_ownership_verified=True` only for the documents the commit
+  actually proved. `git_backup_session_command` projects the new bounded counts
+  and boolean and admits the new completed status.
+
+Verification: `test_v0420_local_recovery_git_provenance` — 3 data tests
+(modified-file predicate incl. index-neither/head-differs/rename, v3 codec
+round trip with five invalid shapes and path-digest binding, closed errors and
+stored-input limits before any reader) and 4 actual tests over a real Git
+repository with a local bare remote, the real session lifecycle and a real
+approved title recovery: (1) preview classifies zettel + recovery receipt +
+establishment receipt, execute commits exactly those three, HEAD blob equals
+the approved postimage and baseline equals the preimage, remote ref equals
+HEAD, completed replay reauthenticates without a second commit (commit count
+2); (2) an index holding neither image, then a later unrelated body edit,
+leave the document unverified and uncommitted while the establishment receipt
+still backs up; (3) a second recovery on the same document supersedes the
+first — no chain evidence, document stays at baseline; (4) key, image and
+claim readers agree and a changed control is refused without repair. The
+pushed-once assertion originally compared text-mode `git show` output; it now
+compares raw bytes. Run: 7 tests, exit 0 (data 0.004 s; actual
+216.525 s for the first three plus 85.750 s for the corrected fourth).
+Regression cohorts: scope/provenance/intake-provenance 32 tests 175.784 s
+before the tests existed. Git workflow/session command/MCP command/intake and
+record public workflows/record contract cohort: 65 tests in 1177.938 s with one
+failure — two contract tests asserted the old two-way producer partition; both
+were updated to the three-way tuple (documents empty for intake scopes) and the
+two contract modules passed 13 tests in 0.115 s. No product code changed for it.
+
+Not claimed: WS-04 generic document ownership for files outside canonical
+zettels (locator/ledger/index outputs), consecutive-chain evidence for
+overlapping approvals, installed/release acceptance, any client execution.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)

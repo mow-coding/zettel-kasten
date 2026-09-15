@@ -93,7 +93,7 @@ class RecordGitScopeTests(unittest.TestCase):
         binding = archive_binding()
         proofs = [record_proof(binding, 1), record_proof(binding, 2, "common_completion_receipt")]
         prepared = SimpleNamespace(session_scope=SimpleNamespace(document=lambda: {"producer_proofs": proofs}))
-        self.assertEqual(git_workflow._partition_producer_proofs(prepared), ([], proofs))
+        self.assertEqual(git_workflow._partition_producer_proofs(prepared), ([], proofs, []))
         result = git_provenance._ReceiptSelection(git_provenance._canonical({
             "selection": selection(proofs), "proofs": proofs, "unverified_receipt_candidates": 0})).public_summary()
         self.assertEqual(result["selected_output_count"], 2)

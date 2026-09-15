@@ -105,25 +105,41 @@ class _ReceiptSelection:
         intake = [proof for proof in data["proofs"]
                   if proof["producer"] in ("authenticated_source_intake_batch_output",
                                            "authenticated_source_intake_record_output")]
+        documents = [proof for proof in data["proofs"]
+                     if proof["producer"] == "authenticated_local_recovery_document_output"
+                     and proof["output_kind"] == "canonical_zettel_document"]
         intake_summary = data.get("intake_provenance_summary")
-        if intake or intake_summary is not None:
+        document_summary = data.get("document_provenance_summary")
+        if intake or documents or intake_summary is not None or document_summary is not None:
             selected_intake = [proof for proof in intake if proof["change_ref"] in selected_refs]
+            selected_documents = [proof for proof in documents if proof["change_ref"] in selected_refs]
             requests = sum(proof["output_kind"] == "prepared_capture_request" for proof in selected_intake)
             other_requests = sum(proof["output_kind"] == "prepared_capture_request"
                                  and proof["change_ref"] not in selected_refs for proof in intake)
+            other_documents = sum(proof["change_ref"] not in selected_refs for proof in documents)
             result.update(
                 status="session_output_selection_classified" if selected else "no_eligible_session_outputs",
-                selected_output_count=selected, selected_receipt_count=selected - requests,
-                selected_intake_output_count=len(selected_intake), receipt_only=not requests,
+                selected_output_count=selected, selected_receipt_count=selected - requests - len(selected_documents),
+                selected_intake_output_count=len(selected_intake), selected_document_count=len(selected_documents),
+                receipt_only=not requests and not selected_documents,
                 other_session_output_count=result["other_session_receipt_count"],
-                other_session_receipt_count=result["other_session_receipt_count"] - other_requests,
+                other_session_receipt_count=result["other_session_receipt_count"] - other_requests - other_documents,
                 source_bytes_backed_up=False, artifact_capture_performed=False,
+                document_provenance_evaluated=bool(documents or document_summary is not None),
+                whole_document_ownership_verified=False,
             )
             if intake_summary is not None:
                 result.update(
                     intake_context_count=intake_summary["context_hint_count"],
                     authenticated_intake_original_count=intake_summary["authenticated_original_count"],
                     unverified_intake_context_count=intake_summary["unverified_context_hint_count"],
+                )
+            if document_summary is not None:
+                result.update(
+                    document_control_count=document_summary["document_control_count"],
+                    authenticated_recovery_count=document_summary["authenticated_recovery_count"],
+                    unverified_document_control_count=document_summary["unverified_document_control_count"],
+                    overlapping_document_count=document_summary["overlapping_document_count"],
                 )
         return result
 
@@ -278,10 +294,20 @@ def _select_receipt_changes_held(
         intake_proofs = {proof["change_ref"]: proof for proof in intake_data["proofs"]}
         if len(intake_proofs) != len(intake_data["proofs"]):
             raise WorkSessionGitProvenanceError()
-        # Intake outputs are authenticated once per original, not once per
-        # changed output or by falling through the human-decision parser.
+        from . import work_session_local_recovery_git_provenance as document_provenance
+        document_selection = document_provenance._select_document_changes_held(
+            store.root, held=held, snapshot=snapshot, selected_binding=binding, key_provider=key_provider,
+        )
+        document_data = document_selection._private_document()
+        document_proofs = {proof["change_ref"]: proof for proof in document_data["proofs"]}
+        if len(document_proofs) != len(document_data["proofs"]) or set(document_proofs) & set(intake_proofs):
+            raise WorkSessionGitProvenanceError()
+        # Intake outputs and recovery documents are authenticated once per
+        # original, not once per changed output or by falling through the
+        # human-decision parser.
         candidates = sum(_RECEIPT_PATH.fullmatch(row["path"]) is not None
-                         and row["public_observation"]["change_ref"] not in intake_proofs for row in rows)
+                         and row["public_observation"]["change_ref"] not in intake_proofs
+                         and row["public_observation"]["change_ref"] not in document_proofs for row in rows)
         if candidates > _MAX_RECEIPT_CANDIDATES:
             raise WorkSessionGitProvenanceError("work_session_git_receipt_limit")
         selected, excluded, proofs, unverified = [], [], [], 0
@@ -289,7 +315,7 @@ def _select_receipt_changes_held(
             store._require_held_lock(held)
             change_ref = row["public_observation"]["change_ref"]
             match = _RECEIPT_PATH.fullmatch(row["path"])
-            proof = intake_proofs.get(change_ref)
+            proof = intake_proofs.get(change_ref) or document_proofs.get(change_ref)
             if proof is None and match is not None and _new_whole_receipt(row):
                 try:
                     proof = _authenticated_receipt(
@@ -314,13 +340,19 @@ def _select_receipt_changes_held(
                              "reason": writer.GIT_BACKUP_EXCLUSION_REASONS[scope]})
         groups, group_rows = [], []
         has_selected_intake = any(row["public_observation"]["change_ref"] in intake_proofs for row in selected)
+        has_selected_document = any(
+            row["public_observation"]["change_ref"] in document_proofs
+            and document_proofs[row["public_observation"]["change_ref"]]["output_kind"] == "canonical_zettel_document"
+            for row in selected)
+        subject = ("Back up authenticated session documents and outputs" if has_selected_document
+                   else "Back up authenticated session outputs" if has_selected_intake
+                   else "Back up authenticated session receipts")
 
         def flush_group():
             if group_rows:
                 groups.append({"group_id": "group:session-receipts-" + str(len(groups) + 1).zfill(6),
                                "change_refs": sorted(row["public_observation"]["change_ref"] for row in group_rows),
-                               "commit_subject": ("Back up authenticated session outputs" if has_selected_intake
-                                                  else "Back up authenticated session receipts")})
+                               "commit_subject": subject})
                 group_rows.clear()
 
         for row in selected:
@@ -351,5 +383,7 @@ def _select_receipt_changes_held(
         }
         if intake_data["hint_inventory_state"] == "present":
             result["intake_provenance_summary"] = intake_selection.public_summary()
+        if document_data["control_inventory_state"] == "present":
+            result["document_provenance_summary"] = document_selection.public_summary()
         return _ReceiptSelection(_canonical(result))
     return _safe_failure(select)

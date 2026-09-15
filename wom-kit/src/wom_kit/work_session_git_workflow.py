@@ -239,16 +239,18 @@ def _current_scope(prepared, store, routing, selected, held):
 
 def _partition_producer_proofs(prepared):
     """Closed producer dispatch, never treat an unknown schema as legacy."""
-    human, intake = [], []
+    human, intake, documents = [], [], []
     for proof in prepared.session_scope.document()["producer_proofs"]:
         if proof["producer"] == "authenticated_work_session_completion_receipt":
             human.append(proof)
         elif proof["producer"] in ("authenticated_source_intake_batch_output",
                                    "authenticated_source_intake_record_output"):
             intake.append(proof)
+        elif proof["producer"] == "authenticated_local_recovery_document_output":
+            documents.append(proof)
         else:
             raise WorkSessionGitWorkflowError("work_session_git_original_evidence_invalid")
-    return human, intake
+    return human, intake, documents
 
 
 def _private_proof_changes(prepared):
@@ -257,7 +259,7 @@ def _private_proof_changes(prepared):
 
 
 def _authenticate_proofs(prepared, store, claim, held):
-    human, intake = _partition_producer_proofs(prepared)
+    human, intake, documents = _partition_producer_proofs(prepared)
     for proof in human:
         original = session_bundle.load_context_bound_session_decision(
             store, manifest_sha256=proof["manifest_sha256"])
@@ -295,6 +297,13 @@ def _authenticate_proofs(prepared, store, claim, held):
             store.root, held=held, proofs=intake, private_changes=_private_proof_changes(prepared), claim=claim,
         )
         if observed != intake:
+            raise WorkSessionGitWorkflowError("work_session_git_original_evidence_invalid")
+    if documents:
+        from . import work_session_local_recovery_git_provenance as document_provenance
+        observed = document_provenance._revalidate_document_proofs_with_claim_held(
+            store.root, held=held, proofs=documents, private_changes=_private_proof_changes(prepared), claim=claim,
+        )
+        if observed != documents:
             raise WorkSessionGitWorkflowError("work_session_git_original_evidence_invalid")
 
 
@@ -549,17 +558,27 @@ def _finish(prepared, context, claim, held, *, completed):
             "selected_receipt_count": frozen.session_scope.document()["selected_change_count"],
             "excluded_change_count": len(frozen.excluded_changes), "commit_count": len(frozen.groups),
             "original_git_anchors": observed.document(), "private_values_echoed": False}
-    _human, intake = _partition_producer_proofs(frozen)
-    if intake:
+    _human, intake, documents = _partition_producer_proofs(frozen)
+    if intake or documents:
         selected_refs = {row["public_observation"]["change_ref"]
                          for group in frozen.groups for row in group.private_changes}
         selected_intake = [proof for proof in intake if proof["change_ref"] in selected_refs]
+        selected_documents = [proof for proof in documents if proof["change_ref"] in selected_refs
+                              and proof["output_kind"] == "canonical_zettel_document"]
         requests = sum(proof["output_kind"] == "prepared_capture_request" for proof in selected_intake)
         result.update(
-            status="session_outputs_backed_up", selected_output_count=len(selected_refs),
-            selected_receipt_count=len(selected_refs) - requests,
-            selected_intake_output_count=len(selected_intake), receipt_only=not requests,
+            status=("session_documents_backed_up" if selected_documents else "session_outputs_backed_up"),
+            selected_output_count=len(selected_refs),
+            selected_receipt_count=len(selected_refs) - requests - len(selected_documents),
+            selected_intake_output_count=len(selected_intake),
+            selected_document_count=len(selected_documents),
+            receipt_only=not requests and not selected_documents,
             source_bytes_backed_up=False, artifact_capture_performed=False,
+            # The commit proves HEAD preimage, worktree postimage and the
+            # authenticated original for exactly these documents. It is not
+            # ownership of any other file, revision or unrelated change.
+            document_provenance_evaluated=bool(documents),
+            whole_document_ownership_verified=bool(selected_documents),
         )
     return result
 
@@ -804,7 +823,7 @@ def _original_git_claim_presence_held(prepared, context, store, routing, selecte
 def _original_git_proof_image_held(prepared, store, held):
     """Bound original proof bytes, including their claims; this does not authenticate."""
     scope = prepared.session_scope.document()
-    human, intake = _partition_producer_proofs(prepared)
+    human, intake, documents = _partition_producer_proofs(prepared)
     images = []
     with session_execution._claim_boundary(store, held, create=False) as (root, parent):
         for proof in (scope["establishment_proof"], *human):
@@ -834,6 +853,11 @@ def _original_git_proof_image_held(prepared, store, held):
         images.extend(("intake", *image) for image in
             intake_provenance._original_intake_output_proof_images_held(
                 store.root, held=held, proofs=intake, private_changes=_private_proof_changes(prepared)))
+    if documents:
+        from . import work_session_local_recovery_git_provenance as document_provenance
+        images.extend(("document", *image) for image in
+            document_provenance._original_document_proof_images_held(
+                store.root, held=held, proofs=documents, private_changes=_private_proof_changes(prepared)))
     return tuple(images)
 
 
@@ -852,7 +876,7 @@ def _authenticate_original_git_review_proofs_held(prepared, store, routing, sele
         raise WorkSessionGitWorkflowError("work_session_git_original_evidence_invalid")
     private_changes = _private_proof_changes(prepared)
     rows = {row["public_observation"]["change_ref"]: row for row in private_changes}
-    human, intake = _partition_producer_proofs(prepared)
+    human, intake, documents = _partition_producer_proofs(prepared)
     for proof in human:
         observed = provenance._authenticated_receipt(store, held, rows[proof["change_ref"]],
                                                      proof["execution_sha256"], key_provider=key_provider)
@@ -863,6 +887,12 @@ def _authenticate_original_git_review_proofs_held(prepared, store, routing, sele
         observed = intake_provenance._revalidate_intake_output_proofs_held(
             store.root, held=held, proofs=intake, private_changes=private_changes, key_provider=key_provider)
         if observed != intake:
+            raise WorkSessionGitWorkflowError("work_session_git_original_evidence_invalid")
+    if documents:
+        from . import work_session_local_recovery_git_provenance as document_provenance
+        observed = document_provenance._revalidate_document_proofs_held(
+            store.root, held=held, proofs=documents, private_changes=private_changes, key_provider=key_provider)
+        if observed != documents:
             raise WorkSessionGitWorkflowError("work_session_git_original_evidence_invalid")
     if _original_git_proof_image_held(prepared, store, held) != image:
         raise WorkSessionGitWorkflowError("work_session_git_changed")

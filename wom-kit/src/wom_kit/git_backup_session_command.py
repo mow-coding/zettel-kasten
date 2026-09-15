@@ -141,6 +141,7 @@ def _project_mcp_git_backup_result(result, *, mode):
         "artifact_backup_complete", "source_bytes_backed_up", "artifact_capture_performed",
         "write_performed", "domain_writer_reentered", "signed_terminal_tail_only",
         "common_final_tail_only", "native_approval_redisplayed", "original_context_preserved",
+        "whole_document_ownership_verified",
     ):
         item = value.get(key)
         if type(item) is bool:
@@ -150,6 +151,8 @@ def _project_mcp_git_backup_result(result, *, mode):
         "excluded_change_count", "other_session_receipt_count", "other_session_output_count",
         "ownership_unverified_count", "unverified_receipt_candidate_count", "intake_context_count",
         "authenticated_intake_original_count", "unverified_intake_context_count", "commit_count",
+        "selected_document_count", "document_control_count", "authenticated_recovery_count",
+        "unverified_document_control_count", "overlapping_document_count",
     ):
         item = value.get(key)
         if type(item) is int and 0 <= item <= 100000:
@@ -173,7 +176,8 @@ def _project_mcp_git_backup_result(result, *, mode):
         "receipt_selection_classified", "no_eligible_receipts",
         "session_output_selection_classified", "no_eligible_session_outputs",
     }
-    completed = (type(status) is str and status in {"session_receipts_backed_up", "session_outputs_backed_up"}
+    completed = (type(status) is str and status in {"session_receipts_backed_up", "session_outputs_backed_up",
+                                                    "session_documents_backed_up"}
         and all(public.get(key) is True for key in (
             "backup_performed", "original_commit_verified", "current_claim_ownership_verified",
             "actor_completion_published", "commit_anchors_verified", "remote_ref_independently_verified"))

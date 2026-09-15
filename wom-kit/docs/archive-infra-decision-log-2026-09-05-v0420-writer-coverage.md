@@ -348,3 +348,20 @@ a document count without echoing paths; whole-document ownership stays false.
 review found no actionable defect. This is observation evidence for the next
 Git producer unit, not a new writer family, generic-document provenance or
 WS-04 selected/excluded coverage completion.
+
+## Authenticated document Git producer
+
+The session Git backup gains a third closed producer for canonical zettel
+documents changed by a completed session title recovery whose control
+recorded whole preimages/postimages. Ownership of a modified file requires
+the authenticated original (control, common final receipt, checkpoint, claim
+and establishment evidence), HEAD bytes equal to the approved preimage,
+worktree bytes equal to the approved postimage, the index equal to one of
+them, and the current file still matching the postimage under the held lock.
+Pre-existing uncommitted edits, a later body edit, a foreign index entry, a
+rename or a superseded earlier recovery all leave the path
+`ownership_unverified`; the recovery's own completion receipt is proved by the
+same producer. Scope schema v3 carries these proofs; v1/v2 are unchanged.
+Development verified with 7 tests over a real repository and bare remote.
+This does not prove ownership of locator/ledger/index outputs, chains of
+overlapping approvals, or installed/release acceptance.
