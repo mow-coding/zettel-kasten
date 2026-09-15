@@ -45,8 +45,12 @@ def parser_inventory() -> tuple[dict[str, list[str]], list[str]]:
 
 
 def check(manifest_path: Path = MANIFEST) -> tuple[list[str], dict[str, int]]:
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if manifest.get("schema") != "wom-kit/writer-session-coverage/v1" or not isinstance(manifest.get("paths"), dict):
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError):
+        return ["writer-session coverage manifest is missing or unreadable."], {}
+    if (type(manifest) is not dict or manifest.get("schema") != "wom-kit/writer-session-coverage/v1"
+            or not isinstance(manifest.get("paths"), dict)):
         return ["writer-session coverage manifest has an unexpected shape."], {}
     paths = manifest["paths"]
     options, available = parser_inventory()
@@ -71,6 +75,11 @@ def check(manifest_path: Path = MANIFEST) -> tuple[list[str], dict[str, int]]:
             route_exposes = any(option in options.get(route, []) for option in SESSION_OPTIONS)
             if not route_exposes:
                 problems.append(f"{path}: session_integrated but {route} exposes no session refs")
+            if route != path:
+                counts["session_integrated"] -= 1
+                counts["routed"] = counts.get("routed", 0) + 1
+                if paths.get(route, {}).get("status") != "session_integrated":
+                    problems.append(f"{path}: route {route} is not itself session_integrated")
             evidence = row.get("evidence")
             if not isinstance(evidence, list) or not evidence:
                 problems.append(f"{path}: session_integrated without test evidence")
@@ -102,7 +111,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"BLOCKED: {problem}")
         print(
             "Writer-session coverage: "
-            f"{counts.get('session_integrated', 0)} integrated, {counts.get('pending', 0)} pending, "
+            f"{counts.get('session_integrated', 0)} integrated, {counts.get('routed', 0)} routed through "
+            f"an integrated command, {counts.get('pending', 0)} pending, "
             f"{counts.get('legacy_exception', 0)} documented exceptions; "
             + ("all-writer scope complete." if complete else "all-writer scope NOT complete.")
         )

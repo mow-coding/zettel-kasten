@@ -110,9 +110,9 @@ class _ReceiptSelection:
                      and proof["output_kind"] == "canonical_zettel_document"]
         intake_summary = data.get("intake_provenance_summary")
         document_summary = data.get("document_provenance_summary")
-        if intake or documents or intake_summary is not None or document_summary is not None:
+        selected_documents = [proof for proof in documents if proof["change_ref"] in selected_refs]
+        if intake or selected_documents or intake_summary is not None or document_summary is not None:
             selected_intake = [proof for proof in intake if proof["change_ref"] in selected_refs]
-            selected_documents = [proof for proof in documents if proof["change_ref"] in selected_refs]
             requests = sum(proof["output_kind"] == "prepared_capture_request" for proof in selected_intake)
             other_requests = sum(proof["output_kind"] == "prepared_capture_request"
                                  and proof["change_ref"] not in selected_refs for proof in intake)

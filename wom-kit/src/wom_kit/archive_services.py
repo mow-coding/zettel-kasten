@@ -38554,6 +38554,10 @@ def _source_fidelity_verify_for_mint(
     )
     blockers: list[str] = list(receipt_blockers)
     warnings: list[str] = []
+    if snapshot.get("body_separator_normalized") is True:
+        # Letter 159 ①: an older zettel-edge rewrite dropped the blank line
+        # after the closing marker; the body bytes are unchanged.
+        warnings.append("source_fidelity_draft_body_separator_normalized")
     fidelity = (
         private_receipt.get("source_fidelity")
         if isinstance(private_receipt, dict)
@@ -76106,7 +76110,12 @@ def zettel_edge_write(
         try:
             source_path = resolve_zettel_path(root, zettel_id=from_zettel, relative_path=from_path, zettel_path_index=zettel_path_index)
             source_bytes = source_path.read_bytes()
-            source_text = decode_utf8_with_universal_newlines(source_bytes)
+            try:
+                source_text = decode_utf8_with_universal_newlines(source_bytes)
+            except UnicodeError:
+                raise ArchiveServiceError(
+                    "Zettel content is unavailable because it could not be read safely."
+                ) from None
             source_frontmatter, _parsed_body = require_readable_zettel_text(source_text)
             # Keep the exact body suffix (letter 159 ①): the reading parser
             # strips the blank separator line, and rewriting without it made
@@ -77426,7 +77435,12 @@ def zettel_edge_revert(
                 else:
                     try:
                         source_original_bytes = source_path.read_bytes()
-                        source_text = decode_utf8_with_universal_newlines(source_original_bytes)
+                        try:
+                            source_text = decode_utf8_with_universal_newlines(source_original_bytes)
+                        except UnicodeError:
+                            raise ArchiveServiceError(
+                                "Zettel content is unavailable because it could not be read safely."
+                            ) from None
                         source_frontmatter, _parsed_body = require_readable_zettel_text(source_text)
                         source_body = exact_zettel_body_after_frontmatter(source_text)
                     except ArchiveServiceError as exc:

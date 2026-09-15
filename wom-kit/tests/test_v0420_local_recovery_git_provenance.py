@@ -316,7 +316,7 @@ class DocumentGitProvenanceActualTests(unittest.TestCase):
                 task_route_ref=self.route, work_session_ref=self.session, reviewer_claim="person:git-reviewer",
                 native=git_fixture._Native(), key_provider=self.key)
             self.assertTrue(result["ok"], result)
-            self.assertEqual(result["status"], "session_outputs_backed_up")
+            self.assertEqual(result["status"], "session_receipts_backed_up")  # no document was proved
             self.assertEqual(self.committed_paths(), sorted([second, self.establishment_receipt]))
             self.assertNotEqual(self.git("ls-files", "--error-unmatch", "--", first, check=False).returncode, 0)
             self.assertEqual(self.show_bytes("HEAD:" + ZETTEL_RELATIVE), self.show_bytes(self.baseline + ":" + ZETTEL_RELATIVE))

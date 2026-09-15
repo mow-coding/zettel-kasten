@@ -23932,7 +23932,8 @@ def _execute_local_recovery_cli_mode(
                 reporter.progress("local-recovery-" + event.get("phase", event.get("stage")), "apply", None, None)
 
         result = _dispatch_session_local_recovery(archive_root,
-            mode=("review_original" if review_original else "resume" if resume else "revert" if revert
+            mode=("review_original" if review_original else "resume" if resume
+                  else ("revert_preview" if bool(args.dry_run) else "revert") if revert
                   else "preview" if bool(args.dry_run) else "apply"),
             client_app_ref=getattr(args, "client_app_ref", None),
             task_route_ref=getattr(args, "task_route_ref", None),
@@ -25658,7 +25659,12 @@ def _binding_with_primary_bound_zettel_preview(
 
 
 def _bounded_preflight_blockers(blockers: Any) -> list[str]:
-    """Keep only short plain blocker sentences the dry-run already exposes."""
+    """Keep only short blocker sentences the same dry-run already exposes.
+
+    Some blockers name an operator-supplied value such as the proposed draft
+    path; they are the same sentences the JSON dry-run returns, so this adds
+    no new exposure class, only a second channel (stderr) for text mode.
+    """
 
     if not isinstance(blockers, (list, tuple)):
         return []
@@ -25684,10 +25690,10 @@ def _exact_human_approval_cli_error(
 ) -> int:
     """Emit only a fixed code after an approval-boundary failure.
 
-    ``preflight_blockers`` are the same fixed dry-run sentences the caller
-    already computed for this request; repeating them here (letter 160 ③)
-    saves the operator a second --format json round trip. They are bounded
-    and never carry raw input values.
+    ``preflight_blockers`` are the same dry-run sentences the caller already
+    computed for this request; repeating them here (letter 160 ③) saves the
+    operator a second --format json round trip. They are bounded; they never
+    carry body text or credential values.
     """
 
     safe_reason = (

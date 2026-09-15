@@ -1,5 +1,6 @@
 """One shared native protocol for exact preclaim handoff recovery."""
 
+from contextlib import contextmanager
 import inspect
 import json
 import os
@@ -77,13 +78,13 @@ class HandoffRereviewTests(unittest.TestCase):
         path = t.root.joinpath(*bundle.PRIVATE_ROOT, selected["pending_manifest_sha256"][7:] + ".json")
         raw = path.read_bytes()
         contexts = []
-        original = workflow._execute_exact_human_approved_write_core
+        original = workflow._execute_exact_human_approved_original_review_core
 
         def observe(root, context, writer, **kwargs):
             contexts.append(context)
             return original(root, context, writer, **kwargs)
 
-        with patch.object(workflow, "_execute_exact_human_approved_write_core", new=observe), \
+        with patch.object(workflow, "_execute_exact_human_approved_original_review_core", new=observe), \
              patch.object(registry, "_new_ref", side_effect=AssertionError("new reference")), \
              patch.object(bundle, "save_context_bound_session_decision", side_effect=AssertionError("rewrote original")):
             result = self.review()
@@ -94,7 +95,7 @@ class HandoffRereviewTests(unittest.TestCase):
         self.assertEqual(path.read_bytes(), raw)
         self.assertEqual(t.routing.read().document()["established_origin"], selected["established_origin"])
         self.assertEqual(result["target_app_ref"], self.case.target)
-        self.assertEqual(self.key.requests[-3:], [False, False, True])
+        self.assertEqual(self.key.requests[-3:], [False, False, False])
         self.assertFalse(result["ownership_transferred"])
         for private in (str(t.root), selected["claim_ref"], "Synthetic private", bound.context.reviewer_claim):
             self.assertNotIn(private, json.dumps(result))
@@ -205,15 +206,34 @@ class HandoffRereviewTests(unittest.TestCase):
         selected, _bound = self.cut()
         claims = t.claims()
         with exact.ExactOperationWriterLock(t.root) as held:
+            # The original-review broker publishes under the existing key
+            # (create_if_missing=False); drift the actor inside the write
+            # boundary's key consumer, as the sibling re-review test does.
+            original_boundary = execution._claim_boundary
+            publication_ready = [False]
+
+            @contextmanager
+            def boundary(*args, create, **kwargs):
+                with original_boundary(*args, create=create, **kwargs) as value:
+                    publication_ready[0] = create
+                    try:
+                        yield value
+                    finally:
+                        publication_ready[0] = False
+
             def drift():
-                t.routing.save(expected_sha256=t.routing._read(current=False).sha256, held_lock=held,
-                    work_session_ref=self.case.session, observed_binding=WorkSessionBinding.from_document(selected["observed_binding"]),
-                    claim_ref=selected["claim_ref"], pending_manifest_sha256=selected["pending_manifest_sha256"],
-                    pending_context_sha256="sha256:" + "f" * 64)
-            self.key.before_create = drift
-            self.case.reject(lambda: subject._review_original_handoff_held(t.root, held=held,
-                client_app_ref=t.app, task_route_ref=t.route, work_session_ref=self.case.session,
-                target_app_ref=self.case.target), "work_session_original_operation_changed")
+                if publication_ready[0]:
+                    self.assertTrue(self.key.active)
+                    self.assertFalse(self.key.requests[-1])
+                    t.routing.save(expected_sha256=t.routing._read(current=False).sha256, held_lock=held,
+                        work_session_ref=self.case.session, observed_binding=WorkSessionBinding.from_document(selected["observed_binding"]),
+                        claim_ref=selected["claim_ref"], pending_manifest_sha256=selected["pending_manifest_sha256"],
+                        pending_context_sha256="sha256:" + "f" * 64)
+            self.key.before_use = drift
+            with patch.object(execution, "_claim_boundary", new=boundary):
+                self.case.reject(lambda: subject._review_original_handoff_held(t.root, held=held,
+                    client_app_ref=t.app, task_route_ref=t.route, work_session_ref=self.case.session,
+                    target_app_ref=self.case.target), "work_session_original_operation_changed")
         self.assertEqual(t.claims(), claims)
         self.assertEqual(t.store.read()._document["sessions"][self.case.session]["state"], "claimed")
 

@@ -3104,6 +3104,57 @@ the exact messages) and the updated `test_release_readiness`: 7 tests in
 remain synchronized. Not claimed: all-writer session coverage — the 21
 pending paths are the remaining WS-02 denominator.
 
+## 2026-09-16 Independent review of units α–ε and first branch CI
+
+Executing model: Claude Opus 5 at effort high (reviewer: one Claude subagent,
+read-only, no tests run; 257,011 tokens). Unit ε was committed and pushed as
+`b5329eb51c1f`.
+
+Review findings and corrections (12 of 12 addressed):
+
+- Blocker: the new approval-time observer checked the pre state for every
+  mode, so a legacy `--revert-recovery` would have failed before the dialog.
+  `local_recovery_observe_target_binding` now checks the state the mode starts
+  from (pre for apply, post for revert) and rejects other modes; a new session
+  test drives the legacy apply and revert through the real broker with the
+  preview forwarded.
+- Major: session `--revert-recovery --dry-run` executed a live compensation
+  and skipped the approve-gated runtime guard. New dispatcher mode
+  `revert_preview` binds the compensation, checks ownership and returns
+  `ready_to_revert` with no dialog and no effect; the CLI routes dry-run to it.
+- The whole-plan post precheck before the subset planner was removed (the
+  planner decides field by field); `already_reverted` no longer asserts
+  `current_claim_ownership_verified`; marker companions are swapped and
+  whole-file specs refused in a compensation; `pre_value` None guarded;
+  edge write/revert map unreadable or non-UTF-8 sources to the static
+  blocker; the mint verifier reports
+  `source_fidelity_draft_body_separator_normalized` as a warning; the blocked
+  text output docstring no longer claims value-free blockers; the completion
+  reader re-verifies the establishment post state and re-reads the
+  establishment bundle; a backup whose only document-producer output is the
+  recovery receipt stays `session_receipts_backed_up`; the coverage gate
+  requires a routed path's route to be integrated itself, counts routed paths
+  separately (5 integrated + 1 routed) and tolerates a missing manifest.
+
+Draft PR #99 gave the branch its first full CI run. Ubuntu shard 1 failed 11
+tests, all reproduced locally and all present at the handoff commit
+`597ad81d` (exported and run separately), none from units α–ε: stale surface
+pins after the branch's own changes (approval-available 46→47, conditional
+10→11, MCP tools 136→137 with `zet_title_remap_write` and new digest), the
+v0.4.19 fixture-boundary tests pinning `_walk_regular_files` source lines
+that moved by 13 with `a6472cb9` (3345→3358, raise map 3346/3402/3405 →
+3359/3415/3418), and the handoff re-review test still patching the write
+broker after `0f9f0950` moved re-review to the original-review broker (its
+sibling test had been updated; the handoff test now mirrors it, including
+the boundary-gated actor drift). No product code changed for these.
+
+Verification after the corrections: revert/session cohorts 11 tests
+116.803 s; surfaces/fixture/runtime cohorts 50 tests 109.600 s; handoff
+re-review 9 tests 92.682 s; coverage gate 2 tests; Git document provenance,
+letter-159, fidelity, execution, legacy title, readiness, predecessor and
+runtime cohorts rerun after the fixes (see the bump section below for the
+predecessor test, which is version-bound). All exit 0.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)

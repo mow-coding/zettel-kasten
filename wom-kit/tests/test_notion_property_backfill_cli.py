@@ -315,7 +315,7 @@ class NotionPropertyBackfillCliTests(unittest.TestCase):
         )
         self.assertEqual(
             inventory["counts"]["approval_available_command_count"],
-            46,
+            47,
         )
         self.assertEqual(
             inventory["counts"]["approval_fixed_closed_command_count"],
@@ -337,7 +337,7 @@ class NotionPropertyBackfillCliTests(unittest.TestCase):
         )
         self.assertEqual(
             inventory["counts"]["conditional_approval_command_count"],
-            10,
+            11,
         )
         self.assertEqual(by_path["create-draft"]["approval_scope"]["kind"], "namespace_predicate")
 

@@ -24,6 +24,7 @@ from . import local_recovery_session as sessions
 from . import work_session_bundle as controls
 from . import work_session_establishment as establishment
 from . import work_session_execution as session_execution
+from . import work_session_operation as session_operation
 from . import work_session_registry as registry
 from . import work_session_source_intake_completion as evidence_readers
 
@@ -112,6 +113,9 @@ def _original(root, held, manifest_sha256, context_sha256):
 def _require_original(original, held):
     sessions._retained(original.view, held)
     original.store._require_held_lock(held)
+    selector = establishment.EstablishmentSelector.from_document(original.scope.document()["original_establishment"])
+    if controls._read_bundle_raw(original.store, selector.manifest_sha256) != original.origin_raw:
+        raise LocalRecoveryCompletionError("local_recovery_completion_changed")
 
 
 def _completion_evidence(original, *, reference, execution, final):
@@ -216,7 +220,10 @@ def _image(original, execution, held):
             execution_sha256=execution,
             approval_authority=exact.ExactOperationApprovalAuthority.from_reference(reference))
             or recovery.verify_local_recovery_state(plan, state="post").get("all_match") is not True
-            or not document_images._matches_state_held(plan, list(original.images), state="post", held=held)):
+            or not document_images._matches_state_held(plan, list(original.images), state="post", held=held)
+            or exact.verify_exact_operation(original.origin.prepared.manifest,
+                verifier=session_operation._Verifier(original.store, original.origin.prepared), state="post",
+                heartbeat=held.verify_held)["all_match"] is not True):
         raise LocalRecoveryCompletionError("local_recovery_completion_changed")
     files = [("original", original.view.control_bytes), ("establishment", original.origin_raw),
              ("common_final", raw), ("checkpoint", checkpoint), ("claim", claim_raw),

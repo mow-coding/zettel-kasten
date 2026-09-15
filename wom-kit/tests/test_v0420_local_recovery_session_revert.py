@@ -49,6 +49,19 @@ class SessionSubsetRevertTests(unittest.TestCase):
         self.path.write_bytes(recovered + b"\nUnrelated later body line.\n")
         archive_services.index_archive(self.root)
         files_before = self.f.files()
+        # The preview binds the compensation and checks ownership but opens no
+        # dialog and writes nothing.
+        preview = subject._dispatch_session_local_recovery(self.root, mode="revert_preview", client_app_ref=self.f.app,
+            task_route_ref=self.f.route, work_session_ref=self.f.session, allowed_domains={"synthetic_title"},
+            reviewer_claim="person:synthetic-revert-reviewer")
+        self.assertTrue(preview["ok"], preview)
+        self.assertEqual(preview["state"], "ready_to_revert")
+        self.assertTrue(preview["dry_run"])
+        self.assertEqual(preview["mode"], "revert")
+        self.assertEqual(preview["effects_state"], "none")
+        self.assertEqual(preview["field_count"], 1)
+        self.assertEqual(self.f.files(), files_before)
+        self.assertEqual(self.f.native.calls, 1)
         with patch.object(subject, "_review_original_session_local_recovery_held",
                           side_effect=AssertionError("review path used")), \
              patch.object(recovery, "resume_local_recovery", side_effect=AssertionError("legacy resume")):
@@ -85,6 +98,7 @@ class SessionSubsetRevertTests(unittest.TestCase):
         self.assertEqual(again["state"], "already_reverted")
         self.assertEqual(again["effects_state"], "none")
         self.assertEqual(again["already_pre_field_count"], 1)
+        self.assertFalse(again["current_claim_ownership_verified"])
         self.assertEqual(self.f.files(), files_after)
         self.assertEqual(self.f.native.calls, 2)
         self.assertNotEqual(files_before, files_after)

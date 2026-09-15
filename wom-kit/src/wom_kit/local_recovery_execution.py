@@ -1458,7 +1458,7 @@ def local_recovery_target_collection(plan: LocalRecoveryPlan):
     for spec in plan.specs:
         if spec.target_kind != "zettel":
             continue
-        if spec.field_ref == "frontmatter.title":
+        if spec.field_ref == "frontmatter.title" and isinstance(spec.pre_value, bytes):
             try:
                 titles[spec.target_identity_sha256] = spec.pre_value.decode("utf-8")
             except UnicodeDecodeError:
@@ -1486,12 +1486,19 @@ def local_recovery_target_collection(plan: LocalRecoveryPlan):
 
 
 def local_recovery_observe_target_binding(plan: LocalRecoveryPlan, *, mode: str, held=None):
-    """Return the approval target binding only while the pre state still holds."""
+    """Return the approval target binding only while the starting state holds.
+
+    An apply starts from the plan's pre values; a revert of a loaded control
+    starts from its post values (the manifest keeps its original orientation).
+    """
+    if mode not in {"apply", "revert"}:
+        raise _fail("local_recovery_plan_invalid")
+    starting_state = "pre" if mode == "apply" else "post"
 
     def observe() -> str:
         if held is not None:
             held.verify_held()
-        if verify_local_recovery_state(plan, state="pre").get("all_match") is not True:
+        if verify_local_recovery_state(plan, state=starting_state).get("all_match") is not True:
             raise _fail("local_recovery_plan_changed")
         return _binding(plan, mode=mode).target_binding_sha256
 

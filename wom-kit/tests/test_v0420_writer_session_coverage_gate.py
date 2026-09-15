@@ -17,7 +17,8 @@ class WriterSessionCoverageGateTests(unittest.TestCase):
         problems, counts = subject.check()
         self.assertEqual(problems, [])
         self.assertEqual(sum(counts.values()), 47)
-        self.assertGreaterEqual(counts["session_integrated"], 6)
+        self.assertGreaterEqual(counts["session_integrated"], 5)
+        self.assertEqual(counts["routed"], 1)
         self.assertGreater(counts["pending"], 0)  # all-writer scope is not complete yet
         self.assertEqual(subject.main(["--format", "text"]), 0)
 
@@ -28,6 +29,7 @@ class WriterSessionCoverageGateTests(unittest.TestCase):
         paths["synthetic-retired-command"] = {"status": "pending", "target": "v0.4.21"}
         paths["work-session"] = {"status": "pending", "target": "v0.4.21"}
         paths["mint-zet"] = {"status": "session_integrated", "evidence": ["test_missing_module"]}
+        paths["zet-title-remap-revert"]["route"] = "create-draft"
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "manifest.json"
             path.write_text(json.dumps(manifest), encoding="utf-8")
@@ -39,6 +41,9 @@ class WriterSessionCoverageGateTests(unittest.TestCase):
         self.assertIn("work-session: marked pending but already exposes session refs", joined)
         self.assertIn("mint-zet: session_integrated but mint-zet exposes no session refs", joined)
         self.assertIn("evidence test module missing: test_missing_module", joined)
+        self.assertIn("zet-title-remap-revert: session_integrated but create-draft exposes no session refs", joined)
+        self.assertIn("route create-draft is not itself session_integrated", joined)
+        self.assertNotEqual(subject.main(["--manifest", str(path.with_name("absent.json")), "--format", "json"]), 0)
 
 
 if __name__ == "__main__":

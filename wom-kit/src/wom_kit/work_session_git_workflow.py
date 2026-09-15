@@ -559,12 +559,12 @@ def _finish(prepared, context, claim, held, *, completed):
             "excluded_change_count": len(frozen.excluded_changes), "commit_count": len(frozen.groups),
             "original_git_anchors": observed.document(), "private_values_echoed": False}
     _human, intake, documents = _partition_producer_proofs(frozen)
-    if intake or documents:
-        selected_refs = {row["public_observation"]["change_ref"]
-                         for group in frozen.groups for row in group.private_changes}
+    selected_refs = {row["public_observation"]["change_ref"]
+                     for group in frozen.groups for row in group.private_changes}
+    selected_documents = [proof for proof in documents if proof["change_ref"] in selected_refs
+                          and proof["output_kind"] == "canonical_zettel_document"]
+    if intake or selected_documents:
         selected_intake = [proof for proof in intake if proof["change_ref"] in selected_refs]
-        selected_documents = [proof for proof in documents if proof["change_ref"] in selected_refs
-                              and proof["output_kind"] == "canonical_zettel_document"]
         requests = sum(proof["output_kind"] == "prepared_capture_request" for proof in selected_intake)
         result.update(
             status=("session_documents_backed_up" if selected_documents else "session_outputs_backed_up"),

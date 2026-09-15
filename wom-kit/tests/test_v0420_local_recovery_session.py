@@ -206,6 +206,29 @@ class SessionLocalRecoveryTests(unittest.TestCase):
         with self.assertRaises(recovery.LocalRecoveryError):
             observe()  # the pre state no longer holds after the recovery
 
+    def test_legacy_title_apply_and_revert_pass_the_real_boundary_with_the_preview(self):
+        from test_local_recovery_execution import _ApproveNative, _StableKeyProvider
+        from wom_kit.exact_human_approval_workflow import _execute_exact_human_approved_write_core
+        native, keys = _ApproveNative(), _StableKeyProvider()
+
+        def approved_workflow(archive_root, context, writer, **preview):
+            return _execute_exact_human_approved_write_core(archive_root, context, writer,
+                native=native, key_provider=keys, **preview)
+
+        plan = self.factory()
+        with patch.object(recovery, "_execute_exact_human_approved_write", new=approved_workflow):
+            applied = recovery.execute_local_recovery(plan, reviewer_claim="person:legacy")
+            self.assertTrue(applied["ok"], applied)
+            loaded = recovery.load_local_recovery_plan(self.root, manifest_sha256=plan.manifest.manifest_sha256)
+            self.assertTrue(recovery.verify_local_recovery_state(loaded, state="post")["all_match"])
+            # The revert observer must accept the post state the revert starts from.
+            observe = recovery.local_recovery_observe_target_binding(loaded, mode="revert")
+            self.assertEqual(observe(), recovery._binding(loaded, mode="revert").target_binding_sha256)
+            reverted = recovery.execute_local_recovery(loaded, mode="revert", reviewer_claim="person:legacy")
+            self.assertTrue(reverted["ok"], reverted)
+            self.assertTrue(recovery.verify_local_recovery_state(loaded, state="pre")["all_match"])
+        self.assertEqual(native.calls, 2)
+
 
 if __name__ == "__main__":
     unittest.main()
