@@ -100,16 +100,19 @@ plan_digest
 ```
 
 They prove what the validation read, but they do not grant approval authority.
-The successful result therefore reports `status: approval_fixed_closed`,
+The successful result therefore reports `status: ready_for_human_review`,
 `proposal_validation_status: ready_for_human_review`,
-`approval_contract.approved_write_implemented: false`, and
-`approval_contract.actionable_handoff_available: false`.
+`approval_contract.approval_status: approval_available`,
+`approval_contract.approved_write_implemented: true`, and
+`approval_contract.actionable_handoff_available: false`: the plan itself hands
+off no approval, and the validation digest is not approval authority.
 
-v0.4.11 provides no supported preview, handoff, or apply path from this result
-to `zet-revision-write`. The command remains fixed closed, and a person should
-not be instructed to copy the proposed change into the canonical zet by hand.
-See [Canonical zet Revision Write](zet-revision-write.md) for that command's
-closed-boundary contract.
+Since v0.4.21 the supported path from this result is `zet-revision-write
+--dry-run` with the plan digests, then `--approve --reviewed-by`, which opens
+one native exact human approval dialog. A person should still not be
+instructed to copy the proposed change into the canonical zet by hand. See
+[Canonical zet Revision Write](zet-revision-write.md) for that command's
+exact-human contract.
 
 MCP remains read-only and exposes no revision writer.
 

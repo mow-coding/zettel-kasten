@@ -298,6 +298,8 @@ def _read_valid_source_intake_receipt(
     root: Path,
     archive_id: str,
     relative: str,
+    *,
+    projected_receipt_bytes: bytes | None = None,
 ) -> tuple[bytes, str]:
     try:
         normalized = normalize_archive_relative_path(relative)
@@ -311,7 +313,18 @@ def _read_valid_source_intake_receipt(
         path = archive_services.archive_internal_path(root, normalized)
     except archive_services.ArchiveServiceError:
         raise _fail("existing_intake_capture_selection_source_intake_invalid") from None
-    raw = _stable_regular_bytes(path, max_bytes=_MAX_RECEIPT_BYTES)
+    if projected_receipt_bytes is None:
+        raw = _stable_regular_bytes(path, max_bytes=_MAX_RECEIPT_BYTES)
+    else:
+        # v0.4.21 LR-01e: the intake chain validates the receipt its own
+        # earlier step will write from those exact bytes; it must not exist yet.
+        if (
+            type(projected_receipt_bytes) is not bytes
+            or len(projected_receipt_bytes) > _MAX_RECEIPT_BYTES
+            or path.exists()
+        ):
+            raise _fail("existing_intake_capture_selection_source_intake_invalid")
+        raw = projected_receipt_bytes
     document = _strict_json_object(raw)
     blockers: list[str] = []
     archive_services.prepare_source_intake_plan_for_draft(document, blockers)
@@ -333,8 +346,14 @@ def plan_existing_intake_capture_selection(
     source_intake_receipt: str,
     item_id: str = "item",
     manifest_id: str | None = None,
+    projected_source_intake_receipt_bytes: bytes | None = None,
 ) -> ExistingIntakeCaptureSelectionPlan:
-    """Build one stable, private-path-bound selection creation manifest."""
+    """Build one stable, private-path-bound selection creation manifest.
+
+    ``projected_source_intake_receipt_bytes`` lets the v0.4.21 intake chain
+    plan this step before its own record step has written the receipt; the
+    execution re-plans from disk and the digests must then match exactly.
+    """
 
     try:
         root = archive_services.require_existing_archive_root(archive_root)
@@ -358,6 +377,7 @@ def plan_existing_intake_capture_selection(
             root,
             archive_id,
             normalized_receipt,
+            projected_receipt_bytes=projected_source_intake_receipt_bytes,
         )
     except ExistingIntakeCaptureSelectionError as error:
         return _blocked_plan(
@@ -380,6 +400,7 @@ def plan_existing_intake_capture_selection(
             dry_run=True,
             approve=False,
             reviewed_by=None,
+            projected_source_intake_receipt_bytes=projected_source_intake_receipt_bytes,
         )
     except Exception:
         return _blocked_plan(
@@ -634,6 +655,49 @@ def _authority(
         raise _fail("existing_intake_capture_selection_approval_required") from None
 
 
+def _chain_authority(
+    plan: ExistingIntakeCaptureSelectionPlan,
+    claim: _ClaimedExactHumanApproval,
+    chain_authority: Any,
+) -> ExactOperationApprovalAuthority:
+    """v0.4.21 LR-01e: this selection step runs inside one approved intake chain.
+
+    The chain dialog covered this step's own manifest binding; the step proves
+    that binding is an approved chain item, re-asserts the chain claim against
+    the chain context and binds the exact operation to that claim's reference.
+    """
+
+    if plan.manifest is None:
+        raise _fail("existing_intake_capture_selection_plan_blocked")
+    if (
+        type(claim) is not _ClaimedExactHumanApproval
+        or type(chain_authority) is not archive_services._ExactBatchItemAuthority
+    ):
+        raise _fail("existing_intake_capture_selection_approval_required")
+    try:
+        binding = operation_approval_binding.exact_operation_manifest_approval_binding(
+            plan.manifest,
+            operation=ExactHumanApprovalOperation.objet_capture_selection_record,
+            archive_id=plan.archive_id,
+            warnings=plan.warnings,
+        )
+        chain_authority.item_approval(
+            binding,
+            claim=claim,
+            item_identity_sha256=chain_authority.item_identity_sha256,
+        )
+        return ExactOperationApprovalAuthority.from_reference(
+            claim.assert_ready_for_context(chain_authority.batch.context)
+        )
+    except (
+        archive_services.ArchiveServiceError,
+        operation_approval_binding.OperationApprovalBindingError,
+        ExactHumanApprovalError,
+        ExactOperationManifestError,
+    ):
+        raise _fail("existing_intake_capture_selection_approval_required") from None
+
+
 def _verify_private_sources(
     plan: ExistingIntakeCaptureSelectionPlan,
     *,
@@ -818,11 +882,17 @@ class _Writer:
 def _execute_core(
     plan: ExistingIntakeCaptureSelectionPlan,
     claim: _ClaimedExactHumanApproval,
-    context: ExactHumanApprovalContext,
+    context: ExactHumanApprovalContext | None,
     *,
     progress_hook: Callable[[ExactOperationProgress], None] | None = None,
+    chain_authority: Any = None,
 ) -> dict[str, Any]:
-    authority = _authority(plan, claim, context)
+    if chain_authority is not None:
+        authority = _chain_authority(plan, claim, chain_authority)
+    elif context is not None:
+        authority = _authority(plan, claim, context)
+    else:
+        raise _fail("existing_intake_capture_selection_approval_required")
     fresh = plan_existing_intake_capture_selection(
         plan.archive_root,
         staged_path=plan.staged_path,
@@ -917,6 +987,26 @@ def execute_existing_intake_capture_selection(
     )
 
 
+def execute_existing_intake_capture_selection_in_chain(
+    plan: ExistingIntakeCaptureSelectionPlan,
+    *,
+    claim: _ClaimedExactHumanApproval,
+    chain_authority: Any,
+    progress_hook: Callable[[ExactOperationProgress], None] | None = None,
+) -> dict[str, Any]:
+    """Write one selection as the second step of an approved intake chain."""
+
+    if not plan.approveable or plan.manifest is None:
+        raise _fail("existing_intake_capture_selection_plan_blocked")
+    return _execute_core(
+        plan,
+        claim,
+        None,
+        progress_hook=progress_hook,
+        chain_authority=chain_authority,
+    )
+
+
 def failure_document(code: str) -> dict[str, Any]:
     safe = ExistingIntakeCaptureSelectionError(code).code
     return {
@@ -942,6 +1032,7 @@ __all__ = [
     "ExistingIntakeCaptureSelectionPlan",
     "approval_context",
     "execute_existing_intake_capture_selection",
+    "execute_existing_intake_capture_selection_in_chain",
     "failure_document",
     "plan_existing_intake_capture_selection",
 ]

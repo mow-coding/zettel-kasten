@@ -80,8 +80,6 @@ COMPOUND_APPROVAL_FIXED_CLOSED_COMMANDS = frozenset(
         "credential-keepassxc-write",
         "credential-lifecycle",
         "delegate-zet",
-        "discard-draft",
-        "discard-draft-restore",
         "derive-text capture",
         "external-locator-deactivate",
         "external-locator-revert",
@@ -94,7 +92,6 @@ COMPOUND_APPROVAL_FIXED_CLOSED_COMMANDS = frozenset(
         "markup-normalization",
         "markup-normalization-recovery",
         "markup-normalization-revert",
-        "mint-zet-batch",
         "notion-ancestor-fetch-adapter-run",
         "notion-objet-manifest-locator-label",
         "notion-objet-link-convert",
@@ -115,11 +112,9 @@ COMPOUND_APPROVAL_FIXED_CLOSED_COMMANDS = frozenset(
         "quarantine-foreign-block",
         "record-quarantine-decision",
         "remint-reconcile",
-        "retire-draft-batch",
         "retire-draft-reconcile",
         "runtime-skill-install",
         "runtime-skill-uninstall",
-        "revert-batch",
         "restore-drill",
         "saved-view-revert",
         "saved-view-write",
@@ -131,20 +126,28 @@ COMPOUND_APPROVAL_FIXED_CLOSED_COMMANDS = frozenset(
         "zet-abstract-backfill-revert",
         "zet-abstract-backfill-write",
         "zet-catalog-pass-cleanup",
-        "zet-revision-restore-write",
         "zet-revision-restore-proposal-from-snapshot",
-        "zet-revision-write",
         "zet-title-remap-recover",
         "zet-title-remap-revert-recover",
-        "zettel-edge-batch",
         "zettel-objet-link-revert",
     }
 )
 
-COMPOUND_APPROVAL_FIXED_CLOSED_PLAN_WRITERS = {
-    "discard-draft": "discard-draft",
-    "zet-revision-plan": "zet-revision-write",
-}
+COMPOUND_APPROVAL_FIXED_CLOSED_PLAN_WRITERS: dict[str, str] = {}
+
+# Writers that v0.4.21 reopened through operation-specific exact human
+# approval.  Their plan documents keep the same contract shape so an AI
+# operator can tell a validation preview from approval authority.
+EXACT_APPROVAL_REOPENED_WRITERS = frozenset({
+    "discard-draft",
+    "discard-draft-restore",
+    "zettel-edge-batch",
+    "mint-zet-batch",
+    "retire-draft-batch",
+    "revert-batch",
+    "zet-revision-write",
+    "zet-revision-restore-write",
+})
 
 # Public parser and dispatch exposure was audited at v0.3.320 and its explicit
 # restriction at v0.4.0. These facts do not prove successful execution at either
@@ -222,6 +225,27 @@ def compound_approval_fixed_closed_contract(command: str) -> dict[str, Any]:
         "approval_reason_code": COMPOUND_APPROVAL_REASON_CODE,
         "approved_write_implemented": False,
         "actionable_handoff_available": False,
+    }
+
+
+def exact_approval_available_plan_contract(command: str) -> dict[str, Any]:
+    """Describe a reopened writer whose --approve uses exact human approval.
+
+    The validation digest in a dry-run is still not approval authority; the
+    native dialog and the authenticated claim are.
+    """
+
+    normalized = " ".join(str(command or "").split())
+    if normalized not in EXACT_APPROVAL_REOPENED_WRITERS:
+        raise ValueError("exact_approval_command_not_reopened")
+    return {
+        "approval_status": APPROVAL_AVAILABLE,
+        "approval_reason_code": None,
+        "approved_write_implemented": True,
+        "actionable_handoff_available": False,
+        "validation_preview_available": True,
+        "validation_digest_is_approval_authority": False,
+        "writer_command": normalized,
     }
 
 

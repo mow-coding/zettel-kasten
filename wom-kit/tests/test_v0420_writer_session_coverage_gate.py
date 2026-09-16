@@ -16,7 +16,7 @@ class WriterSessionCoverageGateTests(unittest.TestCase):
     def test_manifest_matches_parser_and_denominator_stays_honest(self):
         problems, counts = subject.check()
         self.assertEqual(problems, [])
-        self.assertEqual(sum(counts.values()), 47)
+        self.assertEqual(sum(counts.values()), 56)  # v0.4.21 reopened eight writers + intake chain
         self.assertGreaterEqual(counts["session_integrated"], 5)
         self.assertEqual(counts["routed"], 1)
         self.assertGreater(counts["pending"], 0)  # all-writer scope is not complete yet

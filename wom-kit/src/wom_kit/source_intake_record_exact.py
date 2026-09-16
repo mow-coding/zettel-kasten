@@ -785,6 +785,50 @@ def _authority(
         raise _fail("source_intake_record_approval_required") from None
 
 
+def _chain_authority(
+    plan: SourceIntakeRecordExactPlan,
+    claim: _ClaimedExactHumanApproval,
+    chain_authority: Any,
+) -> ExactOperationApprovalAuthority:
+    """v0.4.21 LR-01e: this record step runs inside one approved intake chain.
+
+    The chain dialog covered this step's own manifest binding.  The step
+    proves that binding is an approved chain item and re-asserts the chain
+    claim against the chain context, then binds the exact operation to that
+    claim's reference: the final receipt records the approval the human gave.
+    """
+
+    if plan.manifest is None:
+        raise _fail("source_intake_record_plan_blocked")
+    if (
+        type(claim) is not _ClaimedExactHumanApproval
+        or type(chain_authority) is not archive_services._ExactBatchItemAuthority
+    ):
+        raise _fail("source_intake_record_approval_required")
+    try:
+        binding = operation_approval_binding.exact_operation_manifest_approval_binding(
+            plan.manifest,
+            operation=ExactHumanApprovalOperation.source_intake_record,
+            archive_id=plan.archive_id,
+            warnings=(),
+        )
+        chain_authority.item_approval(
+            binding,
+            claim=claim,
+            item_identity_sha256=chain_authority.item_identity_sha256,
+        )
+        return ExactOperationApprovalAuthority.from_reference(
+            claim.assert_ready_for_context(chain_authority.batch.context)
+        )
+    except (
+        archive_services.ArchiveServiceError,
+        operation_approval_binding.OperationApprovalBindingError,
+        ExactHumanApprovalError,
+        ExactOperationManifestError,
+    ):
+        raise _fail("source_intake_record_approval_required") from None
+
+
 class _Payloads:
     def __init__(self, plan: SourceIntakeRecordExactPlan) -> None:
         self.plan = plan
@@ -942,11 +986,17 @@ class _Writer:
 def _execute_core(
     plan: SourceIntakeRecordExactPlan,
     claim: _ClaimedExactHumanApproval,
-    context: ExactHumanApprovalContext,
+    context: ExactHumanApprovalContext | None,
     *,
     progress_hook: Callable[[ExactOperationProgress], None] | None = None,
+    chain_authority: Any = None,
 ) -> dict[str, Any]:
-    authority = _authority(plan, claim, context)
+    if chain_authority is not None:
+        authority = _chain_authority(plan, claim, chain_authority)
+    elif context is not None:
+        authority = _authority(plan, claim, context)
+    else:
+        raise _fail("source_intake_record_approval_required")
     fresh = plan_source_intake_record(
         plan.archive_root,
         plan.input_plan_path,
@@ -1069,6 +1119,34 @@ def execute_source_intake_record(
     )
 
 
+def execute_source_intake_record_in_chain(
+    plan: SourceIntakeRecordExactPlan,
+    *,
+    claim: _ClaimedExactHumanApproval,
+    chain_authority: Any,
+    progress_hook: Callable[[ExactOperationProgress], None] | None = None,
+) -> dict[str, Any]:
+    """Write one record as the first step of an approved intake chain.
+
+    No dialog is opened here: the chain already holds the one authenticated
+    claim and passes its per-step view.  Everything else (fresh re-plan,
+    drift check, writer lock, checkpoints, independent verification) is the
+    same as the single-step write.
+    """
+
+    if plan.manifest is not None and plan.manifest.work_session_binding is not None:
+        raise _fail("source_intake_record_scope_context_required")
+    if not plan.approveable or plan.manifest is None:
+        raise _fail("source_intake_record_plan_blocked")
+    return _execute_core(
+        plan,
+        claim,
+        None,
+        progress_hook=progress_hook,
+        chain_authority=chain_authority,
+    )
+
+
 def failure_document(code: str) -> dict[str, Any]:
     safe = SourceIntakeRecordExactError(code).code
     return {
@@ -1095,6 +1173,7 @@ __all__ = [
     "SourceIntakeRecordExactPlan",
     "approval_context",
     "execute_source_intake_record",
+    "execute_source_intake_record_in_chain",
     "failure_document",
     "plan_source_intake_record",
 ]

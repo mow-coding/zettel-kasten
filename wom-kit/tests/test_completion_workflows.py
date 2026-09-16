@@ -3343,7 +3343,11 @@ class CompletionWorkflowTests(unittest.TestCase):
                 revert_plan["blockers"],
             )
 
-    def test_discard_unminted_draft_plans_but_approve_and_restore_fail_closed(self) -> None:
+    def test_discard_unminted_draft_plans_and_unbound_calls_fail_before_reads(self) -> None:
+        # v0.4.21 LR-01 reopened discard-draft and its restore through exact
+        # human approval. The full approved round trip is covered by
+        # test_v0421_draft_discard_exact_approval; this test keeps the plan
+        # contract and the unbound-call boundary on the same fixture.
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.fake_archive(Path(tmp) / "archive")
             draft_relative = "inbox/zet_20260519_draft_ai_lunch_note.md"
@@ -3368,71 +3372,44 @@ class CompletionWorkflowTests(unittest.TestCase):
             self.assertNotIn(reason, plan_output)
             plan = json.loads(plan_output)
             self.assertTrue(plan["ok"], plan)
-            self.assertEqual(plan["state"], "approval_fixed_closed")
+            self.assertEqual(plan["state"], "ready")
             self.assertEqual(plan["validation_status"], "ready")
-            self.assertEqual(
-                plan["approval_contract"]["approval_reason_code"],
-                "compound_exact_human_approval_binding_required",
-            )
+            self.assertEqual(plan["approval_status"], "approval_available")
+            self.assertIsNone(plan["approval_contract"]["approval_reason_code"])
+            self.assertTrue(plan["approval_contract"]["approved_write_implemented"])
             self.assertFalse(
-                plan["approval_contract"]["approved_write_implemented"]
-            )
-            self.assertFalse(
-                plan["approval_contract"]["actionable_handoff_available"]
+                plan["approval_contract"]["validation_digest_is_approval_authority"]
             )
             self.assertIsNone(plan["approval_handoff"])
-            self.assertTrue(plan["summary"]["plan_sha256_validation_only"])
+            self.assertFalse(plan["summary"]["plan_sha256_validation_only"])
             self.assertFalse(
                 plan["summary"]["plan_sha256_is_approval_authority"]
             )
             self.assertTrue(plan["summary"]["exact_byte_restore_supported"])
-            self.assertFalse(
+            self.assertTrue(
                 plan["summary"]["exact_byte_restore_approval_available"]
             )
 
-            before_apply = {
-                path.relative_to(archive_root).as_posix(): path.read_bytes()
-                for path in archive_root.rglob("*")
-                if path.is_file()
-            }
-            apply_code, apply_output = self.run_cli(
-                [
-                    "discard-draft",
-                    str(archive_root),
-                    "--path",
-                    draft_relative,
-                    "--reason",
-                    reason,
-                    "--expected-plan-sha256",
-                    plan["summary"]["plan_sha256"],
-                    "--approve",
-                    "--reviewed-by",
-                    "person:test",
-                    "--format",
-                    "json",
-                ]
-            )
-            self.assertEqual(apply_code, 1, apply_output)
-            self.assertNotIn(reason, apply_output)
-            blocked = json.loads(apply_output)
-            self.assertEqual(
-                blocked["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
-            )
-            self.assertFalse(blocked["private_values_echoed"])
+            before_apply = self.snapshot_files(archive_root)
+            # An unbound service call (no authenticated claim) fails before any
+            # archive read; the CLI never reaches the writer without the dialog.
+            with self.assertRaises(
+                completion_workflows.archive_services.ArchiveServiceError
+            ) as caught:
+                completion_workflows.draft_discard_apply(
+                    archive_root,
+                    relative_path=draft_relative,
+                    reason=reason,
+                    expected_plan_sha256=plan["summary"]["plan_sha256"],
+                    reviewed_by="person:test",
+                )
+            self.assertEqual(str(caught.exception), "exact_human_approval_required")
             self.assertEqual(draft_path.read_bytes(), before_bytes)
-            self.assertEqual(
-                {
-                    path.relative_to(archive_root).as_posix(): path.read_bytes()
-                    for path in archive_root.rglob("*")
-                    if path.is_file()
-                },
-                before_apply,
-            )
+            self.assertEqual(self.snapshot_files(archive_root), before_apply)
 
-            # Install one bounded v0.3 discard as historical test evidence so
-            # the read-only restore plan remains covered without reopening the
-            # production approval path.
+            # Install one bounded historical discard receipt (no embedded exact
+            # approval, as pre-v0.4.21 receipts have) so the read-only restore
+            # plan and the unbound restore boundary stay covered here.
             snapshot_path = archive_root / plan["summary"]["snapshot_path"]
             snapshot_path.parent.mkdir(parents=True, exist_ok=True)
             snapshot_path.write_bytes(before_bytes)
@@ -3485,33 +3462,20 @@ class CompletionWorkflowTests(unittest.TestCase):
                 receipt=plan["summary"]["receipt_path"],
             )
             self.assertTrue(restore_plan["ok"], restore_plan)
-            before_restore = {
-                path.relative_to(archive_root).as_posix(): path.read_bytes()
-                for path in archive_root.rglob("*")
-                if path.is_file()
-            }
-            restored = completion_workflows.draft_discard_restore(
-                archive_root,
-                receipt=plan["summary"]["receipt_path"],
-                expected_plan_sha256=restore_plan["summary"]["plan_sha256"],
-                reviewed_by="person:test",
-            )
-            self.assertFalse(restored["ok"], restored)
-            self.assertEqual(
-                restored["blockers"],
-                ["compound_exact_human_approval_binding_required"],
-            )
-            self.assertEqual(restored["files_written"], [])
-            self.assertFalse(restored["privacy_guards"]["writes"])
+            self.assertEqual(restore_plan["state"], "ready")
+            before_restore = self.snapshot_files(archive_root)
+            with self.assertRaises(
+                completion_workflows.archive_services.ArchiveServiceError
+            ) as caught:
+                completion_workflows.draft_discard_restore(
+                    archive_root,
+                    receipt=plan["summary"]["receipt_path"],
+                    expected_plan_sha256=restore_plan["summary"]["plan_sha256"],
+                    reviewed_by="person:test",
+                )
+            self.assertEqual(str(caught.exception), "exact_human_approval_required")
             self.assertFalse(draft_path.exists())
-            self.assertEqual(
-                {
-                    path.relative_to(archive_root).as_posix(): path.read_bytes()
-                    for path in archive_root.rglob("*")
-                    if path.is_file()
-                },
-                before_restore,
-            )
+            self.assertEqual(self.snapshot_files(archive_root), before_restore)
 
     def test_discard_draft_blocks_minted_twin_and_routes_to_retire(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

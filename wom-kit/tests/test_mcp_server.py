@@ -8406,12 +8406,15 @@ class McpServerTests(unittest.TestCase):
                 self.assertFalse(result["isError"])
                 content = result["structuredContent"]
                 self.assertTrue(content["ok"])
-                self.assertEqual(content["status"], "approval_fixed_closed")
+                # v0.4.21 LR-01d reopened zet-revision-write: the plan is
+                # ready for human review and the write exists, but the plan
+                # itself still hands off no actionable approval.
+                self.assertEqual(content["status"], "ready_for_human_review")
                 self.assertEqual(
                     content["proposal_validation_status"],
                     "ready_for_human_review",
                 )
-                self.assertFalse(
+                self.assertTrue(
                     content["approval_contract"]["approved_write_implemented"]
                 )
                 self.assertFalse(

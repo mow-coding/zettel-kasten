@@ -29,7 +29,7 @@ in their original private custody. The developer does not update their lifecycle
 | WS-02 | v0.4.20 | New writes carry session binding; old approved operations resume without rewriting their authority | batch/record intake and Git have scoped CLI/MCP source evidence; intake original review and unrelated-app continuation development verified; title apply/original review/resume now has CLI/MCP development evidence (25 recovery plus 30 adapter/transport tests and independent review); canonical document before/after transition observation development verified (21 recovery plus one MCP projection test, independent read-only review); authenticated whole-document Git ownership for completed title recoveries development verified (7 tests over a real repository; HEAD preimage, worktree postimage, index, original authentication); session-scoped title revert development verified (compensation as a bound apply over the observed post subset; 3 tests); all-writer/effect coverage unfinished |
 | WS-03 | v0.4.20 | Local-only count-first target preview with 20-item pages and safe title/filename/short-ID fallback | preview and paging components implemented; session decisions and local recovery writers (legacy and session-scoped apply) show the count-first paged preview with a live target-binding observer; other writer families and installed acceptance pending |
 | WS-04 | v0.4.20 | Complete cursor pagination and exact selected/excluded Git coverage; selected-session non-force commit/push plus independent remote-ref proof | pagination and authenticated receipt/metadata selective Git source journeys verified; canonical zettel documents changed by completed session title recoveries are now selected with HEAD/index/worktree proof (scope v3); generic ownership of other outputs, responsibility integration and installed/release acceptance pending |
-| LR-01 | v0.4.21 | Draft discard/restore, semantic revision/restore, mint/retire/edge batches work through exact approval | planned |
+| LR-01 | v0.4.21 | Draft discard/restore, semantic revision/restore, mint/retire/edge batches work through exact approval | discard-draft, discard-draft-restore, zettel-edge-batch, mint-zet-batch, retire-draft-batch, revert-batch, zet-revision-write and zet-revision-restore-write reopened through exact approval with development evidence (20 new tests; batches take one count-first dialog and every item write re-verifies the batch claim; the revision pair binds its own digest protocol to the dialog; `source-intake-chain` runs record, selection and capture under one approval, 27 new tests); installed/client acceptance pending |
 | LR-02 | v0.4.21 | Source-property backfill classifies every mirror page and supports apply/resume/independent comparison/field revert | older domain exists; client closure unconfirmed |
 | LR-03 | v0.4.21 | Identifier-like title proposals and historical title receipts are individually classified; insufficient evidence remains review | older planner exists; client writes unconfirmed |
 | LR-04 | v0.4.21 | Locator records, occurrence anchors, and markup have separate validated outcomes; existing correct links survive | older partial result; recovery pending |
@@ -200,3 +200,84 @@ journeys only. WS-02 all-writer coverage (21 pending paths), WS-03 and
 WS-04 installed acceptance for the remaining writer families, and every
 client feedback outcome remain open. No feedback letter's `resolved_in` is
 set by this release.
+
+### 2026-09-16 v0.4.21 LR-01a: discard-draft and restore reopened
+
+Both writers accept `--approve` again, only through operation-specific exact
+human approval: fresh private preflight, digest comparison, binding from the
+fresh plan, native dialog, authenticated one-use claim re-verified under the
+per-draft lock, approval reference embedded in the receipt. Development
+evidence and the exact inventory change (49 available, 66 fixed-closed) are in
+the [v0.4.21 implementation record](../../meeting-minutes/2026-09-16-v0421-local-repairs-implementation.md).
+Not released; letters 157-160 stay open until the client runs the released
+command.
+
+### 2026-09-16 v0.4.21 LR-01b/c: the four batches under one approval each
+
+`zettel-edge-batch`, `mint-zet-batch`, `retire-draft-batch` and `revert-batch`
+accept `--approve` again: one fresh preflight, one binding over every item's
+own single-operation binding, one count-first native dialog with a live
+target observer, one authenticated claim that each item write re-verifies
+against the batch context before it proves its own binding is approved.
+Development evidence and the inventory change (53 available, 62 fixed-closed)
+are in the [v0.4.21 implementation record](../../meeting-minutes/2026-09-16-v0421-local-repairs-implementation.md).
+Not released; letter 160's 21-dialog and 42-popup measurements stay open
+until the client runs the released commands.
+
+### 2026-09-16 v0.4.21 LR-01d: semantic revision and restore reopened
+
+`zet-revision-write` and `zet-revision-restore-write` accept `--approve`
+again: the reviewer's digest protocol (expected proposal and current digests,
+reviewer marker, revision time) stays as it was and is bound into one exact
+human approval whose claim is verified right after the dry-run point against
+the same ready-to-apply document the preview produced. Unbound service calls
+return the content-free blocked document with `exact_human_approval_required`.
+Development evidence and the inventory change (55 available, 60 fixed-closed,
+no fixed-closed plan writers left) are in the
+[v0.4.21 implementation record](../../meeting-minutes/2026-09-16-v0421-local-repairs-implementation.md).
+Not released; issue I14 stays open until the client runs the released
+command.
+
+### 2026-09-16 v0.4.21 LR-01e: the intake chain under one approval
+
+`source-intake-chain` plans the source-intake record, the objet-capture
+selection and the objet capture of one staged original from projected bytes
+(the record's receipt bytes and the selection bytes are known before they are
+written), opens one native dialog, and runs the three steps in order under
+one authenticated claim that every step re-verifies before it writes. The
+dry-run also proves the capture precondition so the first two steps are never
+written into a refused capture; a later failure is reported as `partial` with
+the written paths and the single-step command that finishes. Development
+evidence and the inventory change (56 available, 60 fixed-closed, 30 pending
+session paths) are in the
+[v0.4.21 implementation record](../../meeting-minutes/2026-09-16-v0421-local-repairs-implementation.md).
+Not released; letter 160's three-approvals-per-objet measurement stays open
+until the client runs the released command.
+
+### 2026-09-17 v0.4.21 release candidate
+
+Scope decision (Claude Opus 5, high; standing train approval): v0.4.21 ships
+LR-01a through LR-01e (the eight reopened writers and the one-approval
+intake chain), because those are the client regressions letters 157-160
+report; LR-06 session integration of the 30 pending paths and the older
+audit rows LR-02 through LR-05 and LR-07 carry to v0.4.22 and later with
+their register rows unchanged. The version bump and release documents were
+prepared in the work-session branch after the full development cohorts of
+each unit passed. This register still records development evidence only:
+LR-01 keeps its pending installed/client acceptance until the public
+artifact, anonymous download and fresh-venv installation evidence exist,
+and no client outcome is claimed by publication.
+
+### 2026-09-17 v0.4.21 pre-merge review corrections
+
+A bounded adversarial review of the release diff (Claude Fable 5.1 with the
+user's Ultracode opt-in; three read-only lenses, one skeptic per finding)
+confirmed six defects before merge, all corrected in the candidate: the
+batch `identity_after_own_write` rule is now proven by the item writer's own
+fresh read against the digest of the bytes the batch wrote (a foreign edit
+between items is refused), the intake chain lists the capture step's durable
+writes when the capture reports failure and writes no chain receipt when
+nothing was written, and the packaged Runtime Skill operator contract plus
+the revision/discard/batch guides, matrix rows and READMEs no longer describe
+the reopened writers as fixed closed. Development evidence: 5 new tests,
+full cohort 2,185 OK. Still no client outcome is claimed.

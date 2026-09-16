@@ -117,6 +117,7 @@ CLI_ADDITIONS = {
     ("source-fidelity-session-evidence",),
     ("source-reference-coverage-audit",),
     ("source-intake-batch",),
+    ("source-intake-chain",),
     ("work-session",),
     ("zet-objet-link",),
     ("zet-objet-link-receipts",),
@@ -125,9 +126,9 @@ CLI_ADDITIONS = {
     ("zettel-objet-link-receipts",),
     ("zettel-objet-link-revert",),
 }
-CURRENT_CLI_COUNT = 576
+CURRENT_CLI_COUNT = 577
 CURRENT_CLI_CANONICAL_SHA256 = (
-    "18287b38efa279b4a2c096234e762d66fbc8f426a1e74859b7e921cc90e809b7"
+    "0b17395706b99b5599a7a799b8be5e02e3b5d3587e7ae295bb9425d46f3ad3f0"
 )
 CURRENT_MCP_COUNT = 137
 CURRENT_MCP_CANONICAL_SHA256 = (
@@ -156,7 +157,7 @@ CURRENT_DATABASE_CANONICAL_SHA256 = (
     "d9a42f08ee12a6d42e40214cfb12441e4077bf50c38c25b2692ec1344328294a"
 )
 RESOURCE_ADDITIONS = {
-    "release-notes/v0.4.20.md",
+    "release-notes/v0.4.21.md",
     "schemas/agent-instruction-policy-v0.1.schema.json",
     "schemas/approval-handoff-v0.1.schema.json",
     "schemas/approval-integrity-audit-result-v0.1.schema.json",
@@ -219,7 +220,7 @@ RESOURCE_ADDITIONS = {
 RESOURCE_REMOVALS = {"release-notes/v0.3.297.md"}
 CURRENT_RESOURCE_COUNT = 169
 CURRENT_RESOURCE_CANONICAL_SHA256 = (
-    "bedae27bccf947f05f524812d0ed3696f2861edcbce169fff405f773b192cc93"
+    "ae6d377612cae7b88038e6901c53f068dc84de8061bd556cb14b641be7dc556f"
 )
 
 
@@ -577,10 +578,10 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             actual,
             expected,
             "Current package-resource paths must be the full v0.3.297 set plus "
-            "the exact cumulative v0.3.298 through v0.4.20 delta. "
+            "the exact cumulative v0.3.298 through v0.4.21 delta. "
             f"missing={compact(missing)}; extra={compact(extra)}",
         )
-        self.assertEqual(manifest["version"], "0.4.20")
+        self.assertEqual(manifest["version"], "0.4.21")
         self.assertEqual(len(actual), CURRENT_RESOURCE_COUNT)
         self.assertEqual(
             canonical_sha256(actual),
@@ -600,13 +601,13 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         self.assertNotIn("C:\\Users\\", predecessor_text)
 
     def test_v0419_release_note_is_current_and_older_notes_remain_historical(self) -> None:
-        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.4.20.md"
+        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.4.21.md"
         current_packaged_release = (
             SRC_ROOT
             / "wom_kit"
             / "_resources"
             / "release-notes"
-            / "v0.4.20.md"
+            / "v0.4.21.md"
         )
         self.assertEqual(
             current_source_release.read_bytes(),
@@ -615,10 +616,10 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         current_text = current_source_release.read_text(encoding="utf-8")
         current_flat = " ".join(current_text.split())
         for token in (
-            "v0.4.20",
+            "v0.4.21",
             "project-version-update",
             "Publishing or installing this release does not read or modify a client archive",
-            "wom_kit-0.4.20-py3-none-any.whl",
+            "wom_kit-0.4.21-py3-none-any.whl",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, current_flat)

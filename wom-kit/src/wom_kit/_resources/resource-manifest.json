@@ -1,6 +1,6 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.4.20",
+  "version": "0.4.21",
   "source_of_truth": "wom-kit source resource directories",
   "file_count": 169,
   "files": [
@@ -145,14 +145,14 @@
     {
       "source": "schemas/draft-discard-receipt.schema.json",
       "packaged": "schemas/draft-discard-receipt.schema.json",
-      "bytes": 1605,
-      "sha256": "3cf180f4a684e409ebbf8ac2122011fc369c90910dcd108e948b2bdd33b5a7d5"
+      "bytes": 2810,
+      "sha256": "07b331aa9d4ca9127bb1d66c75819bd8441ea46c273c1b45076d452cf0d18e5f"
     },
     {
       "source": "schemas/draft-discard-restore-receipt.schema.json",
       "packaged": "schemas/draft-discard-restore-receipt.schema.json",
-      "bytes": 1107,
-      "sha256": "c1d75c0479e51033440b7770a5437b77b538192c5db9bf8276e2e5582d88254c"
+      "bytes": 2320,
+      "sha256": "9e6920210f2f0050b8c49a14756334fc9b64998b474f8e0da1ada2b79970dde5"
     },
     {
       "source": "schemas/duplicate-object-reconciliation-receipt-v0.1.schema.json",
@@ -337,8 +337,8 @@
     {
       "source": "schemas/operation-exact-human-approval-v0.1.schema.json",
       "packaged": "schemas/operation-exact-human-approval-v0.1.schema.json",
-      "bytes": 1647,
-      "sha256": "d8f0de0538b683f0367cac7720605c8719ccc8f94a324d2db1b3d0d081fb4dbe"
+      "bytes": 1925,
+      "sha256": "1b7c2016a84006c56bd1a86ada29c1f51c9d9fd2d69880f90661090c75fb994a"
     },
     {
       "source": "schemas/operator-feedback-delivery-receipt.schema.json",
@@ -631,8 +631,8 @@
     {
       "source": "schemas/zet-revision-receipt-v0.2.schema.json",
       "packaged": "schemas/zet-revision-receipt-v0.2.schema.json",
-      "bytes": 8619,
-      "sha256": "781b5d727f47390ed246fdf95a00fd417ee17002c8ef882a42799fced79544c6"
+      "bytes": 9829,
+      "sha256": "5b41b537fa077098bd6d96abcccb98fcddcea421c0af0a86ad371c960afa0778"
     },
     {
       "source": "schemas/zet-revision-receipt.schema.json",
@@ -643,8 +643,8 @@
     {
       "source": "schemas/zet-revision-restore-receipt.schema.json",
       "packaged": "schemas/zet-revision-restore-receipt.schema.json",
-      "bytes": 7391,
-      "sha256": "569dfafe8d38df1ad369291e310c8e53ab8fe891c6cd33251935d79b32df033d"
+      "bytes": 8609,
+      "sha256": "23f16ebd35c54803d1165ac3d4f0c99145feaf50e06e5645ce7bad09e8024ab6"
     },
     {
       "source": "schemas/zet-title-remap-proposal.schema.json",
@@ -739,8 +739,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/operator-contract.md",
       "packaged": "templates/ai-runtime/wom-archive/references/operator-contract.md",
-      "bytes": 77033,
-      "sha256": "4f1eff580144c44a4da3a2a27df329a9b3e9a1dbbab0e6561f67157691ed5009"
+      "bytes": 77429,
+      "sha256": "5d06bd9bbe3ed797eb0e22ae116b49cd484569e63f625576cd2477b628f8b268"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/reading-memory-and-revision.md",
@@ -1013,10 +1013,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.4.20.md",
-      "packaged": "release-notes/v0.4.20.md",
-      "bytes": 7126,
-      "sha256": "fc1746a21370cad8766aea385b7a38e7a49bb40e73b4908f839d56cfce4b8a7e"
+      "source": "docs/releases/v0.4.21.md",
+      "packaged": "release-notes/v0.4.21.md",
+      "bytes": 7068,
+      "sha256": "ef0e3c47614f3d0e75bbdc06c9c795e8daa9a937bb634cf8bea5050dd1b5e9a2"
     }
   ]
 }

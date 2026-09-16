@@ -434,6 +434,7 @@ from . import (
     runtime_skill_install,
     saved_view_workflows,
     source_intake_batch_exact,
+    source_intake_chain_exact,
     source_intake_record_exact,
     source_fidelity_session_evidence,
     target_sha_evolution,
@@ -467,6 +468,7 @@ from .exact_human_approval_workflow import (
     _resume_exact_human_approved_transaction_core,
 )
 from .exact_operation_manifest import ExactOperationManifestError, ExactOperationProgress
+from .target_collection_preview import TargetCollectionItem, TargetCollectionPreview
 from .markdown_display import project_wom_safe_markdown
 from .process_launch import noninteractive_creationflags
 from .cli_entry import handoff_startup_progress
@@ -16659,19 +16661,249 @@ def command_zettel_edge(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
-def command_zettel_edge_batch(args: argparse.Namespace) -> int:
-    if args.approve:
+def _batch_target_collection(
+    rows: Any,
+    *,
+    kind: str,
+    identity_of: Callable[[dict[str, Any]], Any],
+    path_of: Callable[[dict[str, Any]], Any],
+) -> TargetCollectionPreview | None:
+    """Count-first local preview of the targets a reviewed batch will change.
+
+    Identities are digests of already-bound ids; the only label is a filename
+    leaf. A batch whose rows cannot be identified keeps the plain dialog.
+    """
+
+    items: dict[str, TargetCollectionItem] = {}
+    for row in rows or ():
+        if not isinstance(row, dict):
+            return None
+        identity_value = identity_of(row)
+        path = path_of(row)
+        if type(identity_value) is not str or not identity_value:
+            return None
+        identity = "sha256:" + hashlib.sha256(identity_value.encode("utf-8")).hexdigest()
+        if identity in items:
+            continue
+        try:
+            items[identity] = TargetCollectionItem(
+                identity_sha256=identity,
+                kind=kind,
+                filename=(path.replace("\\", "/").rsplit("/", 1)[-1] if type(path) is str else None),
+            )
+        except ValueError:
+            return None
+    if not items:
+        return None
+    try:
+        return TargetCollectionPreview(items=tuple(items.values()))
+    except ValueError:
+        return None
+
+
+def _zettel_edge_batch_target_collection(
+    preview: Mapping[str, Any],
+) -> TargetCollectionPreview | None:
+    return _batch_target_collection(
+        preview.get("policy_writable_edges"),
+        kind="zet",
+        identity_of=lambda row: (row.get("source") or {}).get("zettel_id") if isinstance(row.get("source"), dict) else None,
+        path_of=lambda row: (row.get("source") or {}).get("path") if isinstance(row.get("source"), dict) else None,
+    )
+
+
+def _exact_batch_approval_route(
+    args: argparse.Namespace,
+    *,
+    lifecycle_action: str,
+    plan: Callable[[], dict[str, Any]],
+    binding_builder: Callable[
+        [dict[str, Any]],
+        operation_approval_binding.ExactOperationApprovalBinding,
+    ],
+    write: Callable[
+        [operation_approval_binding.ExactOperationApprovalBinding, Any, str],
+        dict[str, Any],
+    ],
+    items_of: Callable[[dict[str, Any]], Any],
+    collection_of: Callable[[dict[str, Any]], TargetCollectionPreview | None],
+    printer: Callable[[dict[str, Any]], None],
+) -> int:
+    """Shared v0.4.21 --approve route for reviewed batches.
+
+    One fresh private preflight, one exact binding over every item's own
+    binding digests, one count-first native decision, one authenticated claim
+    that each item write re-verifies; fixed reason codes and no private echo.
+    """
+
+    if args.dry_run:
         return _exact_human_approval_cli_error(
             args,
+            lifecycle_action=lifecycle_action,
+            reason_code=f"{lifecycle_action}_mode_conflict",
+        )
+    reviewer = str(getattr(args, "reviewed_by", "") or "").strip()
+    if not reviewer:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code=f"{lifecycle_action}_reviewer_required",
+        )
+    archive_root = Path(args.archive_root)
+    try:
+        preview = plan()
+        if preview.get("ok") is not True or preview.get("blockers"):
+            return _exact_human_approval_cli_error(
+                args,
+                lifecycle_action=lifecycle_action,
+                reason_code=f"{lifecycle_action}_preflight_blocked",
+                preflight_blockers=preview.get("blockers"),
+            )
+        if not items_of(preview):
+            # Honest no-op: nothing is writable, so no dialog opens and the
+            # result says so instead of pretending a write was approved.
+            result = {
+                **preview,
+                "dry_run": False,
+                "approved": False,
+                "write_status": "nothing_to_write",
+                "native_approval_dialog_opened": False,
+                "files_written": [],
+                "private_values_echoed": False,
+            }
+        else:
+            binding = binding_builder(preview)
+            context = binding.context(
+                archive_id=archive_services.read_archive_id(archive_root),
+                reviewer_claim=reviewer,
+            )
+
+            def _observe_target_binding() -> str:
+                return binding_builder(plan()).target_binding_sha256
+
+            collection = collection_of(preview)
+            result = _execute_exact_human_approved_write(
+                archive_root,
+                context,
+                lambda claim: write(binding, claim, reviewer),
+                **(
+                    {
+                        "target_collection": collection,
+                        "observe_target_binding": _observe_target_binding,
+                    }
+                    if collection is not None
+                    else {}
+                ),
+            )
+    except ExactHumanApprovalWorkflowError as error:
+        no_effect = error.code in {
+            "exact_human_approval_cancelled",
+            "exact_human_approval_operation_failed",
+            "exact_human_approval_writer_result_invalid",
+        }
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code=(
+                f"{lifecycle_action}_workflow_precondition_failed"
+                if no_effect
+                else "exact_human_approval_state_unknown"
+            ),
+        )
+    except (
+        archive_services.ArchiveServiceError,
+        operation_approval_binding.OperationApprovalBindingError,
+        ExactHumanApprovalError,
+        ExactHumanApprovalWindowsError,
+        OSError,
+    ):
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code=f"{lifecycle_action}_workflow_failed_safely",
+        )
+    printer(result)
+    return 0 if result.get("ok") else 1
+
+
+def _print_zettel_edge_batch_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    state = result.get("write_status") or ("passed" if result.get("ok") else "blocked")
+    summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+    policy = result.get("policy") if isinstance(result.get("policy"), dict) else {}
+    print(f"Zettel edge batch: {state}.")
+    print(f"Archive: {result.get('archive_id') or '-'}")
+    print(f"Policy: {policy.get('policy_id') or '-'}")
+    print(f"Policy-writable edges: {summary.get('policy_writable_edge_count', 0)}")
+    print(f"Human review queue: {summary.get('review_queue_count', 0)}")
+    print(f"Skipped existing edges: {summary.get('skipped_existing_edge_count', 0)}")
+    print(f"Written edges: {summary.get('written_edge_count', 0)}")
+    print(f"Receipt: {result.get('receipt_path') or '-'}")
+    if result.get("files_written"):
+        print("Files written:")
+        for path in result["files_written"]:
+            print(f"- {path}")
+    elif result.get("would_change"):
+        print("Would change:")
+        for path in result["would_change"]:
+            print(f"- {path}")
+    if result.get("blockers"):
+        print("Blockers:")
+        for blocker in result["blockers"]:
+            print(f"- {blocker}")
+    if result.get("warnings"):
+        print("Warnings:")
+        for warning in result["warnings"]:
+            print(f"- {warning}")
+
+
+def command_zettel_edge_batch(args: argparse.Namespace) -> int:
+    archive_root = Path(args.archive_root)
+
+    def _plan() -> dict[str, Any]:
+        return archive_services.zettel_edge_batch_write(
+            archive_root,
+            plan_path=Path(args.plan),
+            dry_run=True,
+            approve=False,
+            reviewed_by=None,
+            max_edges=args.max_edges,
+            skip_existing=args.skip_existing,
+        )
+
+    if args.approve:
+        def _write(binding, claim, reviewer) -> dict[str, Any]:
+            return archive_services.zettel_edge_batch_write(
+                archive_root,
+                plan_path=Path(args.plan),
+                dry_run=False,
+                approve=True,
+                reviewed_by=reviewer,
+                max_edges=args.max_edges,
+                skip_existing=args.skip_existing,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+                exact_human_approval_claim=claim,
+            )
+
+        return _exact_batch_approval_route(
+            args,
             lifecycle_action="zettel_edge_batch",
-            reason_code="compound_exact_human_approval_binding_required",
+            plan=_plan,
+            binding_builder=operation_approval_binding.zettel_edge_batch_approval_binding,
+            write=_write,
+            items_of=lambda preview: preview.get("policy_writable_edges"),
+            collection_of=_zettel_edge_batch_target_collection,
+            printer=lambda result: _print_zettel_edge_batch_result(result, args.format),
         )
     try:
         result = archive_services.zettel_edge_batch_write(
-            Path(args.archive_root),
+            archive_root,
             plan_path=Path(args.plan),
             dry_run=args.dry_run,
-            approve=args.approve,
+            approve=False,
             reviewed_by=args.reviewed_by,
             max_edges=args.max_edges,
             skip_existing=args.skip_existing,
@@ -16679,37 +16911,7 @@ def command_zettel_edge_batch(args: argparse.Namespace) -> int:
     except (archive_services.ArchiveServiceError, OSError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
-
-    if args.format == "json":
-        print_json(result)
-    else:
-        state = result.get("write_status") or ("passed" if result.get("ok") else "blocked")
-        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
-        policy = result.get("policy") if isinstance(result.get("policy"), dict) else {}
-        print(f"Zettel edge batch: {state}.")
-        print(f"Archive: {result.get('archive_id') or '-'}")
-        print(f"Policy: {policy.get('policy_id') or '-'}")
-        print(f"Policy-writable edges: {summary.get('policy_writable_edge_count', 0)}")
-        print(f"Human review queue: {summary.get('review_queue_count', 0)}")
-        print(f"Skipped existing edges: {summary.get('skipped_existing_edge_count', 0)}")
-        print(f"Written edges: {summary.get('written_edge_count', 0)}")
-        print(f"Receipt: {result.get('receipt_path') or '-'}")
-        if result.get("files_written"):
-            print("Files written:")
-            for path in result["files_written"]:
-                print(f"- {path}")
-        elif result.get("would_change"):
-            print("Would change:")
-            for path in result["would_change"]:
-                print(f"- {path}")
-        if result.get("blockers"):
-            print("Blockers:")
-            for blocker in result["blockers"]:
-                print(f"- {blocker}")
-        if result.get("warnings"):
-            print("Warnings:")
-            for warning in result["warnings"]:
-                print(f"- {warning}")
+    _print_zettel_edge_batch_result(result, args.format)
     return 0 if result.get("ok", True) else 1
 
 
@@ -16812,28 +17014,69 @@ def command_revert_edge(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
+def _print_revert_batch_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    _print_revert_batch_text(result)
+
+
 def command_revert_batch(args: argparse.Namespace) -> int:
+    archive_root = Path(args.archive_root)
+
+    def _plan() -> dict[str, Any]:
+        return archive_services.zettel_edge_batch_revert(
+            archive_root,
+            receipt=args.receipt,
+            dry_run=True,
+            approve=False,
+        )
+
     if args.approve:
-        return _exact_human_approval_cli_error(
+        def _write(binding, claim, reviewer) -> dict[str, Any]:
+            return archive_services.zettel_edge_batch_revert(
+                archive_root,
+                receipt=args.receipt,
+                dry_run=False,
+                approve=True,
+                reviewed_by=reviewer,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+                exact_human_approval_claim=claim,
+            )
+
+        return _exact_batch_approval_route(
             args,
             lifecycle_action="zettel_edge_batch_revert",
-            reason_code="compound_exact_human_approval_binding_required",
+            plan=_plan,
+            binding_builder=operation_approval_binding.zettel_edge_batch_revert_approval_binding,
+            write=_write,
+            items_of=lambda preview: preview.get("edge_reverts"),
+            collection_of=lambda preview: _batch_target_collection(
+                preview.get("edge_reverts"),
+                kind="zet",
+                identity_of=lambda row: (row.get("source") or {}).get("zettel_id") if isinstance(row.get("source"), dict) else None,
+                path_of=lambda row: (row.get("source") or {}).get("path") if isinstance(row.get("source"), dict) else None,
+            ),
+            printer=lambda result: _print_revert_batch_result(result, args.format),
         )
     try:
         result = archive_services.zettel_edge_batch_revert(
-            Path(args.archive_root),
+            archive_root,
             receipt=args.receipt,
             dry_run=args.dry_run,
-            approve=args.approve,
+            approve=False,
             reviewed_by=args.reviewed_by,
         )
     except (archive_services.ArchiveServiceError, OSError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
+    _print_revert_batch_result(result, args.format)
+    return 0 if result.get("ok", True) else 1
 
-    if args.format == "json":
-        print_json(result)
-    else:
+
+def _print_revert_batch_text(result: dict[str, Any]) -> None:
+    if True:
         state = result.get("write_status") or ("passed" if result.get("ok") else "blocked")
         summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
         print(f"Zettel edge batch revert: {state}.")
@@ -16857,7 +17100,7 @@ def command_revert_batch(args: argparse.Namespace) -> int:
             print("Warnings:")
             for warning in result["warnings"]:
                 print(f"- {warning}")
-    return 0 if result.get("ok", True) else 1
+
 
 
 def command_prehashed_objet_ledger(args: argparse.Namespace) -> int:
@@ -20215,6 +20458,141 @@ def command_source_intake_record(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def command_source_intake_chain(args: argparse.Namespace) -> int:
+    """v0.4.21 LR-01e: record → selection → capture under one exact approval."""
+
+    reporter = CommandProgressReporter(
+        bool(getattr(args, "progress", True)),
+        label="source-intake-chain",
+    )
+    reporter.progress("source-intake-chain-plan", "start", None, None)
+
+    def exact_progress(event: ExactOperationProgress) -> None:
+        document = event.public_document()
+        reporter.progress(
+            "exact-operation-" + str(document["stage"]),
+            str(document["mode"]),
+            int(document["completed_items"]),
+            int(document["total_items"]),
+        )
+
+    try:
+        if args.dry_run == args.approve or not args.source_intake_plan:
+            raise source_intake_chain_exact.SourceIntakeChainExactError(
+                "source_intake_chain_request_invalid"
+            )
+        if args.approve and not args.reviewed_by:
+            raise source_intake_chain_exact.SourceIntakeChainExactError(
+                "source_intake_chain_approval_required"
+            )
+        if args.dry_run and args.reviewed_by:
+            raise source_intake_chain_exact.SourceIntakeChainExactError(
+                "source_intake_chain_request_invalid"
+            )
+
+        def plan() -> source_intake_chain_exact.SourceIntakeChainExactPlan:
+            return source_intake_chain_exact.plan_source_intake_chain(
+                Path(args.archive_root),
+                Path(args.source_intake_plan),
+                staged_path=str(args.staged_path),
+                item_id=str(args.item_id or "item"),
+                manifest_id=args.manifest_id,
+                project_intake_receipt=args.project_intake_receipt,
+            )
+
+        chain_plan = plan()
+        reporter.progress("source-intake-chain-plan", "done", None, None)
+        if args.dry_run:
+            result = chain_plan.public_document()
+        else:
+            def _observe_target_binding() -> str:
+                return source_intake_chain_exact.source_intake_chain_approval_binding(
+                    plan()
+                ).target_binding_sha256
+
+            result = source_intake_chain_exact.execute_source_intake_chain(
+                chain_plan,
+                expected_plan_sha256=args.expected_plan_sha256 or "",
+                reviewer_claim=str(args.reviewed_by).strip(),
+                progress_hook=exact_progress,
+                observe_target_binding=_observe_target_binding,
+                target_collection=_source_intake_chain_target_collection(chain_plan),
+            )
+    except (
+        source_intake_chain_exact.SourceIntakeChainExactError,
+        source_intake_record_exact.SourceIntakeRecordExactError,
+        objet_capture_selection_exact.ExistingIntakeCaptureSelectionError,
+        operation_approval_binding.OperationApprovalBindingError,
+        ExactHumanApprovalError,
+        ExactHumanApprovalWindowsError,
+        ExactHumanApprovalWorkflowError,
+        ExactOperationManifestError,
+        archive_services.ArchiveServiceError,
+        OSError,
+    ) as error:
+        result = source_intake_chain_exact.failure_document(
+            str(getattr(error, "code", "") or "")
+        )
+    finally:
+        reporter.close()
+
+    print_source_intake_chain_result(result, args.format)
+    return 0 if result.get("ok") else 1
+
+
+def _source_intake_chain_target_collection(
+    plan: source_intake_chain_exact.SourceIntakeChainExactPlan,
+) -> TargetCollectionPreview | None:
+    """One objet in the count-first dialog; no staged name or path is shown."""
+
+    if not plan.steps:
+        return None
+    capture = plan.steps[-1]
+    identity = capture.item_identity_sha256
+    if type(identity) is not str or not identity:
+        return None
+    try:
+        return TargetCollectionPreview(
+            items=(TargetCollectionItem(identity_sha256=identity, kind="objet"),),
+        )
+    except ValueError:
+        return None
+
+
+def print_source_intake_chain_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    print(f"Source intake chain {result.get('state') or 'blocked'}.")
+    print(f"Chain plan SHA-256: {result.get('plan_sha256') or '-'}")
+    print(
+        f"Approvals: {result.get('approval_count', 0)} "
+        f"(single-step commands: {result.get('single_step_approval_count', 3)})"
+    )
+    for step in result.get("steps") or []:
+        if not isinstance(step, dict):
+            continue
+        line = f"- {step.get('step')}: {step.get('state')}"
+        if step.get("output_path"):
+            line += f" -> {step['output_path']}"
+        print(line)
+    if result.get("files_written"):
+        print("Files written:")
+        for path in result["files_written"]:
+            print(f"- {path}")
+    print(f"Writes performed: {bool(result.get('writes_performed'))}")
+    if result.get("blockers"):
+        print("Blockers:")
+        for blocker in result["blockers"]:
+            print(f"- {blocker}")
+    if result.get("warnings"):
+        print("Warnings:")
+        for warning in result["warnings"]:
+            print(f"- {warning}")
+    for action in result.get("next_safe_actions") or []:
+        print(f"Next: {action}")
+
+
 def _source_intake_session_selected(args: argparse.Namespace) -> bool:
     return bool(getattr(args, "review_original", False)) or any(getattr(args, name, None) is not None
                for name in ("client_app_ref", "task_route_ref", "work_session_ref"))
@@ -22203,42 +22581,194 @@ def command_zet_revision_plan(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
-def command_zet_revision_write(args: argparse.Namespace) -> int:
-    if args.approve:
+def _zet_revision_exact_approval_route(
+    args: argparse.Namespace,
+    *,
+    lifecycle_action: str,
+    service: Callable[..., dict[str, Any]],
+    service_kwargs: dict[str, Any],
+    binding_builder: Callable[..., operation_approval_binding.ExactOperationApprovalBinding],
+    preview_identity: str,
+    printer: Callable[[dict[str, Any]], None],
+) -> int:
+    """Shared v0.4.21 --approve route for the semantic revision writers.
+
+    The dry-run preview decides the timezone-aware ``revision_at`` and the
+    write-plan digest when the caller did not supply them, so the dialog binds
+    exactly the write that follows. Every failure is a fixed reason code and
+    no private value (zettel id, paths, proposal text) is echoed.
+    """
+
+    reviewer = archive_services.safe_foreign_quarantine_actor_id(
+        str(getattr(args, "reviewed_by", "") or "")
+    )
+    if reviewer is None:
         return _exact_human_approval_cli_error(
             args,
-            lifecycle_action="zet_revision_write",
-            reason_code=command_status.COMPOUND_APPROVAL_REASON_CODE,
+            lifecycle_action=lifecycle_action,
+            reason_code=f"{lifecycle_action}_reviewer_required",
         )
+    archive_root = Path(args.archive_root)
+    # The dry-run refuses reviewer and affirmation inputs; they belong to the
+    # approved write only, and the dialog is the authority that covers them.
+    preview_kwargs = {
+        key: value for key, value in service_kwargs.items() if not key.startswith("affirm_")
+    }
+    try:
+        preview = service(archive_root, dry_run=True, approve=False, reviewed_by=None, **preview_kwargs)
+        if preview.get("ok") is not True or preview.get("blockers"):
+            return _exact_human_approval_cli_error(
+                args,
+                lifecycle_action=lifecycle_action,
+                reason_code=f"{lifecycle_action}_preflight_blocked",
+                preflight_blockers=preview.get("blockers"),
+            )
+        bound_kwargs = dict(service_kwargs)
+        bound_kwargs["revision_at"] = preview.get("revision_at")
+        bound_kwargs["expected_write_plan_digest"] = (
+            preview.get("write_plan") or {}
+        ).get("actual_digest")
+        bound_preview_kwargs = {
+            key: value for key, value in bound_kwargs.items() if not key.startswith("affirm_")
+        }
+        # Re-run the preview with the bound timestamp and digest so the plan
+        # the dialog shows is byte-for-byte the plan the writer re-derives.
+        preview = service(archive_root, dry_run=True, approve=False, reviewed_by=None, **bound_preview_kwargs)
+        if preview.get("ok") is not True or preview.get("blockers"):
+            return _exact_human_approval_cli_error(
+                args,
+                lifecycle_action=lifecycle_action,
+                reason_code=f"{lifecycle_action}_preflight_blocked",
+                preflight_blockers=preview.get("blockers"),
+            )
+        binding = binding_builder(preview, preview_identity=preview_identity)
+        context = binding.context(
+            archive_id=archive_services.read_archive_id(archive_root),
+            reviewer_claim=reviewer,
+        )
+
+        def _write(claim) -> dict[str, Any]:
+            return service(
+                archive_root,
+                dry_run=False,
+                approve=True,
+                reviewed_by=reviewer,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+                exact_human_approval_claim=claim,
+                **bound_kwargs,
+            )
+
+        result = _execute_exact_human_approved_write(archive_root, context, _write)
+    except ExactHumanApprovalWorkflowError as error:
+        no_effect = error.code in {
+            "exact_human_approval_cancelled",
+            "exact_human_approval_operation_failed",
+            "exact_human_approval_writer_result_invalid",
+        }
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code=(
+                f"{lifecycle_action}_workflow_precondition_failed"
+                if no_effect
+                else "exact_human_approval_state_unknown"
+            ),
+        )
+    except (
+        archive_services.ArchiveServiceError,
+        operation_approval_binding.OperationApprovalBindingError,
+        ExactHumanApprovalError,
+        ExactHumanApprovalWindowsError,
+        ArchivePathError,
+        OSError,
+        UnicodeError,
+        ValueError,
+    ):
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code=f"{lifecycle_action}_workflow_failed_safely",
+        )
+    printer(result)
+    return 0 if result.get("ok") else 1
+
+
+def _print_zet_revision_write_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    print(f"WOM zet revision write: {result.get('status') or 'unknown'}")
+    print(f"Revision timestamp: {result.get('revision_at') or 'unavailable'}")
+    print(
+        "Write-plan digest: "
+        + str(result.get("write_plan", {}).get("actual_digest") or "unavailable")
+    )
+    print(
+        "Canonical files written this run: "
+        + str(
+            result.get("write_boundary", {}).get(
+                "canonical_files_written_this_run", 0
+            )
+        )
+    )
+    print(
+        "Immutable receipt present: "
+        + ("yes" if result.get("receipt", {}).get("exists") else "no")
+    )
+    if result.get("blockers"):
+        print("Blockers:")
+        for blocker in result["blockers"]:
+            print(f"- {blocker}")
+    if result.get("warnings"):
+        print("Warnings:")
+        for warning in result["warnings"]:
+            print(f"- {warning}")
+
+
+def command_zet_revision_write(args: argparse.Namespace) -> int:
     if bool(args.dry_run) == bool(args.approve):
         print(
             "zet-revision-write requires exactly one of --dry-run or --approve.",
             file=sys.stderr,
         )
         return 1
+    service_kwargs = dict(
+        zettel_id=str(args.zettel_id),
+        proposal_path=str(args.proposal),
+        expected_canonical_sha256=str(args.expected_canonical_sha256),
+        expected_proposal_sha256=str(args.expected_proposal_sha256),
+        expected_proposal_semantic_sha256=str(
+            args.expected_proposal_semantic_sha256
+        ),
+        expected_plan_digest=str(args.expected_plan_digest),
+        revision_at=str(args.revision_at or "").strip() or None,
+        expected_write_plan_digest=(
+            str(args.expected_write_plan_digest or "").strip() or None
+        ),
+        affirm_revision_reviewed=bool(args.affirm_revision_reviewed),
+        affirm_abstract_body_pair_reviewed=bool(
+            args.affirm_abstract_body_pair_reviewed
+        ),
+        affirm_edge_changes_reviewed=bool(args.affirm_edge_changes_reviewed),
+    )
+    if args.approve:
+        return _zet_revision_exact_approval_route(
+            args,
+            lifecycle_action="zet_revision_write",
+            service=archive_services.zet_revision_write,
+            service_kwargs=service_kwargs,
+            binding_builder=operation_approval_binding.zet_revision_write_approval_binding,
+            preview_identity=str(args.zettel_id),
+            printer=lambda result: _print_zet_revision_write_result(result, args.format),
+        )
     try:
         result = archive_services.zet_revision_write(
             Path(args.archive_root),
-            zettel_id=str(args.zettel_id),
-            proposal_path=str(args.proposal),
-            expected_canonical_sha256=str(args.expected_canonical_sha256),
-            expected_proposal_sha256=str(args.expected_proposal_sha256),
-            expected_proposal_semantic_sha256=str(
-                args.expected_proposal_semantic_sha256
-            ),
-            expected_plan_digest=str(args.expected_plan_digest),
-            revision_at=str(args.revision_at or "").strip() or None,
-            expected_write_plan_digest=(
-                str(args.expected_write_plan_digest or "").strip() or None
-            ),
-            dry_run=bool(args.dry_run),
-            approve=bool(args.approve),
+            dry_run=True,
+            approve=False,
             reviewed_by=str(args.reviewed_by or "").strip() or None,
-            affirm_revision_reviewed=bool(args.affirm_revision_reviewed),
-            affirm_abstract_body_pair_reviewed=bool(
-                args.affirm_abstract_body_pair_reviewed
-            ),
-            affirm_edge_changes_reviewed=bool(args.affirm_edge_changes_reviewed),
+            **service_kwargs,
         )
     except (
         archive_services.ArchiveServiceError,
@@ -22252,39 +22782,8 @@ def command_zet_revision_write(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 1
-
-    if args.format == "json":
-        print_json(result)
-    else:
-        print(f"WOM zet revision write: {result.get('status') or 'unknown'}")
-        print(f"Revision timestamp: {result.get('revision_at') or 'unavailable'}")
-        print(
-            "Write-plan digest: "
-            + str(result.get("write_plan", {}).get("actual_digest") or "unavailable")
-        )
-        print(
-            "Canonical files written this run: "
-            + str(
-                result.get("write_boundary", {}).get(
-                    "canonical_files_written_this_run", 0
-                )
-            )
-        )
-        print(
-            "Immutable receipt present: "
-            + ("yes" if result.get("receipt", {}).get("exists") else "no")
-        )
-        if result.get("blockers"):
-            print("Blockers:")
-            for blocker in result["blockers"]:
-                print(f"- {blocker}")
-        if result.get("warnings"):
-            print("Warnings:")
-            for warning in result["warnings"]:
-                print(f"- {warning}")
+    _print_zet_revision_write_result(result, args.format)
     return 0 if result.get("ok") else 1
-
-
 def command_zet_revision_receipt_audit(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print(
@@ -22533,49 +23032,101 @@ def command_zet_revision_restore_plan(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
-def command_zet_revision_restore_write(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="zet_revision_restore_write",
-            reason_code="compound_exact_human_approval_binding_required",
+def _print_zet_revision_restore_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    print(f"WOM zet exact restore write: {result.get('status') or 'unknown'}")
+    print(f"Restore event timestamp: {result.get('revision_at') or 'unavailable'}")
+    print(
+        "Write-plan digest: "
+        + str(
+            result.get("write_plan", {}).get("actual_digest")
+            or "unavailable"
         )
+    )
+    print(
+        "Canonical files written this run: "
+        + str(
+            result.get("write_boundary", {}).get(
+                "canonical_files_written_this_run", 0
+            )
+        )
+    )
+    print(
+        "Exact restore bytes present: "
+        + (
+            "yes"
+            if result.get("write_boundary", {}).get(
+                "canonical_replaced_with_exact_restore_bytes"
+            )
+            else "no"
+        )
+    )
+    print(
+        "Immutable restore receipt present: "
+        + ("yes" if result.get("receipt", {}).get("exists") else "no")
+    )
+    if result.get("blockers"):
+        print("Blockers:")
+        for blocker in result["blockers"]:
+            print(f"- {blocker}")
+    if result.get("warnings"):
+        print("Warnings:")
+        for warning in result["warnings"]:
+            print(f"- {warning}")
+
+
+def command_zet_revision_restore_write(args: argparse.Namespace) -> int:
     if bool(args.dry_run) == bool(args.approve):
         print(
             "zet-revision-restore-write requires exactly one of --dry-run or --approve.",
             file=sys.stderr,
         )
         return 1
+    service_kwargs = dict(
+        receipt_path=str(args.receipt),
+        expected_receipt_sha256=str(args.expected_receipt_sha256),
+        restore_proposal_path=str(args.restore_proposal),
+        expected_current_sha256=str(args.expected_current_sha256),
+        expected_restore_proposal_sha256=str(
+            args.expected_restore_proposal_sha256
+        ),
+        expected_restore_proposal_semantic_sha256=str(
+            args.expected_restore_proposal_semantic_sha256
+        ),
+        expected_restore_plan_digest=str(
+            args.expected_restore_plan_digest
+        ),
+        revision_at=str(args.revision_at or "").strip() or None,
+        expected_write_plan_digest=(
+            str(args.expected_write_plan_digest or "").strip() or None
+        ),
+        affirm_restore_reviewed=bool(args.affirm_restore_reviewed),
+        affirm_abstract_body_pair_reviewed=bool(
+            args.affirm_abstract_body_pair_reviewed
+        ),
+        affirm_edge_changes_reviewed=bool(
+            args.affirm_edge_changes_reviewed
+        ),
+    )
+    if args.approve:
+        return _zet_revision_exact_approval_route(
+            args,
+            lifecycle_action="zet_revision_restore_write",
+            service=archive_services.zet_revision_restore_write,
+            service_kwargs=service_kwargs,
+            binding_builder=operation_approval_binding.zet_revision_restore_write_approval_binding,
+            preview_identity=str(args.receipt).replace("\\", "/").rsplit("/", 1)[-1] or "zet revision restore",
+            printer=lambda result: _print_zet_revision_restore_result(result, args.format),
+        )
     try:
         result = archive_services.zet_revision_restore_write(
             Path(args.archive_root),
-            receipt_path=str(args.receipt),
-            expected_receipt_sha256=str(args.expected_receipt_sha256),
-            restore_proposal_path=str(args.restore_proposal),
-            expected_current_sha256=str(args.expected_current_sha256),
-            expected_restore_proposal_sha256=str(
-                args.expected_restore_proposal_sha256
-            ),
-            expected_restore_proposal_semantic_sha256=str(
-                args.expected_restore_proposal_semantic_sha256
-            ),
-            expected_restore_plan_digest=str(
-                args.expected_restore_plan_digest
-            ),
-            revision_at=str(args.revision_at or "").strip() or None,
-            expected_write_plan_digest=(
-                str(args.expected_write_plan_digest or "").strip() or None
-            ),
-            dry_run=bool(args.dry_run),
-            approve=bool(args.approve),
+            dry_run=True,
+            approve=False,
             reviewed_by=str(args.reviewed_by or "").strip() or None,
-            affirm_restore_reviewed=bool(args.affirm_restore_reviewed),
-            affirm_abstract_body_pair_reviewed=bool(
-                args.affirm_abstract_body_pair_reviewed
-            ),
-            affirm_edge_changes_reviewed=bool(
-                args.affirm_edge_changes_reviewed
-            ),
+            **service_kwargs,
         )
     except (
         archive_services.ArchiveServiceError,
@@ -22585,53 +23136,11 @@ def command_zet_revision_restore_write(args: argparse.Namespace) -> int:
         ValueError,
     ):
         print(
-            "zet-revision-restore-write could not produce a privacy-safe result from the bound receipt and private restore proposal.",
+            "zet-revision-restore-write could not produce a privacy-safe result from the bound receipt, canonical zet, and private restore proposal.",
             file=sys.stderr,
         )
         return 1
-
-    if args.format == "json":
-        print_json(result)
-    else:
-        print(f"WOM zet exact restore write: {result.get('status') or 'unknown'}")
-        print(f"Restore event timestamp: {result.get('revision_at') or 'unavailable'}")
-        print(
-            "Write-plan digest: "
-            + str(
-                result.get("write_plan", {}).get("actual_digest")
-                or "unavailable"
-            )
-        )
-        print(
-            "Canonical files written this run: "
-            + str(
-                result.get("write_boundary", {}).get(
-                    "canonical_files_written_this_run", 0
-                )
-            )
-        )
-        print(
-            "Exact restore bytes present: "
-            + (
-                "yes"
-                if result.get("write_boundary", {}).get(
-                    "canonical_replaced_with_exact_restore_bytes"
-                )
-                else "no"
-            )
-        )
-        print(
-            "Immutable restore receipt present: "
-            + ("yes" if result.get("receipt", {}).get("exists") else "no")
-        )
-        if result.get("blockers"):
-            print("Blockers:")
-            for blocker in result["blockers"]:
-                print(f"- {blocker}")
-        if result.get("warnings"):
-            print("Warnings:")
-            for warning in result["warnings"]:
-                print(f"- {warning}")
+    _print_zet_revision_restore_result(result, args.format)
     return 0 if result.get("ok") else 1
 
 
@@ -24700,36 +25209,169 @@ def _print_draft_discard_result(
         print(f"NEXT: {action}")
 
 
-def command_discard_draft(args: argparse.Namespace) -> int:
-    if args.approve:
+def _draft_discard_exact_approval_route(
+    args: argparse.Namespace,
+    *,
+    command: str,
+    lifecycle_action: str,
+    plan: Callable[[], dict[str, Any]],
+    binding_builder: Callable[
+        [dict[str, Any]],
+        operation_approval_binding.ExactOperationApprovalBinding,
+    ],
+    writer: Callable[
+        [operation_approval_binding.ExactOperationApprovalBinding, Any, str],
+        dict[str, Any],
+    ],
+    draft_relative_key: str,
+    draft_sha256_key: str,
+) -> int:
+    """Shared v0.4.21 --approve route for discard-draft and its restore.
+
+    A fresh private preflight decides; the caller's expected service digest
+    must equal the fresh one; the exact binding is derived from that fresh
+    plan; the native dialog and authenticated claim are the only authority.
+    Every failure maps to a fixed reason code and no private value is echoed.
+    """
+
+    reviewer = str(args.reviewed_by or "").strip()
+    if not reviewer:
         return _exact_human_approval_cli_error(
             args,
-            lifecycle_action="discard_draft_apply",
-            reason_code=command_status.COMPOUND_APPROVAL_REASON_CODE,
+            lifecycle_action=lifecycle_action,
+            reason_code=f"{lifecycle_action}_reviewer_required",
         )
+    expected_service_plan_sha256 = str(
+        args.expected_plan_sha256 or ""
+    ).strip().lower()
+    if SHA256_RE.fullmatch(expected_service_plan_sha256) is None:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code=f"{lifecycle_action}_expected_plan_sha256_invalid",
+        )
+    archive_root = Path(args.archive_root)
+    try:
+        preview = plan()
+        if preview.get("ok") is not True or preview.get("blockers"):
+            return _exact_human_approval_cli_error(
+                args,
+                lifecycle_action=lifecycle_action,
+                reason_code=f"{lifecycle_action}_preflight_blocked",
+                preflight_blockers=preview.get("blockers"),
+            )
+        summary = (
+            preview.get("summary")
+            if isinstance(preview.get("summary"), dict)
+            else {}
+        )
+        service_plan_sha256 = str(summary.get("plan_sha256") or "")
+        if SHA256_RE.fullmatch(service_plan_sha256) is None or not (
+            secrets.compare_digest(
+                expected_service_plan_sha256, service_plan_sha256
+            )
+        ):
+            return _exact_human_approval_cli_error(
+                args,
+                lifecycle_action=lifecycle_action,
+                reason_code=f"{lifecycle_action}_plan_changed",
+            )
+        binding = binding_builder(preview)
+        binding = _binding_with_primary_bound_zettel_preview(
+            binding,
+            archive_root,
+            relative_path=summary.get(draft_relative_key),
+            expected_file_sha256=summary.get(draft_sha256_key),
+        )
+        context = binding.context(
+            archive_id=archive_services.read_archive_id(archive_root),
+            reviewer_claim=reviewer,
+        )
+        result = _execute_exact_human_approved_write(
+            archive_root,
+            context,
+            lambda claim: writer(binding, claim, reviewer),
+        )
+    except ExactHumanApprovalWorkflowError as error:
+        no_effect = error.code in {
+            "exact_human_approval_cancelled",
+            "exact_human_approval_operation_failed",
+            "exact_human_approval_writer_result_invalid",
+        }
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code=(
+                f"{lifecycle_action}_workflow_precondition_failed"
+                if no_effect
+                else "exact_human_approval_state_unknown"
+            ),
+        )
+    except (
+        archive_services.ArchiveServiceError,
+        operation_approval_binding.OperationApprovalBindingError,
+        ExactHumanApprovalError,
+        ExactHumanApprovalWindowsError,
+        OSError,
+    ):
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code=f"{lifecycle_action}_workflow_failed_safely",
+        )
+    _print_draft_discard_result(result, args.format)
+    return 0 if result.get("ok") else 1
+
+
+def command_discard_draft(args: argparse.Namespace) -> int:
     if args.dry_run == args.approve:
         print(
             "discard-draft requires exactly one of --dry-run or --approve.",
             file=sys.stderr,
         )
         return 1
-    try:
-        if args.dry_run:
-            result = completion_workflows.draft_discard_plan(
-                Path(args.archive_root),
-                zettel_id=args.zettel_id,
-                relative_path=args.path,
-                reason=args.reason,
-            )
-        else:
-            result = completion_workflows.draft_discard_apply(
-                Path(args.archive_root),
+    if args.approve:
+        archive_root = Path(args.archive_root)
+
+        def _write_discard(binding, claim, reviewer) -> dict[str, Any]:
+            return completion_workflows.draft_discard_apply(
+                archive_root,
                 zettel_id=args.zettel_id,
                 relative_path=args.path,
                 reason=args.reason,
                 expected_plan_sha256=args.expected_plan_sha256,
-                reviewed_by=args.reviewed_by,
+                reviewed_by=reviewer,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=(
+                    binding.target_binding_sha256
+                ),
+                exact_human_approval_claim=claim,
             )
+
+        return _draft_discard_exact_approval_route(
+            args,
+            command="discard-draft",
+            lifecycle_action="discard_draft_apply",
+            plan=lambda: completion_workflows.draft_discard_plan(
+                archive_root,
+                zettel_id=args.zettel_id,
+                relative_path=args.path,
+                reason=args.reason,
+            ),
+            binding_builder=(
+                operation_approval_binding.draft_discard_approval_binding
+            ),
+            writer=_write_discard,
+            draft_relative_key="draft_path",
+            draft_sha256_key="draft_sha256",
+        )
+    try:
+        result = completion_workflows.draft_discard_plan(
+            Path(args.archive_root),
+            zettel_id=args.zettel_id,
+            relative_path=args.path,
+            reason=args.reason,
+        )
     except Exception:
         print("discard-draft failed safely.", file=sys.stderr)
         return 1
@@ -24738,31 +25380,50 @@ def command_discard_draft(args: argparse.Namespace) -> int:
 
 
 def command_discard_draft_restore(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="discard_draft_restore",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
     if args.dry_run == args.approve:
         print(
             "discard-draft-restore requires exactly one of --dry-run or --approve.",
             file=sys.stderr,
         )
         return 1
-    try:
-        if args.dry_run:
-            result = completion_workflows.draft_discard_restore_plan(
-                Path(args.archive_root),
-                receipt=args.receipt,
-            )
-        else:
-            result = completion_workflows.draft_discard_restore(
-                Path(args.archive_root),
+    if args.approve:
+        archive_root = Path(args.archive_root)
+
+        def _write_restore(binding, claim, reviewer) -> dict[str, Any]:
+            return completion_workflows.draft_discard_restore(
+                archive_root,
                 receipt=args.receipt,
                 expected_plan_sha256=args.expected_plan_sha256,
-                reviewed_by=args.reviewed_by,
+                reviewed_by=reviewer,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=(
+                    binding.target_binding_sha256
+                ),
+                exact_human_approval_claim=claim,
             )
+
+        return _draft_discard_exact_approval_route(
+            args,
+            command="discard-draft-restore",
+            lifecycle_action="discard_draft_restore",
+            plan=lambda: completion_workflows.draft_discard_restore_plan(
+                archive_root,
+                receipt=args.receipt,
+            ),
+            binding_builder=(
+                operation_approval_binding.draft_discard_restore_approval_binding
+            ),
+            writer=_write_restore,
+            # The draft is absent before a restore; the snapshot digest is the
+            # bound content, so no bound-file preview is attempted here.
+            draft_relative_key="restore_path_absent",
+            draft_sha256_key="restore_sha256",
+        )
+    try:
+        result = completion_workflows.draft_discard_restore_plan(
+            Path(args.archive_root),
+            receipt=args.receipt,
+        )
     except Exception:
         print("discard-draft-restore failed safely.", file=sys.stderr)
         return 1
@@ -29039,19 +29700,77 @@ def command_retire_draft_reconcile(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def _print_lifecycle_batch_result(label: str, result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    print(f"{label} {result.get('write_status')} ({result['summary']['candidate_item_count']} item(s)).")
+    print(f"Receipt path: {result.get('receipt_path') or '-'}")
+    print(f"Would/write count: {result['summary']['would_write_count'] or result['summary']['written_item_count']}")
+    print(f"Skipped existing: {result['summary']['skipped_existing_item_count']}")
+    print(f"Failed: {result['summary']['failed_item_count']}")
+    if result.get("next_safe_actions"):
+        print("Next safe actions:")
+        for action in result["next_safe_actions"]:
+            print(f"- {action}")
+
+
+def _lifecycle_batch_collection(preview: dict[str, Any]) -> TargetCollectionPreview | None:
+    return _batch_target_collection(
+        preview.get("items"),
+        kind="draft",
+        identity_of=lambda row: row.get("zettel_id"),
+        path_of=lambda row: row.get("draft_path"),
+    )
+
+
 def command_mint_zettel_batch(args: argparse.Namespace) -> int:
+    archive_root = Path(args.archive_root)
+
+    def _plan() -> dict[str, Any]:
+        return archive_services.mint_zet_batch(
+            archive_root,
+            plan_path=args.plan,
+            dry_run=True,
+            approve=False,
+            reviewed_by=None,
+            allow_warnings=args.allow_warnings,
+            max_items=args.max_items,
+            skip_existing=args.skip_existing,
+        )
+
     if args.approve:
-        return _exact_human_approval_cli_error(
+        def _write(binding, claim, reviewer) -> dict[str, Any]:
+            return archive_services.mint_zet_batch(
+                archive_root,
+                plan_path=args.plan,
+                dry_run=False,
+                approve=True,
+                reviewed_by=reviewer,
+                allow_warnings=args.allow_warnings,
+                max_items=args.max_items,
+                skip_existing=args.skip_existing,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+                exact_human_approval_claim=claim,
+            )
+
+        return _exact_batch_approval_route(
             args,
             lifecycle_action="mint_zet_batch",
-            reason_code="compound_exact_human_approval_binding_required",
+            plan=_plan,
+            binding_builder=operation_approval_binding.mint_zet_batch_approval_binding,
+            write=_write,
+            items_of=lambda preview: preview.get("items"),
+            collection_of=_lifecycle_batch_collection,
+            printer=lambda result: _print_lifecycle_batch_result("Mint batch", result, args.format),
         )
     try:
         result = archive_services.mint_zet_batch(
-            Path(args.archive_root),
+            archive_root,
             plan_path=args.plan,
             dry_run=args.dry_run,
-            approve=args.approve,
+            approve=False,
             reviewed_by=args.reviewed_by,
             allow_warnings=args.allow_warnings,
             max_items=args.max_items,
@@ -29060,31 +29779,55 @@ def command_mint_zettel_batch(args: argparse.Namespace) -> int:
     except (archive_services.ArchiveServiceError, OSError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
-
-    if args.format == "json":
-        print_json(result)
-    else:
-        print(f"Mint batch {result.get('write_status')} ({result['summary']['candidate_item_count']} item(s)).")
-        print(f"Receipt path: {result.get('receipt_path') or '-'}")
-        print(f"Would/write count: {result['summary']['would_write_count'] or result['summary']['written_item_count']}")
-        print(f"Skipped existing: {result['summary']['skipped_existing_item_count']}")
-        print(f"Failed: {result['summary']['failed_item_count']}")
+    _print_lifecycle_batch_result("Mint batch", result, args.format)
     return 0 if result.get("ok") else 1
 
 
 def command_retire_draft_batch(args: argparse.Namespace) -> int:
+    archive_root = Path(args.archive_root)
+
+    def _plan() -> dict[str, Any]:
+        return archive_services.retire_draft_batch(
+            archive_root,
+            plan_path=args.plan,
+            dry_run=True,
+            approve=False,
+            reviewed_by=None,
+            max_items=args.max_items,
+            skip_existing=args.skip_existing,
+        )
+
     if args.approve:
-        return _exact_human_approval_cli_error(
+        def _write(binding, claim, reviewer) -> dict[str, Any]:
+            return archive_services.retire_draft_batch(
+                archive_root,
+                plan_path=args.plan,
+                dry_run=False,
+                approve=True,
+                reviewed_by=reviewer,
+                max_items=args.max_items,
+                skip_existing=args.skip_existing,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+                exact_human_approval_claim=claim,
+            )
+
+        return _exact_batch_approval_route(
             args,
             lifecycle_action="retire_draft_batch",
-            reason_code="compound_exact_human_approval_binding_required",
+            plan=_plan,
+            binding_builder=operation_approval_binding.retire_draft_batch_approval_binding,
+            write=_write,
+            items_of=lambda preview: preview.get("items"),
+            collection_of=_lifecycle_batch_collection,
+            printer=lambda result: _print_lifecycle_batch_result("Retire draft batch", result, args.format),
         )
     try:
         result = archive_services.retire_draft_batch(
-            Path(args.archive_root),
+            archive_root,
             plan_path=args.plan,
             dry_run=args.dry_run,
-            approve=args.approve,
+            approve=False,
             reviewed_by=args.reviewed_by,
             max_items=args.max_items,
             skip_existing=args.skip_existing,
@@ -29092,19 +29835,7 @@ def command_retire_draft_batch(args: argparse.Namespace) -> int:
     except (archive_services.ArchiveServiceError, OSError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
-
-    if args.format == "json":
-        print_json(result)
-    else:
-        print(f"Retire draft batch {result.get('write_status')} ({result['summary']['candidate_item_count']} item(s)).")
-        print(f"Receipt path: {result.get('receipt_path') or '-'}")
-        print(f"Would/write count: {result['summary']['would_write_count'] or result['summary']['written_item_count']}")
-        print(f"Skipped existing: {result['summary']['skipped_existing_item_count']}")
-        print(f"Failed: {result['summary']['failed_item_count']}")
-        if result.get("next_safe_actions"):
-            print("Next safe actions:")
-            for action in result["next_safe_actions"]:
-                print(f"- {action}")
+    _print_lifecycle_batch_result("Retire draft batch", result, args.format)
     return 0 if result.get("ok") else 1
 
 
@@ -39743,6 +40474,62 @@ def build_parser() -> argparse.ArgumentParser:
     source_intake_record.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     source_intake_record.set_defaults(func=command_source_intake_record, _wom_project_runtime_resume_effect=True)
 
+    source_intake_chain = subcommands.add_parser(
+        "source-intake-chain",
+        help=(
+            "Record, select and capture one staged original under ONE exact human "
+            "approval (v0.4.21; replaces the three-dialog record/selection/capture chain)."
+        ),
+        description=(
+            "Preview or approve the whole objet intake chain for one staged file: the "
+            "source-intake record, the objet-capture selection and the objet capture are "
+            "planned together from the reviewed source-intake plan and executed in order "
+            "under one native exact human approval. Each step re-verifies that approval "
+            "before it writes; a step failure after an earlier write is reported as "
+            "partial with the written paths so the single-step commands can finish."
+        ),
+    )
+    source_intake_chain.add_argument("archive_root", help="Archive root to update.")
+    source_intake_chain.add_argument(
+        "--source-intake-plan",
+        required=True,
+        help="JSON file from source-intake --dry-run (the same input as source-intake-record).",
+    )
+    source_intake_chain.add_argument(
+        "--staged-path",
+        required=True,
+        help="Archive-relative staged file path (the same input as objet-capture-selection).",
+    )
+    source_intake_chain.add_argument("--item-id", default="item", help="Safe item id for the selection manifest.")
+    source_intake_chain.add_argument("--manifest-id", help="Optional safe manifest id; defaults from the object hash.")
+    source_intake_chain.add_argument(
+        "--project-intake-receipt",
+        help="Optional project-intake decisions receipt to validate as capture-session context only.",
+    )
+    source_intake_chain.add_argument("--dry-run", action="store_true", help="Plan all three steps without writing files.")
+    source_intake_chain.add_argument("--approve", action="store_true", help="Open one native approval and run the three steps.")
+    source_intake_chain.add_argument("--reviewed-by", help="Reviewer id required when --approve is used.")
+    source_intake_chain.add_argument(
+        "--expected-plan-sha256",
+        help="Optional expert binding to the exact chain plan SHA-256 shown by --dry-run.",
+    )
+    source_intake_chain_progress = source_intake_chain.add_mutually_exclusive_group()
+    source_intake_chain_progress.add_argument(
+        "--progress",
+        dest="progress",
+        action="store_true",
+        help="Print content-free progress and heartbeats to stderr (default).",
+    )
+    source_intake_chain_progress.add_argument(
+        "--no-progress",
+        dest="progress",
+        action="store_false",
+        help="Disable progress output.",
+    )
+    source_intake_chain.set_defaults(progress=True)
+    source_intake_chain.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    source_intake_chain.set_defaults(func=command_source_intake_chain)
+
     source_intake_batch = subcommands.add_parser(
         "source-intake-batch",
         help="Plan or record many metadata-only local source intakes with one review gate.",
@@ -40679,7 +41466,7 @@ def build_parser() -> argparse.ArgumentParser:
         aliases=["revise-zet-plan", "canonical-revision-plan"],
         help=(
             "Validate one private full-zet revision proposal without writing; "
-            "revision approval remains fixed closed in this release."
+            "zet-revision-write --approve then applies it through exact human approval."
         ),
         description=(
             "Validate one private full-zet revision proposal against the current "
@@ -40687,9 +41474,10 @@ def build_parser() -> argparse.ArgumentParser:
             "not approval authority."
         ),
         epilog=(
-            "Approval status: approval_fixed_closed "
-            f"({command_status.COMPOUND_APPROVAL_REASON_CODE}). No actionable "
-            "approval handoff is issued by this command."
+            "Approval status: approval_available through zet-revision-write "
+            "--approve, whose native exact human approval dialog and "
+            "authenticated claim are the sole write authority. This plan's "
+            "digests are validation evidence only."
         ),
     )
     zet_revision_plan.add_argument("archive_root", help="Archive root containing the canonical zet.")
@@ -40725,12 +41513,14 @@ def build_parser() -> argparse.ArgumentParser:
         "zet-revision-write",
         aliases=["revise-zet-write", "canonical-revision-write"],
         help=(
-            "Build a SHA-bound revision validation preview; approval remains "
-            "fixed closed in this release."
+            "Preview or approve one SHA-bound canonical zet revision through "
+            "exact human approval."
         ),
         description=(
             "Build a SHA-bound canonical revision validation preview without "
-            "writing. The approval mode remains fixed closed in this release."
+            "writing, or approve the revision through the native exact human "
+            "approval dialog. The dry-run digests are validation only; the "
+            "dialog and its authenticated claim are the sole write authority."
         ),
     )
     zet_revision_write.add_argument(
@@ -40945,6 +41735,13 @@ def build_parser() -> argparse.ArgumentParser:
         "zet-revision-restore-write",
         aliases=["canonical-revision-restore-write", "zet-restore-write"],
         help="Preview or approve one exact-byte canonical zet restore bound to an immutable revision receipt.",
+        description=(
+            "Preview or approve one exact-byte canonical zet restore bound to "
+            "an immutable revision receipt. Approval runs through the native "
+            "exact human approval dialog; the dry-run digests are validation "
+            "only and the dialog with its authenticated claim is the sole "
+            "write authority."
+        ),
     )
     zet_revision_restore_write.add_argument(
         "archive_root",
@@ -41881,12 +42678,14 @@ def build_parser() -> argparse.ArgumentParser:
     discard_draft = subcommands.add_parser(
         "discard-draft",
         help=(
-            "Preview reversible discard of one unminted inbox draft; approval "
-            "remains fixed closed in this release."
+            "Preview or approve reversible discard of one unminted inbox "
+            "draft through exact human approval."
         ),
         description=(
-            "Build a reversible discard validation preview without writing. "
-            "The approval mode remains fixed closed in this release."
+            "Build a reversible discard validation preview without writing, "
+            "or approve the discard through the native exact human approval "
+            "dialog. The dry-run digest is validation only; the dialog and "
+            "its authenticated claim are the sole write authority."
         ),
     )
     discard_draft.add_argument("archive_root")

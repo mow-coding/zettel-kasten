@@ -9,7 +9,7 @@ from wom_kit import __version__
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = KIT_ROOT.parent
-EXPECTED_CURRENT_VERSION = "0.4.20"
+EXPECTED_CURRENT_VERSION = "0.4.21"
 EXPECTED_CURRENT_TAG = f"v{EXPECTED_CURRENT_VERSION}"
 CURRENT_VERSION = f"v{__version__}"
 CURRENT_RELEASE_NOTE = f"{EXPECTED_CURRENT_TAG}.md"
@@ -20,8 +20,8 @@ CURRENT_WHEEL_URL = (
     f"wom_kit-{EXPECTED_CURRENT_VERSION}-py3-none-any.whl"
 )
 CURRENT_RUNTIME_STATUS = (
-    f"Status: {CURRENT_VERSION} session-owned writes, selective Git ownership, and "
-    "draft promotion truth"
+    f"Status: {CURRENT_VERSION} reopened writers, one-approval intake chain, and "
+    "session-owned writes truth"
 )
 CURRENT_MATRIX_VERSION = f"Version: {CURRENT_VERSION} implementation and release scope"
 MATRIX_PATH = KIT_ROOT / "docs" / "capability-matrix.md"
@@ -693,8 +693,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             ".wom-scratch/revisions/",
             "plan_digest",
             "no actionable writer handoff",
-            "approval_fixed_closed",
-            "approved_write_implemented: false",
+            "approval_status: approval_available",
+            "approved_write_implemented: true",
             "actionable_handoff_available: false",
         ):
             with self.subTest(phrase=phrase):
@@ -721,21 +721,24 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase.lower(), combined.lower())
+        # v0.4.21 reopened zet-revision-write: the plan reports the writer as
+        # available but still hands off no approval by itself.
         for phrase in (
-            "approval_fixed_closed",
-            "approved_write_implemented: false",
+            "approval_contract.approval_status: approval_available",
+            "approved_write_implemented: true",
             "actionable_handoff_available: false",
-            "no supported preview, handoff, or apply path",
+            "`--approve --reviewed-by`, which opens",
         ):
             with self.subTest(current_plan_contract=phrase):
                 self.assertIn(phrase, guide_text)
         for phrase in (
             "review evidence only",
-            "there is no supported handoff to `zet-revision-write`",
-            "actionable_handoff_available` are\nboth false",
+            "`zet-revision-write --dry-run`",
+            "`approved_write_implemented: true` and `actionable_handoff_available: false`",
         ):
             with self.subTest(installed_operator_contract=phrase):
                 self.assertIn(phrase, operator_text)
+        self.assertNotIn("there is no supported handoff to `zet-revision-write`", operator_text)
         self.assertNotIn("preview\nthe separate CLI-only `zet-revision-write`", operator_text)
         self.assertIn("zet-revision-plan.md", public_map_text)
         self.assertIn("zet-revision-plan.md", public_map_ko_text)
@@ -789,11 +792,11 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(document="canonical-revision-write"):
                 self.assertIn("zet-revision-write", text)
         for phrase in (
-            "Status: fixed closed in v0.4.12",
-            "Step 2: Stop After Validation",
-            "no supported next-step writer command",
-            "before private target read or mutation",
-            "compound_exact_human_approval_binding_required",
+            "reopened through operation-specific exact human approval in v0.4.21",
+            "Step 2: Preview, Then Approve The Exact Write",
+            "the native dialog with its one-use claim is the only write authority",
+            "zet_revision_write_reviewer_required",
+            "exact_human_approval_required",
             "Historical v0.3 Receipt Boundary",
             "receipts/revisions/canonical/",
         ):
@@ -1221,11 +1224,10 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "dry-run-only exact-byte restore planning",
+            "reopened through operation-specific exact human approval in v0.4.21",
             "does not recreate missing words from hashes",
             "recovered historical `updated_at`",
-            "before private target read or mutation",
-            "compound_exact_human_approval_binding_required",
+            "the native dialog with its one-use claim is the only write authority",
             "calls no model, provider, object store, database, credential store, or network",
         ):
             with self.subTest(phrase=phrase):
@@ -7364,7 +7366,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 )
                 root_line = (
                     '$womBootstrapRoot = Join-Path $env:LOCALAPPDATA '
-                    '"WOM\\bootstrap-v0420-$womBootstrapNonce"'
+                    '"WOM\\bootstrap-v0421-$womBootstrapNonce"'
                 )
                 absent_guard = "if (Test-Path -LiteralPath $womBootstrapRoot)"
                 absent_failure = 'throw "WOM bootstrap path must be new."'
@@ -7399,7 +7401,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn("wom-kit/docs/runtime-skill-install", text)
                 self.assertNotIn(
                     '$womBootstrapRoot = Join-Path $env:LOCALAPPDATA '
-                    '"WOM\\bootstrap-v0420"',
+                    '"WOM\\bootstrap-v0421"',
                     text,
                 )
                 self.assertNotIn(
