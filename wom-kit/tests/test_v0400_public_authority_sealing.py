@@ -61,8 +61,13 @@ class PublicAuthoritySealingTests(unittest.TestCase):
         )
         self.assertEqual(
             tuple(inspect.signature(private_workflow).parameters),
-            ("archive_root", "context", "writer"),
+            ("archive_root", "context", "writer", "target_collection", "observe_target_binding"),
         )
+        # The two extra keywords carry only a local-only native preview and its
+        # observer; native and key injection remain impossible here.
+        for name in ("target_collection", "observe_target_binding"):
+            self.assertIs(inspect.signature(private_workflow).parameters[name].kind,
+                          inspect.Parameter.KEYWORD_ONLY)
         with self.assertRaises(TypeError):
             private_workflow(
                 ".",

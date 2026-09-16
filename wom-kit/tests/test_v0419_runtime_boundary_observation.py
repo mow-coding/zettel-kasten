@@ -116,7 +116,7 @@ class RuntimeBoundaryObservationTests(unittest.TestCase):
                 failure = parsed['failure_observation']['failures']['first_cli_call'][0]
                 self.assertEqual(failure['code'], 'project_runtime_tree_changed')
                 self.assertEqual(failure['source'], {'file': 'wom-kit/src/wom_kit/project_runtime.py',
-                                 'line': 3346, 'function': '_walk_regular_files'})
+                                 'line': 3359, 'function': '_walk_regular_files'})
                 events = parsed['failure_observation']['runtime_observation']['events']
                 self.assertEqual(events[0]['changed_identity_fields'], ['mtime_ns'])
                 self.assertFalse(parsed['failure_observation']['boundaries']['approval_broker']['entered'])

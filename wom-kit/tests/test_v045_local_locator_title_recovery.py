@@ -129,13 +129,14 @@ class V045LocalLocatorTitleRecoveryTests(unittest.TestCase):
     ):
         keys = key_provider or _StableKeyProvider()
 
-        def approved_workflow(archive_root, context, writer):
+        def approved_workflow(archive_root, context, writer, **preview):
             return _execute_exact_human_approved_write_core(
                 archive_root,
                 context,
                 writer,
                 native=_ApproveNative(),
                 key_provider=keys,
+                **preview,
             )
 
         with mock.patch.object(

@@ -195,6 +195,7 @@ class SourceIntakeRecordExactError(RuntimeError):
         "source_intake_record_plan_blocked",
         "source_intake_record_plan_digest_mismatch",
         "source_intake_record_approval_required",
+        "source_intake_record_scope_context_required",
         "source_intake_record_state_drifted",
         "source_intake_record_write_failed",
         "exact_human_approval_cancelled",
@@ -564,54 +565,22 @@ def _blocked_plan(
     )
 
 
-def plan_source_intake_record(
-    archive_root: Path | str,
-    plan_path: Path | str,
+def _source_intake_record_plan_from_bytes(
+    archive_root: Path,
+    *,
+    archive_id: str,
+    input_plan_path: Path,
+    input_plan_bytes: bytes,
 ) -> SourceIntakeRecordExactPlan:
-    """Build one absent-to-exact-bytes receipt creation manifest."""
-
-    try:
-        root = archive_services.require_existing_archive_root(archive_root)
-        archive_id = archive_services.read_archive_id(root)
-    except Exception:
-        raise _fail("source_intake_record_archive_invalid") from None
-    try:
-        input_path = _resolve_plan_path(root, plan_path)
-        input_raw = _stable_regular_bytes(input_path, maximum=_MAX_PLAN_BYTES)
-        document, document_sha256 = _validated_plan_document(
-            input_raw,
-            archive_id=archive_id,
-        )
-        receipt_relative = archive_services.source_intake_record_path(
-            document_sha256
-        )
-        receipt_raw = _receipt_bytes(document)
-        if len(receipt_raw) > _MAX_RECEIPT_BYTES:
-            raise _fail("source_intake_record_plan_invalid")
-        if archive_services.objet_capture_path_chain_blockers(
-            root,
-            receipt_relative,
-        ):
-            raise _fail("source_intake_record_target_unsafe")
-        receipt_path = archive_services.archive_internal_path(
-            root,
-            receipt_relative,
-        )
-    except SourceIntakeRecordExactError as error:
-        return _blocked_plan(
-            root=root,
-            archive_id=archive_id,
-            input_path=Path(os.fspath(plan_path)),
-            blocker=error.code,
-        )
-    except (archive_services.ArchiveServiceError, OSError, ValueError):
-        return _blocked_plan(
-            root=root,
-            archive_id=archive_id,
-            input_path=Path(os.fspath(plan_path)),
-            blocker="source_intake_record_plan_invalid",
-        )
-
+    """Reconstruct READY immutable values only; no input/target filesystem read."""
+    if type(input_plan_bytes) is not bytes or not 1 <= len(input_plan_bytes) <= _MAX_PLAN_BYTES:
+        raise _fail("source_intake_record_plan_invalid")
+    root, input_path, input_raw = archive_root, input_plan_path, input_plan_bytes
+    document, document_sha256 = _validated_plan_document(input_raw, archive_id=archive_id)
+    receipt_relative = archive_services.source_intake_record_path(document_sha256)
+    receipt_raw = _receipt_bytes(document)
+    if len(receipt_raw) > _MAX_RECEIPT_BYTES:
+        raise _fail("source_intake_record_plan_invalid")
     archive_identity = exact_human_approval_archive_identity_sha256(archive_id)
     input_sha256 = _sha_bytes(input_raw)
     receipt_sha256 = _sha_bytes(receipt_raw)
@@ -666,6 +635,67 @@ def plan_source_intake_record(
             "private_values_echoed": False,
         },
     )
+    return SourceIntakeRecordExactPlan(
+        archive_root=root,
+        archive_id=archive_id,
+        input_plan_path=input_path,
+        input_plan_bytes_sha256=input_sha256,
+        source_intake_plan_sha256=document_sha256,
+        receipt_relative_path=receipt_relative,
+        receipt_bytes=receipt_raw,
+        source_basis_bytes=source_basis,
+        manifest=manifest,
+        state="ready",
+        blockers=(),
+    )
+
+
+
+def plan_source_intake_record(
+    archive_root: Path | str,
+    plan_path: Path | str,
+) -> SourceIntakeRecordExactPlan:
+    """Build one absent-to-exact-bytes receipt creation manifest."""
+
+    try:
+        root = archive_services.require_existing_archive_root(archive_root)
+        archive_id = archive_services.read_archive_id(root)
+    except Exception:
+        raise _fail("source_intake_record_archive_invalid") from None
+    try:
+        input_path = _resolve_plan_path(root, plan_path)
+        input_raw = _stable_regular_bytes(input_path, maximum=_MAX_PLAN_BYTES)
+        ready = _source_intake_record_plan_from_bytes(
+            root, archive_id=archive_id, input_plan_path=input_path, input_plan_bytes=input_raw,
+        )
+        document_sha256 = ready.source_intake_plan_sha256
+        receipt_relative, receipt_raw = ready.receipt_relative_path, ready.receipt_bytes
+        if archive_services.objet_capture_path_chain_blockers(
+            root,
+            receipt_relative,
+        ):
+            raise _fail("source_intake_record_target_unsafe")
+        receipt_path = archive_services.archive_internal_path(
+            root,
+            receipt_relative,
+        )
+    except SourceIntakeRecordExactError as error:
+        return _blocked_plan(
+            root=root,
+            archive_id=archive_id,
+            input_path=Path(os.fspath(plan_path)),
+            blocker=error.code,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError):
+        return _blocked_plan(
+            root=root,
+            archive_id=archive_id,
+            input_path=Path(os.fspath(plan_path)),
+            blocker="source_intake_record_plan_invalid",
+        )
+
+    input_sha256 = ready.input_plan_bytes_sha256
+    source_basis, manifest = ready.source_basis_bytes, ready.manifest
     existing, existing_reason = archive_services._bounded_stable_regular_file_read(
         receipt_path,
         max_bytes=_MAX_RECEIPT_BYTES,
@@ -975,6 +1005,10 @@ def execute_source_intake_record(
     reviewer_claim: str,
     progress_hook: Callable[[ExactOperationProgress], None] | None = None,
 ) -> dict[str, Any]:
+    # A scoped manifest requires the concrete owned-session held runner.
+    # Its context alone is not current ownership or execution authority.
+    if plan.manifest is not None and plan.manifest.work_session_binding is not None:
+        raise _fail("source_intake_record_scope_context_required")
     expected = str(expected_plan_sha256 or "").strip().lower()
     if expected and (
         plan.manifest is None

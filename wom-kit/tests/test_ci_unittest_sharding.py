@@ -179,18 +179,15 @@ class CiUnittestShardingTests(unittest.TestCase):
             matrix_rows.append(current)
         self.assertEqual(len(matrix_rows), 8)
         for row in matrix_rows:
+            windows = row["os"] == "windows-latest"
             expected_timeout = (
-                "90"
-                if (
-                    row["os"] == "windows-latest"
-                    and row["shard_index_zero"] == "0"
-                )
+                "120"
+                if windows and row["shard_index_zero"] == "1"
+                else "90"
+                if windows and row["shard_index_zero"] == "0"
                 else "75"
                 if row["shard_index_zero"] == "0"
-                or (
-                    row["os"] == "windows-latest"
-                    and row["shard_index_zero"] == "1"
-                )
+                or (windows and row["shard_index_zero"] == "2")
                 else "45"
             )
             self.assertEqual(

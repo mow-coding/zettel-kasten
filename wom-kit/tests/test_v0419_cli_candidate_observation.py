@@ -51,7 +51,7 @@ class CliCandidateObservationTests(unittest.TestCase):
             payload = observation.failure_payload(native_observed=False, cli_code=1)
             source = payload["failures"]["runtime_prepare"][0]["source"]
             self.assertEqual(source, {"file": "wom-kit/src/wom_kit/project_runtime.py",
-                                      "function": "_walk_regular_files", "line": 3402})
+                                      "function": "_walk_regular_files", "line": 3415})
             events = payload["runtime_observation"]["events"]
             self.assertIn("file_size", {row["comparison_site"] for row in events})
             self.assertFalse(any(row["changed_identity_fields"] for row in events))

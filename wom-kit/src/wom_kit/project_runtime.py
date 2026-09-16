@@ -890,8 +890,8 @@ def project_runtime_policy_document(raw: bytes | None) -> dict[str, Any] | None:
         "runtime_root": ".zettel-kasten/runtimes/vX.Y.Z",
         "active_version_pin": ".zettel-kasten/installed-version.txt",
         "launcher": ".zettel-kasten/bin/archive.cmd",
-        "supply_lock": "wom-kit/project-runtime-supply-lock-v0.4.19.json",
-        "supply_lock_sha256": "sha256:8714250cab5fd639ef00c99d054f7b33b7a8b45fce63f68702e4138fec83b70e",
+        "supply_lock": "wom-kit/project-runtime-supply-lock-v0.4.20.json",
+        "supply_lock_sha256": "sha256:5b41edfcdf278e6d6f3393a1b3e06178af501a86d9779d6c3782a0c757c5d492",
         "global_path_mutation": False,
     }
     if value != expected:
@@ -1931,13 +1931,22 @@ def runtime_inspection_truth(
     }
 
 
+_RUNNING_ARCHIVE_CLI_MODULE_UNSET = object()
+
+
 def project_write_guard(
     inspection_root: Path,
     *,
     running_version: str,
     running_module_path: str | Path | None = None,
+    running_archive_cli_module_path: str | Path | None | object = _RUNNING_ARCHIVE_CLI_MODULE_UNSET,
 ) -> dict[str, Any]:
-    """Return a content-free blocker when a project pin and runtime differ."""
+    """Return a content-free blocker when a project pin and runtime differ.
+
+    Existing callers bind their running module as the CLI, unchanged. A
+    non-CLI caller may pass an explicit None CLI origin to observe the real
+    loaded canonical/legacy CLI instead; this does not waive any core check.
+    """
 
     root = Path(os.path.abspath(str(inspection_root)))
     search_roots = [root]
@@ -2112,7 +2121,11 @@ def project_write_guard(
                     project_root,
                     pinned_version,
                     running_module_path=running_module_path,
-                    running_archive_cli_module_path=running_module_path,
+                    running_archive_cli_module_path=(
+                        running_module_path
+                        if running_archive_cli_module_path is _RUNNING_ARCHIVE_CLI_MODULE_UNSET
+                        else running_archive_cli_module_path
+                    ),
                     runtime_inspection=installed,
                 )
                 binding_observation_state = str(

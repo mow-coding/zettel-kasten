@@ -333,13 +333,14 @@ class LocalRecoveryExecutionTests(unittest.TestCase):
             keys = _StableKeyProvider()
             original_write = local_recovery_execution._Writer.write_field
 
-            def approved_workflow(archive_root, context, writer):
+            def approved_workflow(archive_root, context, writer, **preview):
                 return _execute_exact_human_approved_write_core(
                     archive_root,
                     context,
                     writer,
                     native=native,
                     key_provider=keys,
+                    **preview,
                 )
 
             def crash_after_write(writer, **kwargs):
@@ -512,13 +513,14 @@ class LocalRecoveryExecutionTests(unittest.TestCase):
             original_write = local_recovery_execution._Writer.write_field
             calls = 0
 
-            def approved_workflow(archive_root, context, writer):
+            def approved_workflow(archive_root, context, writer, **preview):
                 return _execute_exact_human_approved_write_core(
                     archive_root,
                     context,
                     writer,
                     native=native,
                     key_provider=keys,
+                    **preview,
                 )
 
             def fail_before_third_write(writer, **kwargs):
@@ -620,13 +622,14 @@ class LocalRecoveryExecutionTests(unittest.TestCase):
             original_write = local_recovery_execution._Writer.write_field
             calls = 0
 
-            def approved_workflow(archive_root, context, writer):
+            def approved_workflow(archive_root, context, writer, **preview):
                 return _execute_exact_human_approved_write_core(
                     archive_root,
                     context,
                     writer,
                     native=native,
                     key_provider=keys,
+                    **preview,
                 )
 
             def fail_before_third_write(writer, **kwargs):
@@ -884,13 +887,14 @@ class LocalRecoveryExecutionTests(unittest.TestCase):
             keys = _StableKeyProvider()
             original_write = local_recovery_execution._Writer.write_field
 
-            def approved_workflow(archive_root, context, writer):
+            def approved_workflow(archive_root, context, writer, **preview):
                 return _execute_exact_human_approved_write_core(
                     archive_root,
                     context,
                     writer,
                     native=native,
                     key_provider=keys,
+                    **preview,
                 )
 
             def crash_after_write(writer, **kwargs):

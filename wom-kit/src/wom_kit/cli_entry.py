@@ -48,10 +48,10 @@ zet-revision-receipt-audit zet-title-check zet-title-readiness zet-title-remap-p
 zet-title-remap-receipt-audit zet-title-remap-recover zet-title-remap-recovery-plan
 zet-title-remap-revert zet-title-remap-revert-plan zet-title-remap-revert-recover
 zet-title-remap-revert-recovery-plan zet-title-remap-write zettel-catalog
-zettel-objet-link
+zettel-objet-link work-session
 """.split()
 STARTUP_PROGRESS_DEFAULTS = {
-    command: command in {"doctor", "source-intake-batch", "objet-capture-batch"}
+    command: command in {"doctor", "source-intake-batch", "objet-capture-batch", "work-session"}
     for command in _PROGRESS_COMMANDS
 }
 STARTUP_STATUS = "[wom] startup: preparing command\n"
@@ -89,6 +89,19 @@ def startup_progress_requested(argv: list[str]) -> bool:
     # let the actual parser retain sole authority over their validity/order.
     if any(option in {"--no-progress", "--help", "-h", "--version"} for option in options):
         return False
+    if argv[0] == "git-backup-reconcile-plan" and any(
+        option.split("=", 1)[0] in {"--client-app-ref", "--task-route-ref", "--work-session-ref", "--resume", "--review-original"}
+        for option in options
+    ):
+        # The explicit session route owns progress by default, including the
+        # heavy CLI import. Inspect fixed option names only, never their values;
+        # actual parsing and the original unscoped mode remain unchanged.
+        return True
+    if argv[0] == "source-intake-record" and any(
+        option.split("=", 1)[0] in {"--client-app-ref", "--task-route-ref", "--work-session-ref", "--review-original"}
+        for option in options
+    ):
+        return True
     return bool(STARTUP_PROGRESS_DEFAULTS[argv[0]] or "--progress" in options)
 
 

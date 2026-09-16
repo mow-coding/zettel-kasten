@@ -2,6 +2,46 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.4.20 세션 소유 쓰기와 초안 승격
+
+일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.
+새 외부 CPython 3.12 환경의 실제 `python.exe -m pip`를 사용해 설치된 PEP 610
+metadata에 wheel hash가 남게 합니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0420-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.20/wom_kit-0.4.20-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+새 process에서 정확히 `archive 0.4.20`이 나와야 합니다. wheel을 공개하거나 설치하는
+것만으로 client archive, project runtime, version pin은 바뀌지 않습니다. project
+update는 client가 따로 선택하고 승인합니다.
+
+v0.4.18에서 mint하지 못하게 된 초안은 별도 복구 명령이 필요 없습니다. `mint-zet`는
+이전 `zettel-edge` 재작성이 지운 빈 구분 줄을 차단이 아니라 정규화로 다루고, 초안의
+근거 원본 오브제를 asset으로 연결한 것을 허용합니다. 업데이트 뒤 해당 초안에
+`mint-zet --dry-run`을 다시 실행하세요. 텍스트 모드의 차단된 `create-draft --approve`는
+이제 사유 코드와 blockers를 출력하고, 차단된 dry-run은 쓸 수 있는 `approval_replay`
+값을 돌려주지 않습니다.
+
+세션 소유 쓰기는 선택 사항입니다. `work-session`으로 앱을 등록하고 세션을 만들어
+claim한 뒤 `source-intake-record`, `source-intake-batch`, `zet-title-remap-write`,
+`git-backup-reconcile-plan`에 `--client-app-ref`, `--task-route-ref`,
+`--work-session-ref`를 줍니다. 기존 control·승인·영수증의 바이트는 그대로이며, 세션
+참조 없이 실행한 명령은 전과 같이 동작합니다. 세션 Git backup은 세션에 귀속할 수
+있는 변경만 commit하고 나머지는 `ownership_unverified`로 남깁니다.
+
+검토한 project update 한 번 뒤에는 새 process에서 project launcher를 시작해 pin,
+source, launcher, runtime 근거를 확인하세요. 그 client 실행 결과만이 project가
+고쳐졌음을 보여 줍니다.
+
 ## v0.4.19 runtime과 capability 사실성
 
 일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.

@@ -9,6 +9,101 @@ authenticated started approval after an interruption.
 
 ## The Short Version
 
+### Unreleased v0.4.20 session route: authenticated outputs, not all documents
+
+The v0.4.20 development branch extends this same command with explicit app,
+task-route and session selection. Its original producer selects whole, newly
+created, authenticated session-completion receipts. The next source integration
+also selects exact outputs of a completed scoped intake: source-intake receipts,
+the prepared capture request and the common completion receipt, when each is
+a whole new Git file. Isolated source-CLI tests have verified actual scoped
+commits/pushes, original resume and original re-review; installed acceptance
+and release remain separate gates. Other sessions' outputs,
+mixed or unknown changes and ordinary document changes remain excluded. An
+`artifact_backup_complete: false` result is intentional: this lane does not yet
+prove authorship or backup of arbitrary zet, objet or work files. Do not use
+this development checkpoint as a completed client-recovery or release claim.
+
+The intake producer verifies retained original inputs, original succeeded
+approval authentication, the original session binding and actual output bytes.
+A common receipt that is already committed can still prove other new outputs
+from that same operation. Filenames, timestamps and lookalike JSON are not proof.
+Missing or invalid evidence stays unverified rather than becoming guessed
+ownership. Original Git resume and re-review use the stored exact proof set,
+not newly discovered candidates. Historical v1 scope bytes remain readable.
+
+`selected_output_count` includes a selected capture request;
+`selected_receipt_count` does not count that request as a receipt. Neither count
+means the referenced original files were captured or backed up. Source bytes,
+objets and generic work documents need their own completed producer/backup path.
+
+The client AI obtains the project launcher and opaque references from its
+retained task context. It computes counts, hashes and the complete selected /
+excluded partition; a person is not asked to copy identifiers or write a JSON
+manifest. These are schematic AI-side inputs, not a manual checklist:
+
+```powershell
+& $projectArchive git-backup-reconcile-plan $archiveRoot `
+  --client-app-ref $clientAppRef --task-route-ref $taskRouteRef `
+  --work-session-ref $workSessionRef --credential-mode stored `
+  --dry-run --format json
+```
+
+Fresh `--approve --reviewed-by $reviewerClaim` uses the same inputs and the
+existing native broker once, after waiting for the existing archive lock and
+rechecking the loaded runtime and current ownership. The displayed approval,
+current source/selection and original establishment proofs are rechecked before
+claim publication. The ordinary unscoped modes below retain their old contract.
+
+If output was lost or the same operation was interrupted, the AI supplies only
+the retained app/task route; no newly copied approval hash or reviewer:
+
+```powershell
+& $projectArchive git-backup-reconcile-plan $archiveRoot `
+  --client-app-ref $clientAppRef --task-route-ref $taskRouteRef `
+  --resume --format json
+```
+
+An optional session ref may assert that original selection. Replacement plan,
+selection, reviewer, provider settings and approval identifiers are refused on
+this route. WOM verifies the retained original context, claim, checkpoints,
+signed final evidence and exact remote commit; it does not silently replan or
+sign a completed original again. Historical commit verification is reported
+separately if current ownership or actor completion cannot be established.
+
+A pending operation with no authenticated original claim currently reports
+`work_session_git_original_approval_missing`. It is preserved, never treated as
+approval and never silently replaced with a fresh review. For this specific
+pre-claim interruption, the development route adds explicit original review:
+
+```powershell
+& $projectArchive git-backup-reconcile-plan $archiveRoot `
+  --client-app-ref $clientAppRef --task-route-ref $taskRouteRef `
+  --approve --review-original --format json
+```
+
+This shows the same retained decision, not a fresh plan. Its original reviewer,
+manifest, selection and pending actor remain fixed. A changed target, corrupted
+claim or ambiguous evidence stops the attempt. If an authenticated claim already
+exists, WOM resumes that original without displaying another approval. The shared
+broker also checks claim presence after entering the key provider, so a newly
+inserted claim cannot become a duplicate approval. No hash, replacement reviewer
+or provider setting belongs on this route. These are development source contracts;
+installed acceptance remains a separate gate, not automatic recovery of every
+possible corruption or interruption.
+
+The new scoped CLI route owns content-free progress by default, while keeping
+stdout for the final JSON. Its separate hidden observer receives only a closed
+stage/numeric projection, not archive paths, target names or credentials. It
+does not invoke arbitrary progress callbacks while Git is changing state.
+Unavailable live observation blocks before dispatch; non-fd embedded output is
+explicitly synchronous and does not claim live heartbeat timing. Observation
+success is not write authority, and losing observation does not erase already
+verified original commit evidence. Mutation settlement, observer cancellation,
+backpressure and full source-command tests remain distinct evidence categories.
+
+### Existing unscoped contract
+
 Run `git-backup-plan` to take a bounded, privacy-preserving observation of one
 Git worktree and its exact target branch. Run `git-backup-reconcile-plan
 --dry-run` to repeat that observation. Supplying a private selection manifest
@@ -324,3 +419,52 @@ durable completion-evidence path. It does not claim Git hosting account
 ownership, branch-protection policy, provider audit-log coverage, or automatic
 remote rollback. Those are separate provider-policy concerns, not evidence
 silently inferred from a successful Git transport.
+
+## Unreleased v0.4.20 session route
+
+The explicit session route reuses the same exact Git writer. It is separate
+from the legacy file-and-digest route above and does not make humans prepare
+selection JSON or copy approval identifiers. The AI retains its registered
+app/task route, presents the meaningful native decision and uses the saved
+original operation for continuation.
+
+```text
+archive git-backup-reconcile-plan <archive-root> --client-app-ref <app> --task-route-ref <task> --work-session-ref <session> --dry-run --format json
+archive git-backup-reconcile-plan <archive-root> --client-app-ref <app> --task-route-ref <task> --work-session-ref <session> --approve --reviewed-by <reviewer> --credential-mode stored --format json
+archive git-backup-reconcile-plan <archive-root> --client-app-ref <app> --task-route-ref <task> --resume --format json
+archive git-backup-reconcile-plan <archive-root> --client-app-ref <app> --task-route-ref <task> --approve --review-original --format json
+```
+
+MCP `git_backup_reconcile_plan` calls the same service with `mode` set to
+`preview`, `apply`, `resume` or `review_original`. Every call supplies
+`archive_root`, `client_app_ref` and `task_route_ref`. Fresh preview/apply
+requires `work_session_ref`; only apply requires `reviewed_by`. Fresh options
+are `remote_name`, `branch`, `credential_mode` (`stored`), `max_changes` and
+`max_changed_bytes`. Original continuation accepts only an optional same-session
+assertion: omit every fresh option and reviewer, including null/default values.
+No public authority, private-context, key-provider, native or selection override
+is accepted. The archive must pass the existing MCP allowed-root policy.
+
+The route classifies authenticated new completion receipts and supported intake
+metadata outputs. It excludes other-session, unknown and mixed changes, keeping
+the full selected/excluded partition. It does not yet authenticate generic
+documents or prove source/objet byte custody. No eligible outputs is a completed
+classification, not a successful backup. Do not use metadata backup to justify
+source deletion or whole-archive completion.
+
+MCP output contains fixed status, count, digest and verification fields, not
+private paths, selection documents or nested Git anchors. The original verified
+commit, current ownership, independent remote ref and final acknowledgement are
+reported separately. `backup_completion_verified` requires all completion
+evidence; a later ownership failure can still report an already verified commit.
+
+All modes wait in the shared serial lane and revalidate under the archive lock.
+Read-only requests can continue through the audited bypass. With a progress
+token, the server reports fixed stages and observed count pairs; a repeating
+heartbeat means it is awaiting another observation. Cancelling a waiting
+request does not terminate an already entered Git operation. Resume verifies
+the same original approval/context, not a fresh inventory or a replacement
+reviewer. Original re-review redisplays only that original decision when needed.
+
+This is an unreleased source interface. Integration minutes distinguish actual
+synthetic Git journeys, transport tests, installed acceptance and client results.

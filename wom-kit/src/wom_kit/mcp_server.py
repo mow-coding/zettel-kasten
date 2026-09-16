@@ -87,6 +87,85 @@ def configure_stdio_utf8() -> None:
 
 TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
+        "name": "archive_work_session_manage",
+        "description": (
+            "Explicitly register an app, create a human-reviewed task, claim, pause, resume, complete, hand off or recover its session. "
+            "The AI retains original registration selection and app/task references before mutation; "
+            "Request-init returns a new routing-only task reference for an explicit registered app, "
+            "without creating, approving or saving a task. Retain it before create; "
+            "resume uses that original reference and never another request-init. "
+            "humans never copy hashes or JSON. Private labels are input only, not output. "
+            "Create/accept/handoff/recover have no dry-run preview. "
+            "Handoff approve uses the original current session and target_app_ref. "
+            "Accept approve uses a new task route and work_session_ref of the predecessor; "
+            "it creates an unclaimed successor and does not transfer artifact responsibility. "
+            "Accept resume/review_original uses app and original task route only, without a replacement predecessor. "
+            "Recover approve selects the same app's claimed active session using explicit app/task/session references, "
+            "with no target_app_ref, and issues its replacement claim only under the existing OS lock and human decision. "
+            "Recover resume/review_original retains those exact original references and accepts no replacement reviewer. "
+            "Review_original requires approve and only reopens an original pending decision with genuinely absent claim evidence. "
+            "Action pause/resume/complete with apply starts a state transition; the resume flag instead "
+            "continues only the original operation and never creates a new claim or human approval."
+            " Completion closes only session metadata, never deleting or cleaning up archive data."
+        ),
+        "annotations": {"readOnlyHint": False, "destructiveHint": False,
+                        "idempotentHint": False, "openWorldHint": False},
+        "inputSchema": {
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                "archive_root": {"type": "string"},
+                "action": {"type": "string", "enum": ["register-app", "request-init", "create", "claim", "pause", "resume", "complete", "handoff", "accept", "recover"]},
+                "dry_run": {"type": "boolean", "default": False},
+                "approve": {"type": "boolean", "default": False},
+                "apply": {"type": "boolean", "default": False},
+                "resume": {"type": "boolean", "default": False},
+                "review_original": {"type": "boolean", "default": False},
+                "client_app_ref": {"type": "string"},
+                "task_route_ref": {"type": "string"},
+                "work_session_ref": {"type": "string"},
+                "target_app_ref": {"type": "string"},
+                "request": {
+                    "type": "object", "additionalProperties": False,
+                    "properties": {
+                        "label": {"type": "string"},
+                        "reviewer_claim": {"type": "string"},
+                        "selection": {
+                            "type": "object", "additionalProperties": False,
+                            "properties": {key: {"type": "string"} for key in
+                                           ("schema", "archive_identity_sha256", "client_app_ref",
+                                            "plan_sha256", "before_sha256", "label_sha256")},
+                            "required": ["schema", "archive_identity_sha256", "client_app_ref",
+                                         "plan_sha256", "before_sha256", "label_sha256"],
+                        },
+                    },
+                },
+            },
+            "required": ["archive_root", "action"],
+        },
+    },
+    {
+        "name": "archive_work_session",
+        "description": (
+            "Read one complete work-session registry generation using opaque references and cursor pages. "
+            "Does not disclose private labels or claim tokens, infer legacy artifact ownership, or grant write authority. "
+            "Only list/inspect are exposed by this development slice."
+        ),
+        "annotations": {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True,
+                        "openWorldHint": False},
+        "inputSchema": {
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                "archive_root": {"type": "string"},
+                "action": {"type": "string", "enum": ["list", "inspect"], "default": "list"},
+                "kind": {"type": "string", "enum": ["app", "workstream", "session"], "default": "session"},
+                "ref": {"type": "string"}, "client_app_ref": {"type": "string"},
+                "workstream_ref": {"type": "string"}, "cursor": {"type": "string"},
+                "page_size": {"type": "integer", "minimum": 1, "maximum": 2000, "default": 20},
+            },
+            "required": ["archive_root"],
+        },
+    },
+    {
         "name": "wom_profile_list",
         "description": "List read-only WOM profile registry entries before resolving archive runtime context.",
         "inputSchema": {
@@ -1740,6 +1819,143 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "git_backup_reconcile_plan",
+        "description": (
+            "Preview or execute the existing session-scoped Git backup using exact native human approval. "
+            "Fresh preview/apply require the explicit app/task/work-session route; apply also requires reviewed_by. "
+            "Resume and review_original select only the retained original by app/task (optional work-session); "
+            "omit every fresh option and reviewer, including null/default values. review_original redisplays "
+            "the original approval when needed, not a replacement approval. Unknown/other-session changes stay excluded. "
+            "No eligible outputs is not a completed backup; metadata receipts do not prove source-byte capture."
+        ),
+        "annotations": {"readOnlyHint": False, "destructiveHint": False,
+                        "idempotentHint": False, "openWorldHint": True},
+        "inputSchema": {
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                "archive_root": {"type": "string", "minLength": 1, "maxLength": 65536},
+                "mode": {"type": "string", "enum": ["preview", "apply", "resume", "review_original"]},
+                "client_app_ref": {"type": "string", "minLength": 1},
+                "task_route_ref": {"type": "string", "minLength": 1},
+                "work_session_ref": {"type": "string", "minLength": 1},
+                "reviewed_by": {"type": "string", "minLength": 1},
+                "remote_name": {"type": "string", "minLength": 1},
+                "branch": {"type": "string", "minLength": 1},
+                "credential_mode": {"type": "string", "enum": ["stored"]},
+                "max_changes": {"type": "integer", "minimum": 1, "maximum": 100000},
+                "max_changed_bytes": {"type": "integer", "minimum": 1, "maximum": 2147483648},
+            },
+            "required": ["archive_root", "mode", "client_app_ref", "task_route_ref"],
+            "allOf": [
+                {"if": {"properties": {"mode": {"enum": ["preview", "apply"]}}},
+                 "then": {"required": ["work_session_ref"]}},
+                {"if": {"properties": {"mode": {"const": "apply"}}},
+                 "then": {"required": ["reviewed_by"]},
+                 "else": {"not": {"required": ["reviewed_by"]}}},
+                {"if": {"properties": {"mode": {"enum": ["resume", "review_original"]}}},
+                 "then": {"not": {"anyOf": [{"required": [key]} for key in (
+                     "remote_name", "branch", "credential_mode", "max_changes", "max_changed_bytes")]}}},
+            ],
+        },
+    },
+    {
+        "name": "source_intake_batch",
+        "description": (
+            "Preview or record a source-intake batch in the explicit app/task work session with exact native human approval. "
+            "Fresh preview/apply require work_session_ref and manifest; apply also requires reviewed_by. "
+            "This records metadata receipts and, when prepared, a capture request; it does not capture source bytes. "
+            "Resume selects only the retained original by app/task (optional work-session); omit manifest and reviewer "
+            "entirely, including null values. No replacement approval, hashes or approval IDs are accepted. "
+            "Explicit review_original may reopen only the retained original whose claim was never published; "
+            "normal resume never opens a new approval dialog."
+        ),
+        "annotations": {"readOnlyHint": False, "destructiveHint": False,
+                        "idempotentHint": False, "openWorldHint": False},
+        "inputSchema": {
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                "archive_root": {"type": "string", "minLength": 1, "maxLength": 65536},
+                "mode": {"type": "string", "enum": ["preview", "apply", "resume", "review_original"]},
+                "client_app_ref": {"type": "string", "minLength": 1},
+                "task_route_ref": {"type": "string", "minLength": 1},
+                "work_session_ref": {"type": "string", "minLength": 1},
+                "manifest": {"type": "string", "minLength": 1,
+                             "description": "Existing batch request JSON, relative to archive_root or absolute; fresh modes only."},
+                "reviewed_by": {"type": "string", "minLength": 1,
+                                "description": "Safe reviewer reference for fresh apply only."},
+            },
+            "required": ["archive_root", "mode", "client_app_ref", "task_route_ref"],
+            "allOf": [
+                {"if": {"properties": {"mode": {"enum": ["preview", "apply"]}}},
+                 "then": {"required": ["work_session_ref", "manifest"]},
+                 "else": {"not": {"required": ["manifest"]}}},
+                {"if": {"properties": {"mode": {"const": "apply"}}},
+                 "then": {"required": ["reviewed_by"]},
+                 "else": {"not": {"required": ["reviewed_by"]}}},
+            ],
+        },
+    },
+    {
+        "name": "zet_title_remap_write",
+        "description": (
+            "Preview or apply local title recovery in the explicit app/task session with native human approval. "
+            "Fresh modes require source_mirror and work_session_ref; apply requires reviewed_by. "
+            "Resume or explicit review_original takes only retained app/task references and never replacement source evidence, "
+            "reviewer, approval identifiers or hashes. Existing approval resumes without a new dialog. "
+            "This verifies changed fields and index completion, not whole-document Git ownership."
+        ),
+        "annotations": {"readOnlyHint": False, "destructiveHint": False,
+                        "idempotentHint": False, "openWorldHint": False},
+        "inputSchema": {
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                "archive_root": {"type": "string", "minLength": 1},
+                "mode": {"type": "string", "enum": ["preview", "apply", "resume", "review_original"]},
+                "client_app_ref": {"type": "string", "minLength": 1},
+                "task_route_ref": {"type": "string", "minLength": 1},
+                "work_session_ref": {"type": "string", "minLength": 1},
+                "source_mirror": {"type": "string", "minLength": 1},
+                "reviewed_by": {"type": "string", "minLength": 1},
+                "max_items": {"type": "integer", "minimum": 1, "maximum": 5000},
+                "expected_identifier_title_count": {"type": "integer", "minimum": 0},
+            },
+            "required": ["archive_root", "mode", "client_app_ref", "task_route_ref"],
+            "allOf": [
+                {"if": {"properties": {"mode": {"enum": ["preview", "apply"]}}},
+                 "then": {"required": ["source_mirror", "work_session_ref"]},
+                 "else": {"not": {"anyOf": [{"required": ["source_mirror"]}, {"required": ["max_items"]},
+                                               {"required": ["expected_identifier_title_count"]}]}}},
+                {"if": {"properties": {"mode": {"const": "apply"}}},
+                 "then": {"required": ["reviewed_by"]},
+                 "else": {"not": {"required": ["reviewed_by"]}}},
+            ],
+        },
+    },
+    {
+        "name": "source_intake_record",
+        "description": (
+            "Record one redacted source-intake plan using its explicit app/task session and native exact approval. "
+            "This preserves metadata only, not source bytes, and creates no capture request. "
+            "Resume selects the original approval using only app/task references; omit plan, reviewer, hashes and approval IDs. "
+            "Explicit review_original may reopen only the retained original whose claim was never published; "
+            "normal resume never opens a new approval dialog."
+        ),
+        "annotations": {"readOnlyHint": False, "destructiveHint": False,
+                        "idempotentHint": False, "openWorldHint": False},
+        "inputSchema": {
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                "archive_root": {"type": "string"},
+                "mode": {"type": "string", "enum": ["preview", "apply", "resume", "review_original"]},
+                "client_app_ref": {"type": "string"}, "task_route_ref": {"type": "string"},
+                "work_session_ref": {"type": "string"},
+                "source_intake_plan": {"type": "string", "description": "Existing redacted plan JSON path; omitted on original resume."},
+                "reviewed_by": {"type": "string", "description": "Safe reviewer reference for fresh apply only."},
+            },
+            "required": ["archive_root", "mode", "client_app_ref", "task_route_ref"],
+        },
+    },
+    {
         "name": "source_intake_plan",
         "description": "Plan safe source/objet references before draft creation. Read-only metadata-only dry-run; never reads file bodies, hashes, copies, uploads, imports, OCRs, transcribes, or calls provider APIs.",
         "inputSchema": {
@@ -3295,40 +3511,46 @@ def main() -> int:
 
 class JsonRpcMcpServer:
     def serve(self, stdin: Any, stdout: Any) -> int:
-        input_stream = getattr(stdin, "buffer", stdin)
-        for raw_line in input_stream:
-            if isinstance(raw_line, bytes):
+        from ._mcp_session_transport import SessionStdioTransport
+
+        transport = SessionStdioTransport(
+            self.handle_message, lambda response: self._write(stdout, response),
+            jsonrpc_request_id_is_valid,
+        )
+        try:
+            input_stream = getattr(stdin, "buffer", stdin)
+            for raw_line in input_stream:
+                if transport.stopped:
+                    break
+                if isinstance(raw_line, bytes):
+                    try:
+                        raw_line = raw_line.decode("utf-8", errors="strict")
+                    except UnicodeDecodeError:
+                        if not transport.send(error_response(None, JSONRPC_PARSE_ERROR)):
+                            return 0
+                        continue
+                line = raw_line.strip()
+                if not line:
+                    continue
                 try:
-                    raw_line = raw_line.decode("utf-8", errors="strict")
-                except UnicodeDecodeError:
-                    if not self._write(
-                        stdout,
-                        error_response(None, JSONRPC_PARSE_ERROR),
-                    ):
+                    message = json.loads(
+                        line,
+                        parse_constant=reject_nonstandard_json_constant,
+                        parse_float=parse_finite_json_float,
+                    )
+                except (json.JSONDecodeError, NonFiniteJsonNumberError):
+                    if not transport.send(error_response(None, JSONRPC_PARSE_ERROR)):
                         return 0
                     continue
-            line = raw_line.strip()
-            if not line:
-                continue
-            try:
-                message = json.loads(
-                    line,
-                    parse_constant=reject_nonstandard_json_constant,
-                    parse_float=parse_finite_json_float,
-                )
-            except (json.JSONDecodeError, NonFiniteJsonNumberError):
-                if not self._write(stdout, error_response(None, JSONRPC_PARSE_ERROR)):
+                except Exception:
+                    if not transport.send(error_response(None, JSONRPC_INTERNAL_ERROR)):
+                        return 0
+                    continue
+                transport.dispatch(message)
+                if transport.stopped:
                     return 0
-                continue
-            except Exception:
-                if not self._write(stdout, error_response(None, JSONRPC_INTERNAL_ERROR)):
-                    return 0
-                continue
-
-            response = self.handle_message(message)
-            if response is not None:
-                if not self._write(stdout, response):
-                    return 0
+        finally:
+            transport.close()
         return 0
 
     def handle_message(self, message: Any) -> dict[str, Any] | None:
@@ -3349,6 +3571,12 @@ class JsonRpcMcpServer:
         if not has_request_id:
             self._handle_notification(method)
             return None
+
+        # This bounded management lane uses MCP IDs, not the broader historical
+        # JSON-RPC validator. Existing legacy/direct handlers keep their ABI.
+        from ._mcp_session_transport import is_management_request
+        if is_management_request(message) and type(request_id) not in (str, int):
+            return error_response(None, JSONRPC_INVALID_REQUEST)
 
         try:
             params = message.get("params")
@@ -3451,6 +3679,13 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
     elif not isinstance(arguments, dict):
         raise InvalidParamsError("tools/call params.arguments must be an object.")
 
+    if name == "archive_work_session":
+        return tool_archive_work_session(arguments)
+    if name == "archive_work_session_manage":
+        from ._mcp_session_transport import management_metadata
+        if not management_metadata(params)[0]:
+            raise InvalidParamsError()
+        return tool_archive_work_session_manage(arguments)
     if name == "wom_profile_list":
         return tool_wom_profile_list(arguments)
     if name == "wom_profile_resolve":
@@ -3563,6 +3798,26 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_project_intake_item_plan(arguments)
     if name == "source_intake_plan":
         return tool_source_intake_plan(arguments)
+    if name == "source_intake_record":
+        from ._mcp_session_transport import management_metadata
+        if not management_metadata(params)[0]:
+            raise InvalidParamsError()
+        return tool_source_intake_record(arguments)
+    if name == "zet_title_remap_write":
+        from ._mcp_session_transport import management_metadata
+        if not management_metadata(params)[0]:
+            raise InvalidParamsError()
+        return tool_zet_title_remap_write(arguments)
+    if name == "source_intake_batch":
+        from ._mcp_session_transport import management_metadata
+        if not management_metadata(params)[0]:
+            raise InvalidParamsError()
+        return tool_source_intake_batch(arguments)
+    if name == "git_backup_reconcile_plan":
+        from ._mcp_session_transport import management_metadata
+        if not management_metadata(params)[0]:
+            raise InvalidParamsError()
+        return tool_git_backup_reconcile_plan(arguments)
     if name == "tiro_import_plan":
         return tool_tiro_import_plan(arguments)
     if name == "archive_init":
@@ -3822,6 +4077,74 @@ def tool_archive_runtime_context(arguments: dict[str, Any]) -> dict[str, Any]:
     add_mcp_redaction_warning(result, requested_redaction, redact_local_paths)
     state = "passed" if result["ok"] else "blocked"
     return tool_success_result(f"archive_runtime_context: {state}; mode={result['inspection']['mode']}.", result)
+
+
+def tool_archive_work_session_manage(arguments: dict[str, Any]) -> dict[str, Any]:
+    from ._mcp_session_transport import current_session_request
+    from .work_session_command import REQUEST_LIMIT_BYTES, dispatch_work_session_management
+
+    flags = {"dry_run", "approve", "apply", "resume", "review_original"}
+    refs = {"client_app_ref", "task_route_ref", "work_session_ref", "target_app_ref"}
+    allowed = {"archive_root", "action", "request", *flags, *refs}
+    if (type(arguments) is not dict or any(type(key) is not str for key in arguments)
+            or set(arguments) - allowed
+            or type(arguments.get("action")) is not str
+            or arguments["action"] not in {"register-app", "request-init", "create", "claim", "pause", "resume", "complete", "handoff", "accept", "recover"}):
+        raise InvalidParamsError()
+    if (any(type(arguments[key]) is not bool for key in flags if key in arguments)
+            or any(type(arguments[key]) is not str for key in refs if key in arguments)
+            or ("request" in arguments and type(arguments["request"]) is not dict)):
+        raise InvalidParamsError()
+    valid_size = False
+    try:
+        valid_size = len(json.dumps(arguments, ensure_ascii=False, allow_nan=False).encode("utf-8")) <= REQUEST_LIMIT_BYTES
+    except (TypeError, ValueError, UnicodeError):
+        pass
+    if not valid_size:
+        raise InvalidParamsError()
+    archive_root = require_path_arg(arguments, "archive_root")
+    context = current_session_request()
+    wait_callbacks = {} if context is None else {
+        "cancel_requested": context.cancel_requested, "progress": context.progress,
+    }
+    result = dispatch_work_session_management(archive_root, action=arguments["action"],
+        **{key: arguments.get(key, False) for key in flags},
+        **{key: arguments.get(key) for key in refs}, request=arguments.get("request"), **wait_callbacks)
+    if not result["ok"]:
+        return {"content": [{"type": "text", "text": "Work-session operation could not be completed."}],
+                "structuredContent": result, "isError": True}
+    return tool_success_result("Work-session operation returned; original evidence and current ownership remain distinct.", result)
+
+
+def tool_archive_work_session(arguments: dict[str, Any]) -> dict[str, Any]:
+    from .work_session_query import WorkSessionQueryError, query_work_sessions
+
+    allowed = {"archive_root", "action", "kind", "ref", "client_app_ref",
+               "workstream_ref", "page_size", "cursor"}
+    if set(arguments) - allowed:
+        raise InvalidParamsError()
+    for key in allowed - {"page_size"}:
+        if key in arguments and type(arguments[key]) is not str:
+            raise InvalidParamsError()
+    page_size = arguments.get("page_size", 20)
+    if type(page_size) is not int or not 1 <= page_size <= 2000:
+        raise InvalidParamsError()
+    if arguments.get("action", "list") not in {"list", "inspect"} or arguments.get(
+            "kind", "session") not in {"app", "workstream", "session"}:
+        raise InvalidParamsError()
+    archive_root = require_path_arg(arguments, "archive_root")
+    try:
+        result = query_work_sessions(
+            archive_root, action=arguments.get("action", "list"), kind=arguments.get("kind", "session"),
+            reference=arguments.get("ref"), client_app_ref=arguments.get("client_app_ref"),
+            workstream_ref=arguments.get("workstream_ref"), page_size=page_size, cursor=arguments.get("cursor"),
+        )
+    except WorkSessionQueryError as error:
+        return {"content": [{"type": "text", "text": "Work-session query could not be completed."}],
+                "structuredContent": {"schema": "wom-kit/work-session-query/v1", "ok": False,
+                                      "reason_code": error.code, "read_only": True, "private_values_echoed": False},
+                "isError": True}
+    return tool_success_result("Read-only work-session registry query returned.", result)
 
 
 def tool_archive_capabilities(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -5165,6 +5488,161 @@ def tool_project_intake_item_plan(arguments: dict[str, Any]) -> dict[str, Any]:
     )
     state = str(result.get("state") or ("passed" if result["ok"] else "blocked"))
     return tool_success_result(f"project_intake_item_plan: {state}.", result)
+
+
+def tool_git_backup_reconcile_plan(arguments: dict[str, Any]) -> dict[str, Any]:
+    from ._mcp_session_transport import current_session_request
+    from .git_backup_session_command import dispatch_session_git_backup, _project_mcp_git_backup_result
+
+    fresh = {"remote_name", "branch", "credential_mode", "max_changes", "max_changed_bytes"}
+    required = {"archive_root", "mode", "client_app_ref", "task_route_ref"}
+    allowed = required | fresh | {"work_session_ref", "reviewed_by"}
+    if (type(arguments) is not dict or any(type(key) is not str for key in arguments)
+            or set(arguments) - allowed or not required <= set(arguments)):
+        raise InvalidParamsError()
+    for key, value in arguments.items():
+        if key in {"max_changes", "max_changed_bytes"}:
+            limit = 100000 if key == "max_changes" else 2147483648
+            if type(value) is not int or not 1 <= value <= limit:
+                raise InvalidParamsError()
+        elif type(value) is not str or not value.strip() or len(value) > 65536:
+            raise InvalidParamsError()
+    mode = arguments["mode"]
+    if mode not in {"preview", "apply", "resume", "review_original"}:
+        raise InvalidParamsError()
+    original = mode in {"resume", "review_original"}
+    if (original and (fresh | {"reviewed_by"}) & set(arguments)
+            or not original and "work_session_ref" not in arguments
+            or mode == "apply" and "reviewed_by" not in arguments
+            or mode != "apply" and "reviewed_by" in arguments
+            or "credential_mode" in arguments and arguments["credential_mode"] != "stored"
+            or len(json.dumps(arguments, ensure_ascii=True).encode("utf-8")) > 65536):
+        raise InvalidParamsError()
+    archive_root = require_path_arg(arguments, "archive_root")
+    context = current_session_request()
+    callbacks = {} if context is None else {"cancel_requested": context.cancel_requested, "progress": context.progress}
+    raw = dispatch_session_git_backup(archive_root, mode=mode,
+        client_app_ref=arguments["client_app_ref"], task_route_ref=arguments["task_route_ref"],
+        work_session_ref=arguments.get("work_session_ref"), reviewer_claim=arguments.get("reviewed_by"),
+        options={key: arguments[key] for key in fresh if key in arguments}, **callbacks)
+    result = _project_mcp_git_backup_result(raw, mode=mode)
+    if result["ok"] is not True:
+        return {"content": [{"type": "text", "text": "Session Git backup could not be completed."}],
+                "structuredContent": result, "isError": True}
+    return tool_success_result("Session Git backup result returned; completion is reported separately from eligibility.", result)
+
+
+def tool_zet_title_remap_write(arguments: dict[str, Any]) -> dict[str, Any]:
+    from ._mcp_session_transport import current_session_request
+    from .local_recovery_session import _dispatch_session_local_recovery
+    from .local_title_recovery import zet_title_recovery_execution_plan
+
+    strings = {"archive_root", "mode", "client_app_ref", "task_route_ref",
+               "work_session_ref", "source_mirror", "reviewed_by"}
+    counts = {"max_items", "expected_identifier_title_count"}
+    required = {"archive_root", "mode", "client_app_ref", "task_route_ref"}
+    if (type(arguments) is not dict or any(type(key) is not str for key in arguments)
+            or set(arguments) - strings - counts or not required <= set(arguments)
+            or any(type(value) is not str or not value.strip() or len(value) > 65536
+                   for key, value in arguments.items() if key in strings)
+            or any(type(value) is not int or not 0 <= value <= 2**63 - 1
+                   for key, value in arguments.items() if key in counts)
+            or arguments["mode"] not in {"preview", "apply", "resume", "review_original"}
+            or len(json.dumps(arguments, ensure_ascii=True).encode("utf-8")) > 65536):
+        raise InvalidParamsError()
+    mode = arguments["mode"]
+    original = mode in {"resume", "review_original"}
+    if (original and ({"source_mirror", "reviewed_by"} | counts) & set(arguments)
+            or not original and not {"work_session_ref", "source_mirror"} <= set(arguments)
+            or mode == "apply" and "reviewed_by" not in arguments
+            or mode == "preview" and "reviewed_by" in arguments
+            or not 1 <= arguments.get("max_items", archive_services.ZET_TITLE_REMAP_MAX_ITEMS) <= 5000):
+        raise InvalidParamsError()
+    root = require_path_arg(arguments, "archive_root")
+    context = current_session_request()
+    callbacks = {} if context is None else {"cancel_requested": context.cancel_requested, "progress": context.progress}
+    planner = None
+    if not original:
+        mirror = Path(arguments["source_mirror"])
+        mirror = require_path_arg({"mirror": str(mirror if mirror.is_absolute() else root / mirror)}, "mirror")
+        planner = lambda: zet_title_recovery_execution_plan(root, source_mirror=mirror,
+            max_items=arguments.get("max_items", archive_services.ZET_TITLE_REMAP_MAX_ITEMS),
+            expected_identifier_title_count=arguments.get("expected_identifier_title_count"))
+    result = _dispatch_session_local_recovery(root, mode=mode,
+        client_app_ref=arguments["client_app_ref"], task_route_ref=arguments["task_route_ref"],
+        work_session_ref=arguments.get("work_session_ref"), plan_factory=planner,
+        allowed_domains={"zet_title_recovery"},
+        reviewer_claim=None if original else arguments.get("reviewed_by", "person:local-recovery-operator"), **callbacks)
+    if result.get("ok") is not True:
+        return {"content": [{"type": "text", "text": "Session title recovery could not be completed."}],
+                "structuredContent": result, "isError": True}
+    return tool_success_result("Session title recovery returned; field completion and file backup ownership are separate.", result)
+
+
+def tool_source_intake_record(arguments: dict[str, Any]) -> dict[str, Any]:
+    return _tool_session_source_intake(arguments, family="record")
+
+
+def tool_source_intake_batch(arguments: dict[str, Any]) -> dict[str, Any]:
+    return _tool_session_source_intake(arguments, family="batch")
+
+
+def _tool_session_source_intake(arguments: dict[str, Any], *, family: str) -> dict[str, Any]:
+    """Two fixed public routes; no caller-supplied dispatch or family authority."""
+    from ._mcp_session_transport import current_session_request
+    from .source_intake_session_command import dispatch_session_source_intake, dispatch_session_source_intake_record
+
+    if type(family) is not str or family not in {"record", "batch"}:
+        raise InvalidParamsError()
+    record = family == "record"
+    input_key = "source_intake_plan" if record else "manifest"
+    allowed = {"archive_root", "mode", "client_app_ref", "task_route_ref", "work_session_ref",
+               input_key, "reviewed_by"}
+    required = {"archive_root", "mode", "client_app_ref", "task_route_ref"}
+    if not record and (type(arguments) is not dict or any(type(key) is not str for key in arguments)):
+        raise InvalidParamsError()
+    if (type(arguments) is not dict or set(arguments) - allowed or not required <= set(arguments)
+            or any(type(arguments[key]) is not str for key in arguments)
+            or arguments["mode"] not in {"preview", "apply", "resume", "review_original"}):
+        raise InvalidParamsError()
+    # Keep the record route's original missing/empty-field error ordering. Its
+    # existing command owns those structured failures; only the new batch tool
+    # requires every fresh input at the MCP grammar boundary.
+    original_mode = arguments["mode"] in {"resume", "review_original"}
+    if not record and (any(not value.strip() or len(value) > 65536 for value in arguments.values())
+            or not original_mode and not {"manifest", "work_session_ref"} <= set(arguments)
+            or arguments["mode"] == "apply" and "reviewed_by" not in arguments):
+        raise InvalidParamsError()
+    # Bound both the direct call and asynchronous transport input. Do not echo
+    # rejected path/identity values or let extra approval knobs reach a writer.
+    if len(json.dumps(arguments, ensure_ascii=True).encode("utf-8")) > 65536:
+        raise InvalidParamsError()
+    if (original_mode and {input_key, "reviewed_by"} & set(arguments)
+            or arguments["mode"] == "preview" and "reviewed_by" in arguments):
+        raise InvalidParamsError()
+    archive_root = require_path_arg(arguments, "archive_root")
+    value = arguments.get(input_key)
+    plan_path = None
+    if value is not None:
+        candidate = Path(value)
+        candidate = candidate if candidate.is_absolute() else archive_root / candidate
+        path_label = "plan" if record else "manifest"
+        plan_path = require_path_arg({path_label: str(candidate)}, path_label)
+    context = current_session_request()
+    callbacks = {} if context is None else {"cancel_requested": context.cancel_requested, "progress": context.progress}
+    dispatch = dispatch_session_source_intake_record if record else dispatch_session_source_intake
+    input_path = {"plan_path": plan_path} if record else {"request_path": plan_path}
+    result = dispatch(archive_root, mode=arguments["mode"],
+        client_app_ref=arguments["client_app_ref"], task_route_ref=arguments["task_route_ref"],
+        work_session_ref=arguments.get("work_session_ref"),
+        reviewer_claim=arguments.get("reviewed_by"), **input_path, **callbacks)
+    if result.get("ok") is not True:
+        message = "Source-intake record could not be completed." if record else "Source-intake batch could not be completed."
+        return {"content": [{"type": "text", "text": message}],
+                "structuredContent": result, "isError": True}
+    message = ("Source-intake metadata record returned; source bytes are not captured." if record else
+               "Source-intake batch metadata returned; any prepared capture request needs separate approval to capture bytes.")
+    return tool_success_result(message, result)
 
 
 def tool_source_intake_plan(arguments: dict[str, Any]) -> dict[str, Any]:

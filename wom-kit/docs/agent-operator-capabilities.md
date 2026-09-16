@@ -1,6 +1,6 @@
 # Agent Operator Capabilities Manifest
 
-Status: v0.4.19 shared capability availability and four-state runtime truth
+Status: v0.4.20 shared capability availability and writer-session coverage gate
 
 v0.4.19 keeps the command inventory stable and makes its interpretation
 consistent. Help, `capabilities`, Doctor suggestions, dry-run interpretation,
@@ -124,17 +124,17 @@ field remain `history_not_audited`. Inventory, shared capability availability,
 and command help consume the same content-free history. Current availability
 continues to be parser-derived; history does not grant execution authority.
 
-For the current v0.4.19 working-tree parser, the inventory snapshot is:
+For the current v0.4.20 working-tree parser, the inventory snapshot is:
 
 ```text
-canonical executable command paths: 315
+canonical executable command paths: 316
 alias invocation paths:              259
-all invocation paths:                574
-approval_available:                   46
+all invocation paths:                575
+approval_available:                   47
 approval_fixed_closed:                68
 approval_not_exposed:                201
-conditional approval paths:            10
-dry_run_exposed:                     272
+conditional approval paths:            11
+dry_run_exposed:                     273
 unmatched fixed-close entries:         0
 ```
 

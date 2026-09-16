@@ -1,0 +1,379 @@
+# Session integration covers real dispatch families
+
+## Context
+
+A parser option is not proof of an executable writer. Likewise, adding one
+argument or changing the native broker cannot bind every existing local record.
+The integration audit ran the actual parser and capability inventory at the
+development checkpoint: 315 canonical paths, 47 approval-available paths (ten
+conditional), 67 fixed-closed paths and 201 paths without exposed approval.
+These are dispatch-surface facts, not successful client execution counts.
+
+One of the 47, `operation-control`, has no mutation: cancel always returns an
+unsupported result and the other actions require read-only mode. Its v0.4.19
+capability correction is separate from v0.4.20 writer integration. It must not
+be implemented or counted as a newly available session writer by accident.
+
+## Explicit coverage groups
+
+| Family | Paths at the audited checkpoint |
+| --- | --- |
+| Exact manifest (10) | `external-locator-record`, `git-backup-reconcile-plan`, `migrate`, `object-storage`, `object-storage-adopt-existing`, `objet-capture-selection`, `source-intake-batch`, `source-intake-record`, `zet-title-remap-revert`, `zet-title-remap-write` |
+| Native/custom domain (15) | `approval-integrity-overlay`, `create-draft`, `credential-adopt`, `duplicate-object-reconcile`, `human-artifact-register-root`, `human-artifact-transition`, `mint-zet`, `objet-capture`, `objet-capture-batch`, `project-version-update`, `promote`, `retire-draft`, `revert-edge`, `source-fidelity-session-evidence`, `zettel-edge` |
+| Mixed single/manifest (1) | `zettel-objet-link` |
+| Existing local records and saved plans (20) | `activity-group-membership-removal-plan`, `ai-usage-record`, `approval-handoff-record`, `credential-access-approval-plan`, `imap-mailbox-adapter-audit-write`, `imap-mailbox-header-scan-receipt-audit`, `imap-mailbox-material-capture-approval-plan`, `imap-mailbox-material-selection-record`, `operational-context`, `operator-feedback-compose`, `operator-feedback-mark-delivered`, `operator-feedback-record`, `project-intake-decisions`, `project-intake-record-answer`, `project-intake-unpack-choice`, `record-attestation-review-candidate`, `record-attestation-statement-draft`, `relation-candidate-decide`, `session-handoff-checkpoint`, `shared-update-attestation-review` |
+| Unsupported control (1) | `operation-control` |
+
+The local-record group is not an exact-native approval implementation. For
+example, feedback composition has its own CAS contract and legacy handoff uses
+its v1 digest and receipt. IMAP entries here save local evidence or plans; they
+do not open the unavailable IMAP provider writers.
+
+## Decisions
+
+1. Classify parsed execution intent before ownership enforcement: read-only,
+   fresh write, existing resume, bootstrap, emergency preservation or unsupported
+   control. `approve=True` alone does not identify a fresh operation.
+2. For fresh domain writes, acquire the existing archive lock, validate current
+   app/session/claim ownership, observe a fresh plan, and then request approval.
+   Reuse that held lock in the writer; do not nest a second archive lock.
+3. A historical `RegistrySnapshot.binding()` is identity data, not evidence of
+   a current claim. Add a narrow existing-store guard for the fresh-write lane.
+   Its result does not replace human approval or authenticate a hostile app
+   running under the same operating-system user.
+4. Pass new session bindings explicitly into manifest preparation. Preserve the
+   absent extension and original byte/digest contract of historical documents.
+   Native/custom adapters must freeze and recheck the same domain plus session
+   binding rather than silently rewriting every old context factory.
+5. A new capture may reference old intake evidence. Attribute only the new
+   capture decision; do not reattribute the intake's creator or approval.
+6. Resume from the original context, manifest, reviewer claim and authentication.
+   Do not inject the current registry revision into an old approval. Keep
+   bootstrap and emergency feedback preservation explicit to avoid requiring a
+   working session system before it can itself be installed or diagnosed.
+7. Compare actual parser paths and conditional modes against completed adapters
+   and narrowly documented exceptions in CI before declaring all-writer scope
+   complete. Test aliases, option assignment syntax, repeated-option semantics,
+   old approvals, lock waits, interrupted writes and public-output privacy.
+
+## Status
+
+### Approval-free effects are a separate coverage axis
+
+A second bounded source audit confirmed that the approval table is not an
+inventory of every filesystem or provider effect. It checked representative
+paths, not all 201 approval-unexposed commands.
+
+| Invocation | Observed effect beyond reading |
+| --- | --- |
+| `index` | Regenerates and commits the shared archive SQLite index without an approval option |
+| `index-health` or `staged-cleanup-check`, with `--dry-run --output` | Writes the diagnostic result and operation journal |
+| `ai-start-here`, `zet-catalog` or `upgrade-check`, with `--output` | Writes an AI/diagnostic artifact through the shared scratch capture helper |
+| `zet-catalog-pass --dry-run` | Writes the required private JSONL output and manages its own incomplete output |
+| `doctor --output` or `--progress-log` | Writes a new archive-relative result or an explicitly external progress log |
+
+Do not infer effects from names alone: the ordinary Doctor without output is
+read-only, the Notion object-link index is an in-memory projection, SQLite
+readers have read-only/sidecar preflight, secure credential verification reads
+an existing key without creating one, and upload-verify checks local bytes
+rather than proving a remote response. These observations are not a universal
+guarantee about all provider or query paths.
+
+The common parser-derived judgment needs an invocation-effect axis independent
+of human approval. Preserve exact canonical/alias/argument-mode interpretation;
+include generated-index, private-artifact, operational-metadata, credential and
+provider effects where actually present. Propagate the validated execution
+binding through the shared result-capture and operation-journal boundaries.
+Progress records and SQLite temporary files inherit their parent execution;
+they do not each demand a new human decision. The shared index remains
+archive-wide data even when its generation has a responsible work session.
+
+No-output reads remain available without a session. Historical checkpoints
+remain unchanged. Any bootstrap or emergency diagnostic exception must be
+explicit and cannot falsely report attribution to a current session. Complete
+effect coverage and these output/journal integrations remain acceptance work.
+
+The internal registry decision runner and its three real process-loss/resume
+journeys are implemented and development-tested. The complete family mapping,
+public CLI/MCP attachment and all-writer enforcement are **not yet complete**.
+No existing writer has been closed merely to claim session coverage. No client
+archive, provider, credential or feedback ledger was modified by this audit.
+
+See [integration minutes](../../meeting-minutes/2026-09-05-v0420-work-session-integration.md).
+
+## Bounded implementation and public query
+
+The pure invocation-effect decision is now implemented in `command_status` for
+twelve audited command paths. Parser/handler footprint drift returns unknown
+coverage, not an inferred read-only result. Independent review added the explicit
+external deferred-input read. The actual CLI attaches the result before its
+existing runtime guard; audited index, artifact and journal writes receive that
+guard without requiring a new human approval. Unknown coverage does not erase
+existing explicit writer guards. This is not yet session binding for every
+effect, nor runtime/session enforcement for existing MCP writers.
+
+The one new top-level command, `work-session`, and MCP `archive_work_session`
+now share a read-only list/inspect service. Its complete registry generation,
+opaque filters, pagination and counts do not infer legacy artifact ownership or
+expose labels/claim tokens. Reads may continue while the writer lock is held;
+new generations invalidate subsequent cursors rather than mixing snapshots.
+Default JSON parse errors are private-safe. The existing no-console startup
+reporter is reused; no custom UI or secondary approval system was introduced.
+
+Lifecycle writes and automatic private client-context attachment remain the
+next public integration slice. Read-only availability is not evidence that app
+registration, work creation, claims or original-operation resume are exposed.
+
+## Subsequent public lifecycle and provenance checkpoint
+
+At `1ad9e489`, the public CLI/MCP now expose registration, creation, claim,
+pause/resume, completion, exact human handoff/acceptance and same-app recovery,
+including original-operation continuation. The earlier paragraph records the
+preceding read-only milestone, not the current public lifecycle status.
+
+Session coverage of domain writers is still incomplete. Reuse the existing
+Git selection-v2 partition/writer and artifact pagination; add authenticated
+producer evidence rather than treating selection declarations or private actor
+context as document ownership. The first bounded adapter may select authentic
+new session completion receipts only. This is not general document backup.
+Preserve unknown/mixed/other-session changes and custom ignore rules. Current
+claim authority, historical producer identity and cleanup responsibility are
+three distinct concepts; none substitutes for another or for human approval.
+
+## Rechecked dispatch coverage, 2026-09-06
+
+A read-only recheck of the actual parser at `0d9e8498` plus the current scoped
+Git preparation work found 316 canonical paths and 259 alias spellings. The
+canonical approval inventory is now 48 available (11 conditional), 67 fixed
+closed and 201 not exposed. The additional available family is `work-session`;
+`operation-control` remains unsupported cancel/read-only and is not a writer.
+The 46 legacy paths in the four domain/local-record groups above still need
+current actor, held execution and explicit session-binding composition. An
+internal optional Git binding or held seam is not public route integration.
+
+The 201 not-exposed paths are not all read-only: the separate output/index/
+journal effects described above remain acceptance work. Aliases, declared
+permissions, callback count and historical coverage numbers are not writer
+denominators. MCP management is connected through the same session service;
+MCP project-intake choice is an existing unintegrated service, not a new family.
+
+Retain the exact current conditional modes. In particular, a local IMAP plan
+does not implement an IMAP provider writer; only relation rejection is currently
+available; existing exact-local/capture/recovery/adoption mode limits remain.
+Do not close these existing supported modes merely to claim session coverage.
+
+The implementation sequence is scoped Git original-operation composition,
+then exact-manifest families, native/custom contexts and local-record effects,
+all reusing the existing wait/held/current-selection seams. Legacy absent
+extensions and original approvals remain unchanged. Current capability tests
+check availability, not completed session coverage. The comprehensive
+writer-session coverage gate and `responsibility_assignment` implementation
+are still missing; the design text is not implementation evidence.
+
+Receipt-only provenance currently admits newly added, authenticated whole
+completion receipts. It explicitly does not attest canonical Zet/document
+ownership or full artifact backup. Real document changes remain unknown or
+excluded until an actual producer proof or separately approved responsibility
+assignment supplies the right evidence. No client archive was inspected or
+changed by this dispatch audit.
+
+## Subsequent scoped intake-to-Git source checkpoint
+
+The existing Git and source-intake-batch CLI families now have joined scoped
+execution evidence. Public creation/claim and real scoped intake feed exact
+metadata-output proofs into selective Git commit/push. Tests cover a common
+receipt already committed, other-session and unknown exclusions, retained
+original resume and original Git re-review. Historical human-receipt provenance
+remains a separate producer. A prepared capture request is not captured or
+backed-up source bytes; generic documents and objet custody remain outside
+this producer's claim. The scoped domain routes are CLI-only at this checkpoint,
+not completed MCP parity or two fully completed coverage families.
+
+This does not close the remaining writer denominator. Other exact families,
+native/custom capture and daily operations, local record/index/journal effects,
+responsibility assignment and the comprehensive session-coverage gate remain
+unfinished. In particular, legacy objet capture is not a common exact held
+transaction and must not be opened to scoped intake through schema widening.
+Reuse the existing next exact-manifest families before claiming universal writer
+coverage; retain old approvals and already usable legacy modes meanwhile.
+
+## Subsequent scoped single-record source checkpoint
+
+`source-intake-record` now composes its own one-receipt exact manifest with the
+existing actor/claim/origin guards, retained original-input codec and shared
+approval/checkpoint engine. It has joined source tests for CLI interruption to
+MCP original resume, and MCP interruption to CLI original resume; completed
+replay is read-only in both directions. The other two scoped domain families
+remain CLI-only. Single-record MCP parity does not imply universal domain
+parity or installed-release acceptance.
+
+The parser delta remains exactly one top-level `work-session`; new arguments
+extend existing families. Relative to the released surface, MCP additions are
+the two work-session tools and the single source-intake record tool. Do not
+count aliases, preview paths or internal classes as completed writer families.
+Metadata recording still does not prove source capture, cleanup responsibility
+or Git producer ownership. Single-record downstream Git authentication and the
+remaining writer/effect coverage remain explicit follow-up work.
+
+## Subsequent single-record metadata-to-Git checkpoint
+
+The shared historical reader now handles the single record through a closed
+family route and distinct exact data/authenticated result types. Its explicit
+Git producer proves one source receipt and its whole common completion file;
+it does not imply batch capture, generic document ownership or source custody.
+Both fixed private context directories are bounded discovery hints. Original
+Git continuation uses only its stored producer references and original claim.
+
+This extends the existing scoped Git family rather than increasing the number
+of completed writer families. Single-record CLI/MCP parity remains separate
+from Git's currently CLI-only public route. Actual synthetic Git journey and
+regression evidence belongs in the integration minutes; version, installed
+acceptance and client execution are not implied by this source checkpoint.
+
+## Subsequent Git MCP source checkpoint
+
+The existing scoped Git family now has an MCP route calling the same service.
+Joined source tests cross CLI/MCP at interruption and completed replay, with
+real isolated commit/push/ref/blob and excluded-change checks. This adds no
+writer family or approval protocol. The scoped batch route remains CLI-only;
+single record and Git have their own MCP parity evidence. Installed acceptance,
+comprehensive writer/effect coverage and client results remain unfinished.
+
+Relative to the preceding feature checkpoint, the only additional MCP tool is
+`git_backup_reconcile_plan`; the current total is 135. It accepts no private
+original locator, approval identifier, selection or replacement reviewer for
+continuation. The public result preserves historical commit verification apart
+from current ownership and final completion. Metadata-only Git backup still
+does not attest source capture or generic document ownership.
+
+## Subsequent batch MCP source checkpoint
+
+The existing scoped batch family now calls its same held dispatcher through
+`source_intake_batch`. Actual source journeys cross CLI/MCP after partial
+receipt publication and verify original continuation and immutable completed
+replay. Existing single-record journeys pass after sharing the fixed-family
+MCP helper and intake starting notification. This gives the three existing
+scoped domain families their own CLI/MCP evidence; it does not increase the
+writer denominator or establish comprehensive effect ownership.
+
+MCP is now 136 tools; only the batch definition was added and existing record
+schema/response/error behavior is preserved. The original missing-approval
+blocker remains explicit for intake; automatic resume cannot silently request
+a new human decision. Prepared capture requests and metadata backup do not
+close source custody, generic document ownership, cleanup responsibility,
+installed acceptance or any client recovery. Those remaining boundaries are
+still tracked rather than relabelled as completed coverage.
+
+## Explicit intake original-review extension under verification
+
+Both existing scoped intake families now expose explicit original review via
+their existing CLI/MCP routes. This addresses the reachable interruption after
+the retained original/pending task was published but before its approval claim
+was created. Ordinary resume stays non-interactive; explicit review requires
+authenticated original evidence, unchanged pending ownership and genuine claim
+absence. Existing claims return to their original resume path. The extension
+reuses the common broker and each family's existing writer and does not widen
+metadata recording into source capture.
+
+CLI remains 576 command spellings and MCP remains 136 tools. The only schema
+delta from the prior checkpoint is the additional original-review mode on the
+two intake tools; descriptions explain the explicit action. Routing and
+transport tests are separate from the private-engine fault matrix and actual
+CLI/MCP write/interruption/review/replay journeys. No additional writer family,
+release, installed runtime, client recovery or universal ownership coverage is
+claimed by this extension.
+
+## Original-review and unrelated-app continuation development closeout
+
+On 2026-09-08 the pending intake original-review extension and the existing
+intake/Git current-owner correction passed 45 focused source tests: eight
+private review cases, nine public/registry journeys and 28 scope/Git/CAS
+regressions. Independent read-only review found no actionable defect. The
+previous 101 public routing/transport passes are retained as unchanged-source
+evidence rather than repeated or counted again.
+
+The public journeys register an unrelated app after A's original interruption,
+then verify exact original resume/review across CLI/MCP, real metadata outputs
+and local-bare Git refs/blobs, plus read-only completed replay. Actual session
+pause, claim/actor/target/evidence drift and registry write conflicts remain
+refused. The original `registry_preimage_sha256` and approvals are preserved;
+current ownership uses the existing session-specific claimed-binding guard.
+
+This completes those bounded source paths, with no additional writer family,
+top-level command or tool. Whole writer/effect ownership, source capture,
+generic-document provenance, responsibility assignment, comprehensive coverage
+gates and final installed/release acceptance remain unfinished. No client
+archive, runtime, credentials, providers or feedback lifecycle was changed.
+
+## Local recovery transformation preservation
+
+The existing local recovery composite, revert and observed-post subset
+planners now preserve a supplied work-session binding. Composites refuse
+mixed identity/revision or bound/unbound members; subsets cannot relabel the
+historical parent. Legacy unbound approval and control digests remain byte
+compatible with the preceding development checkpoint. Six contract tests and
+12 existing local-recovery regressions passed; independent review found no
+actionable defect. This does not add a completed writer family: current-owner
+execution, original actor routing and whole-document Git proof remain pending.
+
+## Partial session title recovery checkpoint
+
+At `6088a434` the existing local title recovery CLI supports held session apply,
+original approved resume, and read-only completed replay. The scoped control
+retains the original actor/origin/approval context; concrete current-owner and
+retained-byte checks protect field writes, progress, index completion and actor
+publication. Core/binding/held/legacy recovery passed 28 tests, actor pending
+regressions 11, and an actual title CLI journey plus argument privacy checks
+passed. Independent review corrections were verified and the checkpoint pushed.
+
+Explicit missing-claim original review and the title CLI's MCP counterpart now
+have development evidence: 25 private/public/legacy recovery tests and 30
+grammar/transport tests passed, including both directions of actual CLI/MCP
+continuation. Independent review corrections were verified. This adds one fixed MCP tool definition
+(137 total), not a new top-level CLI command or generic execution framework.
+It is not yet a fully covered family: scoped revert, complete whole-document
+provenance/backup and final installed/release acceptance remain unfinished.
+Field-level receipts explicitly do not attest whole-document ownership.
+
+## Canonical document transition observation
+
+The title recovery session control now optionally records actual canonical
+document preimage/postimage digests and sizes captured under the held writer
+lock, bound by the scope digest. The existing field CAS refuses a write whose
+observed input or replacement bytes differ from the approved images, and
+original review refuses a changed whole preimage. Old image-less controls keep
+their exact shape. Completion reports whole-document transition matching and
+a document count without echoing paths; whole-document ownership stays false.
+21 recovery tests and one MCP projection test passed; independent read-only
+review found no actionable defect. This is observation evidence for the next
+Git producer unit, not a new writer family, generic-document provenance or
+WS-04 selected/excluded coverage completion.
+
+## Authenticated document Git producer
+
+The session Git backup gains a third closed producer for canonical zettel
+documents changed by a completed session title recovery whose control
+recorded whole preimages/postimages. Ownership of a modified file requires
+the authenticated original (control, common final receipt, checkpoint, claim
+and establishment evidence), HEAD bytes equal to the approved preimage,
+worktree bytes equal to the approved postimage, the index equal to one of
+them, and the current file still matching the postimage under the held lock.
+Pre-existing uncommitted edits, a later body edit, a foreign index entry, a
+rename or a superseded earlier recovery all leave the path
+`ownership_unverified`; the recovery's own completion receipt is proved by the
+same producer. Scope schema v3 carries these proofs; v1/v2 are unchanged.
+Development verified with 7 tests over a real repository and bare remote.
+This does not prove ownership of locator/ledger/index outputs, chains of
+overlapping approvals, or installed/release acceptance.
+
+## Writer-session coverage gate
+
+Decision 7 is now mechanical: `tools/check_writer_session_coverage.py`
+compares the parser's approval-available paths with
+`docs/writer-session-coverage.json` on every release readiness run. A path
+is session-integrated only with exposed session refs and cited tests;
+pending paths carry a train release target; legacy exceptions carry their
+decision-6 reason. The gate blocks unclassified, stale or misclassified
+paths and prints the honest denominator (6 integrated, 21 pending, 20
+exceptions of 47 at this checkpoint). It never declares all-writer scope
+complete while a pending path remains.

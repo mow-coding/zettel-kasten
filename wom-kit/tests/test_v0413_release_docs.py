@@ -29,7 +29,7 @@ BUDGET_CONTRACT_DOCUMENTS = (
 
 class V0413ReleaseDocsTests(unittest.TestCase):
     def test_v0413_is_preserved_as_source_history(self) -> None:
-        expected = "0.4.19"
+        expected = "0.4.20"
         package_init = (KIT / "src" / "wom_kit" / "__init__.py").read_text(
             encoding="utf-8"
         )
@@ -45,15 +45,15 @@ class V0413ReleaseDocsTests(unittest.TestCase):
             (ROOT / "CITATION.cff").read_text(encoding="utf-8"),
         )
         versioning = (ROOT / "VERSIONING.md").read_text(encoding="utf-8")
-        self.assertIn("Current public baseline:\n\n```text\nv0.4.19", versioning)
-        self.assertIn("current `wom-kit` package metadata is:\n\n```text\n0.4.19", versioning)
+        self.assertIn("Current public baseline:\n\n```text\nv0.4.20", versioning)
+        self.assertIn("current `wom-kit` package metadata is:\n\n```text\n0.4.20", versioning)
 
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         readme_ko = (ROOT / "README.ko.md").read_text(encoding="utf-8")
         for document in (readme, readme_ko):
-            self.assertIn("releases/download/v0.4.19/wom_kit-0.4.19-py3-none-any.whl", document)
-        self.assertIn("Previous public baseline: v0.4.18.", readme)
-        self.assertIn("이전 공개 기준: v0.4.18.", readme_ko)
+            self.assertIn("releases/download/v0.4.20/wom_kit-0.4.20-py3-none-any.whl", document)
+        self.assertIn("Previous public baseline: v0.4.19.", readme)
+        self.assertIn("이전 공개 기준: v0.4.19.", readme_ko)
         self.assertTrue(RELEASE.is_file())
         self.assertFalse(
             (KIT / "src" / "wom_kit" / "_resources" / "release-notes" / "v0.4.13.md").exists()
@@ -74,11 +74,11 @@ class V0413ReleaseDocsTests(unittest.TestCase):
         policy = json.loads((KIT / "project-runtime-policy.json").read_text(encoding="utf-8"))
         self.assertEqual(
             policy["supply_lock"],
-            "wom-kit/project-runtime-supply-lock-v0.4.19.json",
+            "wom-kit/project-runtime-supply-lock-v0.4.20.json",
         )
         self.assertEqual(
             policy["supply_lock_sha256"],
-            "sha256:8714250cab5fd639ef00c99d054f7b33b7a8b45fce63f68702e4138fec83b70e",
+            "sha256:5b41edfcdf278e6d6f3393a1b3e06178af501a86d9779d6c3782a0c757c5d492",
         )
         source = (KIT / "src" / "wom_kit" / "project_runtime.py").read_text(
             encoding="utf-8"

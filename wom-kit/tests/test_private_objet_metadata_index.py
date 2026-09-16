@@ -58,13 +58,13 @@ EMPTY_ALLOWLIST_SHA256 = (
     "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
 )
 
-CLI_COUNT = 575
+CLI_COUNT = 576
 CLI_CANONICAL_SHA256 = (
-    "f3d12300e12dc3ab54d2b72e443f69bb4102ac2460c3d51d7f3da17108063c1f"
+    "18287b38efa279b4a2c096234e762d66fbc8f426a1e74859b7e921cc90e809b7"
 )
-MCP_COUNT = 131
+MCP_COUNT = 137
 MCP_CANONICAL_SHA256 = (
-    "40c6667552b13d3662afedfeb1e5049d933a7bf01a04774f41426fe225139f1e"
+    "9aff69868e11f6982cdb91014c9bd905be36574d6005d9cb624231c3217b3619"
 )
 DB_SOURCE_COUNT = 3
 DB_SOURCE_CANONICAL_SHA256 = (
@@ -72,7 +72,7 @@ DB_SOURCE_CANONICAL_SHA256 = (
 )
 RESOURCE_ADDITIONS = frozenset(
     {
-        "release-notes/v0.4.19.md",
+        "release-notes/v0.4.20.md",
         "schemas/agent-instruction-policy-v0.1.schema.json",
         "schemas/approval-handoff-v0.1.schema.json",
         "schemas/approval-integrity-audit-result-v0.1.schema.json",
@@ -1214,7 +1214,7 @@ class PrivateObjetMetadataIndexPrivacyGateTests(unittest.TestCase):
             manifest["schema"],
             "wom-kit/package-resource-manifest/v0.1",
         )
-        self.assertEqual(manifest["version"], "0.4.19")
+        self.assertEqual(manifest["version"], "0.4.20")
         self.assertEqual(manifest["file_count"], len(manifest["files"]))
         current_paths = {row["packaged"] for row in manifest["files"]}
         self.assertEqual(

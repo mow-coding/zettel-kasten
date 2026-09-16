@@ -31,7 +31,7 @@ WINDOWS_RUNTIME = os.name == "nt" and sys.version_info[:2] == (3, 12) and platfo
 # This one production predicate compares the before/after directory lstat.
 # A contract test pins the source line and actual nested code object; another
 # identity call cannot be paired merely because it happened nearby.
-_DIRECTORY_IDENTITY_COMPARISON_LINE = 3345
+_DIRECTORY_IDENTITY_COMPARISON_LINE = 3358
 _DIRECTORY_IDENTITY_FIELDS = ("device", "inode", "type", "size", "mtime_ns", "attributes")
 
 
