@@ -281,3 +281,17 @@ nothing was written, and the packaged Runtime Skill operator contract plus
 the revision/discard/batch guides, matrix rows and READMEs no longer describe
 the reopened writers as fixed closed. Development evidence: 5 new tests,
 full cohort 2,185 OK. Still no client outcome is claimed.
+
+### 2026-09-17 v0.4.21 released
+
+v0.4.21 is public: tag `v0.4.21` on main `70536034`, one wheel
+`wom_kit-0.4.21-py3-none-any.whl` (SHA-256
+`73f13ff73ca983b5ac196ca5d8f01b818c739becc1b1fc7eb09e8c79f46527db`),
+candidate CI 14/14 with no rerun on the merged head, exact-merge installed
+verification, anonymous download and two fresh-venv installations recorded
+in the [release evidence](../../meeting-minutes/2026-09-17-v0421-release-evidence.md).
+This is release acceptance of the artifact and the installed synthetic
+journeys only. LR-01's client outcome (letters 157-160 and the letter-160
+intake chain), LR-06 session integration of the 30 pending paths, and the
+carried rows LR-02 through LR-05 and LR-07 remain open. No feedback letter's
+`resolved_in` is set by this release.
