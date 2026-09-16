@@ -25,7 +25,7 @@ in their original private custody. The developer does not update their lifecycle
 | RT-03 | v0.4.19 | Actual released interruption states resume or safely abandon with exact evidence; unknown states are preserved | development verified and released; client execution independently pending |
 | RT-04 | v0.4.19 | Four-state checks, command availability, requested modes, index readiness, and actual dispatch agree | development verified and released; client execution independently pending |
 | RT-05 | v0.4.19 | Operational Doctor <=180 s, initial status <=2 s, heartbeat <=10 s; count and byte-scale evidence distinguished; no background console flashes | released with supported-platform candidate and installed observations; count/mixed evidence and failed observations retained separately; client execution independently pending |
-| WS-01 | v0.4.20 | Opaque app/workstream/session identity, CAS claims, one cancellable OS writer lock, consistent generation reads, and context handoff | public CLI/MCP lifecycle implemented with development evidence; final installed/release acceptance pending |
+| WS-01 | v0.4.20 | Opaque app/workstream/session identity, CAS claims, one cancellable OS writer lock, consistent generation reads, and context handoff | public CLI/MCP lifecycle implemented with development evidence; released in v0.4.20 (public wheel, anonymous download and fresh-venv installation verified); client outcome pending |
 | WS-02 | v0.4.20 | New writes carry session binding; old approved operations resume without rewriting their authority | batch/record intake and Git have scoped CLI/MCP source evidence; intake original review and unrelated-app continuation development verified; title apply/original review/resume now has CLI/MCP development evidence (25 recovery plus 30 adapter/transport tests and independent review); canonical document before/after transition observation development verified (21 recovery plus one MCP projection test, independent read-only review); authenticated whole-document Git ownership for completed title recoveries development verified (7 tests over a real repository; HEAD preimage, worktree postimage, index, original authentication); session-scoped title revert development verified (compensation as a bound apply over the observed post subset; 3 tests); all-writer/effect coverage unfinished |
 | WS-03 | v0.4.20 | Local-only count-first target preview with 20-item pages and safe title/filename/short-ID fallback | preview and paging components implemented; session decisions and local recovery writers (legacy and session-scoped apply) show the count-first paged preview with a live target-binding observer; other writer families and installed acceptance pending |
 | WS-04 | v0.4.20 | Complete cursor pagination and exact selected/excluded Git coverage; selected-session non-force commit/push plus independent remote-ref proof | pagination and authenticated receipt/metadata selective Git source journeys verified; canonical zettel documents changed by completed session title recoveries are now selected with HEAD/index/worktree proof (scope v3); generic ownership of other outputs, responsibility integration and installed/release acceptance pending |
@@ -186,3 +186,17 @@ register still records development evidence only: WS-01 through WS-04 keep
 their pending installed/platform/release acceptance until the public
 artifact, anonymous download and fresh-venv installation evidence exist,
 and no client outcome is claimed by publication.
+
+### 2026-09-16 v0.4.20 released
+
+v0.4.20 is public: tag `v0.4.20` on main `25a46efb`, one wheel
+`wom_kit-0.4.20-py3-none-any.whl` (SHA-256
+`42d6553f1f49ef2cdc03a0990974c4c00ad9a3a629123e888cb5b6e4a293d9e8`),
+candidate CI 14/14, exact-merge installed verification, anonymous download
+and two fresh-venv installations recorded in the
+[release evidence](../../meeting-minutes/2026-09-16-v0420-release-evidence.md).
+This is release acceptance of the artifact and the installed synthetic
+journeys only. WS-02 all-writer coverage (21 pending paths), WS-03 and
+WS-04 installed acceptance for the remaining writer families, and every
+client feedback outcome remain open. No feedback letter's `resolved_in` is
+set by this release.
