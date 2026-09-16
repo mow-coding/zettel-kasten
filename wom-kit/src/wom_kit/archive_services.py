@@ -119,7 +119,11 @@ from .operation_approval_binding import (
     retire_draft_approval_binding,
     warning_override_approval_binding,
     zettel_edge_approval_binding,
+    zettel_edge_batch_approval_binding,
+    zettel_edge_batch_revert_approval_binding,
     zettel_edge_revert_approval_binding,
+    mint_zet_batch_approval_binding,
+    retire_draft_batch_approval_binding,
 )
 
 try:
@@ -49428,12 +49432,21 @@ def mint_zettel(
     expected_exact_approval_target_binding_sha256: str | None = None,
     exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
     progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
+    batch_authority: _ExactBatchItemAuthority | None = None,
 ) -> dict[str, Any]:
+    if batch_authority is not None and type(batch_authority) is not _ExactBatchItemAuthority:
+        raise ArchiveServiceError("exact_batch_authority_invalid")
     _require_exact_human_approval_inputs_before_archive_read(
         claim=exact_human_approval_claim,
-        expected_plan_sha256=expected_exact_approval_plan_sha256,
+        expected_plan_sha256=(
+            batch_authority.plan_sha256
+            if batch_authority is not None
+            else expected_exact_approval_plan_sha256
+        ),
         expected_target_binding_sha256=(
-            expected_exact_approval_target_binding_sha256
+            batch_authority.target_binding_sha256
+            if batch_authority is not None
+            else expected_exact_approval_target_binding_sha256
         ),
     )
     reviewer = reviewed_by.strip()
@@ -49639,16 +49652,23 @@ def mint_zettel(
     created_paths = [canonical_relative, receipt_relative, snapshot_relative]
 
     try:
-        exact_operation_approval = _require_exact_human_operation_approval(
-            root,
-            mint_zet_approval_binding(dry_run),
-            reviewer_claim=reviewer,
-            expected_plan_sha256=expected_exact_approval_plan_sha256,
-            expected_target_binding_sha256=(
-                expected_exact_approval_target_binding_sha256
-            ),
-            claim=exact_human_approval_claim,
-        )
+        if batch_authority is not None:
+            exact_operation_approval = batch_authority.item_approval(
+                mint_zet_approval_binding(dry_run),
+                claim=exact_human_approval_claim,
+                item_identity_sha256=_mint_item_identity(dry_run),
+            )
+        else:
+            exact_operation_approval = _require_exact_human_operation_approval(
+                root,
+                mint_zet_approval_binding(dry_run),
+                reviewer_claim=reviewer,
+                expected_plan_sha256=expected_exact_approval_plan_sha256,
+                expected_target_binding_sha256=(
+                    expected_exact_approval_target_binding_sha256
+                ),
+                claim=exact_human_approval_claim,
+            )
     except OperationApprovalBindingError as exc:
         raise ArchiveServiceError(exc.code) from None
     approved_scratch_cleanup_projection = _ai_scratch_gc_approval_projection(
@@ -50628,12 +50648,21 @@ def write_retired_draft_from_plan(
     expected_exact_approval_plan_sha256: str | None = None,
     expected_exact_approval_target_binding_sha256: str | None = None,
     exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
+    batch_authority: _ExactBatchItemAuthority | None = None,
 ) -> dict[str, Any]:
+    if batch_authority is not None and type(batch_authority) is not _ExactBatchItemAuthority:
+        raise ArchiveServiceError("exact_batch_authority_invalid")
     _require_exact_human_approval_inputs_before_archive_read(
         claim=exact_human_approval_claim,
-        expected_plan_sha256=expected_exact_approval_plan_sha256,
+        expected_plan_sha256=(
+            batch_authority.plan_sha256
+            if batch_authority is not None
+            else expected_exact_approval_plan_sha256
+        ),
         expected_target_binding_sha256=(
-            expected_exact_approval_target_binding_sha256
+            batch_authority.target_binding_sha256
+            if batch_authority is not None
+            else expected_exact_approval_target_binding_sha256
         ),
     )
     root = require_existing_archive_root(archive_root)
@@ -50656,16 +50685,23 @@ def write_retired_draft_from_plan(
     verify_retired_draft_plan_still_current(root, plan)
 
     try:
-        exact_operation_approval = _require_exact_human_operation_approval(
-            root,
-            retire_draft_approval_binding(plan),
-            reviewer_claim=reviewed_by,
-            expected_plan_sha256=expected_exact_approval_plan_sha256,
-            expected_target_binding_sha256=(
-                expected_exact_approval_target_binding_sha256
-            ),
-            claim=exact_human_approval_claim,
-        )
+        if batch_authority is not None:
+            exact_operation_approval = batch_authority.item_approval(
+                retire_draft_approval_binding(plan),
+                claim=exact_human_approval_claim,
+                item_identity_sha256=_retire_item_identity(plan),
+            )
+        else:
+            exact_operation_approval = _require_exact_human_operation_approval(
+                root,
+                retire_draft_approval_binding(plan),
+                reviewer_claim=reviewed_by,
+                expected_plan_sha256=expected_exact_approval_plan_sha256,
+                expected_target_binding_sha256=(
+                    expected_exact_approval_target_binding_sha256
+                ),
+                claim=exact_human_approval_claim,
+            )
     except OperationApprovalBindingError as exc:
         raise ArchiveServiceError(exc.code) from None
 
@@ -53142,10 +53178,20 @@ def mint_zet_batch(
     allow_warnings: bool = False,
     max_items: int = 500,
     skip_existing: bool = False,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
 ) -> dict[str, Any]:
-    if type(dry_run) is not bool or type(approve) is not bool or approve:
-        return _compound_exact_human_approval_blocked(
-            lifecycle_action="mint_zet_batch",
+    if type(dry_run) is not bool or type(approve) is not bool:
+        raise ArchiveServiceError("mint_zet_batch_mode_invalid")
+    if approve:
+        # v0.4.21 LR-01: one exact human approval covers the reviewed batch.
+        _require_exact_human_approval_inputs_before_archive_read(
+            claim=exact_human_approval_claim,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=(
+                expected_exact_approval_target_binding_sha256
+            ),
         )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
@@ -53188,6 +53234,7 @@ def mint_zet_batch(
     item_results: list[dict[str, Any]] = []
     skipped_existing_items: list[dict[str, Any]] = []
     failed_items: list[dict[str, Any]] = []
+    planned_rows: list[dict[str, Any]] = []
     if not blockers:
         for row in rows:
             key = mint_lifecycle_batch_item_key(row)
@@ -53211,25 +53258,100 @@ def mint_zet_batch(
                 else:
                     failed_items.append({**row, "write_status": "failed", "blockers": dry_result.get("blockers", [])})
                 continue
-            if dry_run:
-                item_results.append(mint_batch_item_summary(row, dry_result, write_status="would_mint"))
-            else:
-                try:
-                    write_result = mint_zettel(
-                        root,
-                        zettel_id=row.get("zettel_id"),
-                        relative_path=row.get("path"),
-                        reviewed_by=str(reviewed_by or ""),
-                        allow_warnings=bool(policy.get("allow_warnings")),
-                    )
-                except (ArchiveServiceError, OSError) as exc:
-                    existing = mint_batch_existing_artifacts(root, row) if skip_existing else None
-                    if existing is not None:
-                        skipped_existing_items.append(existing)
-                    else:
-                        failed_items.append({**row, "write_status": "failed", "blockers": [str(exc)]})
-                    continue
-                item_results.append(mint_batch_item_summary(row, write_result, write_status="minted"))
+            if dry_result.get("warnings") and not policy.get("allow_warnings"):
+                failed_items.append({**row, "write_status": "failed", "blockers": ["mint warnings require the batch policy to allow warnings."]})
+                continue
+            try:
+                item_binding = mint_zet_approval_binding(dry_result)
+            except OperationApprovalBindingError:
+                failed_items.append({**row, "write_status": "failed", "blockers": ["exact approval binding unavailable."]})
+                continue
+            item_results.append({
+                **mint_batch_item_summary(row, dry_result, write_status="would_mint"),
+                **_item_binding_digests(item_binding, _mint_item_identity(dry_result)),
+            })
+            planned_rows.append(row)
+    if approve and not blockers and failed_items:
+        # One approval must describe the whole batch; an item that cannot be
+        # planned is reported, and nothing is minted until the plan is clean.
+        blockers.append("mint batch plan has items that cannot be minted; fix failed_items or use --skip-existing.")
+    if approve and not blockers and planned_rows:
+        planned_batch = mint_lifecycle_batch_result(
+            action="mint_zet_batch",
+            archive_id=archive_id,
+            dry_run=True,
+            approve=False,
+            reviewed_by=None,
+            policy=policy,
+            batch_id="mint-batch:" + sha256_json_hex({
+                "archive_id": archive_id,
+                "policy": policy,
+                "items": [
+                    {
+                        "zettel_id": item.get("zettel_id"),
+                        "canonical_path": item.get("canonical_path"),
+                        "mint_receipt_path": item.get("mint_receipt_path"),
+                    }
+                    for item in item_results
+                ],
+            }),
+            receipt_path=None,
+            plan_path_resolution=plan_path_resolution,
+            item_results=item_results,
+            skipped_existing_items=skipped_existing_items,
+            failed_items=failed_items,
+            candidate_item_count=len(rows),
+            skip_existing=skip_existing,
+            max_items=max_items,
+            files_written=[],
+            blockers=[],
+            warnings=warnings,
+        )
+        planned_batch["receipt_path"] = mint_batch_receipt_relative_path(str(planned_batch["batch_id"]))
+        try:
+            batch_binding = mint_zet_batch_approval_binding(planned_batch)
+        except OperationApprovalBindingError as exc:
+            raise ArchiveServiceError(exc.code) from None
+        batch_authority = _build_exact_batch_authority(
+            root,
+            batch_binding,
+            reviewer_claim=str(reviewed_by or ""),
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+            claim=exact_human_approval_claim,
+            item_results=item_results,
+        )
+        planned_items_by_key = {
+            mint_lifecycle_batch_item_key(row): item for row, item in zip(planned_rows, item_results)
+        }
+        item_results = []
+        for row in planned_rows:
+            planned_item = planned_items_by_key[mint_lifecycle_batch_item_key(row)]
+            try:
+                write_result = mint_zettel(
+                    root,
+                    zettel_id=row.get("zettel_id"),
+                    relative_path=row.get("path"),
+                    reviewed_by=str(reviewed_by or ""),
+                    allow_warnings=bool(policy.get("allow_warnings")),
+                    exact_human_approval_claim=exact_human_approval_claim,
+                    batch_authority=batch_authority.for_item(
+                        str(planned_item.get("approval_item_identity_sha256") or "")
+                    ),
+                )
+            except (ArchiveServiceError, OSError) as exc:
+                existing = mint_batch_existing_artifacts(root, row) if skip_existing else None
+                if existing is not None:
+                    skipped_existing_items.append(existing)
+                else:
+                    failed_items.append({**row, "write_status": "failed", "blockers": [str(exc)]})
+                continue
+            item_results.append({
+                **mint_batch_item_summary(row, write_result, write_status="minted"),
+                "approval_plan_sha256": planned_item.get("approval_plan_sha256"),
+                "approval_target_binding_sha256": planned_item.get("approval_target_binding_sha256"),
+                "approval_item_identity_sha256": planned_item.get("approval_item_identity_sha256"),
+            })
 
     batch_id: str | None = None
     batch_receipt_relative: str | None = None
@@ -53278,6 +53400,7 @@ def mint_zet_batch(
                 "skipped_existing_item_count": len(skipped_existing_items),
                 "failed_item_count": len(failed_items),
                 "mint_receipts": [item.get("mint_receipt_path") for item in written_items],
+                "exact_human_approval": batch_authority.receipt,
                 "closed_actions": {
                     "provider_api_called": False,
                     "external_source_files_read": False,
@@ -53320,10 +53443,19 @@ def retire_draft_batch(
     reviewed_by: str | None = None,
     max_items: int = 500,
     skip_existing: bool = False,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
 ) -> dict[str, Any]:
-    if type(dry_run) is not bool or type(approve) is not bool or approve:
-        return _compound_exact_human_approval_blocked(
-            lifecycle_action="retire_draft_batch",
+    if type(dry_run) is not bool or type(approve) is not bool:
+        raise ArchiveServiceError("retire_draft_batch_mode_invalid")
+    if approve:
+        _require_exact_human_approval_inputs_before_archive_read(
+            claim=exact_human_approval_claim,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=(
+                expected_exact_approval_target_binding_sha256
+            ),
         )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
@@ -53365,6 +53497,7 @@ def retire_draft_batch(
     skipped_existing_items: list[dict[str, Any]] = []
     failed_items: list[dict[str, Any]] = []
     edge_index: dict[str, list[dict[str, Any]]] = edge_receipts_by_source(root) if not blockers and rows else {}
+    planned_rows: list[tuple[dict[str, Any], dict[str, Any]]] = []
     if not blockers:
         for row in rows:
             key = mint_lifecycle_batch_item_key(row)
@@ -53393,25 +53526,92 @@ def retire_draft_batch(
                 else:
                     failed_items.append({**row, "write_status": "failed", "blockers": dry_result.get("blockers", [])})
                 continue
-            if dry_run:
-                item_results.append(retire_batch_item_summary(row, dry_result, write_status="would_retire"))
-            else:
-                try:
-                    write_result = write_retired_draft_from_plan(
-                        root,
-                        dry_result,
-                        reviewed_by=reviewed_by,
-                        zettel_id=row.get("zettel_id"),
-                        relative_path=row.get("path"),
-                    )
-                except (ArchiveServiceError, OSError) as exc:
-                    existing = retire_batch_existing_artifacts(root, row) if skip_existing else None
-                    if existing is not None:
-                        skipped_existing_items.append(existing)
-                    else:
-                        failed_items.append({**row, "write_status": "failed", "blockers": [str(exc)]})
-                    continue
-                item_results.append(retire_batch_item_summary(row, write_result, write_status="retired"))
+            try:
+                item_binding = retire_draft_approval_binding(dry_result)
+            except OperationApprovalBindingError:
+                failed_items.append({**row, "write_status": "failed", "blockers": ["exact approval binding unavailable."]})
+                continue
+            item_results.append({
+                **retire_batch_item_summary(row, dry_result, write_status="would_retire"),
+                **_item_binding_digests(item_binding, _retire_item_identity(dry_result)),
+            })
+            planned_rows.append((row, dry_result))
+    if approve and not blockers and failed_items:
+        blockers.append("retire draft batch plan has items that cannot be retired; fix failed_items or use --skip-existing.")
+    if approve and not blockers and planned_rows:
+        planned_batch = mint_lifecycle_batch_result(
+            action="retire_draft_batch",
+            archive_id=archive_id,
+            dry_run=True,
+            approve=False,
+            reviewed_by=None,
+            policy=policy,
+            batch_id="retire-draft-batch:" + sha256_json_hex({
+                "archive_id": archive_id,
+                "policy": policy,
+                "items": [
+                    {
+                        "zettel_id": item.get("zettel_id"),
+                        "draft_path": item.get("draft_path"),
+                        "retire_receipt_path": item.get("retire_receipt_path"),
+                    }
+                    for item in item_results
+                ],
+            }),
+            receipt_path=None,
+            plan_path_resolution=plan_path_resolution,
+            item_results=item_results,
+            skipped_existing_items=skipped_existing_items,
+            failed_items=failed_items,
+            candidate_item_count=len(rows),
+            skip_existing=skip_existing,
+            max_items=max_items,
+            files_written=[],
+            blockers=[],
+            warnings=warnings,
+        )
+        planned_batch["receipt_path"] = retire_draft_batch_receipt_relative_path(str(planned_batch["batch_id"]))
+        try:
+            batch_binding = retire_draft_batch_approval_binding(planned_batch)
+        except OperationApprovalBindingError as exc:
+            raise ArchiveServiceError(exc.code) from None
+        batch_authority = _build_exact_batch_authority(
+            root,
+            batch_binding,
+            reviewer_claim=str(reviewed_by or ""),
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+            claim=exact_human_approval_claim,
+            item_results=item_results,
+        )
+        planned_digests = list(item_results)
+        item_results = []
+        for (row, dry_result), planned_item in zip(planned_rows, planned_digests):
+            try:
+                write_result = write_retired_draft_from_plan(
+                    root,
+                    dry_result,
+                    reviewed_by=str(reviewed_by or ""),
+                    zettel_id=row.get("zettel_id"),
+                    relative_path=row.get("path"),
+                    exact_human_approval_claim=exact_human_approval_claim,
+                    batch_authority=batch_authority.for_item(
+                        str(planned_item.get("approval_item_identity_sha256") or "")
+                    ),
+                )
+            except (ArchiveServiceError, OSError) as exc:
+                existing = retire_batch_existing_artifacts(root, row) if skip_existing else None
+                if existing is not None:
+                    skipped_existing_items.append(existing)
+                else:
+                    failed_items.append({**row, "write_status": "failed", "blockers": [str(exc)]})
+                continue
+            item_results.append({
+                **retire_batch_item_summary(row, write_result, write_status="retired"),
+                "approval_plan_sha256": planned_item.get("approval_plan_sha256"),
+                "approval_target_binding_sha256": planned_item.get("approval_target_binding_sha256"),
+                "approval_item_identity_sha256": planned_item.get("approval_item_identity_sha256"),
+            })
 
     batch_id: str | None = None
     batch_receipt_relative: str | None = None
@@ -53459,6 +53659,7 @@ def retire_draft_batch(
                 "skipped_existing_item_count": len(skipped_existing_items),
                 "failed_item_count": len(failed_items),
                 "retire_receipts": [item.get("retire_receipt_path") for item in written_items],
+                "exact_human_approval": batch_authority.receipt,
                 "closed_actions": {
                     "provider_api_called": False,
                     "external_source_files_read": False,
@@ -76040,6 +76241,207 @@ def zettel_edge_result(
     }
 
 
+@dataclass(frozen=True)
+class _ExactBatchAuthority:
+    """One verified batch approval that covers a fixed set of reviewed items.
+
+    Built only by a batch writer after ``_require_exact_human_operation_approval``
+    accepted the batch claim (edge, mint, retire and edge-revert batches).
+    The batch binding was verified against a fresh dry pass immediately before
+    the first write, so every approved item's exact digests are known.  An
+    item write then receives a per-item view (``for_item``) and proves, in
+    order of strictness, that its fresh binding is exactly one approved pair,
+    or that its target digest is one approved target (only review context such
+    as duplicate scans drifted because of the batch's own earlier writes), or
+    that its stable identity is approved and the batch itself has verified that
+    the only change to the item's source since the dialog was its own earlier
+    write.  The same authenticated claim is re-verified against the batch
+    context on every item; no item the human did not see can be written.
+    """
+
+    context: ExactHumanApprovalContext
+    plan_sha256: str
+    target_binding_sha256: str
+    item_bindings: frozenset[tuple[str, str]]
+    item_identities: frozenset[str]
+    receipt: dict[str, Any]
+
+    def for_item(
+        self,
+        item_identity_sha256: str,
+        *,
+        own_write_state_verified: bool = False,
+    ) -> "_ExactBatchItemAuthority":
+        if type(item_identity_sha256) is not str or item_identity_sha256 not in self.item_identities:
+            raise ArchiveServiceError("exact_batch_item_not_approved")
+        return _ExactBatchItemAuthority(
+            batch=self,
+            item_identity_sha256=item_identity_sha256,
+            own_write_state_verified=bool(own_write_state_verified),
+        )
+
+
+@dataclass(frozen=True)
+class _ExactBatchItemAuthority:
+    """The batch approval narrowed to one reviewed item (see the batch class)."""
+
+    batch: _ExactBatchAuthority
+    item_identity_sha256: str
+    own_write_state_verified: bool
+
+    @property
+    def plan_sha256(self) -> str:
+        return self.batch.plan_sha256
+
+    @property
+    def target_binding_sha256(self) -> str:
+        return self.batch.target_binding_sha256
+
+    def item_approval(
+        self,
+        item_binding: ExactOperationApprovalBinding,
+        *,
+        claim: _ClaimedExactHumanApproval | None,
+        item_identity_sha256: str,
+    ) -> dict[str, Any]:
+        if type(claim) is not _ClaimedExactHumanApproval:
+            raise ArchiveServiceError("exact_human_approval_required")
+        if (
+            type(item_identity_sha256) is not str
+            or not hmac.compare_digest(item_identity_sha256, self.item_identity_sha256)
+            or item_identity_sha256 not in self.batch.item_identities
+        ):
+            raise ArchiveServiceError("exact_batch_item_not_approved")
+        pair = (item_binding.plan_sha256, item_binding.target_binding_sha256)
+        approved_targets = {target for _plan, target in self.batch.item_bindings}
+        if pair in self.batch.item_bindings:
+            match = "exact"
+        elif item_binding.target_binding_sha256 in approved_targets:
+            match = "target"
+        elif self.own_write_state_verified:
+            match = "identity_after_own_write"
+        else:
+            raise ArchiveServiceError("exact_batch_item_not_approved")
+        try:
+            self.batch.context and claim.assert_ready_for_context(self.batch.context)
+        except ExactHumanApprovalError as exc:
+            raise ArchiveServiceError(
+                getattr(exc, "code", "exact_human_approval_invalid")
+            ) from None
+        return {
+            **copy.deepcopy(self.batch.receipt),
+            "batch_item_binding": {
+                "plan_sha256": item_binding.plan_sha256,
+                "target_binding_sha256": item_binding.target_binding_sha256,
+                "item_identity_sha256": item_identity_sha256,
+                "match": match,
+            },
+        }
+
+
+def _exact_batch_item_identity(operation: str, **fields: Any) -> str:
+    """Stable, content-free identity of one batch item (paths and ids only)."""
+
+    return "sha256:" + sha256_json_hex({"operation": operation, **fields})
+
+
+def _build_exact_batch_authority(
+    root: Path,
+    binding: ExactOperationApprovalBinding,
+    *,
+    reviewer_claim: str,
+    expected_plan_sha256: str | None,
+    expected_target_binding_sha256: str | None,
+    claim: _ClaimedExactHumanApproval | None,
+    item_results: list[dict[str, Any]],
+) -> _ExactBatchAuthority:
+    """Verify one batch claim and freeze the approved item set."""
+
+    try:
+        receipt = _require_exact_human_operation_approval(
+            root,
+            binding,
+            reviewer_claim=reviewer_claim,
+            expected_plan_sha256=expected_plan_sha256,
+            expected_target_binding_sha256=expected_target_binding_sha256,
+            claim=claim,
+        )
+    except OperationApprovalBindingError as exc:
+        raise ArchiveServiceError(exc.code) from None
+    approved = [
+        item for item in item_results
+        if item.get("approval_plan_sha256") and item.get("approval_target_binding_sha256")
+        and item.get("approval_item_identity_sha256")
+    ]
+    return _ExactBatchAuthority(
+        context=binding.context(
+            archive_id=read_archive_id(root),
+            reviewer_claim=reviewer_claim,
+        ),
+        plan_sha256=binding.plan_sha256,
+        target_binding_sha256=binding.target_binding_sha256,
+        item_bindings=frozenset(
+            (str(item["approval_plan_sha256"]), str(item["approval_target_binding_sha256"]))
+            for item in approved
+        ),
+        item_identities=frozenset(str(item["approval_item_identity_sha256"]) for item in approved),
+        receipt=receipt,
+    )
+
+
+def _item_binding_digests(
+    binding: ExactOperationApprovalBinding | None,
+    item_identity_sha256: str | None = None,
+) -> dict[str, str | None]:
+    return {
+        "approval_plan_sha256": binding.plan_sha256 if binding is not None else None,
+        "approval_target_binding_sha256": (
+            binding.target_binding_sha256 if binding is not None else None
+        ),
+        "approval_item_identity_sha256": (
+            item_identity_sha256 if binding is not None else None
+        ),
+    }
+
+
+def _zettel_edge_item_identity(planned: Mapping[str, Any]) -> str:
+    source = planned.get("source") if isinstance(planned.get("source"), dict) else {}
+    return _exact_batch_item_identity(
+        "zettel_edge",
+        source_zettel_id=source.get("zettel_id"),
+        source_path=source.get("path"),
+        edge_id=planned.get("edge_id"),
+        receipt_path=planned.get("receipt_path"),
+    )
+
+
+def _zettel_edge_revert_item_identity(planned: Mapping[str, Any]) -> str:
+    return _exact_batch_item_identity(
+        "zettel_edge_revert",
+        edge_receipt_path=planned.get("edge_receipt_path"),
+        revert_receipt_path=planned.get("revert_receipt_path"),
+    )
+
+
+def _mint_item_identity(dry_run: Mapping[str, Any]) -> str:
+    return _exact_batch_item_identity(
+        "mint_zet",
+        zettel_id=dry_run.get("zettel_id"),
+        draft_path=dry_run.get("draft_path"),
+        canonical_path=dry_run.get("proposed_canonical_path"),
+        mint_receipt_path=dry_run.get("proposed_mint_receipt_path"),
+    )
+
+
+def _retire_item_identity(plan: Mapping[str, Any]) -> str:
+    return _exact_batch_item_identity(
+        "retire_draft",
+        zettel_id=plan.get("zettel_id"),
+        draft_path=plan.get("draft_path"),
+        retire_receipt_path=plan.get("retire_receipt_path"),
+    )
+
+
 def zettel_edge_write(
     archive_root: Path | str,
     *,
@@ -76056,13 +76458,24 @@ def zettel_edge_write(
     expected_exact_approval_plan_sha256: str | None = None,
     expected_exact_approval_target_binding_sha256: str | None = None,
     exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
+    batch_authority: _ExactBatchItemAuthority | None = None,
 ) -> dict[str, Any]:
+    if batch_authority is not None and (
+        type(batch_authority) is not _ExactBatchItemAuthority or not approve
+    ):
+        raise ArchiveServiceError("exact_batch_authority_invalid")
     if approve:
         _require_exact_human_approval_inputs_before_archive_read(
             claim=exact_human_approval_claim,
-            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_plan_sha256=(
+                batch_authority.plan_sha256
+                if batch_authority is not None
+                else expected_exact_approval_plan_sha256
+            ),
             expected_target_binding_sha256=(
-                expected_exact_approval_target_binding_sha256
+                batch_authority.target_binding_sha256
+                if batch_authority is not None
+                else expected_exact_approval_target_binding_sha256
             ),
         )
     root = require_existing_archive_root(archive_root)
@@ -76317,16 +76730,23 @@ def zettel_edge_write(
     }
 
     try:
-        exact_operation_approval = _require_exact_human_operation_approval(
-            root,
-            zettel_edge_approval_binding(planned_result),
-            reviewer_claim=reviewed_by,
-            expected_plan_sha256=expected_exact_approval_plan_sha256,
-            expected_target_binding_sha256=(
-                expected_exact_approval_target_binding_sha256
-            ),
-            claim=exact_human_approval_claim,
-        )
+        if batch_authority is not None:
+            exact_operation_approval = batch_authority.item_approval(
+                zettel_edge_approval_binding(planned_result),
+                claim=exact_human_approval_claim,
+                item_identity_sha256=_zettel_edge_item_identity(planned_result),
+            )
+        else:
+            exact_operation_approval = _require_exact_human_operation_approval(
+                root,
+                zettel_edge_approval_binding(planned_result),
+                reviewer_claim=reviewed_by,
+                expected_plan_sha256=expected_exact_approval_plan_sha256,
+                expected_target_binding_sha256=(
+                    expected_exact_approval_target_binding_sha256
+                ),
+                claim=exact_human_approval_claim,
+            )
     except OperationApprovalBindingError as exc:
         raise ArchiveServiceError(exc.code) from None
     receipt["exact_human_approval"] = exact_operation_approval
@@ -76797,10 +77217,11 @@ def zettel_edge_batch_result(
         "receipt_path": receipt_path,
         "reviewed_by": reviewed_by if approve else None,
         "current_capability": {
-            "policy_batch_approval_implemented": False,
-            "bulk_edge_writer_implemented": False,
-            "legacy_bulk_edge_writer_present_but_blocked": True,
-            "compound_exact_human_approval_binding_required": True,
+            "policy_batch_approval_implemented": True,
+            "bulk_edge_writer_implemented": True,
+            "legacy_bulk_edge_writer_present_but_blocked": False,
+            "compound_exact_human_approval_binding_required": False,
+            "one_exact_human_approval_per_batch": True,
             "archive_relative_plan_path_resolution": True,
             "skip_existing_edges_implemented": True,
             "uses_single_zettel_edge_gate_per_item": True,
@@ -76866,10 +77287,21 @@ def zettel_edge_batch_write(
     reviewed_by: str | None = None,
     max_edges: int = 200,
     skip_existing: bool = False,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
 ) -> dict[str, Any]:
-    if type(dry_run) is not bool or type(approve) is not bool or approve:
-        return _compound_exact_human_approval_blocked(
-            lifecycle_action="zettel_edge_batch",
+    if type(dry_run) is not bool or type(approve) is not bool:
+        raise ArchiveServiceError("zettel_edge_batch_mode_invalid")
+    if approve:
+        # v0.4.21 LR-01: one exact human approval covers the whole reviewed
+        # batch.  Without an authenticated claim nothing is read.
+        _require_exact_human_approval_inputs_before_archive_read(
+            claim=exact_human_approval_claim,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=(
+                expected_exact_approval_target_binding_sha256
+            ),
         )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
@@ -76997,10 +77429,16 @@ def zettel_edge_batch_write(
                     }
                 )
                 continue
+            item_binding: ExactOperationApprovalBinding | None = None
             if not dry_result.get("ok"):
                 blockers.extend(f"edges[{row.get('index')}]: {blocker}" for blocker in dry_result.get("blockers", []))
             else:
-                effective_writable_rows.append(row)
+                try:
+                    item_binding = zettel_edge_approval_binding(dry_result)
+                except OperationApprovalBindingError:
+                    blockers.append(f"edges[{row.get('index')}]: exact approval binding unavailable.")
+                else:
+                    effective_writable_rows.append(row)
             item_results.append(
                 {
                     "index": row.get("index"),
@@ -77016,6 +77454,10 @@ def zettel_edge_batch_write(
                     "receipt_path": dry_result.get("receipt_path"),
                     "would_change": dry_result.get("would_change", []),
                     "blockers": dry_result.get("blockers", []),
+                    **_item_binding_digests(
+                        item_binding,
+                        _zettel_edge_item_identity(dry_result) if item_binding is not None else None,
+                    ),
                 }
             )
             would_change.extend(str(item) for item in dry_result.get("would_change", []) if isinstance(item, str))
@@ -77086,6 +77528,38 @@ def zettel_edge_batch_write(
         )
 
     assert batch_receipt_relative is not None
+    planned_batch = zettel_edge_batch_result(
+        archive_id=archive_id,
+        dry_run=True,
+        approve=False,
+        reviewed_by=None,
+        policy=policy,
+        batch_id=batch_id,
+        receipt_path=batch_receipt_relative,
+        item_results=item_results,
+        review_queue=review_queue,
+        skipped_existing_edges=skipped_existing_edges,
+        skip_existing=skip_existing,
+        plan_path_resolution=plan_path_resolution,
+        would_change=would_change,
+        files_written=[],
+        blockers=[],
+        warnings=warnings,
+    )
+    try:
+        batch_binding = zettel_edge_batch_approval_binding(planned_batch)
+    except OperationApprovalBindingError as exc:
+        raise ArchiveServiceError(exc.code) from None
+    batch_authority = _build_exact_batch_authority(
+        root,
+        batch_binding,
+        reviewer_claim=reviewed_by,
+        expected_plan_sha256=expected_exact_approval_plan_sha256,
+        expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+        claim=exact_human_approval_claim,
+        item_results=item_results,
+    )
+    batch_exact_operation_approval = batch_authority.receipt
     snapshots: dict[str, str | None] = {}
     for item in item_results:
         source = item.get("source") if isinstance(item.get("source"), dict) else {}
@@ -77099,8 +77573,26 @@ def zettel_edge_batch_write(
 
     files_written: list[str] = []
     written_results: list[dict[str, Any]] = []
+    planned_items_by_index = {item.get("index"): item for item in item_results}
+    own_source_sha256: dict[str, str] = {}
     try:
         for row in effective_writable_rows:
+            planned_item = planned_items_by_index.get(row.get("index"), {})
+            planned_source = planned_item.get("source") if isinstance(planned_item.get("source"), dict) else {}
+            source_relative = planned_source.get("path")
+            own_state_verified = False
+            if isinstance(source_relative, str) and source_relative in own_source_sha256:
+                try:
+                    current_sha = "sha256:" + hashlib.sha256(
+                        archive_internal_path(root, source_relative).read_bytes()
+                    ).hexdigest()
+                except (ArchiveServiceError, OSError):
+                    current_sha = ""
+                own_state_verified = hmac.compare_digest(current_sha, own_source_sha256[source_relative])
+            item_authority = batch_authority.for_item(
+                str(planned_item.get("approval_item_identity_sha256") or ""),
+                own_write_state_verified=own_state_verified,
+            )
             write_result = zettel_edge_write(
                 root,
                 from_zettel=row.get("from_zettel"),
@@ -77113,9 +77605,18 @@ def zettel_edge_batch_write(
                 reviewed_by=reviewed_by,
                 manifest_records_by_object_id=manifest_records_by_object_id,
                 zettel_path_index=zettel_path_index,
+                exact_human_approval_claim=exact_human_approval_claim,
+                batch_authority=item_authority,
             )
             if not write_result.get("ok"):
                 raise ArchiveServiceError("; ".join(str(blocker) for blocker in write_result.get("blockers", [])) or "batch edge item write failed.")
+            if isinstance(source_relative, str):
+                try:
+                    own_source_sha256[source_relative] = "sha256:" + hashlib.sha256(
+                        archive_internal_path(root, source_relative).read_bytes()
+                    ).hexdigest()
+                except (ArchiveServiceError, OSError):
+                    own_source_sha256.pop(source_relative, None)
             written_results.append(
                 {
                     "index": row.get("index"),
@@ -77131,6 +77632,9 @@ def zettel_edge_batch_write(
                     "receipt_path": write_result.get("receipt_path"),
                     "files_written": write_result.get("files_written", []),
                     "blockers": [],
+                    "approval_plan_sha256": planned_item.get("approval_plan_sha256"),
+                    "approval_target_binding_sha256": planned_item.get("approval_target_binding_sha256"),
+                    "approval_item_identity_sha256": planned_item.get("approval_item_identity_sha256"),
                 }
             )
             files_written.extend(str(item) for item in write_result.get("files_written", []) if isinstance(item, str))
@@ -77153,6 +77657,7 @@ def zettel_edge_batch_write(
             "review_queue_count": len(review_queue),
             "skipped_existing_edge_count": len(skipped_existing_edges),
             "edge_receipts": [item.get("receipt_path") for item in written_results],
+            "exact_human_approval": batch_exact_operation_approval,
             "closed_actions": {
                 "provider_api_called": False,
                 "oauth_started": False,
@@ -77352,18 +77857,29 @@ def zettel_edge_revert(
     expected_exact_approval_plan_sha256: str | None = None,
     expected_exact_approval_target_binding_sha256: str | None = None,
     exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
+    batch_authority: _ExactBatchItemAuthority | None = None,
 ) -> dict[str, Any]:
     if type(dry_run) is not bool or type(approve) is not bool:
         return _compound_exact_human_approval_blocked(
             lifecycle_action="zettel_edge_revert",
         )
+    if batch_authority is not None and (
+        type(batch_authority) is not _ExactBatchItemAuthority or not approve
+    ):
+        raise ArchiveServiceError("exact_batch_authority_invalid")
     if approve:
         try:
             _require_exact_human_approval_inputs_before_archive_read(
                 claim=exact_human_approval_claim,
-                expected_plan_sha256=expected_exact_approval_plan_sha256,
+                expected_plan_sha256=(
+                    batch_authority.plan_sha256
+                    if batch_authority is not None
+                    else expected_exact_approval_plan_sha256
+                ),
                 expected_target_binding_sha256=(
-                    expected_exact_approval_target_binding_sha256
+                    batch_authority.target_binding_sha256
+                    if batch_authority is not None
+                    else expected_exact_approval_target_binding_sha256
                 ),
             )
         except ArchiveServiceError:
@@ -77561,16 +78077,23 @@ def zettel_edge_revert(
         },
     }
     try:
-        exact_operation_approval = _require_exact_human_operation_approval(
-            root,
-            zettel_edge_revert_approval_binding(planned_result),
-            reviewer_claim=reviewed_by,
-            expected_plan_sha256=expected_exact_approval_plan_sha256,
-            expected_target_binding_sha256=(
-                expected_exact_approval_target_binding_sha256
-            ),
-            claim=exact_human_approval_claim,
-        )
+        if batch_authority is not None:
+            exact_operation_approval = batch_authority.item_approval(
+                zettel_edge_revert_approval_binding(planned_result),
+                claim=exact_human_approval_claim,
+                item_identity_sha256=_zettel_edge_revert_item_identity(planned_result),
+            )
+        else:
+            exact_operation_approval = _require_exact_human_operation_approval(
+                root,
+                zettel_edge_revert_approval_binding(planned_result),
+                reviewer_claim=reviewed_by,
+                expected_plan_sha256=expected_exact_approval_plan_sha256,
+                expected_target_binding_sha256=(
+                    expected_exact_approval_target_binding_sha256
+                ),
+                claim=exact_human_approval_claim,
+            )
     except OperationApprovalBindingError as exc:
         raise ArchiveServiceError(exc.code) from None
     revert_receipt["exact_human_approval"] = exact_operation_approval
@@ -77786,6 +78309,7 @@ def zettel_edge_batch_revert_result(
         "current_capability": {
             "receipt_based_batch_revert_implemented": True,
             "uses_single_edge_revert_gate_per_item": True,
+            "one_exact_human_approval_per_batch": True,
             "mcp_write_tool_implemented": False,
         },
         "closed_actions": {
@@ -77833,10 +78357,19 @@ def zettel_edge_batch_revert(
     dry_run: bool = False,
     approve: bool = False,
     reviewed_by: str | None = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
 ) -> dict[str, Any]:
-    if type(dry_run) is not bool or type(approve) is not bool or approve:
-        return _compound_exact_human_approval_blocked(
-            lifecycle_action="zettel_edge_batch_revert",
+    if type(dry_run) is not bool or type(approve) is not bool:
+        raise ArchiveServiceError("zettel_edge_batch_revert_mode_invalid")
+    if approve:
+        _require_exact_human_approval_inputs_before_archive_read(
+            claim=exact_human_approval_claim,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=(
+                expected_exact_approval_target_binding_sha256
+            ),
         )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
@@ -77906,8 +78439,14 @@ def zettel_edge_batch_revert(
                 dry_run=True,
                 approve=False,
             )
+            item_binding: ExactOperationApprovalBinding | None = None
             if not item_result.get("ok"):
                 blockers.extend(f"edge_receipts[{index}]: {blocker}" for blocker in item_result.get("blockers", []))
+            else:
+                try:
+                    item_binding = zettel_edge_revert_approval_binding(item_result)
+                except OperationApprovalBindingError:
+                    blockers.append(f"edge_receipts[{index}]: exact approval binding unavailable.")
             item_results.append(
                 {
                     "index": index,
@@ -77918,6 +78457,10 @@ def zettel_edge_batch_revert(
                     "edge": item_result.get("edge"),
                     "would_change": item_result.get("would_change", []),
                     "blockers": item_result.get("blockers", []),
+                    **_item_binding_digests(
+                        item_binding,
+                        _zettel_edge_revert_item_identity(item_result) if item_binding is not None else None,
+                    ),
                 }
             )
             would_change.extend(str(item) for item in item_result.get("would_change", []) if isinstance(item, str))
@@ -77943,6 +78486,33 @@ def zettel_edge_batch_revert(
     assert batch_receipt_relative is not None
     assert batch_revert_receipt_relative is not None
 
+    planned_batch = zettel_edge_batch_revert_result(
+        archive_id=archive_id,
+        dry_run=True,
+        approve=False,
+        reviewed_by=None,
+        batch_receipt_path=batch_receipt_relative,
+        batch_revert_receipt_path=batch_revert_receipt_relative,
+        item_results=item_results,
+        would_change=would_change,
+        files_written=[],
+        blockers=[],
+        warnings=warnings,
+    )
+    try:
+        batch_binding = zettel_edge_batch_revert_approval_binding(planned_batch)
+    except OperationApprovalBindingError as exc:
+        raise ArchiveServiceError(exc.code) from None
+    batch_authority = _build_exact_batch_authority(
+        root,
+        batch_binding,
+        reviewer_claim=reviewed_by,
+        expected_plan_sha256=expected_exact_approval_plan_sha256,
+        expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+        claim=exact_human_approval_claim,
+        item_results=item_results,
+    )
+
     snapshots: dict[str, str | None] = {}
     for item in item_results:
         source = item.get("source") if isinstance(item.get("source"), dict) else {}
@@ -77954,15 +78524,40 @@ def zettel_edge_batch_revert(
 
     written_results: list[dict[str, Any]] = []
     files_written: list[str] = []
+    own_source_sha256: dict[str, str] = {}
     try:
         for index, edge_receipt in enumerate(edge_receipts):
+            planned_item = item_results[index]
+            planned_source = planned_item.get("source") if isinstance(planned_item.get("source"), dict) else {}
+            source_relative = planned_source.get("path")
+            own_state_verified = False
+            if isinstance(source_relative, str) and source_relative in own_source_sha256:
+                try:
+                    current_sha = "sha256:" + hashlib.sha256(
+                        archive_internal_path(root, source_relative).read_bytes()
+                    ).hexdigest()
+                except (ArchiveServiceError, OSError):
+                    current_sha = ""
+                own_state_verified = hmac.compare_digest(current_sha, own_source_sha256[source_relative])
             write_result = zettel_edge_revert(
                 root,
                 receipt=edge_receipt,
                 dry_run=False,
                 approve=True,
                 reviewed_by=reviewed_by,
+                exact_human_approval_claim=exact_human_approval_claim,
+                batch_authority=batch_authority.for_item(
+                    str(planned_item.get("approval_item_identity_sha256") or ""),
+                    own_write_state_verified=own_state_verified,
+                ),
             )
+            if isinstance(source_relative, str) and write_result.get("ok"):
+                try:
+                    own_source_sha256[source_relative] = "sha256:" + hashlib.sha256(
+                        archive_internal_path(root, source_relative).read_bytes()
+                    ).hexdigest()
+                except (ArchiveServiceError, OSError):
+                    own_source_sha256.pop(source_relative, None)
             if not write_result.get("ok"):
                 raise ArchiveServiceError("; ".join(str(blocker) for blocker in write_result.get("blockers", [])) or "batch edge revert item failed.")
             written_results.append(
@@ -77975,6 +78570,9 @@ def zettel_edge_batch_revert(
                     "edge": write_result.get("edge"),
                     "files_written": write_result.get("files_written", []),
                     "blockers": [],
+                    "approval_plan_sha256": planned_item.get("approval_plan_sha256"),
+                    "approval_target_binding_sha256": planned_item.get("approval_target_binding_sha256"),
+                    "approval_item_identity_sha256": planned_item.get("approval_item_identity_sha256"),
                 }
             )
             files_written.extend(str(item) for item in write_result.get("files_written", []) if isinstance(item, str))
@@ -77989,6 +78587,7 @@ def zettel_edge_batch_revert(
             "edge_revert_count": len(written_results),
             "edge_revert_receipts": [item.get("revert_receipt_path") for item in written_results],
             "reviewed_by": reviewed_by,
+            "exact_human_approval": batch_authority.receipt,
             "result": {
                 "edges_removed": len(written_results),
                 "batch_revert_receipt_written": True,

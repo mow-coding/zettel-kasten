@@ -349,9 +349,25 @@ class ArchiveCliTests(unittest.TestCase):
         root,
         context,
         writer,
+        *,
+        target_collection=None,
+        observe_target_binding=None,
     ):
-        """Exercise the sealed three-argument approval boundary without UI."""
+        """Exercise the sealed approval boundary without UI.
 
+        The optional v0.4.20 count-first preview and its observer are accepted
+        so writers that forward them (local recovery, v0.4.21 batches) reach
+        the same claim path; the observer is called once, as the dialog would.
+        """
+
+        if observe_target_binding is not None:
+            from wom_kit.exact_human_approval_workflow import (
+                ExactHumanApprovalWorkflowError,
+            )
+
+            observed = observe_target_binding()
+            if observed != context.target_binding_sha256:
+                raise ExactHumanApprovalWorkflowError("exact_human_approval_target_changed")
         return ArchiveCliTests.execute_test_exact_human_transaction(
             root,
             context,
@@ -30639,12 +30655,13 @@ state:
                 ]
             )
             approve_result = json.loads(approve_output)
-            self.assertEqual(approve_code, 1, approve_output)
-            self.assertFalse(approve_result["ok"])
-            self.assertEqual(
-                approve_result["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
-            )
+            # v0.4.21: nothing is policy-writable, so the reopened route is an
+            # honest no-op: no dialog, no write, and the result says so.
+            self.assertEqual(approve_code, 0, approve_output)
+            self.assertTrue(approve_result["ok"])
+            self.assertEqual(approve_result["write_status"], "nothing_to_write")
+            self.assertFalse(approve_result["native_approval_dialog_opened"])
+            self.assertEqual(approve_result["files_written"], [])
             self.assertFalse(approve_result["private_values_echoed"])
             self.assertEqual(self.snapshot_archive_files(archive_root), before)
 
@@ -30734,10 +30751,13 @@ state:
             )
             blocked = json.loads(approve_output)
             self.assertEqual(approve_code, 1, approve_output)
+            # v0.4.21: the fresh preflight blocks the type-incompatible item
+            # before any dialog; the bounded blockers repeat the dry-run truth.
             self.assertEqual(
                 blocked["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
+                ["zettel_edge_batch_preflight_blocked"],
             )
+            self.assertTrue(blocked["blockers"])
             self.assertFalse(blocked["private_values_echoed"])
             self.assertEqual(self.snapshot_archive_files(archive_root), before)
 
@@ -30807,15 +30827,22 @@ state:
                     "json",
                 ]
             )
-            blocked = json.loads(approve_output)
-            self.assertEqual(approve_code, 1, approve_output)
-            self.assertFalse(blocked["ok"])
+            # v0.4.21: one exact approval writes the whole policy batch.
+            written = json.loads(approve_output)
+            self.assertEqual(approve_code, 0, approve_output)
+            self.assertTrue(written["ok"])
+            self.assertEqual(written["write_status"], "written")
+            self.assertEqual(written["summary"]["written_edge_count"], 1)
+            self.assertIn(written["receipt_path"], written["files_written"])
+            after = self.snapshot_archive_files(archive_root)
+            self.assertNotEqual(after, before)
+            batch_receipt = json.loads(after[written["receipt_path"]])
             self.assertEqual(
-                blocked["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
+                batch_receipt["exact_human_approval"]["operation"],
+                "zettel_edge_batch",
             )
-            self.assertFalse(blocked["private_values_echoed"])
-            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            self.assertNotIn(str(archive_root), approve_output)
+
     def test_zettel_edge_batch_objet_targets_preload_manifest_once(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -69511,24 +69538,38 @@ state:
                     "json",
                 ]
             )
-            blocked = json.loads(approve_output)
-            self.assertEqual(approve_code, 1, approve_output)
-            self.assertEqual(
-                blocked["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
+            # v0.4.21: one exact approval mints the whole reviewed batch
+            # (the test seam approves without a dialog).
+            minted = json.loads(approve_output)
+            self.assertEqual(approve_code, 0, approve_output)
+            self.assertTrue(minted["ok"])
+            self.assertEqual(minted["write_status"], "written")
+            self.assertEqual(minted["summary"]["written_item_count"], 2)
+            self.assertTrue(all(path.exists() for path in candidate_paths))
+            batch_receipt = json.loads(
+                (archive_root / minted["receipt_path"]).read_text(encoding="utf-8")
             )
-            self.assertFalse(blocked["private_values_echoed"])
-            self.assertTrue(all(not path.exists() for path in candidate_paths))
+            self.assertEqual(
+                batch_receipt["exact_human_approval"]["operation"], "mint_zet_batch"
+            )
+            self.assertNotIn(str(archive_root), approve_output)
 
-    def test_retire_draft_batch_approve_fails_closed_before_plan_read(self) -> None:
+    def test_retire_draft_batch_approve_on_missing_plan_stops_before_the_writer(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
             before = self.snapshot_archive_files(archive_root)
+            original = archive_services.retire_draft_batch
+
+            def preflight_only(*args, **kwargs):
+                if kwargs.get("approve"):
+                    raise AssertionError("approved writer entered")
+                return original(*args, **kwargs)
+
             with patch.object(
                 archive_services,
                 "retire_draft_batch",
-                side_effect=AssertionError("service must not be called"),
-            ) as service:
+                side_effect=preflight_only,
+            ):
                 code, output = self.run_cli(
                     [
                         "retire-draft-batch",
@@ -69544,12 +69585,14 @@ state:
                 )
             blocked = json.loads(output)
             self.assertEqual(code, 1, output)
+            # the fresh private preflight blocks on the missing plan; no
+            # dialog, no writer, bounded blockers, nothing private echoed
             self.assertEqual(
                 blocked["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
+                ["retire_draft_batch_preflight_blocked"],
             )
             self.assertFalse(blocked["private_values_echoed"])
-            service.assert_not_called()
+            self.assertNotIn("private-missing", output)
             self.assertEqual(self.snapshot_archive_files(archive_root), before)
 
     def test_retire_draft_batch_reuses_edge_receipt_index_for_edge_evolved_targets(self) -> None:

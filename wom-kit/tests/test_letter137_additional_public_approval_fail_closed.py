@@ -39,17 +39,13 @@ NON_BOOLEAN_GUARDED_WRITERS = (
     "activity_group_membership_removal_write",
     "activity_group_membership_recover",
     "activity_group_membership_removal_recover",
-    "mint_zet_batch",
-    "retire_draft_batch",
     "ai_scratch_gc_for_zettel",
     "quarantine_foreign_block",
     "record_quarantine_decision",
     "notion_ancestor_fetch_adapter_run",
     "tiro_lossless_recovery_capture",
     "tiro_lossless_recovery_fetch_run",
-    "zettel_edge_batch_write",
     "zettel_edge_revert",
-    "zettel_edge_batch_revert",
     "imap_mailbox_adapter_manifest_write",
     "imap_mailbox_header_metadata_scan",
     "credential_keepassxc_write",
@@ -295,7 +291,7 @@ class Letter137AdditionalPublicCliBoundaryTests(_CliAssertions):
             ],
             "parcel": ["pack"],
         }
-        self.assertEqual(len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS), 65)
+        self.assertEqual(len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS), 61)
         for exact_batch_command in (
             "source-intake-batch",
             "objet-capture-batch",
@@ -759,7 +755,7 @@ class Letter137AdditionalPublicServiceBoundaryTests(unittest.TestCase):
             def __str__(self) -> str:
                 raise AssertionError("argument must not be rendered")
 
-        self.assertEqual(len(NON_BOOLEAN_GUARDED_WRITERS), 49)
+        self.assertEqual(len(NON_BOOLEAN_GUARDED_WRITERS), 45)
         blocker = archive_services.COMPOUND_EXACT_HUMAN_APPROVAL_REQUIRED
         with (
             mock.patch.object(

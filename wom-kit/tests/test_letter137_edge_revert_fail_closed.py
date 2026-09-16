@@ -80,17 +80,25 @@ class Letter137EdgeRevertServiceBoundaryTests(unittest.TestCase):
                 lifecycle_action="zettel_edge_revert",
             )
 
-    def test_edge_batch_revert_approve_fails_closed_before_receipt_read(
+    def test_edge_batch_revert_approve_requires_the_claim_before_receipt_read(
         self,
     ) -> None:
+        # v0.4.21 reopened revert-batch under one exact approval: an unbound
+        # approve call raises the fixed code before the receipt is read and
+        # echoes nothing private.
         with tempfile.TemporaryDirectory() as tmp:
             root = self._archive_root(Path(tmp))
-            self._assert_approve_is_content_free_and_zero_write(
-                service=archive_services.zettel_edge_batch_revert,
-                root=root,
-                receipt=PRIVATE_BATCH_RECEIPT,
-                lifecycle_action="zettel_edge_batch_revert",
-            )
+            before = _archive_snapshot(root)
+            with self.assertRaises(archive_services.ArchiveServiceError) as caught:
+                archive_services.zettel_edge_batch_revert(
+                    root,
+                    receipt=PRIVATE_BATCH_RECEIPT,
+                    approve=True,
+                    reviewed_by=PRIVATE_REVIEWER,
+                )
+            self.assertEqual(str(caught.exception), "exact_human_approval_required")
+            self.assertEqual(_archive_snapshot(root), before)
+            self.assertNotIn(PRIVATE_BATCH_RECEIPT, repr(caught.exception))
 
 
 class Letter137EdgeRevertCliBoundaryTests(unittest.TestCase):
@@ -151,13 +159,47 @@ class Letter137EdgeRevertCliBoundaryTests(unittest.TestCase):
             lifecycle_action="zettel_edge_revert",
         )
 
-    def test_edge_batch_revert_approve_blocks_before_service(self) -> None:
-        self._assert_cli_blocks_before_service(
-            command="revert-batch",
-            receipt=PRIVATE_BATCH_RECEIPT,
-            service_name="zettel_edge_batch_revert",
-            lifecycle_action="zettel_edge_batch_revert",
+    def test_edge_batch_revert_approve_on_missing_archive_never_enters_the_writer(self) -> None:
+        original = archive_cli.archive_services.zettel_edge_batch_revert
+
+        def preflight_only(*args, **kwargs):
+            if kwargs.get("approve"):
+                raise AssertionError("approved writer entered")
+            return original(*args, **kwargs)
+
+        args = self.parser.parse_args(
+            [
+                "revert-batch",
+                "C:/private/archive",
+                "--receipt",
+                PRIVATE_BATCH_RECEIPT,
+                "--approve",
+                "--reviewed-by",
+                PRIVATE_REVIEWER,
+                "--format",
+                "json",
+            ]
         )
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with (
+            mock.patch.object(
+                archive_cli.archive_services,
+                "zettel_edge_batch_revert",
+                side_effect=preflight_only,
+            ),
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+        ):
+            code = args.func(args)
+        self.assertEqual(code, 1, stderr.getvalue())
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["state"], "blocked")
+        self.assertEqual(payload["lifecycle_action"], "zettel_edge_batch_revert")
+        self.assertEqual(payload["reason_codes"], ["zettel_edge_batch_revert_workflow_failed_safely"])
+        self.assertIs(payload["private_values_echoed"], False)
+        serialized = stdout.getvalue() + stderr.getvalue()
+        self.assertNotIn(PRIVATE_BATCH_RECEIPT, serialized)
+        self.assertNotIn(PRIVATE_REVIEWER, serialized)
 
 
 if __name__ == "__main__":

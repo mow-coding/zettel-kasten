@@ -104,10 +104,13 @@ class V0401ReleaseDocsTests(unittest.TestCase):
 
     def test_current_parser_combines_all_released_writers(self) -> None:
         blocked = archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS
-        self.assertEqual(len(blocked), 65)
+        self.assertEqual(len(blocked), 61)
         self.assertNotIn("migrate", blocked)
         self.assertNotIn("discard-draft", blocked)
         self.assertNotIn("discard-draft-restore", blocked)
+        self.assertNotIn("zettel-edge-batch", blocked)
+        for reopened in ("mint-zet-batch", "retire-draft-batch", "revert-batch"):
+            self.assertNotIn(reopened, blocked)
         self.assertNotIn("zettel-objet-link", blocked)
         self.assertIn("zettel-objet-link-revert", blocked)
         self.assertNotIn("project-version-update", blocked)
@@ -130,8 +133,8 @@ class V0401ReleaseDocsTests(unittest.TestCase):
         self.assertEqual(counts["canonical_executable_command_count"], 316)
         self.assertEqual(counts["alias_invocation_path_count"], 259)
         self.assertEqual(counts["invocation_path_count"], 575)
-        self.assertEqual(counts["approval_available_command_count"], 49)
-        self.assertEqual(counts["approval_fixed_closed_command_count"], 66)
+        self.assertEqual(counts["approval_available_command_count"], 53)
+        self.assertEqual(counts["approval_fixed_closed_command_count"], 62)
         self.assertEqual(counts["approval_not_exposed_command_count"], 201)
         self.assertEqual(counts["conditional_approval_command_count"], 11)
         self.assertEqual(counts["dry_run_exposed_command_count"], 273)

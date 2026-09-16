@@ -92,7 +92,6 @@ COMPOUND_APPROVAL_FIXED_CLOSED_COMMANDS = frozenset(
         "markup-normalization",
         "markup-normalization-recovery",
         "markup-normalization-revert",
-        "mint-zet-batch",
         "notion-ancestor-fetch-adapter-run",
         "notion-objet-manifest-locator-label",
         "notion-objet-link-convert",
@@ -113,11 +112,9 @@ COMPOUND_APPROVAL_FIXED_CLOSED_COMMANDS = frozenset(
         "quarantine-foreign-block",
         "record-quarantine-decision",
         "remint-reconcile",
-        "retire-draft-batch",
         "retire-draft-reconcile",
         "runtime-skill-install",
         "runtime-skill-uninstall",
-        "revert-batch",
         "restore-drill",
         "saved-view-revert",
         "saved-view-write",
@@ -134,7 +131,6 @@ COMPOUND_APPROVAL_FIXED_CLOSED_COMMANDS = frozenset(
         "zet-revision-write",
         "zet-title-remap-recover",
         "zet-title-remap-revert-recover",
-        "zettel-edge-batch",
         "zettel-objet-link-revert",
     }
 )
@@ -149,6 +145,10 @@ COMPOUND_APPROVAL_FIXED_CLOSED_PLAN_WRITERS = {
 EXACT_APPROVAL_REOPENED_WRITERS = frozenset({
     "discard-draft",
     "discard-draft-restore",
+    "zettel-edge-batch",
+    "mint-zet-batch",
+    "retire-draft-batch",
+    "revert-batch",
 })
 
 # Public parser and dispatch exposure was audited at v0.3.320 and its explicit

@@ -97,3 +97,129 @@ without entering the writer. Cohorts: 421 tests (surface, docs, boundary,
 schema parity, predecessor surfaces) OK; wheel-install, MCP and fail-closed
 cohorts 241 tests OK; the v0.4.11 installed smoke program rerun from a wheel
 built from this tree in a fresh venv returned `ok: true`; readiness gate 5/5.
+
+## Unit LR-01b: zettel-edge-batch under one exact approval
+
+Letter 160 measured 21 single-edge dialogs for one review batch (issue I40)
+because `zettel-edge-batch --approve` had been fixed closed since v0.4.0 and
+each edge went through `zettel-edge` alone. v0.4.21 reopens the batch under
+one operation-specific exact human approval that covers exactly the reviewed
+policy-writable items.
+
+Design:
+
+- The dry-run already ran the single-edge preflight per item. It now keeps
+  each item's own single-edge binding digests (`approval_plan_sha256`,
+  `approval_target_binding_sha256`, public-safe) in the result; an item whose
+  binding cannot be built is a blocker.
+- `operation_approval_binding.zettel_edge_batch_approval_binding(plan)` binds
+  the sorted set of those item digest pairs plus the batch id and receipt path
+  as the target, and the policy, item projection (all digests), queue counts,
+  warnings and would-change digest as the plan. The first source filename is
+  the only local label; nothing private enters the public binding.
+- `zettel_edge_batch_write(approve=True)` requires the claim and both expected
+  digests before any read, re-runs the dry pass, verifies the claim against
+  the batch binding built from that fresh pass, then constructs a private
+  `_ZettelEdgeBatchAuthority` (batch context, digests, the approved item pair
+  set, the batch approval receipt). Each item write calls `zettel_edge_write`
+  with that authority: the single writer re-derives its own binding, proves
+  the pair is in the approved set, re-authenticates the same claim against the
+  batch context, and embeds the batch approval receipt plus its own item
+  binding in the edge receipt. A forged authority object or a batch authority
+  without `approve` is refused before any read. The batch receipt embeds the
+  batch approval. Rollback on any item failure is unchanged.
+- The CLI route requires a reviewer, refuses dry-run plus approve through the
+  shared parser gate, runs the private preflight (fixed
+  `zettel_edge_batch_preflight_blocked` with bounded blockers, no dialog),
+  treats a plan with no policy-writable edges as an honest no-op without a
+  dialog, and otherwise opens the production boundary with the v0.4.20
+  count-first `TargetCollectionPreview` of the source zets and a live observer
+  that re-runs the dry pass; the dialog therefore shows "대상 N개" with one page
+  per 20 zets and closes if a source changes while the person is reading.
+- `command_status` drops the command from the fixed-closed registry; the
+  audited v0.3.320 history no longer describes it. Inventory: 50 available,
+  65 fixed-closed (64 compound migrations plus `operation-control`). Coverage
+  manifest: pending session integration (LR-06), denominator 50.
+
+Verification: new `test_v0421_zettel_edge_batch_exact_approval.py` (5
+tests: item bindings and capability truth in the dry-run; one dialog writing
+two policy edges while the low-confidence row stays queued, receipts carrying
+the batch approval and item bindings; cancel writing nothing and a source
+edited after the decision refused with rollback and the honest unknown-state
+code; unbound and forged-authority calls failing before any read; reviewer and
+mode errors without a dialog). Updated pins: the letter-137 batch tests now
+assert the unbound service call and the missing-archive CLI route stop before
+the writer; the non-boolean guard list drops the reopened writer (48); the
+legacy `test_cli` batch test now asserts the approved write and its receipt
+and the type-incompatible test asserts the preflight block; the test CLI
+approval fake accepts the preview options and calls the observer once; closed
+count 65→64 and available 49→50 in the v0.4.0, v0.4.1 and letter-137 tests;
+manifest pins 50/24; capability matrix edge row and inventory paragraphs.
+Cohorts: 429 tests (approval, boundary, preview, checker, docs) OK; the full
+`test_cli` module (1,469 tests, 3,434 s) passed except the format-variant
+batch test whose closed-era expectation LR-01c updates; readiness gate 5/5.
+
+## Unit LR-01c: mint, retire and edge-revert batches under one approval each
+
+`mint-zet-batch`, `retire-draft-batch` and `revert-batch` were the remaining
+fixed-closed batches of LR-01 (letters 157-160: repeated single dialogs for
+reviewed batches). They reuse the LR-01b mechanism, generalized.
+
+Design:
+
+- The batch authority is now generic. `_ExactBatchAuthority` holds the batch
+  context and digests, the approved item binding pairs, the approved item
+  identities and the batch approval receipt; `_build_exact_batch_authority`
+  verifies the batch claim against a fresh dry pass immediately before the
+  first write. Each item write receives `for_item(identity, own_write_state_verified)`,
+  a per-item view whose `item_approval` accepts the fresh single-item binding
+  in order of strictness: an exact approved pair; an approved target digest
+  when only review context drifted (a mint's duplicate scan changes after the
+  batch's own earlier mint while the draft bytes and destinations do not); or
+  an approved stable identity when the batch itself verified that the only
+  change to the item's source since the dialog was its own earlier write (two
+  edges from one zet). The same authenticated claim is re-verified against
+  the batch context on every item, and the receipt records which rule matched.
+  Identities are content-free digests of ids and archive-relative paths.
+- `mint_zettel`, `write_retired_draft_from_plan` and `zettel_edge_revert`
+  accept the per-item authority exactly like `zettel_edge_write`; a forged
+  or wrongly typed authority is refused before any read.
+- The mint and retire batches now plan every item first (recording the
+  single-item binding and identity), refuse to approve while any item cannot
+  be planned (fixed or skipped with `--skip-existing`), verify the batch claim
+  from a planned batch document with the receipt path the write will use,
+  then write. The revert batch keeps its plan-then-write shape and gains the
+  same verification. Batch receipts embed the batch approval; item receipts
+  embed the batch approval plus their item binding and match rule.
+- Bindings: `mint_zet_batch_approval_binding`, `retire_draft_batch_approval_binding`
+  and `zettel_edge_batch_revert_approval_binding` share `_batch_binding`:
+  sorted approved pairs, item count, batch id and receipt digests as the
+  target; item projections, policy or source-receipt digests and warnings as
+  the plan; the first draft or source filename as the only local label.
+- CLI: `_exact_batch_approval_route` is shared by the four batches (mode
+  conflict and reviewer checks, fresh preflight with bounded blockers, an
+  explicit `nothing_to_write` no-op without a dialog when nothing is
+  writable, count-first collection preview with a live observer, fixed
+  reason codes). The edge batch was moved onto it.
+- Registry and inventory: three more writers leave the fixed-closed set;
+  53 approval-available, 62 fixed-closed (61 compound migrations plus
+  `operation-control`); coverage manifest 53 paths, 27 pending.
+
+Verification: new `test_v0421_lifecycle_batches_exact_approval.py` (4
+tests: two drafts minted under one count-first dialog with batch and item
+receipts; the two minted drafts retired under one dialog; a written edge batch
+reverted under one dialog with the original receipts preserved; cancel and
+unbound and reviewer-less calls writing nothing). Updated pins: letter-137
+compound and edge-revert tests assert the unbound service call and the
+missing-archive route stop before the writer; the non-boolean guard list
+drops the three writers (45); closed 64→61 and available 50→53; manifest
+53/27; closed-writer samples moved to `zet-revision-write` and
+`zet-revision-restore-write`; the legacy `test_cli` mint batch test asserts
+the approved write, the retire test asserts the preflight block on a missing
+plan, and the format-variant test asserts the explicit no-op; capability
+matrix mint lifecycle and edge rows; inventory paragraphs. Cohorts: 363
+surface and boundary tests OK; readiness gate 5/5. The full `test_cli` module
+and approval-cohort rerun on the LR-01c tree was interrupted by the user's
+shutdown; it is the first step when work resumes and must pass before PR CI
+is trusted for this unit (the LR-01b tree's full `test_cli` run is recorded
+above; only the closed-era expectations LR-01c updates changed since).
