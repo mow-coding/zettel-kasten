@@ -337,8 +337,8 @@
     {
       "source": "schemas/operation-exact-human-approval-v0.1.schema.json",
       "packaged": "schemas/operation-exact-human-approval-v0.1.schema.json",
-      "bytes": 1705,
-      "sha256": "91d274a6770539e66974b111ebcbb05d924b4c1f9a04941027b66dd49f4823c6"
+      "bytes": 1894,
+      "sha256": "2ea8c33c3d4ea2f9fe1a4bae07d81157422ffde50ff0f638dcd0fae3cbab3c40"
     },
     {
       "source": "schemas/operator-feedback-delivery-receipt.schema.json",
@@ -631,8 +631,8 @@
     {
       "source": "schemas/zet-revision-receipt-v0.2.schema.json",
       "packaged": "schemas/zet-revision-receipt-v0.2.schema.json",
-      "bytes": 8619,
-      "sha256": "781b5d727f47390ed246fdf95a00fd417ee17002c8ef882a42799fced79544c6"
+      "bytes": 9829,
+      "sha256": "5b41b537fa077098bd6d96abcccb98fcddcea421c0af0a86ad371c960afa0778"
     },
     {
       "source": "schemas/zet-revision-receipt.schema.json",
@@ -643,8 +643,8 @@
     {
       "source": "schemas/zet-revision-restore-receipt.schema.json",
       "packaged": "schemas/zet-revision-restore-receipt.schema.json",
-      "bytes": 7391,
-      "sha256": "569dfafe8d38df1ad369291e310c8e53ab8fe891c6cd33251935d79b32df033d"
+      "bytes": 8609,
+      "sha256": "23f16ebd35c54803d1165ac3d4f0c99145feaf50e06e5645ce7bad09e8024ab6"
     },
     {
       "source": "schemas/zet-title-remap-proposal.schema.json",

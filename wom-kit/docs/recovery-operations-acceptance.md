@@ -29,7 +29,7 @@ in their original private custody. The developer does not update their lifecycle
 | WS-02 | v0.4.20 | New writes carry session binding; old approved operations resume without rewriting their authority | batch/record intake and Git have scoped CLI/MCP source evidence; intake original review and unrelated-app continuation development verified; title apply/original review/resume now has CLI/MCP development evidence (25 recovery plus 30 adapter/transport tests and independent review); canonical document before/after transition observation development verified (21 recovery plus one MCP projection test, independent read-only review); authenticated whole-document Git ownership for completed title recoveries development verified (7 tests over a real repository; HEAD preimage, worktree postimage, index, original authentication); session-scoped title revert development verified (compensation as a bound apply over the observed post subset; 3 tests); all-writer/effect coverage unfinished |
 | WS-03 | v0.4.20 | Local-only count-first target preview with 20-item pages and safe title/filename/short-ID fallback | preview and paging components implemented; session decisions and local recovery writers (legacy and session-scoped apply) show the count-first paged preview with a live target-binding observer; other writer families and installed acceptance pending |
 | WS-04 | v0.4.20 | Complete cursor pagination and exact selected/excluded Git coverage; selected-session non-force commit/push plus independent remote-ref proof | pagination and authenticated receipt/metadata selective Git source journeys verified; canonical zettel documents changed by completed session title recoveries are now selected with HEAD/index/worktree proof (scope v3); generic ownership of other outputs, responsibility integration and installed/release acceptance pending |
-| LR-01 | v0.4.21 | Draft discard/restore, semantic revision/restore, mint/retire/edge batches work through exact approval | discard-draft, discard-draft-restore, zettel-edge-batch, mint-zet-batch, retire-draft-batch and revert-batch reopened through exact approval with development evidence (15 new tests; batches take one count-first dialog and every item write re-verifies the batch claim); semantic revision/restore pending |
+| LR-01 | v0.4.21 | Draft discard/restore, semantic revision/restore, mint/retire/edge batches work through exact approval | discard-draft, discard-draft-restore, zettel-edge-batch, mint-zet-batch, retire-draft-batch, revert-batch, zet-revision-write and zet-revision-restore-write reopened through exact approval with development evidence (20 new tests; batches take one count-first dialog and every item write re-verifies the batch claim; the revision pair binds its own digest protocol to the dialog); letter-160 intake-chain single approval and installed/client acceptance pending |
 | LR-02 | v0.4.21 | Source-property backfill classifies every mirror page and supports apply/resume/independent comparison/field revert | older domain exists; client closure unconfirmed |
 | LR-03 | v0.4.21 | Identifier-like title proposals and historical title receipts are individually classified; insufficient evidence remains review | older planner exists; client writes unconfirmed |
 | LR-04 | v0.4.21 | Locator records, occurrence anchors, and markup have separate validated outcomes; existing correct links survive | older partial result; recovery pending |
@@ -223,3 +223,17 @@ Development evidence and the inventory change (53 available, 62 fixed-closed)
 are in the [v0.4.21 implementation record](../../meeting-minutes/2026-09-16-v0421-local-repairs-implementation.md).
 Not released; letter 160's 21-dialog and 42-popup measurements stay open
 until the client runs the released commands.
+
+### 2026-09-16 v0.4.21 LR-01d: semantic revision and restore reopened
+
+`zet-revision-write` and `zet-revision-restore-write` accept `--approve`
+again: the reviewer's digest protocol (expected proposal and current digests,
+reviewer marker, revision time) stays as it was and is bound into one exact
+human approval whose claim is verified right after the dry-run point against
+the same ready-to-apply document the preview produced. Unbound service calls
+return the content-free blocked document with `exact_human_approval_required`.
+Development evidence and the inventory change (55 available, 60 fixed-closed,
+no fixed-closed plan writers left) are in the
+[v0.4.21 implementation record](../../meeting-minutes/2026-09-16-v0421-local-repairs-implementation.md).
+Not released; issue I14 stays open until the client runs the released
+command.

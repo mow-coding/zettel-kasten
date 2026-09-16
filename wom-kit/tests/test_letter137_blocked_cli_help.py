@@ -59,7 +59,7 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
         }
         self.assertEqual(
             len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS),
-            61,
+            59,
         )
         for exact_batch_command in (
             "source-intake-batch",
@@ -179,28 +179,33 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
             archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS,
             command_status.COMPOUND_APPROVAL_FIXED_CLOSED_COMMANDS,
         )
-        plan_contract = (
+        # v0.4.21 reopened zet-revision-write; its plan contract says so while
+        # the validation digest still grants no authority.
+        with self.assertRaises(ValueError):
             command_status.compound_approval_fixed_closed_plan_contract(
                 "zet-revision-plan"
             )
+        plan_contract = command_status.exact_approval_available_plan_contract(
+            "zet-revision-write"
         )
-        self.assertEqual(plan_contract["approval_status"], "approval_fixed_closed")
-        self.assertFalse(plan_contract["approved_write_implemented"])
+        self.assertEqual(plan_contract["approval_status"], "approval_available")
+        self.assertTrue(plan_contract["approved_write_implemented"])
         self.assertFalse(plan_contract["actionable_handoff_available"])
         self.assertFalse(plan_contract["validation_digest_is_approval_authority"])
 
         rendered = " ".join(
             self.subcommands.choices["zet-revision-plan"].format_help().split()
         )
-        self.assertIn("approval_fixed_closed", rendered)
-        self.assertIn(command_status.COMPOUND_APPROVAL_REASON_CODE, rendered)
-        self.assertIn("No actionable approval handoff", rendered)
+        self.assertIn("approval_available", rendered)
+        self.assertNotIn("approval_fixed_closed", rendered)
+        self.assertIn("validation evidence only", rendered)
 
     def test_installed_module_help_keeps_plan_and_writer_closure_visible(self) -> None:
         for command_name, expected in (
-            ("zet-revision-plan", "approval_fixed_closed"),
-            ("zet-revision-write", f"Unavailable in v{archive_cli.__version__}"),
-            ("zet-revision-restore-write", f"Unavailable in v{archive_cli.__version__}"),
+            ("zet-revision-plan", "approval_available"),
+            ("zet-revision-write", "exact human approval"),
+            ("zet-revision-restore-write", "exact-byte"),
+            ("remint-reconcile", f"Unavailable in v{archive_cli.__version__}"),
         ):
             with self.subTest(command=command_name):
                 completed = subprocess.run(

@@ -143,10 +143,10 @@ class V0420ReleaseDocsTests(unittest.TestCase):
         # Current manifest facts move with the train (v0.4.21 reopened two
         # writers and classified them as pending session integration); the
         # v0.4.20 note above keeps its historical 21-pending claim.
-        self.assertEqual(len(statuses), 53)
+        self.assertEqual(len(statuses), 55)
         self.assertEqual(statuses.count("session_integrated") - routed, 5)
         self.assertEqual(routed, 1)
-        self.assertEqual(statuses.count("pending"), 27)
+        self.assertEqual(statuses.count("pending"), 29)
         self.assertEqual(statuses.count("legacy_exception"), 20)
 
     def test_current_docs_are_private_safe(self) -> None:

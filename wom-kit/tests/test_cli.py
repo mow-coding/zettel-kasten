@@ -3624,9 +3624,16 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["write_status"], "blocked")
         self.assertEqual(result["lifecycle_action"], lifecycle_action)
-        self.assertEqual(
+        # v0.4.21: reopened document-returning writers (the semantic revision
+        # pair) report exact_human_approval_required when no claim is
+        # supplied; still-closed writers keep the compound code. Both read
+        # nothing.
+        self.assertIn(
             result["blockers"],
-            ["compound_exact_human_approval_binding_required"],
+            (
+                ["compound_exact_human_approval_binding_required"],
+                ["exact_human_approval_required"],
+            ),
         )
         self.assertEqual(result["files_written"], [])
         self.assertFalse(result["private_values_echoed"])
@@ -58392,7 +58399,9 @@ state:
             result = json.loads(output)
             self.assertTrue(result["ok"])
             self.assertEqual(result["schema"], "wom-kit/zet-revision-plan/v0.1")
-            self.assertEqual(result["status"], "approval_fixed_closed")
+            # v0.4.21: the plan reports the reopened writer without making
+            # its own digest approval authority.
+            self.assertEqual(result["status"], "ready_for_human_review")
             self.assertEqual(
                 result["proposal_validation_status"],
                 "ready_for_human_review",
@@ -58405,16 +58414,16 @@ state:
             self.assertRegex(result["plan_digest"], r"^sha256:[0-9a-f]{64}$")
             self.assertTrue(result["plan_digest_contract"]["validation_only"])
             self.assertFalse(result["plan_digest_contract"]["approval_authority"])
-            self.assertFalse(result["approval_contract"]["approved_write_implemented"])
-            self.assertEqual(
-                result["approval_contract"]["approval_reason_code"],
-                "compound_exact_human_approval_binding_required",
+            self.assertTrue(result["approval_contract"]["approved_write_implemented"])
+            self.assertIsNone(result["approval_contract"]["approval_reason_code"])
+            self.assertFalse(
+                result["approval_contract"]["validation_digest_is_approval_authority"]
             )
             self.assertFalse(
                 result["approval_contract"]["actionable_handoff_available"]
             )
             self.assertIsNone(result["approval_handoff"])
-            self.assertFalse(
+            self.assertTrue(
                 any(
                     "zet-revision-write" in action
                     for action in result["next_safe_actions"]
@@ -58704,18 +58713,22 @@ state:
                 "--affirm-revision-reviewed",
                 "--affirm-abstract-body-pair-reviewed",
             ]
-            before_approve = self.snapshot_archive_files(archive_root)
+            # v0.4.21: the reopened route applies through the test approval
+            # seam (no dialog in tests) and embeds the exact approval.
             code, output = self.run_cli(approve_args)
-            self.assertEqual(code, 1, output)
-            blocked = json.loads(output)
-            self.assertEqual(
-                blocked["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
-            )
-            self.assertFalse(blocked["private_values_echoed"])
-            self.assertEqual(self.snapshot_archive_files(archive_root), before_approve)
-            self.assertEqual(
+            self.assertEqual(code, 0, output)
+            applied = json.loads(output)
+            self.assertEqual(applied["status"], "applied")
+            self.assertTrue(applied["approved"])
+            self.assertTrue(applied["receipt"]["exists"])
+            self.assertNotEqual(
                 fixture["canonical_path"].read_bytes(), fixture["original_bytes"]
+            )
+            receipt = json.loads(
+                (archive_root / applied["receipt"]["path"]).read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                receipt["exact_human_approval"]["operation"], "zet_revision_write"
             )
             for marker in (
                 fixture["zettel_id"],
@@ -58727,9 +58740,16 @@ state:
             ):
                 self.assertNotIn(marker, output)
 
+            # a replay re-derives the plan against the revised canonical and
+            # stops at the fresh preflight without a second write
+            after_apply = self.snapshot_archive_files(archive_root)
             code, output = self.run_cli(approve_args)
             self.assertEqual(code, 1, output)
-            self.assertEqual(self.snapshot_archive_files(archive_root), before_approve)
+            self.assertIn(
+                json.loads(output)["reason_codes"][0],
+                {"zet_revision_write_preflight_blocked", "zet_revision_write_workflow_failed_safely"},
+            )
+            self.assertEqual(self.snapshot_archive_files(archive_root), after_apply)
 
     def test_zet_revision_write_blocks_missing_approval_and_changed_proposal(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

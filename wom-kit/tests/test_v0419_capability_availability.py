@@ -79,7 +79,8 @@ class V0419CapabilityAvailabilityTests(unittest.TestCase):
         # their audited restriction history no longer describes the surface.
         expected_commands = audited_commands - {
             "discard-draft", "discard-draft-restore", "zettel-edge-batch",
-            "mint-zet-batch", "retire-draft-batch",
+            "mint-zet-batch", "retire-draft-batch", "zet-revision-write",
+            "zet-revision-restore-write",
         }
         expected_history = {
             "state": "previously_exposed_now_restricted",
@@ -130,7 +131,7 @@ class V0419CapabilityAvailabilityTests(unittest.TestCase):
         inventory = self.inventory()
         known = next(
             row for row in inventory["commands"]
-            if row["canonical_path"] == "zet-revision-write"
+            if row["canonical_path"] == "remint-reconcile"
         )
         history = known["approval_exposure_history"]
         invalid_histories = [
@@ -146,12 +147,12 @@ class V0419CapabilityAvailabilityTests(unittest.TestCase):
                 tampered = copy.deepcopy(inventory)
                 tampered_row = next(
                     row for row in tampered["commands"]
-                    if row["canonical_path"] == "zet-revision-write"
+                    if row["canonical_path"] == "remint-reconcile"
                 )
                 tampered_row["approval_exposure_history"] = invalid
                 with self.assertRaisesRegex(ValueError, "^command_status_inventory_invalid$"):
                     command_status.resolve_capability_availability(
-                        tampered, "zet-revision-write", requested_mode="approve"
+                        tampered, "remint-reconcile", requested_mode="approve"
                     )
         tampered = copy.deepcopy(inventory)
         unaudited_row = next(

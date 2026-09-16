@@ -223,3 +223,122 @@ and approval-cohort rerun on the LR-01c tree was interrupted by the user's
 shutdown; it is the first step when work resumes and must pass before PR CI
 is trusted for this unit (the LR-01b tree's full `test_cli` run is recorded
 above; only the closed-era expectations LR-01c updates changed since).
+
+## Unit LR-01d: zet-revision-write and zet-revision-restore-write reopened
+
+The semantic revision pair (`zet-revision-write`, `zet-revision-restore-write`)
+were the last two LR-01 writers (letters 157-160: reviewed revision proposals
+could only be dry-run since the v0.4.0 compound closure; issue I14). Executing
+model: Claude Opus 5, high reasoning effort, solo (no fan-out).
+
+Design:
+
+- Both writers keep their own digest protocol (expected-proposal and
+  expected-current digests, reviewer marker, `revision_at`) and gain the same
+  three exact-approval inputs as every other reopened writer
+  (`expected_exact_approval_plan_sha256`, `expected_exact_approval_target_binding_sha256`,
+  `exact_human_approval_claim`). The claim is verified immediately after the
+  dry-run return point, against a binding rebuilt from the same
+  `result_payload("ready_to_apply")` the preview produced (with `dry_run`
+  marked true, because the binding builders refuse non-dry documents), so an
+  approved dialog binds exactly the bytes and digests the write applies. The
+  receipt embeds the approval reference.
+- Unbound service calls no longer raise: the guard returns the same
+  content-free blocked document as the compound era, with reason
+  `exact_human_approval_required` instead of the closed reason, so the
+  v0.4.0 fail-closed pins (`assert_compound_revision_write_blocked`) keep
+  holding while the reopened path is testable. `_compound_exact_human_approval_blocked`
+  takes the reason code as a parameter for this.
+- Bindings: `zet_revision_write_approval_binding` and
+  `zet_revision_restore_write_approval_binding` share `_zet_revision_binding`:
+  the target is digest-only (zettel path, current bytes, proposal or
+  restore-source receipt bytes, `revision_at`); the review context carries
+  the expected-digest match flags, which must both be true; reviewer marker
+  and affirm flags are deliberately not part of the basis because they are
+  private reviewer inputs, not archive state.
+- CLI: `_zet_revision_exact_approval_route` runs the preview without the
+  reviewer/affirm inputs (the preview refuses them; earlier attempt failed
+  with `reviewed_by_only_valid_with_approve`), re-derives the plan digest
+  with the bound `revision_at`, opens the dialog with a live target observer,
+  then executes the write with the reviewer marker and the claim. The
+  reviewer marker may appear in the dialog context but never in stdout; a
+  marker that is not a safe actor id returns `zet_revision_write_reviewer_required`
+  (the letter-137 CLI pin was updated from `_workflow_failed_safely` to this
+  precise reason). The restore parser gained a description mentioning the
+  exact-byte restore so the help pins have text to assert.
+- Copy: both operations were added to `ExactHumanApprovalOperation` and to
+  all four per-operation copy tables (labels, questions, summaries, approve
+  buttons); the schema enum `operation-exact-human-approval-v0.1` now lists
+  all eight v0.4.21 operations; both receipt schemas gain optional
+  `exact_human_approval`; packaged resources resynced.
+- Registry and inventory: `COMPOUND_APPROVAL_FIXED_CLOSED_PLAN_WRITERS` is
+  now empty; 55 approval-available, 60 fixed-closed (59 compound migrations
+  plus `operation-control`); coverage manifest 55 paths, 29 pending.
+  Installed-wheel smoke (v0.4.11 program) now asserts the reopened contract:
+  help mentions exact human approval, a reviewer-less approve returns
+  `zet_revision_write_reviewer_required`, evidence records
+  `approval_status: approval_available`.
+
+Verification: new `test_v0421_zet_revision_exact_approval.py` (5 tests: the
+revision applies through the native boundary and a replay is blocked by the
+preflight; cancel and missing reviewer write nothing; unbound service calls
+return the blocked document before any read; restore returns the exact
+previous bytes under one dialog; inventory reports both available). Updated
+pins: letter-137 revision and help tests (59 closed), additional-public
+count (59), command-status and v0.4.19 availability samples moved to
+`remint-reconcile`, v0.4.0/v0.4.1/v0.4.20 release-doc counts (55/60, 55/29),
+writer-session coverage gate denominator 55, letter-140 enum, `test_cli`
+plan and write expectations (`ready_for_human_review`, applied write),
+wheel-checker pins, capability matrix revision rows and inventory, operator
+capabilities and exact-approval contract docs. Two test files rewritten by a
+patch script came back with LF endings and were restored to CRLF before
+commit (content diff unchanged). Readiness gate 5/5. The full cohort
+(`test_cli` plus the approval and boundary modules, 26 modules) was rerun
+from scratch on the LR-01d tree because the LR-01c cohort rerun had been
+started before LR-01d changed the same modules; its result is recorded below
+before the commit: 2,018 tests, OK (13 skipped), 3,504 s.
+
+## Unit LR-01e: the intake chain under one approval (design, before implementation)
+
+Letter 160 ⑦: one objet intake costs three approvals (`source-intake-record`
+→ `objet-capture-selection --exact-existing-intake` → `objet-capture
+--exact-local`); 42 popups for three drafts over two days. The v0.4.10 batch
+pair (`source-intake-batch` → `objet-capture-batch`) already needs only two
+approvals per batch, but it starts from a bounded batch request, not from the
+`source-intake --dry-run` plan the client's flow produces, and the client has
+never used it. The letter asks for the three-step chain as one plan.
+
+Decision (Claude Opus 5, high; solo):
+
+- New command `source-intake-chain` and module `source_intake_chain_exact.py`.
+  Inputs are the union of the three steps' inputs (`--source-intake-plan`,
+  `--staged-path`, `--item-id`, `--manifest-id`, `--project-intake-receipt`).
+  No new approval system: the chain is a heterogeneous batch under the LR-01b/c
+  `_ExactBatchAuthority`, one native dialog, one authenticated claim that every
+  step re-verifies against the chain context before it proves its own binding
+  is approved.
+- Chain plan: (1) the existing record planner must be approveable; its
+  receipt path and bytes are known at plan time. (2) The selection planner
+  gains a projected-receipt input so it can validate the not-yet-written
+  intake receipt from those exact bytes instead of disk; its selection path
+  and bytes are then known. (3) The capture preview runs from the projected
+  selection document (`_objet_capture_run(selection_document=...)`, the same
+  in-memory path `objet-capture-batch` uses); capture never reads the intake
+  receipt from disk. The chain binding covers the three step bindings (plan
+  and target digests) plus the three content-free step identities.
+- Execution: the chain callback builds the batch authority (which verifies
+  the chain claim against a fresh chain plan), then runs record, selection and
+  capture in order. The two manifest-framework steps get a chain variant of
+  their `_authority`: the step's own manifest binding must be an approved
+  pair (or approved target) and the `ExactOperationApprovalAuthority` is built
+  from the chain claim's reference, so the exact-operation final receipts
+  record the approval the human actually gave. The capture step takes
+  `batch_authority` exactly like the LR-01c item writers. Later steps re-plan
+  from disk after the earlier step wrote its bytes; the pair must match
+  exactly because the written bytes are the projected bytes.
+- A step failure after an earlier write is reported as `partial` with each
+  step's state and the written receipt/selection paths so the remaining
+  single-step commands can finish the chain; nothing is rolled back (the
+  written intake record and selection are valid standalone artifacts).
+- Registry: one more approval-available exact writer (56 available); the
+  coverage manifest gains its path (session integration is LR-06).

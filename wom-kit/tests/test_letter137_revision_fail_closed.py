@@ -52,6 +52,9 @@ class Letter137RevisionServiceBoundaryTests(unittest.TestCase):
         invoke: Callable[[], dict[str, object]],
         private_values: tuple[str, ...],
     ) -> None:
+        # v0.4.21 reopened both writers through exact human approval: an
+        # unbound approve call raises the fixed code before any read, changes
+        # nothing, and carries no private value.
         before = _archive_snapshot(root)
         result = invoke()
 
@@ -60,7 +63,7 @@ class Letter137RevisionServiceBoundaryTests(unittest.TestCase):
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["write_status"], "blocked")
         self.assertEqual(result["lifecycle_action"], lifecycle_action)
-        self.assertEqual(result["blockers"], [COMPOUND_APPROVAL_BLOCKER])
+        self.assertEqual(result["blockers"], ["exact_human_approval_required"])
         self.assertEqual(result["would_change"], [])
         self.assertEqual(result["files_written"], [])
         self.assertIs(result["private_values_echoed"], False)
@@ -144,26 +147,38 @@ class Letter137RevisionCliBoundaryTests(unittest.TestCase):
         lifecycle_action: str,
         private_values: tuple[str, ...],
     ) -> None:
+        # v0.4.21: the reopened route runs a private preflight; on an archive
+        # that does not exist it stops with a fixed code, never enters the
+        # approved writer and echoes nothing private.
         args = self.parser.parse_args(values)
+        original = getattr(archive_cli.archive_services, service_name)
+
+        def preflight_only(*call_args, **call_kwargs):
+            if call_kwargs.get("approve"):
+                raise AssertionError("approved writer entered")
+            return original(*call_args, **call_kwargs)
+
         stdout = io.StringIO()
         stderr = io.StringIO()
         with (
             mock.patch.object(
                 archive_cli.archive_services,
                 service_name,
-                return_value={"ok": True, "files_written": ["unexpected"]},
-            ) as service,
+                side_effect=preflight_only,
+            ),
             redirect_stdout(stdout),
             redirect_stderr(stderr),
         ):
             code = args.func(args)
 
         self.assertEqual(code, 1, stderr.getvalue())
-        service.assert_not_called()
         payload = json.loads(stdout.getvalue())
         self.assertEqual(payload["state"], "blocked")
         self.assertEqual(payload["lifecycle_action"], lifecycle_action)
-        self.assertEqual(payload["reason_codes"], [COMPOUND_APPROVAL_BLOCKER])
+        # The private reviewer marker is not a safe actor id, so the route
+        # refuses it before the preflight; a safe reviewer on a missing archive
+        # would stop at the preflight with the failed-safely code instead.
+        self.assertEqual(payload["reason_codes"], [f"{lifecycle_action}_reviewer_required"])
         self.assertIs(payload["private_values_echoed"], False)
         serialized = stdout.getvalue() + stderr.getvalue()
         for value in private_values:

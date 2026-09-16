@@ -1251,11 +1251,11 @@ class InstalledEntrypointTests(unittest.TestCase):
             "isolated_installed_package": True,
             "isolated_python_flags": True,
             "revision_and_discard": {
-                "approval_status": "approval_fixed_closed",
-                "approved_write_implemented": False,
+                "approval_status": "approval_available",
+                "approved_write_implemented": True,
                 "actionable_handoff_available": False,
                 "validation_digest_is_approval_authority": False,
-                "approval_attempts_fixed_closed_without_effects": True,
+                "reviewer_less_approval_attempts_have_no_effects": True,
             },
             "self_contained_check": {
                 "works_without_dry_run_flag": True,

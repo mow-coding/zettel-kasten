@@ -124,6 +124,8 @@ from .operation_approval_binding import (
     zettel_edge_revert_approval_binding,
     mint_zet_batch_approval_binding,
     retire_draft_batch_approval_binding,
+    zet_revision_write_approval_binding,
+    zet_revision_restore_write_approval_binding,
 )
 
 try:
@@ -172,8 +174,14 @@ def _compound_exact_human_approval_blocked(
     *,
     archive_id: str | None = None,
     lifecycle_action: str,
+    reason_code: str = COMPOUND_EXACT_HUMAN_APPROVAL_REQUIRED,
 ) -> dict[str, Any]:
-    """Return a content-free blocker for legacy compound approval writers."""
+    """Return a content-free blocker for legacy compound approval writers.
+
+    Reopened document-returning writers (the v0.4.21 semantic revision pair)
+    use the same shape with ``exact_human_approval_required`` when an approve
+    call carries no authenticated claim; nothing is read in either case.
+    """
 
     result: dict[str, Any] = {
         "ok": False,
@@ -182,8 +190,8 @@ def _compound_exact_human_approval_blocked(
         "status": "blocked",
         "write_status": "blocked",
         "lifecycle_action": lifecycle_action,
-        "blockers": [COMPOUND_EXACT_HUMAN_APPROVAL_REQUIRED],
-        "reason_codes": [COMPOUND_EXACT_HUMAN_APPROVAL_REQUIRED],
+        "blockers": [reason_code],
+        "reason_codes": [reason_code],
         "warnings": [],
         "would_change": [],
         "files_written": [],
@@ -19129,8 +19137,8 @@ def blocked_zet_revision_plan_payload(
 ) -> dict[str, Any]:
     """Return the public plan schema without evidence from rejected bytes."""
     approval_contract = (
-        command_status.compound_approval_fixed_closed_plan_contract(
-            "zet-revision-plan"
+        command_status.exact_approval_available_plan_contract(
+            "zet-revision-write"
         )
     )
     return {
@@ -19555,8 +19563,8 @@ def zet_revision_plan(
     warnings = unique_preserve_order(warnings)
     ok = not blockers
     approval_contract = (
-        command_status.compound_approval_fixed_closed_plan_contract(
-            "zet-revision-plan"
+        command_status.exact_approval_available_plan_contract(
+            "zet-revision-write"
         )
     )
     return {
@@ -19564,9 +19572,7 @@ def zet_revision_plan(
         "dry_run": bool(dry_run),
         "schema": ZET_REVISION_PLAN_SCHEMA,
         "lifecycle_action": "zet_revision_plan",
-        "status": (
-            command_status.APPROVAL_FIXED_CLOSED if ok else "blocked"
-        ),
+        "status": "ready_for_human_review" if ok else "blocked",
         "proposal_validation_status": (
             "ready_for_human_review" if ok else "blocked"
         ),
@@ -19654,7 +19660,7 @@ def zet_revision_plan(
             [
                 "Review the current canonical zet and private proposal together, including the explicit abstract.",
                 "Treat plan_digest only as read-only validation evidence; it is not approval authority.",
-                "Approval execution remains fixed closed in this release.",
+                "Run zet-revision-write --dry-run with these digests, then --approve with --reviewed-by; the native exact human approval dialog is the only write authority.",
                 "Do not edit the canonical zet manually.",
             ]
             if ok
@@ -20438,11 +20444,31 @@ def zet_revision_write(
     affirm_revision_reviewed: bool = False,
     affirm_abstract_body_pair_reviewed: bool = False,
     affirm_edge_changes_reviewed: bool = False,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
 ) -> dict[str, Any]:
-    if type(dry_run) is not bool or type(approve) is not bool or approve:
+    if type(dry_run) is not bool or type(approve) is not bool:
         return _compound_exact_human_approval_blocked(
             lifecycle_action="zet_revision_write",
         )
+    if approve:
+        # v0.4.21 LR-01: the semantic revision writer is reopened only through
+        # operation-specific exact human approval; unbound calls never read and
+        # keep this writer's content-free document contract.
+        try:
+            _require_exact_human_approval_inputs_before_archive_read(
+                claim=exact_human_approval_claim,
+                expected_plan_sha256=expected_exact_approval_plan_sha256,
+                expected_target_binding_sha256=(
+                    expected_exact_approval_target_binding_sha256
+                ),
+            )
+        except ArchiveServiceError:
+            return _compound_exact_human_approval_blocked(
+                lifecycle_action="zet_revision_write",
+                reason_code="exact_human_approval_required",
+            )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     reviewer = safe_foreign_quarantine_actor_id(reviewed_by)
@@ -21168,6 +21194,21 @@ def zet_revision_write(
 
     assert reviewer is not None
     assert expected_write == actual_write_plan
+    try:
+        exact_operation_approval = _require_exact_human_operation_approval(
+            root,
+            zet_revision_write_approval_binding(
+                {**result_payload("ready_to_apply"), "dry_run": True}
+            ),
+            reviewer_claim=str(reviewer),
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=(
+                expected_exact_approval_target_binding_sha256
+            ),
+            claim=exact_human_approval_claim,
+        )
+    except OperationApprovalBindingError as exc:
+        raise ArchiveServiceError(exc.code) from None
     lock_path = zet_revision_write_lock_path(
         root, archive_id=archive_id, zettel_id=zettel_id
     )
@@ -21331,6 +21372,7 @@ def zet_revision_write(
             recovery["finalized_from_already_written_candidate"]
         ),
     )
+    receipt["exact_human_approval"] = exact_operation_approval
     receipt_schema_file = zet_revision_event_receipt_schema_file(receipt)
     if receipt_schema_file is None or validate_schema(receipt, receipt_schema_file):
         blockers.append("revision_receipt_schema_validation_failed")
@@ -24035,11 +24077,28 @@ def zet_revision_restore_write(
     affirm_restore_reviewed: bool = False,
     affirm_abstract_body_pair_reviewed: bool = False,
     affirm_edge_changes_reviewed: bool = False,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
 ) -> dict[str, Any]:
-    if type(dry_run) is not bool or type(approve) is not bool or approve:
+    if type(dry_run) is not bool or type(approve) is not bool:
         return _compound_exact_human_approval_blocked(
             lifecycle_action="zet_revision_restore_write",
         )
+    if approve:
+        try:
+            _require_exact_human_approval_inputs_before_archive_read(
+                claim=exact_human_approval_claim,
+                expected_plan_sha256=expected_exact_approval_plan_sha256,
+                expected_target_binding_sha256=(
+                    expected_exact_approval_target_binding_sha256
+                ),
+            )
+        except ArchiveServiceError:
+            return _compound_exact_human_approval_blocked(
+                lifecycle_action="zet_revision_restore_write",
+                reason_code="exact_human_approval_required",
+            )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     reviewer = safe_foreign_quarantine_actor_id(reviewed_by)
@@ -24808,6 +24867,21 @@ def zet_revision_restore_write(
 
     assert reviewer is not None
     assert expected_write == actual_write_plan
+    try:
+        exact_operation_approval = _require_exact_human_operation_approval(
+            root,
+            zet_revision_restore_write_approval_binding(
+                {**result_payload("ready_to_apply"), "dry_run": True}
+            ),
+            reviewer_claim=str(reviewer),
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=(
+                expected_exact_approval_target_binding_sha256
+            ),
+            claim=exact_human_approval_claim,
+        )
+    except OperationApprovalBindingError as exc:
+        raise ArchiveServiceError(exc.code) from None
     lock_basis = {
         "schema": ZET_REVISION_RESTORE_WRITE_LOCK_SCHEMA,
         "archive_id": archive_id,
@@ -24999,6 +25073,7 @@ def zet_revision_restore_write(
             recovery["finalized_from_already_written_candidate"]
         ),
     )
+    restore_receipt["exact_human_approval"] = exact_operation_approval
     if validate_schema(
         restore_receipt, "zet-revision-restore-receipt.schema.json"
     ):

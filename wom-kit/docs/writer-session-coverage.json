@@ -7,6 +7,8 @@
     "source-intake-record": {"status": "session_integrated", "evidence": ["test_v0420_source_intake_record_git_public_workflow"]},
     "work-session": {"status": "session_integrated", "evidence": ["test_v0420_work_session_execution"]},
     "zet-title-remap-write": {"status": "session_integrated", "evidence": ["test_v0420_local_recovery_session", "test_v0420_local_recovery_mcp"]},
+    "zet-revision-write": {"status": "pending", "target": "v0.4.21", "note": "Reopened through exact approval in v0.4.21 LR-01; session refs follow with LR-06."},
+    "zet-revision-restore-write": {"status": "pending", "target": "v0.4.21", "note": "Reopened through exact approval in v0.4.21 LR-01; session refs follow with LR-06."},
     "zet-title-remap-revert": {"status": "session_integrated", "route": "zet-title-remap-write", "evidence": ["test_v0420_local_recovery_session_revert"], "note": "Session-scoped compensation runs through zet-title-remap-write --revert-recovery; this command keeps the legacy receipt-bound route."},
 
     "zettel-objet-link": {"status": "pending", "target": "v0.4.20"},

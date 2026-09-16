@@ -1684,6 +1684,129 @@ def zettel_edge_batch_revert_approval_binding(
     )
 
 
+def _zet_revision_binding(
+    plan: Mapping[str, Any],
+    *,
+    operation: ExactHumanApprovalOperation,
+    lifecycle_action: str,
+    source_key: str,
+    proposal_key: str,
+    plan_key: str,
+    preview_identity: Any,
+) -> ExactOperationApprovalBinding:
+    """Shared binding for the semantic revision writer and its restore.
+
+    The result documents deliberately echo no zettel id or path; everything
+    bound here is a digest the dry-run already computed, plus the
+    timezone-aware revision timestamp that the write plan digest covers.
+    """
+
+    if plan.get("ok") is not True or plan.get("dry_run") is not True:
+        raise _fail("operation_approval_plan_blocked")
+    if (
+        plan.get("lifecycle_action") != lifecycle_action
+        or plan.get("status") != "ready_to_apply"
+        or plan.get("blockers")
+    ):
+        raise _fail("operation_approval_plan_invalid")
+    source = _plain_mapping(plan.get(source_key))
+    proposal = _plain_mapping(plan.get(proposal_key))
+    revision_plan = _plain_mapping(plan.get(plan_key))
+    write_plan = _plain_mapping(plan.get("write_plan"))
+    receipt = _plain_mapping(plan.get("receipt"))
+    revision_at = plan.get("revision_at")
+    if type(revision_at) is not str or not revision_at:
+        raise _fail("operation_approval_plan_invalid")
+    for mapping, key in (
+        (source, "expected_sha256_matches"),
+        (proposal, "expected_sha256_matches"),
+        (proposal, "expected_semantic_sha256_matches"),
+        (revision_plan, "expected_digest_matches"),
+    ):
+        if mapping.get(key) is not True:
+            raise _fail("operation_approval_plan_invalid")
+    target = {
+        "source_sha256": _sha_ref(source.get("expected_sha256")),
+        "proposal_sha256": _sha_ref(proposal.get("actual_sha256")),
+        "proposal_semantic_sha256": _sha_ref(proposal.get("actual_semantic_sha256")),
+        "plan_digest": _sha_ref(revision_plan.get("actual_digest")),
+        "write_plan_digest": _sha_ref(write_plan.get("actual_digest")),
+        "candidate_file_sha256": _sha_ref(
+            write_plan.get("candidate_file_sha256")
+            or _plain_mapping(plan.get("canonical")).get("candidate_file_sha256")
+        ),
+        "revision_at": revision_at,
+        "receipt_target_digest": _sha256(receipt.get("path")),
+    }
+    basis = {
+        "schema_version": BINDING_SCHEMA_VERSION,
+        "operation": operation.value,
+        "target": target,
+        "change_summary_digest": _sha256(write_plan.get("change_summary")),
+        # Reviewer and affirmation flags are write-time inputs the dry-run
+        # refuses; the dialog and its claim are the authority that covers them.
+        "warnings": plan.get("warnings"),
+    }
+    return ExactOperationApprovalBinding(
+        operation=operation,
+        plan_sha256=_sha256(basis),
+        target_binding_sha256=_sha256(target),
+        warning_codes=_warning_codes(plan.get("warnings")),
+        review_binding_codes=(
+            "candidate_digest",
+            "revision_plan_digest",
+            "source_current_digest",
+            "warning_codes",
+            "write_plan_digest",
+        ),
+        target_preview=ExactHumanApprovalTargetPreview(
+            kind="zet",
+            primary=_required_target_preview_identity(preview_identity),
+        ),
+    )
+
+
+def zet_revision_write_approval_binding(
+    dry_run: Mapping[str, Any],
+    *,
+    preview_identity: Any = None,
+) -> ExactOperationApprovalBinding:
+    """Bind one reviewed semantic revision of a canonical zet (v0.4.21 LR-01)."""
+
+    plan = _plain_mapping(dry_run)
+    return _zet_revision_binding(
+        plan,
+        operation=ExactHumanApprovalOperation.zet_revision_write,
+        lifecycle_action="zet_revision_write",
+        source_key="canonical",
+        proposal_key="proposal",
+        plan_key="revision_plan",
+        preview_identity=preview_identity if preview_identity is not None else "zet revision",
+    )
+
+
+def zet_revision_restore_write_approval_binding(
+    dry_run: Mapping[str, Any],
+    *,
+    preview_identity: Any = None,
+) -> ExactOperationApprovalBinding:
+    """Bind one reviewed exact-byte restore of a revised canonical zet."""
+
+    plan = _plain_mapping(dry_run)
+    source_receipt = _plain_mapping(plan.get("source_receipt"))
+    if source_receipt.get("expected_sha256_matches") is not True:
+        raise _fail("operation_approval_plan_invalid")
+    return _zet_revision_binding(
+        plan,
+        operation=ExactHumanApprovalOperation.zet_revision_restore_write,
+        lifecycle_action="zet_revision_restore_write",
+        source_key="current",
+        proposal_key="restore_proposal",
+        plan_key="restore_plan",
+        preview_identity=preview_identity if preview_identity is not None else "zet revision restore",
+    )
+
+
 def exact_operation_manifest_approval_binding(
     manifest: ExactOperationManifest,
     *,

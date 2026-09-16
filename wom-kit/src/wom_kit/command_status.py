@@ -126,18 +126,14 @@ COMPOUND_APPROVAL_FIXED_CLOSED_COMMANDS = frozenset(
         "zet-abstract-backfill-revert",
         "zet-abstract-backfill-write",
         "zet-catalog-pass-cleanup",
-        "zet-revision-restore-write",
         "zet-revision-restore-proposal-from-snapshot",
-        "zet-revision-write",
         "zet-title-remap-recover",
         "zet-title-remap-revert-recover",
         "zettel-objet-link-revert",
     }
 )
 
-COMPOUND_APPROVAL_FIXED_CLOSED_PLAN_WRITERS = {
-    "zet-revision-plan": "zet-revision-write",
-}
+COMPOUND_APPROVAL_FIXED_CLOSED_PLAN_WRITERS: dict[str, str] = {}
 
 # Writers that v0.4.21 reopened through operation-specific exact human
 # approval.  Their plan documents keep the same contract shape so an AI
@@ -149,6 +145,8 @@ EXACT_APPROVAL_REOPENED_WRITERS = frozenset({
     "mint-zet-batch",
     "retire-draft-batch",
     "revert-batch",
+    "zet-revision-write",
+    "zet-revision-restore-write",
 })
 
 # Public parser and dispatch exposure was audited at v0.3.320 and its explicit

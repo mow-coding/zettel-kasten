@@ -24,7 +24,13 @@
         "zettel_objet_link",
         "retire_draft",
         "draft_discard",
-        "draft_discard_restore"
+        "draft_discard_restore",
+        "zettel_edge_batch",
+        "zettel_edge_batch_revert",
+        "mint_zet_batch",
+        "retire_draft_batch",
+        "zet_revision_write",
+        "zet_revision_restore_write"
       ]
     },
     "plan_sha256": {"$ref": "#/$defs/sha256_ref"},

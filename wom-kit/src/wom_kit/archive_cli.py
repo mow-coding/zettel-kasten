@@ -22445,42 +22445,194 @@ def command_zet_revision_plan(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
-def command_zet_revision_write(args: argparse.Namespace) -> int:
-    if args.approve:
+def _zet_revision_exact_approval_route(
+    args: argparse.Namespace,
+    *,
+    lifecycle_action: str,
+    service: Callable[..., dict[str, Any]],
+    service_kwargs: dict[str, Any],
+    binding_builder: Callable[..., operation_approval_binding.ExactOperationApprovalBinding],
+    preview_identity: str,
+    printer: Callable[[dict[str, Any]], None],
+) -> int:
+    """Shared v0.4.21 --approve route for the semantic revision writers.
+
+    The dry-run preview decides the timezone-aware ``revision_at`` and the
+    write-plan digest when the caller did not supply them, so the dialog binds
+    exactly the write that follows. Every failure is a fixed reason code and
+    no private value (zettel id, paths, proposal text) is echoed.
+    """
+
+    reviewer = archive_services.safe_foreign_quarantine_actor_id(
+        str(getattr(args, "reviewed_by", "") or "")
+    )
+    if reviewer is None:
         return _exact_human_approval_cli_error(
             args,
-            lifecycle_action="zet_revision_write",
-            reason_code=command_status.COMPOUND_APPROVAL_REASON_CODE,
+            lifecycle_action=lifecycle_action,
+            reason_code=f"{lifecycle_action}_reviewer_required",
         )
+    archive_root = Path(args.archive_root)
+    # The dry-run refuses reviewer and affirmation inputs; they belong to the
+    # approved write only, and the dialog is the authority that covers them.
+    preview_kwargs = {
+        key: value for key, value in service_kwargs.items() if not key.startswith("affirm_")
+    }
+    try:
+        preview = service(archive_root, dry_run=True, approve=False, reviewed_by=None, **preview_kwargs)
+        if preview.get("ok") is not True or preview.get("blockers"):
+            return _exact_human_approval_cli_error(
+                args,
+                lifecycle_action=lifecycle_action,
+                reason_code=f"{lifecycle_action}_preflight_blocked",
+                preflight_blockers=preview.get("blockers"),
+            )
+        bound_kwargs = dict(service_kwargs)
+        bound_kwargs["revision_at"] = preview.get("revision_at")
+        bound_kwargs["expected_write_plan_digest"] = (
+            preview.get("write_plan") or {}
+        ).get("actual_digest")
+        bound_preview_kwargs = {
+            key: value for key, value in bound_kwargs.items() if not key.startswith("affirm_")
+        }
+        # Re-run the preview with the bound timestamp and digest so the plan
+        # the dialog shows is byte-for-byte the plan the writer re-derives.
+        preview = service(archive_root, dry_run=True, approve=False, reviewed_by=None, **bound_preview_kwargs)
+        if preview.get("ok") is not True or preview.get("blockers"):
+            return _exact_human_approval_cli_error(
+                args,
+                lifecycle_action=lifecycle_action,
+                reason_code=f"{lifecycle_action}_preflight_blocked",
+                preflight_blockers=preview.get("blockers"),
+            )
+        binding = binding_builder(preview, preview_identity=preview_identity)
+        context = binding.context(
+            archive_id=archive_services.read_archive_id(archive_root),
+            reviewer_claim=reviewer,
+        )
+
+        def _write(claim) -> dict[str, Any]:
+            return service(
+                archive_root,
+                dry_run=False,
+                approve=True,
+                reviewed_by=reviewer,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+                exact_human_approval_claim=claim,
+                **bound_kwargs,
+            )
+
+        result = _execute_exact_human_approved_write(archive_root, context, _write)
+    except ExactHumanApprovalWorkflowError as error:
+        no_effect = error.code in {
+            "exact_human_approval_cancelled",
+            "exact_human_approval_operation_failed",
+            "exact_human_approval_writer_result_invalid",
+        }
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code=(
+                f"{lifecycle_action}_workflow_precondition_failed"
+                if no_effect
+                else "exact_human_approval_state_unknown"
+            ),
+        )
+    except (
+        archive_services.ArchiveServiceError,
+        operation_approval_binding.OperationApprovalBindingError,
+        ExactHumanApprovalError,
+        ExactHumanApprovalWindowsError,
+        ArchivePathError,
+        OSError,
+        UnicodeError,
+        ValueError,
+    ):
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code=f"{lifecycle_action}_workflow_failed_safely",
+        )
+    printer(result)
+    return 0 if result.get("ok") else 1
+
+
+def _print_zet_revision_write_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    print(f"WOM zet revision write: {result.get('status') or 'unknown'}")
+    print(f"Revision timestamp: {result.get('revision_at') or 'unavailable'}")
+    print(
+        "Write-plan digest: "
+        + str(result.get("write_plan", {}).get("actual_digest") or "unavailable")
+    )
+    print(
+        "Canonical files written this run: "
+        + str(
+            result.get("write_boundary", {}).get(
+                "canonical_files_written_this_run", 0
+            )
+        )
+    )
+    print(
+        "Immutable receipt present: "
+        + ("yes" if result.get("receipt", {}).get("exists") else "no")
+    )
+    if result.get("blockers"):
+        print("Blockers:")
+        for blocker in result["blockers"]:
+            print(f"- {blocker}")
+    if result.get("warnings"):
+        print("Warnings:")
+        for warning in result["warnings"]:
+            print(f"- {warning}")
+
+
+def command_zet_revision_write(args: argparse.Namespace) -> int:
     if bool(args.dry_run) == bool(args.approve):
         print(
             "zet-revision-write requires exactly one of --dry-run or --approve.",
             file=sys.stderr,
         )
         return 1
+    service_kwargs = dict(
+        zettel_id=str(args.zettel_id),
+        proposal_path=str(args.proposal),
+        expected_canonical_sha256=str(args.expected_canonical_sha256),
+        expected_proposal_sha256=str(args.expected_proposal_sha256),
+        expected_proposal_semantic_sha256=str(
+            args.expected_proposal_semantic_sha256
+        ),
+        expected_plan_digest=str(args.expected_plan_digest),
+        revision_at=str(args.revision_at or "").strip() or None,
+        expected_write_plan_digest=(
+            str(args.expected_write_plan_digest or "").strip() or None
+        ),
+        affirm_revision_reviewed=bool(args.affirm_revision_reviewed),
+        affirm_abstract_body_pair_reviewed=bool(
+            args.affirm_abstract_body_pair_reviewed
+        ),
+        affirm_edge_changes_reviewed=bool(args.affirm_edge_changes_reviewed),
+    )
+    if args.approve:
+        return _zet_revision_exact_approval_route(
+            args,
+            lifecycle_action="zet_revision_write",
+            service=archive_services.zet_revision_write,
+            service_kwargs=service_kwargs,
+            binding_builder=operation_approval_binding.zet_revision_write_approval_binding,
+            preview_identity=str(args.zettel_id),
+            printer=lambda result: _print_zet_revision_write_result(result, args.format),
+        )
     try:
         result = archive_services.zet_revision_write(
             Path(args.archive_root),
-            zettel_id=str(args.zettel_id),
-            proposal_path=str(args.proposal),
-            expected_canonical_sha256=str(args.expected_canonical_sha256),
-            expected_proposal_sha256=str(args.expected_proposal_sha256),
-            expected_proposal_semantic_sha256=str(
-                args.expected_proposal_semantic_sha256
-            ),
-            expected_plan_digest=str(args.expected_plan_digest),
-            revision_at=str(args.revision_at or "").strip() or None,
-            expected_write_plan_digest=(
-                str(args.expected_write_plan_digest or "").strip() or None
-            ),
-            dry_run=bool(args.dry_run),
-            approve=bool(args.approve),
+            dry_run=True,
+            approve=False,
             reviewed_by=str(args.reviewed_by or "").strip() or None,
-            affirm_revision_reviewed=bool(args.affirm_revision_reviewed),
-            affirm_abstract_body_pair_reviewed=bool(
-                args.affirm_abstract_body_pair_reviewed
-            ),
-            affirm_edge_changes_reviewed=bool(args.affirm_edge_changes_reviewed),
+            **service_kwargs,
         )
     except (
         archive_services.ArchiveServiceError,
@@ -22494,39 +22646,8 @@ def command_zet_revision_write(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 1
-
-    if args.format == "json":
-        print_json(result)
-    else:
-        print(f"WOM zet revision write: {result.get('status') or 'unknown'}")
-        print(f"Revision timestamp: {result.get('revision_at') or 'unavailable'}")
-        print(
-            "Write-plan digest: "
-            + str(result.get("write_plan", {}).get("actual_digest") or "unavailable")
-        )
-        print(
-            "Canonical files written this run: "
-            + str(
-                result.get("write_boundary", {}).get(
-                    "canonical_files_written_this_run", 0
-                )
-            )
-        )
-        print(
-            "Immutable receipt present: "
-            + ("yes" if result.get("receipt", {}).get("exists") else "no")
-        )
-        if result.get("blockers"):
-            print("Blockers:")
-            for blocker in result["blockers"]:
-                print(f"- {blocker}")
-        if result.get("warnings"):
-            print("Warnings:")
-            for warning in result["warnings"]:
-                print(f"- {warning}")
+    _print_zet_revision_write_result(result, args.format)
     return 0 if result.get("ok") else 1
-
-
 def command_zet_revision_receipt_audit(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print(
@@ -22775,49 +22896,101 @@ def command_zet_revision_restore_plan(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
-def command_zet_revision_restore_write(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="zet_revision_restore_write",
-            reason_code="compound_exact_human_approval_binding_required",
+def _print_zet_revision_restore_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    print(f"WOM zet exact restore write: {result.get('status') or 'unknown'}")
+    print(f"Restore event timestamp: {result.get('revision_at') or 'unavailable'}")
+    print(
+        "Write-plan digest: "
+        + str(
+            result.get("write_plan", {}).get("actual_digest")
+            or "unavailable"
         )
+    )
+    print(
+        "Canonical files written this run: "
+        + str(
+            result.get("write_boundary", {}).get(
+                "canonical_files_written_this_run", 0
+            )
+        )
+    )
+    print(
+        "Exact restore bytes present: "
+        + (
+            "yes"
+            if result.get("write_boundary", {}).get(
+                "canonical_replaced_with_exact_restore_bytes"
+            )
+            else "no"
+        )
+    )
+    print(
+        "Immutable restore receipt present: "
+        + ("yes" if result.get("receipt", {}).get("exists") else "no")
+    )
+    if result.get("blockers"):
+        print("Blockers:")
+        for blocker in result["blockers"]:
+            print(f"- {blocker}")
+    if result.get("warnings"):
+        print("Warnings:")
+        for warning in result["warnings"]:
+            print(f"- {warning}")
+
+
+def command_zet_revision_restore_write(args: argparse.Namespace) -> int:
     if bool(args.dry_run) == bool(args.approve):
         print(
             "zet-revision-restore-write requires exactly one of --dry-run or --approve.",
             file=sys.stderr,
         )
         return 1
+    service_kwargs = dict(
+        receipt_path=str(args.receipt),
+        expected_receipt_sha256=str(args.expected_receipt_sha256),
+        restore_proposal_path=str(args.restore_proposal),
+        expected_current_sha256=str(args.expected_current_sha256),
+        expected_restore_proposal_sha256=str(
+            args.expected_restore_proposal_sha256
+        ),
+        expected_restore_proposal_semantic_sha256=str(
+            args.expected_restore_proposal_semantic_sha256
+        ),
+        expected_restore_plan_digest=str(
+            args.expected_restore_plan_digest
+        ),
+        revision_at=str(args.revision_at or "").strip() or None,
+        expected_write_plan_digest=(
+            str(args.expected_write_plan_digest or "").strip() or None
+        ),
+        affirm_restore_reviewed=bool(args.affirm_restore_reviewed),
+        affirm_abstract_body_pair_reviewed=bool(
+            args.affirm_abstract_body_pair_reviewed
+        ),
+        affirm_edge_changes_reviewed=bool(
+            args.affirm_edge_changes_reviewed
+        ),
+    )
+    if args.approve:
+        return _zet_revision_exact_approval_route(
+            args,
+            lifecycle_action="zet_revision_restore_write",
+            service=archive_services.zet_revision_restore_write,
+            service_kwargs=service_kwargs,
+            binding_builder=operation_approval_binding.zet_revision_restore_write_approval_binding,
+            preview_identity=str(args.receipt).replace("\\", "/").rsplit("/", 1)[-1] or "zet revision restore",
+            printer=lambda result: _print_zet_revision_restore_result(result, args.format),
+        )
     try:
         result = archive_services.zet_revision_restore_write(
             Path(args.archive_root),
-            receipt_path=str(args.receipt),
-            expected_receipt_sha256=str(args.expected_receipt_sha256),
-            restore_proposal_path=str(args.restore_proposal),
-            expected_current_sha256=str(args.expected_current_sha256),
-            expected_restore_proposal_sha256=str(
-                args.expected_restore_proposal_sha256
-            ),
-            expected_restore_proposal_semantic_sha256=str(
-                args.expected_restore_proposal_semantic_sha256
-            ),
-            expected_restore_plan_digest=str(
-                args.expected_restore_plan_digest
-            ),
-            revision_at=str(args.revision_at or "").strip() or None,
-            expected_write_plan_digest=(
-                str(args.expected_write_plan_digest or "").strip() or None
-            ),
-            dry_run=bool(args.dry_run),
-            approve=bool(args.approve),
+            dry_run=True,
+            approve=False,
             reviewed_by=str(args.reviewed_by or "").strip() or None,
-            affirm_restore_reviewed=bool(args.affirm_restore_reviewed),
-            affirm_abstract_body_pair_reviewed=bool(
-                args.affirm_abstract_body_pair_reviewed
-            ),
-            affirm_edge_changes_reviewed=bool(
-                args.affirm_edge_changes_reviewed
-            ),
+            **service_kwargs,
         )
     except (
         archive_services.ArchiveServiceError,
@@ -22827,53 +23000,11 @@ def command_zet_revision_restore_write(args: argparse.Namespace) -> int:
         ValueError,
     ):
         print(
-            "zet-revision-restore-write could not produce a privacy-safe result from the bound receipt and private restore proposal.",
+            "zet-revision-restore-write could not produce a privacy-safe result from the bound receipt, canonical zet, and private restore proposal.",
             file=sys.stderr,
         )
         return 1
-
-    if args.format == "json":
-        print_json(result)
-    else:
-        print(f"WOM zet exact restore write: {result.get('status') or 'unknown'}")
-        print(f"Restore event timestamp: {result.get('revision_at') or 'unavailable'}")
-        print(
-            "Write-plan digest: "
-            + str(
-                result.get("write_plan", {}).get("actual_digest")
-                or "unavailable"
-            )
-        )
-        print(
-            "Canonical files written this run: "
-            + str(
-                result.get("write_boundary", {}).get(
-                    "canonical_files_written_this_run", 0
-                )
-            )
-        )
-        print(
-            "Exact restore bytes present: "
-            + (
-                "yes"
-                if result.get("write_boundary", {}).get(
-                    "canonical_replaced_with_exact_restore_bytes"
-                )
-                else "no"
-            )
-        )
-        print(
-            "Immutable restore receipt present: "
-            + ("yes" if result.get("receipt", {}).get("exists") else "no")
-        )
-        if result.get("blockers"):
-            print("Blockers:")
-            for blocker in result["blockers"]:
-                print(f"- {blocker}")
-        if result.get("warnings"):
-            print("Warnings:")
-            for warning in result["warnings"]:
-                print(f"- {warning}")
+    _print_zet_revision_restore_result(result, args.format)
     return 0 if result.get("ok") else 1
 
 
@@ -41143,7 +41274,7 @@ def build_parser() -> argparse.ArgumentParser:
         aliases=["revise-zet-plan", "canonical-revision-plan"],
         help=(
             "Validate one private full-zet revision proposal without writing; "
-            "revision approval remains fixed closed in this release."
+            "zet-revision-write --approve then applies it through exact human approval."
         ),
         description=(
             "Validate one private full-zet revision proposal against the current "
@@ -41151,9 +41282,10 @@ def build_parser() -> argparse.ArgumentParser:
             "not approval authority."
         ),
         epilog=(
-            "Approval status: approval_fixed_closed "
-            f"({command_status.COMPOUND_APPROVAL_REASON_CODE}). No actionable "
-            "approval handoff is issued by this command."
+            "Approval status: approval_available through zet-revision-write "
+            "--approve, whose native exact human approval dialog and "
+            "authenticated claim are the sole write authority. This plan's "
+            "digests are validation evidence only."
         ),
     )
     zet_revision_plan.add_argument("archive_root", help="Archive root containing the canonical zet.")
@@ -41189,12 +41321,14 @@ def build_parser() -> argparse.ArgumentParser:
         "zet-revision-write",
         aliases=["revise-zet-write", "canonical-revision-write"],
         help=(
-            "Build a SHA-bound revision validation preview; approval remains "
-            "fixed closed in this release."
+            "Preview or approve one SHA-bound canonical zet revision through "
+            "exact human approval."
         ),
         description=(
             "Build a SHA-bound canonical revision validation preview without "
-            "writing. The approval mode remains fixed closed in this release."
+            "writing, or approve the revision through the native exact human "
+            "approval dialog. The dry-run digests are validation only; the "
+            "dialog and its authenticated claim are the sole write authority."
         ),
     )
     zet_revision_write.add_argument(
@@ -41409,6 +41543,13 @@ def build_parser() -> argparse.ArgumentParser:
         "zet-revision-restore-write",
         aliases=["canonical-revision-restore-write", "zet-restore-write"],
         help="Preview or approve one exact-byte canonical zet restore bound to an immutable revision receipt.",
+        description=(
+            "Preview or approve one exact-byte canonical zet restore bound to "
+            "an immutable revision receipt. Approval runs through the native "
+            "exact human approval dialog; the dry-run digests are validation "
+            "only and the dialog with its authenticated claim is the sole "
+            "write authority."
+        ),
     )
     zet_revision_restore_write.add_argument(
         "archive_root",

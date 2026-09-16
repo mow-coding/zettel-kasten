@@ -172,6 +172,29 @@
         "model_called": {"const": false},
         "secret_store_or_environment_read": {"const": false}
       }
+    },
+    "exact_human_approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "operation", "plan_sha256", "target_binding_sha256", "exact_human_approval"],
+      "properties": {
+        "schema_version": {"const": "wom-kit/operation-exact-human-approval/v0.1"},
+        "operation": {"const": "zet_revision_write"},
+        "plan_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "target_binding_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "exact_human_approval": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["schema_version", "approval_id", "context_sha256", "approval_authority_sha256", "one_use"],
+          "properties": {
+            "schema_version": {"const": "wom-kit/exact-human-approval-reference/v0.1"},
+            "approval_id": {"type": "string", "pattern": "^approval_[0-9a-f]{32}$"},
+            "context_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+            "approval_authority_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+            "one_use": {"const": true}
+          }
+        }
+      }
     }
   },
   "$defs": {

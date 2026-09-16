@@ -516,6 +516,12 @@ class Letter140ZettelObjetBindingTests(unittest.TestCase):
             "retire_draft",
             "draft_discard",
             "draft_discard_restore",
+            "zettel_edge_batch",
+            "zettel_edge_batch_revert",
+            "mint_zet_batch",
+            "retire_draft_batch",
+            "zet_revision_write",
+            "zet_revision_restore_write",
         }
         self.assertEqual(set(source["properties"]["operation"]["enum"]), expected)
         self.assertEqual(
