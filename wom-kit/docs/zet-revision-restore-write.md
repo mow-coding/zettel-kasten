@@ -1,13 +1,13 @@
 # Canonical zet Exact-Byte Restore Write
 
-Status: v0.4.0 dry-run-only exact-byte restore planning; historical receipts remain readable
+Status: reopened through operation-specific exact human approval in v0.4.21 (dry-run-only exact-byte restore planning from v0.4.0 to v0.4.20); historical receipts remain readable
 
 `zet-revision-restore-write` does not recreate missing words from hashes. Its
 dry-run verifies complete old zet bytes that were separately recovered into
-private scratch and accepted by `zet-revision-restore-plan`. The historical
-writer changes canonical bytes, receipt history, and lock state as one compound
-effect. v0.4.0 has no exact-human binding for that complete effect set, so its
-approve path is intentionally closed.
+private scratch and accepted by `zet-revision-restore-plan`. The writer
+changes canonical bytes, receipt history, and lock state as one effect. Since
+v0.4.21 that complete effect set is bound into one operation-specific exact
+human approval; from v0.4.0 to v0.4.20 the approve path was closed.
 
 ## Three Steps
 
@@ -38,15 +38,15 @@ archive zet-revision-restore-write <archive-root> `
   --dry-run --format json
 ```
 
-Do not rerun it as an approved write. Any `--approve` request stops before
-private target read or mutation with:
-
-```text
-compound_exact_human_approval_binding_required
-```
-
-Aliases `canonical-revision-restore-write` and `zet-restore-write` have the
-same gate. Reviewer and affirmation flags cannot bypass it.
+Then rerun the same command with `--approve --reviewed-by <safe-actor-id>`
+and the affirmation flags. WOM re-derives the restore plan, compares every
+digest, opens one native exact human approval dialog, and returns the exact
+previous bytes only after the authenticated claim is re-verified; the restore
+receipt embeds the approval reference. A cancelled dialog, a missing or
+unsafe reviewer id, or a changed canonical zet writes nothing. Aliases
+`canonical-revision-restore-write` and `zet-restore-write` have the same
+gate. Reviewer and affirmation flags cannot bypass it: the native dialog with
+its one-use claim is the only write authority.
 
 ## Historical Exact-Byte Contract
 
@@ -67,8 +67,8 @@ semantic, abstract, and body hashes join the ordinary and restore events into
 one chronological chain. It also supplies reviewed abstract/body evidence to
 `abstract-freshness` without storing either text.
 
-v0.4.0 does not enter that writer, replace a canonical zet, create a lock, or
-append a restore receipt.
+The dry-run does not enter that writer, replace a canonical zet, create a
+lock, or append a restore receipt; only the approved write does.
 
 ## Historical Failure And Restart Evidence
 
@@ -88,8 +88,8 @@ affirmation, or digest blocks without guessing.
 
 ## Honest Boundary
 
-A v0.4.0 result proves only that the exact restore effect was planned without
-writing and cannot report `applied`. Historical `applied` receipts remain
+A dry-run result proves only that the exact restore effect was planned
+without writing and cannot report `applied`. Historical `applied` receipts remain
 auditable evidence of their recorded local event, not authority for replay.
 The command calls no model, provider, object store, database, credential store,
 or network, and MCP exposes no restore writer duplicate.

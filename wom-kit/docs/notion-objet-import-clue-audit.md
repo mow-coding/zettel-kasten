@@ -84,9 +84,10 @@ Use this order:
    `source_map_join_available`.
 5. `notion-objet-link-index` and `notion-objet-link-plan` when body locators
    still exist.
-6. Operation-specific exact-human `zettel-edge` only after human review.
-   `zettel-edge-batch` remains dry-run-only in v0.4.0; approval returns
-   `compound_exact_human_approval_binding_required` and writes nothing.
+6. Operation-specific exact-human `zettel-edge` only after human review, or
+   since v0.4.21 `zettel-edge-batch --approve` for every policy-writable edge
+   of a reviewed plan under one count-first dialog (dry-run-only from v0.4.0
+   to v0.4.20).
 
 ## Import-Time Contract
 

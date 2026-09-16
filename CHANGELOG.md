@@ -6,6 +6,26 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.21 - 2026-09-16
+
+- Reopened `discard-draft` and `discard-draft-restore` through operation-specific
+  exact human approval: the discard moves one reviewed draft to its snapshot and
+  the restore returns the exact snapshot bytes (beta letters 157-160).
+- Reopened `zettel-edge-batch`, `mint-zet-batch`, `retire-draft-batch` and
+  `revert-batch` under one count-first dialog per batch; every item write
+  re-verifies the batch claim and proves its own fresh binding is approved, and
+  each item receipt records which rule matched.
+- Reopened `zet-revision-write` and `zet-revision-restore-write`; the reviewer's
+  digest protocol is unchanged and bound into one exact approval verified right
+  after the dry-run point, and receipts embed the approval reference.
+- Added `source-intake-chain`, which plans the intake record, the capture
+  selection and the capture of one staged original from projected bytes and
+  runs the three steps under one native approval instead of three (letter 160
+  ⑦); a later step failure is reported as `partial` with the written paths.
+- Inventory: 56 approval-available, 60 fixed-closed and 201 not-exposed paths;
+  no fixed-closed plan writer remains. The writer-session coverage gate reports
+  6 integrated, 30 pending and 20 exempt approval paths of 56.
+
 ## v0.4.20 - 2026-09-16
 
 - Kept drafts mintable after WOM's own writes: `zettel-edge` preserves the

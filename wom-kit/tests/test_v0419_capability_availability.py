@@ -66,15 +66,22 @@ class V0419CapabilityAvailabilityTests(unittest.TestCase):
     def test_audited_history_is_shared_without_claiming_success(self) -> None:
         parser = archive_cli.build_parser()
         inventory = archive_cli._parser_capability_inventory(parser)
-        expected_commands = {
+        audited_commands = {
             "discard-draft", "discard-draft-restore", "mint-zet-batch",
             "retire-draft-batch", "zettel-edge-batch", "zet-revision-write",
             "zet-revision-restore-write", "remint-reconcile", "retire-draft-reconcile",
         }
         self.assertEqual(
             command_status.AUDITED_PREVIOUSLY_EXPOSED_APPROVAL_COMMANDS,
-            expected_commands,
+            audited_commands,
         )
+        # v0.4.21 reopened the two discard writers through exact approval;
+        # their audited restriction history no longer describes the surface.
+        expected_commands = audited_commands - {
+            "discard-draft", "discard-draft-restore", "zettel-edge-batch",
+            "mint-zet-batch", "retire-draft-batch", "zet-revision-write",
+            "zet-revision-restore-write",
+        }
         expected_history = {
             "state": "previously_exposed_now_restricted",
             "exposed_at_tag": "v0.3.320",
@@ -124,7 +131,7 @@ class V0419CapabilityAvailabilityTests(unittest.TestCase):
         inventory = self.inventory()
         known = next(
             row for row in inventory["commands"]
-            if row["canonical_path"] == "discard-draft"
+            if row["canonical_path"] == "remint-reconcile"
         )
         history = known["approval_exposure_history"]
         invalid_histories = [
@@ -140,12 +147,12 @@ class V0419CapabilityAvailabilityTests(unittest.TestCase):
                 tampered = copy.deepcopy(inventory)
                 tampered_row = next(
                     row for row in tampered["commands"]
-                    if row["canonical_path"] == "discard-draft"
+                    if row["canonical_path"] == "remint-reconcile"
                 )
                 tampered_row["approval_exposure_history"] = invalid
                 with self.assertRaisesRegex(ValueError, "^command_status_inventory_invalid$"):
                     command_status.resolve_capability_availability(
-                        tampered, "discard-draft", requested_mode="approve"
+                        tampered, "remint-reconcile", requested_mode="approve"
                     )
         tampered = copy.deepcopy(inventory)
         unaudited_row = next(

@@ -109,56 +109,117 @@ class Letter137CompoundApprovalCliTests(unittest.TestCase):
         )
         self.assertIs(payload["private_values_echoed"], False)
 
-    def test_mint_batch_approve_is_blocked_before_service(self) -> None:
-        self._assert_compound_approve_is_blocked_before_service(
-            [
-                "mint-zet-batch",
-                "C:/private/archive",
-                "--plan",
-                "workbench/private-mint-plan.json",
-                "--approve",
-                "--reviewed-by",
-                "person:reviewer",
-                "--format",
-                "json",
-            ],
+    def test_mint_batch_approve_on_missing_archive_never_enters_the_writer(self) -> None:
+        # v0.4.21 reopened mint-zet-batch under one exact approval; the route runs
+        # a private preflight first and stops with a fixed code on an archive
+        # that does not exist, never entering the approved writer.
+        original = archive_cli.archive_services.mint_zet_batch
+
+        def preflight_only(*args, **kwargs):
+            if kwargs.get("approve"):
+                raise AssertionError("approved writer entered")
+            return original(*args, **kwargs)
+
+        with mock.patch.object(
             archive_cli.archive_services,
             "mint_zet_batch",
-        )
+            side_effect=preflight_only,
+        ):
+            code, stdout, stderr = self._run(
+                [
+                    "mint-zet-batch",
+                    "C:/private/archive",
+                    "--plan",
+                    "workbench/private-mint-plan.json",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:reviewer",
+                    "--format",
+                    "json",
+                ]
+            )
+        self.assertEqual(code, 1, stderr)
+        payload = json.loads(stdout)
+        self.assertEqual(payload["state"], "blocked")
+        self.assertEqual(payload["reason_codes"], ["mint_zet_batch_workflow_failed_safely"])
+        self.assertIs(payload["private_values_echoed"], False)
+        for private in ("C:/private/archive", "private-mint-plan.json"):
+            self.assertNotIn(private, stdout + stderr)
 
-    def test_retire_batch_approve_is_blocked_before_service(self) -> None:
-        self._assert_compound_approve_is_blocked_before_service(
-            [
-                "retire-draft-batch",
-                "C:/private/archive",
-                "--plan",
-                "workbench/private-retire-plan.json",
-                "--approve",
-                "--reviewed-by",
-                "person:reviewer",
-                "--format",
-                "json",
-            ],
+    def test_retire_batch_approve_on_missing_archive_never_enters_the_writer(self) -> None:
+        # v0.4.21 reopened retire-draft-batch under one exact approval; the route runs
+        # a private preflight first and stops with a fixed code on an archive
+        # that does not exist, never entering the approved writer.
+        original = archive_cli.archive_services.retire_draft_batch
+
+        def preflight_only(*args, **kwargs):
+            if kwargs.get("approve"):
+                raise AssertionError("approved writer entered")
+            return original(*args, **kwargs)
+
+        with mock.patch.object(
             archive_cli.archive_services,
             "retire_draft_batch",
-        )
+            side_effect=preflight_only,
+        ):
+            code, stdout, stderr = self._run(
+                [
+                    "retire-draft-batch",
+                    "C:/private/archive",
+                    "--plan",
+                    "workbench/private-retire-plan.json",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:reviewer",
+                    "--format",
+                    "json",
+                ]
+            )
+        self.assertEqual(code, 1, stderr)
+        payload = json.loads(stdout)
+        self.assertEqual(payload["state"], "blocked")
+        self.assertEqual(payload["reason_codes"], ["retire_draft_batch_workflow_failed_safely"])
+        self.assertIs(payload["private_values_echoed"], False)
+        for private in ("C:/private/archive", "private-retire-plan.json"):
+            self.assertNotIn(private, stdout + stderr)
 
-    def test_zettel_edge_batch_approve_is_blocked_before_service(self) -> None:
-        self._assert_compound_approve_is_blocked_before_service(
-            [
-                "zettel-edge-batch",
-                "C:/private/archive",
-                "--plan",
-                "workbench/private-edge-plan.json",
-                "--approve",
-                "--reviewed-by",
-                "person:reviewer",
-                "--format",
-                "json",
-            ],
+    def test_zettel_edge_batch_approve_on_missing_archive_never_enters_the_writer(self) -> None:
+        # v0.4.21 reopened zettel-edge-batch under one exact approval. The
+        # route runs a private preflight first; on an archive that does not
+        # exist it stops with a fixed code, never enters the approved writer
+        # and echoes nothing private.
+        original = archive_cli.archive_services.zettel_edge_batch_write
+
+        def preflight_only(*args, **kwargs):
+            if kwargs.get("approve"):
+                raise AssertionError("approved writer entered")
+            return original(*args, **kwargs)
+
+        with mock.patch.object(
             archive_cli.archive_services,
             "zettel_edge_batch_write",
-        )
+            side_effect=preflight_only,
+        ):
+            code, stdout, stderr = self._run(
+                [
+                    "zettel-edge-batch",
+                    "C:/private/archive",
+                    "--plan",
+                    "workbench/private-edge-plan.json",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:reviewer",
+                    "--format",
+                    "json",
+                ]
+            )
+        self.assertEqual(code, 1, stderr)
+        payload = json.loads(stdout)
+        self.assertEqual(payload["state"], "blocked")
+        self.assertEqual(payload["reason_codes"], ["zettel_edge_batch_workflow_failed_safely"])
+        self.assertIs(payload["private_values_echoed"], False)
+        for private in ("C:/private/archive", "private-edge-plan"):
+            self.assertNotIn(private, stdout + stderr)
 
     def test_notion_objet_link_convert_approve_is_blocked_before_service(
         self,
@@ -350,44 +411,50 @@ class Letter137CompoundApprovalServiceTests(unittest.TestCase):
         self.assertEqual(result.get("files_written"), [])
         self.assertEqual(_archive_snapshot(self.root), before)
 
-    def test_mint_batch_service_has_explicit_compound_gate(self) -> None:
+    def test_mint_batch_service_requires_the_claim_before_any_read(self) -> None:
         before = _archive_snapshot(self.root)
         with mock.patch.object(archive_services, "mint_zettel") as writer:
-            result = archive_services.mint_zet_batch(
-                self.root,
-                plan_path="workbench/private-mint-plan.json",
-                approve=True,
-                reviewed_by="person:reviewer",
-            )
+            with self.assertRaises(archive_services.ArchiveServiceError) as caught:
+                archive_services.mint_zet_batch(
+                    self.root,
+                    plan_path="workbench/private-mint-plan.json",
+                    approve=True,
+                    reviewed_by="person:reviewer",
+                )
+        self.assertEqual(str(caught.exception), "exact_human_approval_required")
         writer.assert_not_called()
-        self._assert_blocked_without_changes(result, before)
+        self.assertEqual(_archive_snapshot(self.root), before)
 
-    def test_retire_batch_service_has_explicit_compound_gate(self) -> None:
+    def test_retire_batch_service_requires_the_claim_before_any_read(self) -> None:
         before = _archive_snapshot(self.root)
         with mock.patch.object(
             archive_services,
             "write_retired_draft_from_plan",
         ) as writer:
-            result = archive_services.retire_draft_batch(
-                self.root,
-                plan_path="workbench/private-retire-plan.json",
-                approve=True,
-                reviewed_by="person:reviewer",
-            )
+            with self.assertRaises(archive_services.ArchiveServiceError) as caught:
+                archive_services.retire_draft_batch(
+                    self.root,
+                    plan_path="workbench/private-retire-plan.json",
+                    approve=True,
+                    reviewed_by="person:reviewer",
+                )
+        self.assertEqual(str(caught.exception), "exact_human_approval_required")
         writer.assert_not_called()
-        self._assert_blocked_without_changes(result, before)
+        self.assertEqual(_archive_snapshot(self.root), before)
 
-    def test_zettel_edge_batch_service_has_explicit_compound_gate(self) -> None:
+    def test_zettel_edge_batch_service_requires_the_claim_before_any_read(self) -> None:
         before = _archive_snapshot(self.root)
         with mock.patch.object(archive_services, "zettel_edge_write") as writer:
-            result = archive_services.zettel_edge_batch_write(
-                self.root,
-                plan_path="workbench/private-edge-plan.json",
-                approve=True,
-                reviewed_by="person:reviewer",
-            )
+            with self.assertRaises(archive_services.ArchiveServiceError) as caught:
+                archive_services.zettel_edge_batch_write(
+                    self.root,
+                    plan_path="workbench/private-edge-plan.json",
+                    approve=True,
+                    reviewed_by="person:reviewer",
+                )
+        self.assertEqual(str(caught.exception), "exact_human_approval_required")
         writer.assert_not_called()
-        self._assert_blocked_without_changes(result, before)
+        self.assertEqual(_archive_snapshot(self.root), before)
 
     def test_notion_convert_service_has_explicit_compound_gate(self) -> None:
         before = _archive_snapshot(self.root)

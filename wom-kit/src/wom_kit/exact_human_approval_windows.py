@@ -192,6 +192,15 @@ class ExactHumanApprovalOperation(Enum):
     local_recovery = "local_recovery"
     local_recovery_revert = "local_recovery_revert"
     work_session = "work_session"
+    draft_discard = "draft_discard"
+    draft_discard_restore = "draft_discard_restore"
+    zettel_edge_batch = "zettel_edge_batch"
+    zettel_edge_batch_revert = "zettel_edge_batch_revert"
+    mint_zet_batch = "mint_zet_batch"
+    retire_draft_batch = "retire_draft_batch"
+    zet_revision_write = "zet_revision_write"
+    zet_revision_restore_write = "zet_revision_restore_write"
+    source_intake_chain = "source_intake_chain"
 
 
 def _validated_target_preview_text(value: str | None) -> str | None:
@@ -448,6 +457,15 @@ _OPERATION_LABELS = {
     ExactHumanApprovalOperation.local_recovery: "검증된 로컬 복구",
     ExactHumanApprovalOperation.local_recovery_revert: "로컬 복구 되돌리기",
     ExactHumanApprovalOperation.work_session: "앱과 작업 연결",
+    ExactHumanApprovalOperation.draft_discard: "발행 전 초안 버리기",
+    ExactHumanApprovalOperation.draft_discard_restore: "버린 초안 복원",
+    ExactHumanApprovalOperation.zettel_edge_batch: "zet 엣지 배치 생성",
+    ExactHumanApprovalOperation.zettel_edge_batch_revert: "zet 엣지 배치 되돌리기",
+    ExactHumanApprovalOperation.mint_zet_batch: "zet 배치 발행",
+    ExactHumanApprovalOperation.retire_draft_batch: "발행된 초안 배치 퇴역",
+    ExactHumanApprovalOperation.zet_revision_write: "정본 zet 의미 개정",
+    ExactHumanApprovalOperation.zet_revision_restore_write: "정본 zet 개정 복원",
+    ExactHumanApprovalOperation.source_intake_chain: "새 원본 반입 사슬(근거 기록·선정·보존)",
 }
 
 _OPERATION_QUESTIONS = {
@@ -510,6 +528,25 @@ _OPERATION_QUESTIONS = {
     ),
     ExactHumanApprovalOperation.local_recovery_revert: (
         "이 로컬 복구가 바꾼 필드만 되돌릴까요?"
+    ),
+    ExactHumanApprovalOperation.draft_discard: "발행하지 않은 이 초안을 버릴까요?",
+    ExactHumanApprovalOperation.draft_discard_restore: (
+        "버린 초안을 원래 바이트 그대로 복원할까요?"
+    ),
+    ExactHumanApprovalOperation.zettel_edge_batch: "검토한 엣지 배치 전체를 만들까요?",
+    ExactHumanApprovalOperation.zettel_edge_batch_revert: (
+        "이 배치 영수증의 엣지 전체를 되돌릴까요?"
+    ),
+    ExactHumanApprovalOperation.mint_zet_batch: "검토한 초안 배치 전체를 정본으로 발행할까요?",
+    ExactHumanApprovalOperation.retire_draft_batch: (
+        "발행을 마친 이 초안 배치 전체를 퇴역시킬까요?"
+    ),
+    ExactHumanApprovalOperation.zet_revision_write: "검토한 제안으로 이 정본 zet를 개정할까요?",
+    ExactHumanApprovalOperation.zet_revision_restore_write: (
+        "이 개정 영수증 이전의 바이트로 정본 zet를 복원할까요?"
+    ),
+    ExactHumanApprovalOperation.source_intake_chain: (
+        "검토한 새 원본 1개의 반입 근거 기록, 보존 선정, 오브제 보존을 한 번에 실행할까요?"
     ),
 }
 
@@ -605,6 +642,43 @@ _OPERATION_SUMMARIES = {
         "이 복구 manifest가 바꾼 필드만 원래 값으로 되돌리고 "
         "관계없는 필드와 본문은 유지합니다."
     ),
+    ExactHumanApprovalOperation.draft_discard: (
+        "초안 파일을 inbox에서 제거하고 같은 바이트를 스냅샷과 영수증으로 "
+        "보관합니다. 정본 zet와 발행 영수증은 건드리지 않습니다."
+    ),
+    ExactHumanApprovalOperation.draft_discard_restore: (
+        "버릴 때 보관한 스냅샷 바이트를 원래 inbox 경로에 그대로 되돌리고 "
+        "복원 영수증 하나만 추가합니다."
+    ),
+    ExactHumanApprovalOperation.zettel_edge_batch: (
+        "정책이 허용하고 dry-run이 검증한 엣지만 각 zet의 frontmatter에 추가하고 "
+        "엣지 영수증과 배치 영수증을 남깁니다. 검토 대기 항목은 쓰지 않습니다."
+    ),
+    ExactHumanApprovalOperation.zettel_edge_batch_revert: (
+        "배치 영수증이 가리키는 엣지만 각 zet에서 제거하고 되돌리기 영수증을 "
+        "남깁니다. 원래 영수증은 지우지 않습니다."
+    ),
+    ExactHumanApprovalOperation.mint_zet_batch: (
+        "dry-run을 통과한 초안만 정본 zet로 발행하고 발행 영수증·스냅샷·배치 "
+        "영수증을 남깁니다. 실패한 항목은 건드리지 않습니다."
+    ),
+    ExactHumanApprovalOperation.retire_draft_batch: (
+        "정본이 이미 있는 초안만 inbox에서 퇴역시키고 퇴역 영수증과 배치 영수증을 "
+        "남깁니다. 정본과 발행 영수증은 건드리지 않습니다."
+    ),
+    ExactHumanApprovalOperation.zet_revision_write: (
+        "검토한 제안 파일의 내용으로 정본 zet 하나를 원자적으로 바꾸고 이전 바이트를 "
+        "스냅샷과 개정 영수증으로 보존합니다. 다른 zet는 건드리지 않습니다."
+    ),
+    ExactHumanApprovalOperation.zet_revision_restore_write: (
+        "검토한 복원 제안의 바이트로 정본 zet 하나를 되돌리고 복원 영수증을 "
+        "남깁니다. 원래 개정 영수증은 지우지 않습니다."
+    ),
+    ExactHumanApprovalOperation.source_intake_chain: (
+        "세 단계(반입 근거 영수증 1개, 보존 선정 파일 1개, 스테이징 원본 1개의 "
+        "content-addressed 보존과 보존 영수증)를 이 승인 하나로 이어서 실행합니다. "
+        "본문을 외부로 보내거나 자격증명을 읽지 않습니다."
+    ),
 }
 
 _OPERATION_APPROVE_BUTTONS = {
@@ -634,6 +708,15 @@ _OPERATION_APPROVE_BUTTONS = {
     ExactHumanApprovalOperation.object_storage_formal_adoption: "정식 채택",
     ExactHumanApprovalOperation.local_recovery: "복구 실행",
     ExactHumanApprovalOperation.local_recovery_revert: "복구 되돌리기",
+    ExactHumanApprovalOperation.draft_discard: "초안 버리기",
+    ExactHumanApprovalOperation.draft_discard_restore: "초안 복원",
+    ExactHumanApprovalOperation.zettel_edge_batch: "배치 엣지 만들기",
+    ExactHumanApprovalOperation.zettel_edge_batch_revert: "배치 엣지 되돌리기",
+    ExactHumanApprovalOperation.mint_zet_batch: "배치 발행",
+    ExactHumanApprovalOperation.retire_draft_batch: "배치 퇴역",
+    ExactHumanApprovalOperation.zet_revision_write: "개정 실행",
+    ExactHumanApprovalOperation.zet_revision_restore_write: "개정 복원",
+    ExactHumanApprovalOperation.source_intake_chain: "반입 사슬 실행",
 }
 
 

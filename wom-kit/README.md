@@ -10,28 +10,36 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.4.19 GitHub Release, when present, uses the self-contained wheel
+The exact v0.4.21 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0420-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0421-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.20/wom_kit-0.4.20-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.21/wom_kit-0.4.21-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-Run the version check in a new process and require exactly `archive 0.4.20`.
+Run the version check in a new process and require exactly `archive 0.4.21`.
 The dedicated external CPython 3.12 environment and exact real
 `python.exe -m pip` path retain the wheel SHA-256 required by the updater. A
 user-scoped `uv tool` environment whose installed metadata omits that archive
 hash is not project-updater supply evidence. Installing the bootstrap does not
 silently update a project-local WOM-kit source mirror or its pin.
+
+v0.4.21 reopens `discard-draft`, `discard-draft-restore`, the `zettel-edge`,
+`mint-zet` and `retire-draft` batches, `revert-batch`, `zet-revision-write` and
+`zet-revision-restore-write` through the same operation-specific exact human
+approval every other v0.4 writer uses, and adds `source-intake-chain`, which
+runs the record → selection → capture intake of one staged original under one
+native approval instead of three. v0.4.20 gave archive writes a work-session
+identity with selective Git backup of the session's own outputs.
 
 v0.4.19 makes project update, runtime inspection, command availability, and
 Windows child-process policy agree. Runtime checks distinguish observed

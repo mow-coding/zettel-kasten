@@ -1273,27 +1273,23 @@ if module_path != installed_prefix and installed_prefix not in module_path.paren
 if sys.flags.isolated != 1 or sys.flags.dont_write_bytecode != 1:
     _fail("installed_v0411_python_isolation_flags_failed")
 
-revision_contract = command_status.compound_approval_fixed_closed_plan_contract(
-    "zet-revision-plan"
-)
-discard_contract = command_status.compound_approval_fixed_closed_plan_contract(
-    "discard-draft"
-)
-for contract, writer in (
-    (revision_contract, "zet-revision-write"),
-    (discard_contract, "discard-draft"),
-):
+# v0.4.21 reopened zet-revision-write and discard-draft through exact human
+# approval; their plan contracts must say so without turning the validation
+# digest into authority. The v0.4.11 fixed-closed plan writer map is empty.
+if command_status.COMPOUND_APPROVAL_FIXED_CLOSED_PLAN_WRITERS:
+    _fail("installed_v0421_plan_writer_map_not_empty")
+for writer in ("zet-revision-write", "discard-draft"):
+    contract = command_status.exact_approval_available_plan_contract(writer)
     if (
-        contract.get("approval_status") != "approval_fixed_closed"
-        or contract.get("approval_reason_code")
-        != "compound_exact_human_approval_binding_required"
-        or contract.get("approved_write_implemented") is not False
+        contract.get("approval_status") != "approval_available"
+        or contract.get("approval_reason_code") is not None
+        or contract.get("approved_write_implemented") is not True
         or contract.get("actionable_handoff_available") is not False
         or contract.get("validation_preview_available") is not True
         or contract.get("validation_digest_is_approval_authority") is not False
         or contract.get("writer_command") != writer
     ):
-        _fail("installed_v0411_fixed_closed_contract_failed")
+        _fail("installed_v0421_reopened_contract_failed")
 
 revision_plan_help = _command_help("zet-revision-plan")
 revision_write_help = _command_help("zet-revision-write")
@@ -1304,12 +1300,15 @@ revision_write_help_words = " ".join(revision_write_help.split())
 discard_help_words = " ".join(discard_help.split())
 self_contained_help_words = " ".join(self_contained_help.split())
 if (
-    "approval_fixed_closed" not in revision_plan_help_words
-    or "No actionable approval handoff" not in revision_plan_help_words
-    or "fixed closed" not in revision_write_help_words
-    or "fixed closed" not in discard_help_words
+    "approval_available" not in revision_plan_help_words
+    or "validation evidence only" not in revision_plan_help_words
+    or "approval_fixed_closed" in revision_plan_help_words
+    or "fixed closed" in revision_write_help_words
+    or "exact human approval" not in revision_write_help_words
+    or "fixed closed" in discard_help_words
+    or "exact human approval" not in discard_help_words
 ):
-    _fail("installed_v0411_fixed_closed_help_failed")
+    _fail("installed_v0421_reopened_help_failed")
 if (
     "Optional compatibility flag" not in self_contained_help_words
     or "always read-only" not in self_contained_help_words
@@ -1447,17 +1446,29 @@ with (
     )
 if revision_writer.call_count or discard_writer.call_count:
     _fail("installed_v0411_closed_writer_called")
-for blocked in (revision_blocked, discard_blocked):
-    if (
-        blocked.get("ok") is not False
-        or blocked.get("state") != "blocked"
-        or blocked.get("reason_codes")
-        != ["compound_exact_human_approval_binding_required"]
-        or blocked.get("effects_state") != "none"
-        or blocked.get("files_written") != []
-        or blocked.get("private_values_echoed") is not False
-    ):
-        _fail("installed_v0411_closed_cli_result_failed")
+# Both reopened routes refuse before their preflight when no reviewer is named.
+if (
+    revision_blocked.get("ok") is not False
+    or revision_blocked.get("state") != "blocked"
+    or revision_blocked.get("reason_codes")
+    != ["zet_revision_write_reviewer_required"]
+    or revision_blocked.get("effects_state") != "none"
+    or revision_blocked.get("files_written") != []
+    or revision_blocked.get("private_values_echoed") is not False
+):
+    _fail("installed_v0421_reopened_cli_result_failed")
+# The reopened discard route refuses before its preflight when no reviewer
+# is named: a fixed code, no effect, no writer call, nothing private echoed.
+if (
+    discard_blocked.get("ok") is not False
+    or discard_blocked.get("state") != "blocked"
+    or discard_blocked.get("reason_codes")
+    != ["discard_draft_apply_reviewer_required"]
+    or discard_blocked.get("effects_state") != "none"
+    or discard_blocked.get("files_written") != []
+    or discard_blocked.get("private_values_echoed") is not False
+):
+    _fail("installed_v0421_reopened_cli_result_failed")
 if revision_stderr or discard_stderr or closed_before != _tree_sha256(ROOT):
     _fail("installed_v0411_closed_cli_effect_failed")
 
@@ -1531,11 +1542,11 @@ print(
             "isolated_installed_package": True,
             "isolated_python_flags": True,
             "revision_and_discard": {
-                "approval_status": "approval_fixed_closed",
-                "approved_write_implemented": False,
+                "approval_status": "approval_available",
+                "approved_write_implemented": True,
                 "actionable_handoff_available": False,
                 "validation_digest_is_approval_authority": False,
-                "approval_attempts_fixed_closed_without_effects": True,
+                "reviewer_less_approval_attempts_have_no_effects": True,
             },
             "self_contained_check": {
                 "works_without_dry_run_flag": True,
@@ -5193,11 +5204,11 @@ def _check_installed_v0411_truth_contracts(
         "isolated_installed_package": True,
         "isolated_python_flags": True,
         "revision_and_discard": {
-            "approval_status": "approval_fixed_closed",
-            "approved_write_implemented": False,
+            "approval_status": "approval_available",
+            "approved_write_implemented": True,
             "actionable_handoff_available": False,
             "validation_digest_is_approval_authority": False,
-            "approval_attempts_fixed_closed_without_effects": True,
+            "reviewer_less_approval_attempts_have_no_effects": True,
         },
         "self_contained_check": {
             "works_without_dry_run_flag": True,

@@ -368,11 +368,15 @@ journal, and never edit an immutable receipt to silence this audit.
 
 For an ordinary correction to one canonical zet, a complete private proposal
 under `.wom-scratch/revisions/` may be validated with `zet-revision-plan`.
-In v0.4.11 the returned hashes are review evidence only: approval is fixed
-closed, `approved_write_implemented` and `actionable_handoff_available` are
-both false, and there is no supported handoff to `zet-revision-write`. Never
-hand-edit the canonical file or replay validation bindings to bypass this
-boundary. To audit historical revisions, run:
+The returned hashes are review evidence only and grant no approval
+authority: the plan reports `approval_status: approval_available`,
+`approved_write_implemented: true` and `actionable_handoff_available: false`.
+Since v0.4.21 the supported path is `zet-revision-write --dry-run` with the
+plan digests, then the same command with `--approve --reviewed-by`, which
+opens the one native exact human approval dialog; `zet-revision-restore-write`
+restores exact prior bytes the same way. Never hand-edit the canonical file
+or copy the proposal in by hand to bypass this boundary. To audit historical
+revisions, run:
 
 ```bash
 archive zet-revision-receipt-audit <archive-root> --dry-run --max-receipts 5000 --max-locks 5000 --max-problems 100 --progress --format json
@@ -705,10 +709,11 @@ or separate approval gate blocks, report that immediately rather than leaving
 the request silent.
 
 Revise an unminted draft in place; title changes do not authorize deletion and
-recreation. `discard-draft` and `discard-draft-restore` remain dry-run previews
-in v0.4.0. Their approval branches fail before private target read or mutation
-with `compound_exact_human_approval_binding_required` and store no snapshot or
-receipt.
+recreation. Since v0.4.21 `discard-draft` and `discard-draft-restore` are
+reopened through the same exact human approval boundary: run `--dry-run`,
+then `--approve --reviewed-by`, which opens one native dialog; the discard
+moves the draft to its snapshot and writes a receipt, and the restore returns
+the exact snapshot bytes. A cancelled dialog or an unbound call writes nothing.
 
 To preview binding an already-manifested objet into structured zettel
 frontmatter, use `zettel-objet-link --dry-run`. In v0.4.1 this single link apply

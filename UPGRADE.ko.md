@@ -2,6 +2,47 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.4.21 다시 연 writer와 승인 한 번의 반입
+
+일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.
+새 외부 CPython 3.12 환경의 실제 `python.exe -m pip`를 사용해 설치된 PEP 610
+metadata에 wheel hash가 남게 합니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0421-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.21/wom_kit-0.4.21-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+새 process에서 정확히 `archive 0.4.21`이 나와야 합니다. wheel을 공개하거나 설치하는
+것만으로 client archive, project runtime, version pin은 바뀌지 않습니다. project
+update는 client가 따로 선택하고 승인합니다.
+
+`discard-draft`, `discard-draft-restore`, `zettel-edge-batch`, `mint-zet-batch`,
+`retire-draft-batch`, `revert-batch`, `zet-revision-write`,
+`zet-revision-restore-write`가 다시 `--approve`를 받습니다. 먼저 같은 `--dry-run`을
+실행하세요. 승인은 다른 v0.4 writer와 같은 native 대화상자를 열고, 배치는 항목
+전체에 대해 개수 우선 대화상자 하나를 엽니다. 이 명령들에서
+`compound_exact_human_approval_binding_required`를 기대하던 스크립트는 이제 쓰기
+결과나 고정된 preflight 사유 코드를 기대해야 합니다.
+
+`source-intake-chain <archive> --source-intake-plan <plan.json> --staged-path
+<archive 상대 스테이징 파일> --dry-run`은 반입 근거 기록, 보존 선정, 보존을 한 번에
+계획하고, `--approve --reviewed-by <id>`는 세 단계를 승인 한 번으로 실행합니다.
+단계별 명령은 그대로 있으며, 앞 단계 뒤에 멈춘 사슬은 `state: partial`이 알려 주는
+명령으로 마무리합니다. 기존 control·승인·영수증·schema의 바이트는 그대로이고, 새
+`exact_human_approval` 영수증 필드는 선택 항목으로 추가됩니다.
+
+검토한 project update 한 번 뒤에는 새 process에서 project launcher를 시작해 pin,
+source, launcher, runtime 근거를 확인하세요. 그 client 실행 결과만이 project가
+고쳐졌음을 보여 줍니다.
+
 ## v0.4.20 세션 소유 쓰기와 초안 승격
 
 일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.

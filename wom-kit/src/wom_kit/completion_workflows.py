@@ -7986,7 +7986,7 @@ def _draft_discard_plan_core(
     aggregate = archive_services.unique_preserve_order(blockers)
     validation_ready = not aggregate
     approval_contract = (
-        command_status.compound_approval_fixed_closed_plan_contract(
+        command_status.exact_approval_available_plan_contract(
             "discard-draft"
         )
     )
@@ -8000,11 +8000,7 @@ def _draft_discard_plan_core(
     )
     result = {
         "ok": validation_ready,
-        "state": (
-            command_status.APPROVAL_FIXED_CLOSED
-            if validation_ready
-            else "blocked"
-        ),
+        "state": "ready" if validation_ready else "blocked",
         "validation_status": "ready" if validation_ready else "blocked",
         "approval_status": approval_contract["approval_status"],
         "dry_run": True,
@@ -8018,14 +8014,14 @@ def _draft_discard_plan_core(
             "snapshot_path": snapshot_relative,
             "receipt_path": receipt_relative,
             "plan_sha256": plan_sha256 if validation_ready else None,
-            "plan_sha256_validation_only": validation_ready,
+            "plan_sha256_validation_only": False,
             "plan_sha256_is_approval_authority": False,
             "mint_receipt_present": (
                 "discard_draft_mint_receipt_present_use_retire_draft" in aggregate
             ),
             "canonical_twin_present": canonical_twin_present,
             "exact_byte_restore_supported": True,
-            "exact_byte_restore_approval_available": False,
+            "exact_byte_restore_approval_available": True,
         },
         "approval_contract": approval_contract,
         "approval_handoff": None,
@@ -8088,11 +8084,19 @@ def draft_discard_apply(
     reason: str | None,
     expected_plan_sha256: str | None,
     reviewed_by: str | None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
 ) -> dict[str, Any]:
-    return _compound_exact_human_approval_binding_blocked(
-        "discard_draft_apply"
+    # v0.4.21 LR-01 reopens this writer only through operation-specific
+    # exact human approval: an unbound call fails before any archive read.
+    archive_services._require_exact_human_approval_inputs_before_archive_read(
+        claim=exact_human_approval_claim,
+        expected_plan_sha256=expected_exact_approval_plan_sha256,
+        expected_target_binding_sha256=(
+            expected_exact_approval_target_binding_sha256
+        ),
     )
-
     result, private = _draft_discard_plan_core(
         archive_root,
         zettel_id=zettel_id,
@@ -8142,6 +8146,23 @@ def draft_discard_apply(
                 "would_change": [],
                 "files_written": [],
             }
+        try:
+            exact_operation_approval = (
+                archive_services._require_exact_human_operation_approval(
+                    root,
+                    operation_approval_binding.draft_discard_approval_binding(
+                        fresh
+                    ),
+                    reviewer_claim=reviewer,
+                    expected_plan_sha256=expected_exact_approval_plan_sha256,
+                    expected_target_binding_sha256=(
+                        expected_exact_approval_target_binding_sha256
+                    ),
+                    claim=exact_human_approval_claim,
+                )
+            )
+        except operation_approval_binding.OperationApprovalBindingError as exc:
+            raise archive_services.ArchiveServiceError(exc.code) from None
         timestamp = _now()
         receipt = {
             "schema": DRAFT_DISCARD_RECEIPT_SCHEMA,
@@ -8161,6 +8182,7 @@ def draft_discard_apply(
                 "snapshot_written": True,
                 "exact_byte_restore_supported": True,
             },
+            "exact_human_approval": exact_operation_approval,
         }
         snapshot_path = archive_services.archive_internal_path(
             root,
@@ -8376,11 +8398,17 @@ def draft_discard_restore(
     receipt: Path | str,
     expected_plan_sha256: str | None,
     reviewed_by: str | None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
 ) -> dict[str, Any]:
-    return _compound_exact_human_approval_binding_blocked(
-        "discard_draft_restore"
+    archive_services._require_exact_human_approval_inputs_before_archive_read(
+        claim=exact_human_approval_claim,
+        expected_plan_sha256=expected_exact_approval_plan_sha256,
+        expected_target_binding_sha256=(
+            expected_exact_approval_target_binding_sha256
+        ),
     )
-
     result, private = _draft_discard_restore_plan_core(
         archive_root,
         receipt=receipt,
@@ -8426,6 +8454,23 @@ def draft_discard_restore(
                 "would_change": [],
                 "files_written": [],
             }
+        try:
+            exact_operation_approval = (
+                archive_services._require_exact_human_operation_approval(
+                    root,
+                    operation_approval_binding.draft_discard_restore_approval_binding(
+                        fresh
+                    ),
+                    reviewer_claim=reviewer,
+                    expected_plan_sha256=expected_exact_approval_plan_sha256,
+                    expected_target_binding_sha256=(
+                        expected_exact_approval_target_binding_sha256
+                    ),
+                    claim=exact_human_approval_claim,
+                )
+            )
+        except operation_approval_binding.OperationApprovalBindingError as exc:
+            raise archive_services.ArchiveServiceError(exc.code) from None
         timestamp = _now()
         restore_receipt = {
             "schema": DRAFT_DISCARD_RESTORE_RECEIPT_SCHEMA,
@@ -8438,6 +8483,7 @@ def draft_discard_restore(
             "restored_sha256": fresh_private["receipt_doc"]["draft_sha256"],
             "reviewed_by": reviewer,
             "created_at": timestamp,
+            "exact_human_approval": exact_operation_approval,
         }
         restore_receipt_path = archive_services.archive_internal_path(
             root,
