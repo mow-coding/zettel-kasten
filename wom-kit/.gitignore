@@ -8,6 +8,7 @@ __pycache__/
 # Packaging
 build/
 dist/
+dist-*/
 *.egg-info/
 
 # Local environments and secrets
