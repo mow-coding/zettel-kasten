@@ -445,3 +445,14 @@ release note `docs/releases/v0.4.21.md` packaged as the only note; historical
 keeps its own contract test, new `test_v0421_release_docs`; resource-path and
 CLI surface digests refreshed. Release-doc, surface, runtime, capability and
 coverage suites pass (353 tests); readiness gate 5/5.
+
+Candidate CI on `0d795a0c` (PR #101, run 35114467567): the Ubuntu shards
+found two stale pins that none of the unit cohorts included —
+`test_mcp_server` expected the `zet_revision_plan` MCP tool to report
+`approval_fixed_closed` (now `ready_for_human_review` with
+`approved_write_implemented: true`, LR-01d) and
+`test_notion_property_backfill_cli` pinned the v0.4.20 inventory counts
+47/68 (now 56/60). Both corrected; the registry-inspecting modules outside
+the cohorts (`test_mcp_server`, doctor performance/operability, invocation
+effects, session command and public work-session modules) were run locally
+(319 tests OK) before the corrected candidate was pushed.

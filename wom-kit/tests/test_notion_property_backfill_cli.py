@@ -313,13 +313,14 @@ class NotionPropertyBackfillCliTests(unittest.TestCase):
                 ),
             },
         )
+        # v0.4.21 reopened eight writers and added source-intake-chain.
         self.assertEqual(
             inventory["counts"]["approval_available_command_count"],
-            47,
+            56,
         )
         self.assertEqual(
             inventory["counts"]["approval_fixed_closed_command_count"],
-            68,
+            60,
         )
         # Unsupported cancellation is a separate fixed-close reason, not a
         # change to the sole approved Notion migration target above.
