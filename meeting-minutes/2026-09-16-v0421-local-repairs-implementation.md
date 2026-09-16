@@ -298,7 +298,10 @@ from scratch on the LR-01d tree because the LR-01c cohort rerun had been
 started before LR-01d changed the same modules; its result is recorded below
 before the commit: 2,018 tests, OK (13 skipped), 3,504 s.
 
-## Unit LR-01e: the intake chain under one approval (design, before implementation)
+## Unit LR-01e: the intake chain under one approval
+
+Design recorded before implementation; the implementation and verification
+notes follow the design.
 
 Letter 160 ⑦: one objet intake costs three approvals (`source-intake-record`
 → `objet-capture-selection --exact-existing-intake` → `objet-capture
@@ -342,3 +345,76 @@ Decision (Claude Opus 5, high; solo):
   written intake record and selection are valid standalone artifacts).
 - Registry: one more approval-available exact writer (56 available); the
   coverage manifest gains its path (session integration is LR-06).
+
+Implementation (Claude Opus 5, high; solo). The design held with two
+additions found while building:
+
+- Projection seams. The selection planner reads the intake receipt in two
+  places (its own strict reader and the legacy `objet_capture_selection_manifest`
+  builder), and the capture run validates the intake receipt per item
+  (`objet_capture_intake_evidence_blockers`). All three accept projected
+  receipt bytes only while the receipt file does not exist yet; the capture
+  run refuses projections on an approving pass. Experiment before coding:
+  record, selection and capture plans are byte-deterministic across seconds,
+  and the capture binding is identical whether planned from the projected
+  selection document or from the file on disk.
+- Capture precondition in the chain dry-run. The single-step capture preview
+  does not check the archive-index manifest mutation authority; only the
+  apply does. A chain that wrote its record and selection first and then
+  met `archive_index_rebuild_required` would be honest but wasteful, so the
+  chain plan runs the same read-only authority check
+  (`require_archive_manifest_index_mutation_authority` with the current
+  manifest snapshot) and blocks the capture step before any write.
+- Chain authority. `source_intake_record_exact` and
+  `objet_capture_selection_exact` gained `_chain_authority` plus
+  `execute_*_in_chain(plan, claim=, chain_authority=)`: the step's own manifest
+  binding must be an approved chain item (`item_approval`), the chain claim is
+  re-asserted against the chain context, and the `ExactOperationApprovalAuthority`
+  is built from that claim's reference. `objet_capture_apply` gained
+  `batch_authority` exactly like the LR-01c item writers, with
+  `_objet_capture_item_identity` (selection path, manifest id, staged paths).
+  The chain module builds the authority with `_build_exact_batch_authority`
+  over the three step documents after a fresh chain plan matched the approved
+  digests.
+- Binding and copy: `source_intake_chain_approval_binding` (target = sorted
+  step pairs, step count, chain id and receipt digests; plan adds step
+  identities, the intake plan digest and the staged-bytes digest; review
+  codes `chain_step_bindings`, `intake_plan_digest`, `staged_source_digest`);
+  `ExactHumanApprovalOperation.source_intake_chain` in all four copy tables;
+  schema enum extended; packaged resources resynced.
+- Result and receipt: the chain result lists every step's state, binding
+  digests and output path, `files_written` (intake receipt, selection,
+  capture receipt, object, manifest, index, chain receipt), and a chain
+  receipt under `receipts/source-intake-chains/` records the one approval and
+  the step bindings. A step failure after an earlier write returns `ok: false`,
+  `state: partial`, per-step reason codes and `next_safe_actions` naming the
+  single-step command that finishes; the framework keeps the claim `started`
+  with `exact_human_approval_reconciliation.required`. The capture step's
+  output path is minted at capture time, so the plan leaves it null and the
+  result carries the actual receipt path.
+- CLI: `source-intake-chain` (inputs: `--source-intake-plan`, `--staged-path`,
+  `--item-id`, `--manifest-id`, `--project-intake-receipt`; `--dry-run` /
+  `--approve --reviewed-by`, `--expected-plan-sha256`, progress default on)
+  with a one-objet count-first collection (no staged name shown) and a live
+  target observer; registered in the startup progress table.
+- Registry and inventory: 56 approval-available (parser-derived), 60
+  fixed-closed, 317 canonical paths / 576 invocation paths (surface digest
+  `0b173957…`); coverage manifest 56 paths, 30 pending; capability matrix
+  row "One-approval objet intake chain"; contract and operator docs updated.
+
+Verification: new `test_v0421_source_intake_chain_exact_approval.py` (7
+tests: dry-run plans three steps from projected bytes and writes nothing with
+a stable digest; one dialog writes record, selection, capture and the chain
+receipt, the exact-operation and capture receipts bind the chain claim's
+approval id, and a replay is blocked; cancel, missing reviewer, dry-run with
+reviewer and a digest mismatch write nothing; a refused capture precondition
+blocks the plan before any write; a capture failure after two writes is
+reported partial with the written selection still valid for the single-step
+capture; step writers refuse a foreign or missing chain authority; inventory
+and help). Pins: v0.4.1/v0.4.20 release-doc counts (56/317/576/274, 56/30),
+coverage gate 56, letter-140 enum, v0.3.299 predecessor surface and private
+objet index surface (577 paths, new digest), startup progress table.
+Neighbouring intake modules (v0.4.8 selection, v0.4.9 record, v0.4.10 batch
+intake and batch capture, v0.4.20 record command/workflow/held/original
+review) pass. Readiness gate 5/5. The full cohort (36 modules including
+`test_cli` and `test_wheel_install`): 2,127 tests, OK (15 skipped), 3,488 s.

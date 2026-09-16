@@ -15,6 +15,7 @@
     "objet-capture-selection": {"status": "pending", "target": "v0.4.20"},
     "objet-capture": {"status": "pending", "target": "v0.4.20"},
     "objet-capture-batch": {"status": "pending", "target": "v0.4.21"},
+    "source-intake-chain": {"status": "pending", "target": "v0.4.21", "note": "New in v0.4.21 LR-01e: record, selection and capture under one exact approval; session refs follow with LR-06."},
     "create-draft": {"status": "pending", "target": "v0.4.21"},
     "discard-draft": {"status": "pending", "target": "v0.4.21", "note": "Reopened through exact approval in v0.4.21 LR-01; session refs follow with LR-06."},
     "discard-draft-restore": {"status": "pending", "target": "v0.4.21", "note": "Reopened through exact approval in v0.4.21 LR-01; session refs follow with LR-06."},

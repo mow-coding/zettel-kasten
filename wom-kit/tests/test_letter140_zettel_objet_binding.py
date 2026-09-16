@@ -522,6 +522,7 @@ class Letter140ZettelObjetBindingTests(unittest.TestCase):
             "retire_draft_batch",
             "zet_revision_write",
             "zet_revision_restore_write",
+            "source_intake_chain",
         }
         self.assertEqual(set(source["properties"]["operation"]["enum"]), expected)
         self.assertEqual(

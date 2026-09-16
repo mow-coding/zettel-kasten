@@ -1558,6 +1558,81 @@ def _batch_binding(
     )
 
 
+def source_intake_chain_approval_binding(
+    dry_run: Mapping[str, Any],
+) -> ExactOperationApprovalBinding:
+    """Bind one reviewed intake chain to the exact step bindings it holds.
+
+    v0.4.21 LR-01e (letter 160 ⑧).  The chain is a heterogeneous batch of
+    three single-operation bindings (record, selection, capture) planned from
+    projected bytes.  The target is the sorted set of approved step pairs plus
+    the chain id and receipt digests; the plan adds the step identities, the
+    input plan digest and the staged-source digest.  No path or content is
+    echoed: every label is reduced to a digest before it reaches the dialog.
+    """
+
+    plan = _plain_mapping(dry_run)
+    if plan.get("ok") is not True or plan.get("dry_run") is not True:
+        raise _fail("operation_approval_plan_blocked")
+    chain_id = plan.get("chain_id")
+    receipt_path = plan.get("receipt_path")
+    if (
+        plan.get("lifecycle_action") != "source_intake_chain_plan"
+        or plan.get("write_status") != "would_write"
+        or plan.get("blockers") != []
+        or type(chain_id) is not str
+        or not chain_id.startswith("source-intake-chain:")
+        or type(receipt_path) is not str
+        or not receipt_path
+    ):
+        raise _fail("operation_approval_plan_invalid")
+    steps = plan.get("steps")
+    pairs = _batch_item_pairs(steps)
+    if len(pairs) != 3:
+        raise _fail("operation_approval_plan_invalid")
+    projection = []
+    for step in steps:
+        row = _plain_mapping(step)
+        projection.append(
+            {
+                "step": row.get("step"),
+                "identity_digest": _sha_ref(row.get("approval_item_identity_sha256")),
+            }
+        )
+    if [row["step"] for row in projection] != [
+        "source_intake_record",
+        "objet_capture_selection",
+        "objet_capture",
+    ]:
+        raise _fail("operation_approval_plan_invalid")
+    target = {
+        "item_bindings": sorted(pairs),
+        "item_count": len(pairs),
+        "chain_id_digest": _sha256(chain_id),
+        "chain_receipt_digest": _sha256(receipt_path),
+    }
+    basis = {
+        "schema_version": BINDING_SCHEMA_VERSION,
+        "operation": ExactHumanApprovalOperation.source_intake_chain.value,
+        "target": target,
+        "steps_digest": _sha256(projection),
+        "intake_plan_digest": _sha_ref(plan.get("source_intake_plan_sha256")),
+        "staged_source_digest": _sha_ref(plan.get("staged_bytes_sha256")),
+        "warnings": plan.get("warnings"),
+    }
+    return ExactOperationApprovalBinding(
+        operation=ExactHumanApprovalOperation.source_intake_chain,
+        plan_sha256=_sha256(basis),
+        target_binding_sha256=_sha256(target),
+        warning_codes=_warning_codes(plan.get("warnings")),
+        review_binding_codes=(
+            "chain_step_bindings",
+            "intake_plan_digest",
+            "staged_source_digest",
+        ),
+    )
+
+
 def mint_zet_batch_approval_binding(
     dry_run: Mapping[str, Any],
 ) -> ExactOperationApprovalBinding:

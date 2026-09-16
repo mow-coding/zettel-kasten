@@ -76490,6 +76490,22 @@ def _zettel_edge_item_identity(planned: Mapping[str, Any]) -> str:
     )
 
 
+def _objet_capture_item_identity(preview: Mapping[str, Any]) -> str:
+    """Content-free identity of one capture: selection path, manifest id, staged paths."""
+
+    items = preview.get("items") if isinstance(preview.get("items"), list) else []
+    return _exact_batch_item_identity(
+        "objet_capture",
+        selection_path=preview.get("selection_path"),
+        selection_manifest_id=preview.get("selection_manifest_id"),
+        staged_paths=sorted(
+            str(item.get("source_staged_path") or "")
+            for item in items
+            if isinstance(item, dict)
+        ),
+    )
+
+
 def _zettel_edge_revert_item_identity(planned: Mapping[str, Any]) -> str:
     return _exact_batch_item_identity(
         "zettel_edge_revert",
@@ -160170,10 +160186,18 @@ def objet_capture_envelope_blockers(selection: dict[str, Any], archive_id: str) 
     return unique_preserve_order(blockers)
 
 
-def objet_capture_intake_evidence_blockers(root: Path, item: dict[str, Any]) -> list[str]:
+def objet_capture_intake_evidence_blockers(
+    root: Path,
+    item: dict[str, Any],
+    *,
+    projected_source_intake_receipts: Mapping[str, bytes] | None = None,
+) -> list[str]:
     # The selection never carries inline evidence; it must point at a PERSISTED
     # source-intake plan JSON under receipts/sources/ (the source-intake --dry-run
-    # output saved to disk in a prior, separately-gated phase).
+    # output saved to disk in a prior, separately-gated phase).  The v0.4.21
+    # intake chain (LR-01e) plans capture before its own record step has
+    # written that receipt: the projected bytes stand in only while the file
+    # does not exist yet; the approved chain re-plans from disk before writing.
     raw_receipt_path = str(item.get("source_intake_receipt_path") or "")
     raw_plan_sha = str(item.get("source_intake_plan_sha256") or "")
     if not raw_receipt_path or not raw_plan_sha:
@@ -160183,12 +160207,27 @@ def objet_capture_intake_evidence_blockers(root: Path, item: dict[str, Any]) -> 
         receipt_path = resolve_archive_relative_path(root, normalized)
     except ArchivePathError:
         return ["source_intake_evidence_invalid"]
-    if not normalized.startswith("receipts/sources/") or not receipt_path.is_file():
+    if not normalized.startswith("receipts/sources/"):
         return ["source_intake_evidence_invalid"]
-    try:
-        plan = json.loads(receipt_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    projected = (
+        projected_source_intake_receipts.get(normalized)
+        if projected_source_intake_receipts is not None
+        else None
+    )
+    if projected is not None:
+        if type(projected) is not bytes or receipt_path.exists():
+            return ["source_intake_evidence_invalid"]
+        try:
+            plan = json.loads(projected.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return ["source_intake_evidence_invalid"]
+    elif not receipt_path.is_file():
         return ["source_intake_evidence_invalid"]
+    else:
+        try:
+            plan = json.loads(receipt_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return ["source_intake_evidence_invalid"]
     if not isinstance(plan, dict):
         return ["source_intake_evidence_invalid"]
     gate_blockers: list[str] = []
@@ -160398,6 +160437,7 @@ def objet_capture_selection_manifest(
     confidence: float | int | None = None,
     language: str | None = None,
     born_digital: bool = False,
+    projected_source_intake_receipt_bytes: bytes | None = None,
 ) -> dict[str, Any]:
     if type(dry_run) is not bool or type(approve) is not bool or approve:
         return _compound_exact_human_approval_blocked(
@@ -160527,8 +160567,14 @@ def objet_capture_selection_manifest(
     if normalized_receipt and not blockers:
         try:
             receipt_path = resolve_archive_relative_path(root, normalized_receipt)
-            plan = json.loads(receipt_path.read_text(encoding="utf-8"))
-        except (ArchivePathError, OSError, json.JSONDecodeError):
+            if projected_source_intake_receipt_bytes is not None:
+                # v0.4.21 LR-01e intake chain: the receipt is planned, not yet written.
+                if receipt_path.exists():
+                    raise OSError("projected receipt already exists")
+                plan = json.loads(projected_source_intake_receipt_bytes.decode("utf-8"))
+            else:
+                plan = json.loads(receipt_path.read_text(encoding="utf-8"))
+        except (ArchivePathError, OSError, json.JSONDecodeError, UnicodeDecodeError):
             blockers.append("source_intake_evidence_invalid")
             plan = None
         if isinstance(plan, dict):
@@ -160643,7 +160689,15 @@ def objet_capture_selection_manifest(
     }
     envelope_blockers = objet_capture_envelope_blockers(selection, archive_id)
     if digest and plan_sha256 and normalized_receipt:
-        evidence_blockers = objet_capture_intake_evidence_blockers(root, item)
+        evidence_blockers = objet_capture_intake_evidence_blockers(
+            root,
+            item,
+            projected_source_intake_receipts=(
+                {normalized_receipt: projected_source_intake_receipt_bytes}
+                if projected_source_intake_receipt_bytes is not None
+                else None
+            ),
+        )
         blockers.extend(evidence_blockers)
     blockers.extend(envelope_blockers)
 
@@ -160812,6 +160866,7 @@ def _objet_capture_process_item(
     selection_sha256: str,
     manifest_appender: Any,
     capture_enabled: bool = False,
+    projected_source_intake_receipts: Mapping[str, bytes] | None = None,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {
         "item_id": str(item.get("item_id") or ""),
@@ -160911,7 +160966,11 @@ def _objet_capture_process_item(
         if commitment_blockers or approved_object_id != object_id:
             return block("approved_content_mismatch")
 
-        evidence_blockers = objet_capture_intake_evidence_blockers(root, item)
+        evidence_blockers = objet_capture_intake_evidence_blockers(
+            root,
+            item,
+            projected_source_intake_receipts=projected_source_intake_receipts,
+        )
         if evidence_blockers:
             return block(evidence_blockers[0])
 
@@ -161432,7 +161491,11 @@ def _objet_capture_run(
     selection_document_path: Path | str | None = None,
     native_exact_authorized: bool = False,
     exact_human_approval_receipt: Mapping[str, Any] | None = None,
+    projected_source_intake_receipts: Mapping[str, bytes] | None = None,
 ) -> dict[str, Any]:
+    # Projected receipts are a dry-run-only chain planning aid (LR-01e).
+    if projected_source_intake_receipts is not None and approve:
+        raise ArchiveServiceError("objet_capture_projected_receipts_dry_run_only")
     root = Path(archive_root).resolve()
     enablement = read_capture_enablement(root)
     sandbox_blockers = (
@@ -161562,6 +161625,7 @@ def _objet_capture_run(
                 selection_sha256=selection_sha256,
                 manifest_appender=lambda _record: None,
                 capture_enabled=capture_enabled,
+                projected_source_intake_receipts=projected_source_intake_receipts,
             )
             for item in items_sorted
         ]
@@ -161648,6 +161712,7 @@ def _objet_capture_run(
                             selection_sha256=selection_sha256,
                             manifest_appender=manifest_appender,
                             capture_enabled=capture_enabled,
+                            projected_source_intake_receipts=projected_source_intake_receipts,
                         )
                     except PublicationOutcomeUnverified:
                         aborted = True
@@ -162016,6 +162081,7 @@ def _objet_capture_run(
                 selection_sha256=selection_sha256,
                 manifest_appender=lambda record: None,
                 capture_enabled=capture_enabled,
+                projected_source_intake_receipts=projected_source_intake_receipts,
             )
         )
     # Plan the derived half for each paired item whose original half is non-blocked.
@@ -163815,6 +163881,7 @@ def objet_capture_apply(
     expected_exact_approval_plan_sha256: str | None = None,
     expected_exact_approval_target_binding_sha256: str | None = None,
     exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
+    batch_authority: _ExactBatchItemAuthority | None = None,
 ) -> dict[str, Any]:
     try:
         if approval_operation not in (
@@ -163822,11 +163889,24 @@ def objet_capture_apply(
             ExactHumanApprovalOperation.objet_capture_batch,
         ):
             raise ArchiveServiceError("operation_approval_plan_invalid")
+        # v0.4.21 LR-01e: the intake chain passes its per-step view of one
+        # approved chain claim; the single capture keeps its own binding.
+        if batch_authority is not None and (
+            type(batch_authority) is not _ExactBatchItemAuthority
+            or approval_operation is not ExactHumanApprovalOperation.objet_capture
+        ):
+            raise ArchiveServiceError("exact_batch_authority_invalid")
         _require_exact_human_approval_inputs_before_archive_read(
             claim=exact_human_approval_claim,
-            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_plan_sha256=(
+                batch_authority.plan_sha256
+                if batch_authority is not None
+                else expected_exact_approval_plan_sha256
+            ),
             expected_target_binding_sha256=(
-                expected_exact_approval_target_binding_sha256
+                batch_authority.target_binding_sha256
+                if batch_authority is not None
+                else expected_exact_approval_target_binding_sha256
             ),
         )
     except ArchiveServiceError:
@@ -163849,19 +163929,26 @@ def objet_capture_apply(
         return preview
     root = require_existing_archive_root(archive_root)
     try:
-        approval_receipt = _require_exact_human_operation_approval(
-            root,
-            objet_capture_approval_binding(
-                preview,
-                operation=approval_operation,
-            ),
-            reviewer_claim=reviewed_by,
-            expected_plan_sha256=expected_exact_approval_plan_sha256,
-            expected_target_binding_sha256=(
-                expected_exact_approval_target_binding_sha256
-            ),
-            claim=exact_human_approval_claim,
-        )
+        if batch_authority is not None:
+            approval_receipt = batch_authority.item_approval(
+                objet_capture_approval_binding(preview),
+                claim=exact_human_approval_claim,
+                item_identity_sha256=_objet_capture_item_identity(preview),
+            )
+        else:
+            approval_receipt = _require_exact_human_operation_approval(
+                root,
+                objet_capture_approval_binding(
+                    preview,
+                    operation=approval_operation,
+                ),
+                reviewer_claim=reviewed_by,
+                expected_plan_sha256=expected_exact_approval_plan_sha256,
+                expected_target_binding_sha256=(
+                    expected_exact_approval_target_binding_sha256
+                ),
+                claim=exact_human_approval_claim,
+            )
     except OperationApprovalBindingError as exc:
         raise ArchiveServiceError(exc.code) from None
     return _objet_capture_run(

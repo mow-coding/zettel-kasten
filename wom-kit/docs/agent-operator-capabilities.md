@@ -127,14 +127,14 @@ continues to be parser-derived; history does not grant execution authority.
 For the current v0.4.21 working-tree parser, the inventory snapshot is:
 
 ```text
-canonical executable command paths: 316
+canonical executable command paths: 317
 alias invocation paths:              259
-all invocation paths:                575
-approval_available:                   55
+all invocation paths:                576
+approval_available:                   56
 approval_fixed_closed:                60
 approval_not_exposed:                201
 conditional approval paths:            11
-dry_run_exposed:                     273
+dry_run_exposed:                     274
 unmatched fixed-close entries:         0
 ```
 

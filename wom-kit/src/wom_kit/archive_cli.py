@@ -434,6 +434,7 @@ from . import (
     runtime_skill_install,
     saved_view_workflows,
     source_intake_batch_exact,
+    source_intake_chain_exact,
     source_intake_record_exact,
     source_fidelity_session_evidence,
     target_sha_evolution,
@@ -20457,6 +20458,141 @@ def command_source_intake_record(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def command_source_intake_chain(args: argparse.Namespace) -> int:
+    """v0.4.21 LR-01e: record → selection → capture under one exact approval."""
+
+    reporter = CommandProgressReporter(
+        bool(getattr(args, "progress", True)),
+        label="source-intake-chain",
+    )
+    reporter.progress("source-intake-chain-plan", "start", None, None)
+
+    def exact_progress(event: ExactOperationProgress) -> None:
+        document = event.public_document()
+        reporter.progress(
+            "exact-operation-" + str(document["stage"]),
+            str(document["mode"]),
+            int(document["completed_items"]),
+            int(document["total_items"]),
+        )
+
+    try:
+        if args.dry_run == args.approve or not args.source_intake_plan:
+            raise source_intake_chain_exact.SourceIntakeChainExactError(
+                "source_intake_chain_request_invalid"
+            )
+        if args.approve and not args.reviewed_by:
+            raise source_intake_chain_exact.SourceIntakeChainExactError(
+                "source_intake_chain_approval_required"
+            )
+        if args.dry_run and args.reviewed_by:
+            raise source_intake_chain_exact.SourceIntakeChainExactError(
+                "source_intake_chain_request_invalid"
+            )
+
+        def plan() -> source_intake_chain_exact.SourceIntakeChainExactPlan:
+            return source_intake_chain_exact.plan_source_intake_chain(
+                Path(args.archive_root),
+                Path(args.source_intake_plan),
+                staged_path=str(args.staged_path),
+                item_id=str(args.item_id or "item"),
+                manifest_id=args.manifest_id,
+                project_intake_receipt=args.project_intake_receipt,
+            )
+
+        chain_plan = plan()
+        reporter.progress("source-intake-chain-plan", "done", None, None)
+        if args.dry_run:
+            result = chain_plan.public_document()
+        else:
+            def _observe_target_binding() -> str:
+                return source_intake_chain_exact.source_intake_chain_approval_binding(
+                    plan()
+                ).target_binding_sha256
+
+            result = source_intake_chain_exact.execute_source_intake_chain(
+                chain_plan,
+                expected_plan_sha256=args.expected_plan_sha256 or "",
+                reviewer_claim=str(args.reviewed_by).strip(),
+                progress_hook=exact_progress,
+                observe_target_binding=_observe_target_binding,
+                target_collection=_source_intake_chain_target_collection(chain_plan),
+            )
+    except (
+        source_intake_chain_exact.SourceIntakeChainExactError,
+        source_intake_record_exact.SourceIntakeRecordExactError,
+        objet_capture_selection_exact.ExistingIntakeCaptureSelectionError,
+        operation_approval_binding.OperationApprovalBindingError,
+        ExactHumanApprovalError,
+        ExactHumanApprovalWindowsError,
+        ExactHumanApprovalWorkflowError,
+        ExactOperationManifestError,
+        archive_services.ArchiveServiceError,
+        OSError,
+    ) as error:
+        result = source_intake_chain_exact.failure_document(
+            str(getattr(error, "code", "") or "")
+        )
+    finally:
+        reporter.close()
+
+    print_source_intake_chain_result(result, args.format)
+    return 0 if result.get("ok") else 1
+
+
+def _source_intake_chain_target_collection(
+    plan: source_intake_chain_exact.SourceIntakeChainExactPlan,
+) -> TargetCollectionPreview | None:
+    """One objet in the count-first dialog; no staged name or path is shown."""
+
+    if not plan.steps:
+        return None
+    capture = plan.steps[-1]
+    identity = capture.item_identity_sha256
+    if type(identity) is not str or not identity:
+        return None
+    try:
+        return TargetCollectionPreview(
+            items=(TargetCollectionItem(identity_sha256=identity, kind="objet"),),
+        )
+    except ValueError:
+        return None
+
+
+def print_source_intake_chain_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    print(f"Source intake chain {result.get('state') or 'blocked'}.")
+    print(f"Chain plan SHA-256: {result.get('plan_sha256') or '-'}")
+    print(
+        f"Approvals: {result.get('approval_count', 0)} "
+        f"(single-step commands: {result.get('single_step_approval_count', 3)})"
+    )
+    for step in result.get("steps") or []:
+        if not isinstance(step, dict):
+            continue
+        line = f"- {step.get('step')}: {step.get('state')}"
+        if step.get("output_path"):
+            line += f" -> {step['output_path']}"
+        print(line)
+    if result.get("files_written"):
+        print("Files written:")
+        for path in result["files_written"]:
+            print(f"- {path}")
+    print(f"Writes performed: {bool(result.get('writes_performed'))}")
+    if result.get("blockers"):
+        print("Blockers:")
+        for blocker in result["blockers"]:
+            print(f"- {blocker}")
+    if result.get("warnings"):
+        print("Warnings:")
+        for warning in result["warnings"]:
+            print(f"- {warning}")
+    for action in result.get("next_safe_actions") or []:
+        print(f"Next: {action}")
+
+
 def _source_intake_session_selected(args: argparse.Namespace) -> bool:
     return bool(getattr(args, "review_original", False)) or any(getattr(args, name, None) is not None
                for name in ("client_app_ref", "task_route_ref", "work_session_ref"))
@@ -40337,6 +40473,62 @@ def build_parser() -> argparse.ArgumentParser:
     source_intake_record.set_defaults(progress=None)
     source_intake_record.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     source_intake_record.set_defaults(func=command_source_intake_record, _wom_project_runtime_resume_effect=True)
+
+    source_intake_chain = subcommands.add_parser(
+        "source-intake-chain",
+        help=(
+            "Record, select and capture one staged original under ONE exact human "
+            "approval (v0.4.21; replaces the three-dialog record/selection/capture chain)."
+        ),
+        description=(
+            "Preview or approve the whole objet intake chain for one staged file: the "
+            "source-intake record, the objet-capture selection and the objet capture are "
+            "planned together from the reviewed source-intake plan and executed in order "
+            "under one native exact human approval. Each step re-verifies that approval "
+            "before it writes; a step failure after an earlier write is reported as "
+            "partial with the written paths so the single-step commands can finish."
+        ),
+    )
+    source_intake_chain.add_argument("archive_root", help="Archive root to update.")
+    source_intake_chain.add_argument(
+        "--source-intake-plan",
+        required=True,
+        help="JSON file from source-intake --dry-run (the same input as source-intake-record).",
+    )
+    source_intake_chain.add_argument(
+        "--staged-path",
+        required=True,
+        help="Archive-relative staged file path (the same input as objet-capture-selection).",
+    )
+    source_intake_chain.add_argument("--item-id", default="item", help="Safe item id for the selection manifest.")
+    source_intake_chain.add_argument("--manifest-id", help="Optional safe manifest id; defaults from the object hash.")
+    source_intake_chain.add_argument(
+        "--project-intake-receipt",
+        help="Optional project-intake decisions receipt to validate as capture-session context only.",
+    )
+    source_intake_chain.add_argument("--dry-run", action="store_true", help="Plan all three steps without writing files.")
+    source_intake_chain.add_argument("--approve", action="store_true", help="Open one native approval and run the three steps.")
+    source_intake_chain.add_argument("--reviewed-by", help="Reviewer id required when --approve is used.")
+    source_intake_chain.add_argument(
+        "--expected-plan-sha256",
+        help="Optional expert binding to the exact chain plan SHA-256 shown by --dry-run.",
+    )
+    source_intake_chain_progress = source_intake_chain.add_mutually_exclusive_group()
+    source_intake_chain_progress.add_argument(
+        "--progress",
+        dest="progress",
+        action="store_true",
+        help="Print content-free progress and heartbeats to stderr (default).",
+    )
+    source_intake_chain_progress.add_argument(
+        "--no-progress",
+        dest="progress",
+        action="store_false",
+        help="Disable progress output.",
+    )
+    source_intake_chain.set_defaults(progress=True)
+    source_intake_chain.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    source_intake_chain.set_defaults(func=command_source_intake_chain)
 
     source_intake_batch = subcommands.add_parser(
         "source-intake-batch",

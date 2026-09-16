@@ -200,6 +200,7 @@ class ExactHumanApprovalOperation(Enum):
     retire_draft_batch = "retire_draft_batch"
     zet_revision_write = "zet_revision_write"
     zet_revision_restore_write = "zet_revision_restore_write"
+    source_intake_chain = "source_intake_chain"
 
 
 def _validated_target_preview_text(value: str | None) -> str | None:
@@ -464,6 +465,7 @@ _OPERATION_LABELS = {
     ExactHumanApprovalOperation.retire_draft_batch: "발행된 초안 배치 퇴역",
     ExactHumanApprovalOperation.zet_revision_write: "정본 zet 의미 개정",
     ExactHumanApprovalOperation.zet_revision_restore_write: "정본 zet 개정 복원",
+    ExactHumanApprovalOperation.source_intake_chain: "새 원본 반입 사슬(근거 기록·선정·보존)",
 }
 
 _OPERATION_QUESTIONS = {
@@ -542,6 +544,9 @@ _OPERATION_QUESTIONS = {
     ExactHumanApprovalOperation.zet_revision_write: "검토한 제안으로 이 정본 zet를 개정할까요?",
     ExactHumanApprovalOperation.zet_revision_restore_write: (
         "이 개정 영수증 이전의 바이트로 정본 zet를 복원할까요?"
+    ),
+    ExactHumanApprovalOperation.source_intake_chain: (
+        "검토한 새 원본 1개의 반입 근거 기록, 보존 선정, 오브제 보존을 한 번에 실행할까요?"
     ),
 }
 
@@ -669,6 +674,11 @@ _OPERATION_SUMMARIES = {
         "검토한 복원 제안의 바이트로 정본 zet 하나를 되돌리고 복원 영수증을 "
         "남깁니다. 원래 개정 영수증은 지우지 않습니다."
     ),
+    ExactHumanApprovalOperation.source_intake_chain: (
+        "세 단계(반입 근거 영수증 1개, 보존 선정 파일 1개, 스테이징 원본 1개의 "
+        "content-addressed 보존과 보존 영수증)를 이 승인 하나로 이어서 실행합니다. "
+        "본문을 외부로 보내거나 자격증명을 읽지 않습니다."
+    ),
 }
 
 _OPERATION_APPROVE_BUTTONS = {
@@ -706,6 +716,7 @@ _OPERATION_APPROVE_BUTTONS = {
     ExactHumanApprovalOperation.retire_draft_batch: "배치 퇴역",
     ExactHumanApprovalOperation.zet_revision_write: "개정 실행",
     ExactHumanApprovalOperation.zet_revision_restore_write: "개정 복원",
+    ExactHumanApprovalOperation.source_intake_chain: "반입 사슬 실행",
 }
 
 

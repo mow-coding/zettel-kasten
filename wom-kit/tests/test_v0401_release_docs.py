@@ -131,14 +131,16 @@ class V0401ReleaseDocsTests(unittest.TestCase):
             blocked,
         )
         counts = inventory["counts"]
-        self.assertEqual(counts["canonical_executable_command_count"], 316)
+        # v0.4.21 LR-01e adds source-intake-chain (one approval for the
+        # record → selection → capture chain).
+        self.assertEqual(counts["canonical_executable_command_count"], 317)
         self.assertEqual(counts["alias_invocation_path_count"], 259)
-        self.assertEqual(counts["invocation_path_count"], 575)
-        self.assertEqual(counts["approval_available_command_count"], 55)
+        self.assertEqual(counts["invocation_path_count"], 576)
+        self.assertEqual(counts["approval_available_command_count"], 56)
         self.assertEqual(counts["approval_fixed_closed_command_count"], 60)
         self.assertEqual(counts["approval_not_exposed_command_count"], 201)
         self.assertEqual(counts["conditional_approval_command_count"], 11)
-        self.assertEqual(counts["dry_run_exposed_command_count"], 273)
+        self.assertEqual(counts["dry_run_exposed_command_count"], 274)
         self.assertEqual(counts["unmatched_fixed_closed_command_count"], 0)
         by_path = {
             row["canonical_path"]: row for row in inventory["commands"]

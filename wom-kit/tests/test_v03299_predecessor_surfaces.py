@@ -117,6 +117,7 @@ CLI_ADDITIONS = {
     ("source-fidelity-session-evidence",),
     ("source-reference-coverage-audit",),
     ("source-intake-batch",),
+    ("source-intake-chain",),
     ("work-session",),
     ("zet-objet-link",),
     ("zet-objet-link-receipts",),
@@ -125,9 +126,9 @@ CLI_ADDITIONS = {
     ("zettel-objet-link-receipts",),
     ("zettel-objet-link-revert",),
 }
-CURRENT_CLI_COUNT = 576
+CURRENT_CLI_COUNT = 577
 CURRENT_CLI_CANONICAL_SHA256 = (
-    "18287b38efa279b4a2c096234e762d66fbc8f426a1e74859b7e921cc90e809b7"
+    "0b17395706b99b5599a7a799b8be5e02e3b5d3587e7ae295bb9425d46f3ad3f0"
 )
 CURRENT_MCP_COUNT = 137
 CURRENT_MCP_CANONICAL_SHA256 = (

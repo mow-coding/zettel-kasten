@@ -337,8 +337,8 @@
     {
       "source": "schemas/operation-exact-human-approval-v0.1.schema.json",
       "packaged": "schemas/operation-exact-human-approval-v0.1.schema.json",
-      "bytes": 1894,
-      "sha256": "2ea8c33c3d4ea2f9fe1a4bae07d81157422ffde50ff0f638dcd0fae3cbab3c40"
+      "bytes": 1925,
+      "sha256": "1b7c2016a84006c56bd1a86ada29c1f51c9d9fd2d69880f90661090c75fb994a"
     },
     {
       "source": "schemas/operator-feedback-delivery-receipt.schema.json",

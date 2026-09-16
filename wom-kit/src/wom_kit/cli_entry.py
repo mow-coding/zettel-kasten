@@ -34,7 +34,8 @@ notion-import-locator-loss-audit notion-locator-loss-audit
 object-storage-adopt-existing object-storage-upload-adopt-existing
 objet-capture-batch objet-capture-selection objet-storage-adopt-existing
 operator-start-here project-version-update revision-receipt-audit runtime-context
-source-intake-batch source-intake-record staged-cleanup-check start-here
+source-intake-batch source-intake-chain source-intake-record staged-cleanup-check
+start-here
 title-readiness title-remap-plan title-remap-receipt-audit title-remap-recover
 title-remap-recovery-plan title-remap-revert title-remap-revert-plan
 title-remap-revert-recover title-remap-revert-recovery-plan title-remap-write
@@ -51,7 +52,9 @@ zet-title-remap-revert-recovery-plan zet-title-remap-write zettel-catalog
 zettel-objet-link work-session
 """.split()
 STARTUP_PROGRESS_DEFAULTS = {
-    command: command in {"doctor", "source-intake-batch", "objet-capture-batch", "work-session"}
+    command: command in {
+        "doctor", "source-intake-batch", "source-intake-chain", "objet-capture-batch", "work-session",
+    }
     for command in _PROGRESS_COMMANDS
 }
 STARTUP_STATUS = "[wom] startup: preparing command\n"
