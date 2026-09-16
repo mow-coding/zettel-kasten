@@ -24,6 +24,49 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.4.21 Reopened Writers And One-Approval Intake
+
+Install the exact public wheel only after the matching release and asset exist.
+Use a new external CPython 3.12 environment so the real `python.exe -m pip`
+records the wheel hash in installed PEP 610 metadata.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0421-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.21/wom_kit-0.4.21-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+Require exactly `archive 0.4.21` from a new process. Publishing or installing
+the wheel changes no client archive, project runtime, or version pin. A client
+separately chooses and approves any project update.
+
+`discard-draft`, `discard-draft-restore`, `zettel-edge-batch`, `mint-zet-batch`,
+`retire-draft-batch`, `revert-batch`, `zet-revision-write` and
+`zet-revision-restore-write` accept `--approve` again. Run the same
+`--dry-run` first; the approval opens the same native dialog as every other
+v0.4 writer, and a batch opens one count-first dialog for all its items.
+Scripts that expected `compound_exact_human_approval_binding_required` from
+these commands should expect the write result or a fixed preflight reason
+code instead.
+
+`source-intake-chain <archive> --source-intake-plan <plan.json> --staged-path
+<archive-relative staged file> --dry-run` plans the intake record, the capture
+selection and the capture together; `--approve --reviewed-by <id>` runs the
+three steps under one approval. The single-step commands remain available and
+finish a chain that stopped after an earlier step (`state: partial` names the
+command). Existing controls, approvals, receipts and schemas keep their exact
+bytes; the new optional `exact_human_approval` receipt fields are additive.
+
+After one reviewed project update, start the project launcher in a new process
+and verify its pin, source, launcher, and runtime evidence. Only that client-run
+result can show that the project was repaired.
+
 ## v0.4.20 Session-Owned Writes And Draft Promotion
 
 Install the exact public wheel only after the matching release and asset exist.

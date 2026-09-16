@@ -253,3 +253,17 @@ session paths) are in the
 [v0.4.21 implementation record](../../meeting-minutes/2026-09-16-v0421-local-repairs-implementation.md).
 Not released; letter 160's three-approvals-per-objet measurement stays open
 until the client runs the released command.
+
+### 2026-09-17 v0.4.21 release candidate
+
+Scope decision (Claude Opus 5, high; standing train approval): v0.4.21 ships
+LR-01a through LR-01e (the eight reopened writers and the one-approval
+intake chain), because those are the client regressions letters 157-160
+report; LR-06 session integration of the 30 pending paths and the older
+audit rows LR-02 through LR-05 and LR-07 carry to v0.4.22 and later with
+their register rows unchanged. The version bump and release documents were
+prepared in the work-session branch after the full development cohorts of
+each unit passed. This register still records development evidence only:
+LR-01 keeps its pending installed/client acceptance until the public
+artifact, anonymous download and fresh-venv installation evidence exist,
+and no client outcome is claimed by publication.

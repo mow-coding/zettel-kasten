@@ -1,6 +1,12 @@
 # Agent Operator Capabilities Manifest
 
-Status: v0.4.20 shared capability availability and writer-session coverage gate
+Status: v0.4.21 reopened writers, one-approval intake chain, and writer-session coverage gate
+
+v0.4.21 adds one canonical command, `source-intake-chain`, and reopens eight
+writers through operation-specific exact human approval; the availability
+decision, help, `capabilities`, Doctor suggestions and dispatch keep the same
+content-free contract. v0.4.20 added the writer-session coverage gate that
+classifies every approval-available path as integrated, pending or exempt.
 
 v0.4.19 keeps the command inventory stable and makes its interpretation
 consistent. Help, `capabilities`, Doctor suggestions, dry-run interpretation,

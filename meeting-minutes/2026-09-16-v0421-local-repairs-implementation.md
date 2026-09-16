@@ -418,3 +418,30 @@ Neighbouring intake modules (v0.4.8 selection, v0.4.9 record, v0.4.10 batch
 intake and batch capture, v0.4.20 record command/workflow/held/original
 review) pass. Readiness gate 5/5. The full cohort (36 modules including
 `test_cli` and `test_wheel_install`): 2,127 tests, OK (15 skipped), 3,488 s.
+
+## Release scope decision and v0.4.21 bump (2026-09-17)
+
+Decision: release v0.4.21 with LR-01a-e now. Reasoning: the letters 157-160
+regressions (eight closed writers, three dialogs per objet intake) block the
+client's daily work and are fixed and verified; LR-06 (session integration of
+30 pending writer paths) is a multi-release architecture item and LR-02
+through LR-05 and LR-07 are older audit rows with no new client evidence
+since the 2026-09-05 audit. Letter 160 ① (directory st_size) and ② fallback
+guidance were already in v0.4.20; ④ stays unreproduced; the byte-hash
+fidelity mode for binary originals is deferred as a design item. All carried
+rows keep their register text and v0.4.21 target notes until re-planned.
+
+Bump (Claude Opus 5, high; solo), following the v0.4.20 ritual: package
+version 0.4.21 in pyproject and both `__init__` shims; CITATION 0.4.21;
+supply lock `project-runtime-supply-lock-v0.4.21.json` (v0.4.20 bytes with the
+target tag; sha256 `ec6e0b1b…`), policy and `project_runtime.py` pins;
+bootstrap blocks (`bootstrap-v0421`, the v0.4.21 wheel URL, exact
+`archive 0.4.21`) in both READMEs, both UPGRADE guides (new sections), the
+kit README, both install guides, runtime entry points and version truth
+source; CHANGELOG entry; capability matrix, operator manifest, contract and
+philosophy-evidence status lines (previous-checkpoint lines keep v0.4.20);
+release note `docs/releases/v0.4.21.md` packaged as the only note; historical
+`test_v04xx_release_docs.py` moved CURRENT facts only, `test_v0420_release_docs`
+keeps its own contract test, new `test_v0421_release_docs`; resource-path and
+CLI surface digests refreshed. Release-doc, surface, runtime, capability and
+coverage suites pass (353 tests); readiness gate 5/5.

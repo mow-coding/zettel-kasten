@@ -1,10 +1,12 @@
 ﻿# WOM-kit Capability Matrix
 
-Status: v0.4.20 session-owned writes, selective Git ownership, and draft promotion truth
+Status: v0.4.21 reopened writers, one-approval intake chain, and session-owned writes truth
 Date: 2026-09-04
-Version: v0.4.20 implementation and release scope
+Version: v0.4.21 implementation and release scope
 
-The current v0.4.20 working tree adds a work-session identity to archive
+The current v0.4.21 working tree reopens eight writers that beta letters
+157-160 reported as regressions and adds the one-approval `source-intake-chain`
+(see the inventory paragraph below). The v0.4.20 tree added a work-session identity to archive
 writes: `work-session` registers apps and creates, claims, pauses, resumes and
 hands off sessions through exact native approval, and `source-intake-record`,
 `source-intake-batch`, `zet-title-remap-write` and `git-backup-reconcile-plan`
