@@ -456,3 +456,58 @@ found two stale pins that none of the unit cohorts included —
 the cohorts (`test_mcp_server`, doctor performance/operability, invocation
 effects, session command and public work-session modules) were run locally
 (319 tests OK) before the corrected candidate was pushed.
+
+## Pre-merge adversarial review of the v0.4.21 diff (2026-09-17)
+
+Executing model from here: Claude Fable 5.1 with Ultracode, switched on by
+the user ("사용량이 많이 남아가지고… 3시간 뒤에 주간 사용량 초기화"). The
+release steps stay solo and sequential; the one fan-out used was a bounded,
+read-only review workflow over `main...claude/v0421-work-session` — three
+lenses (approval boundary, chain/projection, privacy and truth) and one
+skeptic per finding, 9 agents, 1.14M subagent tokens, 16 minutes. Nine
+candidate findings, six verified (none refuted), three unverified and
+handled directly.
+
+Corrections before merge (Fable 5.1, solo):
+
+- `identity_after_own_write` race (edge batch and revert batch). The batch
+  loop proved "the only change since the dialog was our own write" by
+  re-reading the source after its write and again before the next item; a
+  foreign edit landing between that check and the item writer's own fresh
+  read was accepted under the batch approval (the reviewer reproduced it with
+  a patched writer). Now the loop records the digest of the bytes it actually
+  wrote (`written_source_sha256`, returned by `zettel_edge_write` and
+  `zettel_edge_revert` on both result paths), passes it as
+  `for_item(identity, own_write_source_sha256=)`, and the item writer passes
+  the digest of the bytes it just read as `item_approval(...,
+  fresh_source_sha256=)`; the identity rule is granted only when the two are
+  equal. The proof is now tied to the writer's read, not to a separate look.
+  Tests: two edges from one source are written as `exact` then
+  `identity_after_own_write` (control); a foreign edit before the second
+  item's read is refused with rollback; the authority refuses a non-digest
+  own-write value and a missing or different fresh digest.
+- Chain evidence when the capture reports `ok: false`: the capture writer
+  publishes the object bytes and its always-written receipt before the
+  manifest append, so a failed append left those durable writes out of the
+  chain result and chain receipt. The failed step document now carries the
+  capture's receipt path, `files_written` and summary, merged into the
+  chain's `files_written`. A chain that wrote nothing (step 1 failed) no
+  longer writes a chain receipt, and a receipt-write failure after real
+  writes adds the warning `source_intake_chain_receipt_not_written` with
+  `receipt_written: false` instead of silently reporting `completed`.
+  Tests: manifest append forced to `not_written`; step 1 forced to fail.
+- Documentation that still described the reopened writers as fixed closed,
+  including the packaged Runtime Skill `operator-contract.md` that
+  `runtime-skill-install` copies into client runtimes (zet-revision-plan
+  "no supported handoff", discard "remain dry-run previews"), the
+  `zet-revision-plan`, `zet-revision-write`, `zet-revision-restore-write`
+  and `zettel-edge-batch` guides, the archive status board, the Notion clue
+  audit, four capability-matrix rows, both root READMEs, and the release
+  note/CHANGELOG sentence claiming batch receipts record the matched rule
+  (only item receipts do). The docs tests that pinned the stale contract
+  (`test_capability_matrix_docs` revision plan, revision write and restore
+  write blocks) were re-pinned to the v0.4.21 text in the same change;
+  packaged resources resynced. Doc suites 236 OK; readiness gate 5/5; full
+  cohort (30 modules including `test_cli`, `test_mcp_server`,
+  `test_wheel_install`, `test_git_backup_writer`): 2,185 tests, OK
+  (13 skipped), 3,388 s.

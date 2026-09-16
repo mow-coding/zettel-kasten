@@ -779,50 +779,57 @@ def _execute_core(
                 state = "partial"
                 capture_result = None
             if capture_result is not None:
-                if capture_result.get("ok") is True and capture_result.get("dry_run") is not True:
-                    step_documents.append(
-                        _step_result_document(capture_step, capture_result, "written")
-                    )
-                    capture_receipt = capture_result.get("receipt_path")
-                    if isinstance(capture_receipt, str) and capture_receipt:
-                        files_written.append(capture_receipt)
-                    for written in (
-                        capture_result.get("files_written")
-                        if isinstance(capture_result.get("files_written"), list)
-                        else []
-                    ):
-                        if isinstance(written, str) and written not in files_written:
-                            files_written.append(written)
-                else:
+                # The capture writer may publish object bytes and its
+                # always-written receipt even when it reports ok:false; the
+                # chain must list those durable writes either way.
+                capture_ok = (
+                    capture_result.get("ok") is True
+                    and capture_result.get("dry_run") is not True
+                )
+                capture_document = _step_result_document(
+                    capture_step, capture_result, "written" if capture_ok else "failed"
+                )
+                if not capture_ok:
                     blockers = capture_result.get("blockers")
-                    step_documents.append(
-                        _step_result_document(
-                            capture_step,
-                            {
-                                "reason_codes": list(blockers)
-                                if isinstance(blockers, list) and blockers
-                                else ["objet_capture_blocked"],
-                            },
-                            "failed",
+                    item_blockers = [
+                        code
+                        for item in (
+                            capture_result.get("items")
+                            if isinstance(capture_result.get("items"), list)
+                            else []
                         )
-                    )
-                    failure_code = (
-                        str(blockers[0])
-                        if isinstance(blockers, list) and blockers
-                        else "objet_capture_blocked"
-                    )
+                        if isinstance(item, dict)
+                        for code in (item.get("blockers") if isinstance(item.get("blockers"), list) else [])
+                    ]
+                    reason_codes = [
+                        str(code)
+                        for code in (
+                            list(blockers) if isinstance(blockers, list) and blockers else item_blockers
+                        )
+                    ] or ["objet_capture_blocked"]
+                    capture_document["reason_codes"] = reason_codes
+                    failure_code = reason_codes[0]
                     state = "partial"
+                step_documents.append(capture_document)
+                _merge_written_paths(files_written, capture_result)
 
-    receipt_path = _write_chain_receipt(
-        root,
-        fresh,
-        approval=authority.receipt,
-        steps=step_documents,
-        state=state,
-    )
-    if receipt_path is not None:
-        files_written.append(receipt_path)
     written_steps = sum(1 for step in step_documents if step.get("state") == "written")
+    warnings = list(fresh.warnings)
+    receipt_path: str | None = None
+    if written_steps > 0 or files_written:
+        # A chain receipt is evidence of writes; when nothing was written
+        # there is nothing to record and no receipt is created.
+        receipt_path = _write_chain_receipt(
+            root,
+            fresh,
+            approval=authority.receipt,
+            steps=step_documents,
+            state=state,
+        )
+        if receipt_path is not None:
+            files_written.append(receipt_path)
+        else:
+            warnings.append("source_intake_chain_receipt_not_written")
     return {
         "schema_version": RESULT_SCHEMA,
         "ok": state == "completed",
@@ -841,21 +848,35 @@ def _execute_core(
         "approval_count": 1,
         "single_step_approval_count": 3,
         "files_written": files_written,
+        "receipt_written": receipt_path is not None,
         "blockers": [failure_code] if failure_code else [],
         "reason_codes": [failure_code] if failure_code else [],
-        "warnings": list(fresh.warnings),
+        "warnings": warnings,
         "next_safe_actions": (
             []
             if state == "completed"
             else _next_safe_actions(written_steps, fresh)
         ),
         "general_intake_chain_complete": state == "completed",
-        "writes_performed": written_steps > 0 or receipt_path is not None,
+        "writes_performed": bool(files_written),
         "provider_calls_performed": False,
         "credential_values_read": False,
         "private_values_echoed": False,
         "paths_echoed": True,
     }
+
+
+def _merge_written_paths(files_written: list[str], result: dict[str, Any]) -> None:
+    """Add a step result's receipt and written paths once each, in order."""
+
+    receipt = result.get("receipt_path")
+    candidates = [receipt] if isinstance(receipt, str) and receipt else []
+    written = result.get("files_written")
+    if isinstance(written, list):
+        candidates.extend(item for item in written if isinstance(item, str) and item)
+    for path in candidates:
+        if path not in files_written:
+            files_written.append(path)
 
 
 def _next_safe_actions(written_steps: int, fresh: SourceIntakeChainExactPlan) -> list[str]:

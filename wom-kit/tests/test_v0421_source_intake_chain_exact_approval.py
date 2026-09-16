@@ -271,6 +271,56 @@ class SourceIntakeChainExactApprovalTests(unittest.TestCase):
         self.assertIs(archive_services.objet_capture_apply, original)
         self.assert_private_free()
 
+    def test_capture_durable_writes_are_listed_when_the_capture_reports_failure(self) -> None:
+        # The capture writer publishes the object bytes and its always-written
+        # receipt before the manifest append; when that append fails it reports
+        # ok:false, and the chain must still list those durable writes.
+        with patch.object(archive_services, "_append_jsonl_records_outcome_aware", return_value="not_written"):
+            code, result = self.run_cli(*self.chain_args(), "--approve", "--reviewed-by", REVIEWER)
+        self.assertEqual(code, 1, result)
+        self.assertEqual(result["state"], "partial")
+        self.assertEqual([step["state"] for step in result["steps"]], ["written", "written", "failed"])
+        capture = result["steps"][2]
+        self.assertIn("manifest_append_failed", capture["reason_codes"])
+        self.assertTrue(capture["receipt_path"].startswith("receipts/objet-capture/"))
+        self.assertEqual(capture["output_path"], capture["receipt_path"])
+        self.assertIn(capture["receipt_path"], result["files_written"])
+        object_relative = (
+            f"objects/sha256/{result['staged_bytes_sha256'][7:9]}/{result['staged_bytes_sha256'][7:]}"
+        )
+        self.assertIn(object_relative, capture["files_written"])
+        self.assertIn(object_relative, result["files_written"])
+        self.assertTrue((self.root / object_relative).is_file())
+        self.assertTrue(result["receipt_written"])
+        receipt = json.loads((self.root / result["receipt_path"]).read_text(encoding="utf-8"))
+        self.assertEqual(receipt["steps"][2]["receipt_path"], capture["receipt_path"])
+        self.assertIn(object_relative, receipt["steps"][2]["files_written"])
+        self.assert_private_free()
+
+    def test_first_step_failure_writes_nothing_and_no_chain_receipt(self) -> None:
+        before = self.snapshot()
+        with patch.object(
+            source_intake_record_exact, "execute_source_intake_record_in_chain",
+            side_effect=source_intake_record_exact.SourceIntakeRecordExactError("source_intake_record_write_failed"),
+        ):
+            code, result = self.run_cli(*self.chain_args(), "--approve", "--reviewed-by", REVIEWER)
+        self.assertEqual(code, 1, result)
+        self.assertEqual(result["state"], "blocked")
+        self.assertEqual(result["steps_written"], 0)
+        self.assertEqual(result["files_written"], [])
+        self.assertIsNone(result["receipt_path"])
+        self.assertFalse(result["receipt_written"])
+        self.assertFalse(result["writes_performed"])
+        self.assertIn("Nothing was written", result["next_safe_actions"][0])
+        # only the approval broker's own private claim ledger changed; no
+        # receipt, selection, object or chain receipt was written
+        after = self.snapshot()
+        ledger = "profiles/local/exact-human-approvals/"
+        self.assertEqual({k: v for k, v in after.items() if not k.startswith(ledger)},
+                         {k: v for k, v in before.items() if not k.startswith(ledger)})
+        self.assertEqual(self.native.calls, 1)
+        self.assert_private_free()
+
     def test_step_writers_refuse_a_foreign_or_missing_chain_authority(self) -> None:
         plan = chain.plan_source_intake_chain(self.root, self.plan_path, staged_path=STAGED_RELATIVE)
         self.assertTrue(plan.approveable)

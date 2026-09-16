@@ -76345,14 +76345,24 @@ class _ExactBatchAuthority:
         self,
         item_identity_sha256: str,
         *,
-        own_write_state_verified: bool = False,
+        own_write_source_sha256: str | None = None,
     ) -> "_ExactBatchItemAuthority":
+        """Narrow to one item; ``own_write_source_sha256`` is the digest of the
+        bytes this batch itself wrote to the item's source earlier (never a
+        re-read of the file), so a later foreign edit can never be mistaken
+        for the batch's own write."""
+
         if type(item_identity_sha256) is not str or item_identity_sha256 not in self.item_identities:
             raise ArchiveServiceError("exact_batch_item_not_approved")
+        if own_write_source_sha256 is not None and (
+            type(own_write_source_sha256) is not str
+            or not INDEX_SNAPSHOT_SHA256_RE.fullmatch(own_write_source_sha256)
+        ):
+            raise ArchiveServiceError("exact_batch_authority_invalid")
         return _ExactBatchItemAuthority(
             batch=self,
             item_identity_sha256=item_identity_sha256,
-            own_write_state_verified=bool(own_write_state_verified),
+            own_write_source_sha256=own_write_source_sha256,
         )
 
 
@@ -76362,7 +76372,7 @@ class _ExactBatchItemAuthority:
 
     batch: _ExactBatchAuthority
     item_identity_sha256: str
-    own_write_state_verified: bool
+    own_write_source_sha256: str | None
 
     @property
     def plan_sha256(self) -> str:
@@ -76378,6 +76388,7 @@ class _ExactBatchItemAuthority:
         *,
         claim: _ClaimedExactHumanApproval | None,
         item_identity_sha256: str,
+        fresh_source_sha256: str | None = None,
     ) -> dict[str, Any]:
         if type(claim) is not _ClaimedExactHumanApproval:
             raise ArchiveServiceError("exact_human_approval_required")
@@ -76393,7 +76404,14 @@ class _ExactBatchItemAuthority:
             match = "exact"
         elif item_binding.target_binding_sha256 in approved_targets:
             match = "target"
-        elif self.own_write_state_verified:
+        elif (
+            # The item writer proves that the source bytes it just read are
+            # exactly the bytes this batch wrote earlier; any foreign change in
+            # between (even one landing after the batch loop looked) fails.
+            type(self.own_write_source_sha256) is str
+            and type(fresh_source_sha256) is str
+            and hmac.compare_digest(fresh_source_sha256, self.own_write_source_sha256)
+        ):
             match = "identity_after_own_write"
         else:
             raise ArchiveServiceError("exact_batch_item_not_approved")
@@ -76826,6 +76844,7 @@ def zettel_edge_write(
                 zettel_edge_approval_binding(planned_result),
                 claim=exact_human_approval_claim,
                 item_identity_sha256=_zettel_edge_item_identity(planned_result),
+                fresh_source_sha256=current_source_sha256,
             )
         else:
             exact_operation_approval = _require_exact_human_operation_approval(
@@ -76983,6 +77002,7 @@ def zettel_edge_write(
         result.update(
             {
                 "state": "zettel_edge_written_index_update_failed",
+                "written_source_sha256": "sha256:" + expected_written_sha256,
                 "generated_index_updated": False,
                 "index_marked_dirty": index_marked_dirty,
                 "index_generation": expected_index_generation,
@@ -77013,6 +77033,7 @@ def zettel_edge_write(
     )
     result.update(
         {
+            "written_source_sha256": "sha256:" + expected_written_sha256,
             "generated_index_updated": True,
             "index_marked_dirty": False,
             "index_generation": expected_index_generation,
@@ -77671,18 +77692,13 @@ def zettel_edge_batch_write(
             planned_item = planned_items_by_index.get(row.get("index"), {})
             planned_source = planned_item.get("source") if isinstance(planned_item.get("source"), dict) else {}
             source_relative = planned_source.get("path")
-            own_state_verified = False
-            if isinstance(source_relative, str) and source_relative in own_source_sha256:
-                try:
-                    current_sha = "sha256:" + hashlib.sha256(
-                        archive_internal_path(root, source_relative).read_bytes()
-                    ).hexdigest()
-                except (ArchiveServiceError, OSError):
-                    current_sha = ""
-                own_state_verified = hmac.compare_digest(current_sha, own_source_sha256[source_relative])
             item_authority = batch_authority.for_item(
                 str(planned_item.get("approval_item_identity_sha256") or ""),
-                own_write_state_verified=own_state_verified,
+                own_write_source_sha256=(
+                    own_source_sha256.get(source_relative)
+                    if isinstance(source_relative, str)
+                    else None
+                ),
             )
             write_result = zettel_edge_write(
                 root,
@@ -77701,13 +77717,11 @@ def zettel_edge_batch_write(
             )
             if not write_result.get("ok"):
                 raise ArchiveServiceError("; ".join(str(blocker) for blocker in write_result.get("blockers", [])) or "batch edge item write failed.")
-            if isinstance(source_relative, str):
-                try:
-                    own_source_sha256[source_relative] = "sha256:" + hashlib.sha256(
-                        archive_internal_path(root, source_relative).read_bytes()
-                    ).hexdigest()
-                except (ArchiveServiceError, OSError):
-                    own_source_sha256.pop(source_relative, None)
+            written_sha = write_result.get("written_source_sha256")
+            if isinstance(source_relative, str) and type(written_sha) is str and written_sha:
+                own_source_sha256[source_relative] = written_sha
+            elif isinstance(source_relative, str):
+                own_source_sha256.pop(source_relative, None)
             written_results.append(
                 {
                     "index": row.get("index"),
@@ -78173,6 +78187,7 @@ def zettel_edge_revert(
                 zettel_edge_revert_approval_binding(planned_result),
                 claim=exact_human_approval_claim,
                 item_identity_sha256=_zettel_edge_revert_item_identity(planned_result),
+                fresh_source_sha256="sha256:" + hashlib.sha256(source_original_bytes).hexdigest(),
             )
         else:
             exact_operation_approval = _require_exact_human_operation_approval(
@@ -78324,6 +78339,7 @@ def zettel_edge_revert(
         result.update(
             {
                 "state": "zettel_edge_reverted_index_update_failed",
+                "written_source_sha256": "sha256:" + expected_written_sha256,
                 "generated_index_updated": False,
                 "index_marked_dirty": index_marked_dirty,
                 "index_generation": expected_index_generation,
@@ -78351,6 +78367,7 @@ def zettel_edge_revert(
     )
     result.update(
         {
+            "written_source_sha256": "sha256:" + expected_written_sha256,
             "generated_index_updated": True,
             "index_marked_dirty": False,
             "index_generation": expected_index_generation,
@@ -78621,15 +78638,6 @@ def zettel_edge_batch_revert(
             planned_item = item_results[index]
             planned_source = planned_item.get("source") if isinstance(planned_item.get("source"), dict) else {}
             source_relative = planned_source.get("path")
-            own_state_verified = False
-            if isinstance(source_relative, str) and source_relative in own_source_sha256:
-                try:
-                    current_sha = "sha256:" + hashlib.sha256(
-                        archive_internal_path(root, source_relative).read_bytes()
-                    ).hexdigest()
-                except (ArchiveServiceError, OSError):
-                    current_sha = ""
-                own_state_verified = hmac.compare_digest(current_sha, own_source_sha256[source_relative])
             write_result = zettel_edge_revert(
                 root,
                 receipt=edge_receipt,
@@ -78639,16 +78647,18 @@ def zettel_edge_batch_revert(
                 exact_human_approval_claim=exact_human_approval_claim,
                 batch_authority=batch_authority.for_item(
                     str(planned_item.get("approval_item_identity_sha256") or ""),
-                    own_write_state_verified=own_state_verified,
+                    own_write_source_sha256=(
+                        own_source_sha256.get(source_relative)
+                        if isinstance(source_relative, str)
+                        else None
+                    ),
                 ),
             )
-            if isinstance(source_relative, str) and write_result.get("ok"):
-                try:
-                    own_source_sha256[source_relative] = "sha256:" + hashlib.sha256(
-                        archive_internal_path(root, source_relative).read_bytes()
-                    ).hexdigest()
-                except (ArchiveServiceError, OSError):
-                    own_source_sha256.pop(source_relative, None)
+            written_sha = write_result.get("written_source_sha256")
+            if isinstance(source_relative, str) and write_result.get("ok") and type(written_sha) is str and written_sha:
+                own_source_sha256[source_relative] = written_sha
+            elif isinstance(source_relative, str):
+                own_source_sha256.pop(source_relative, None)
             if not write_result.get("ok"):
                 raise ArchiveServiceError("; ".join(str(blocker) for blocker in write_result.get("blockers", [])) or "batch edge revert item failed.")
             written_results.append(

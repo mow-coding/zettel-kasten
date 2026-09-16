@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 import shutil
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -213,6 +214,94 @@ class ZettelEdgeBatchExactApprovalTests(unittest.TestCase):
         for item in plan["policy_writable_edges"]:
             self.assertFalse((self.root / item["receipt_path"]).exists())
         self.assertNotIn(str(self.root), "".join(self.outputs))
+
+    def _two_edges_from_one_source_plan(self) -> Path:
+        plan_path = self.plan_path.parent / "edge-batch-same-source.plan.json"
+        plan_path.write_text(json.dumps(_plan_document([
+            {"candidate_id": "candidate:a1", "from_zettel": SOURCE_A, "target": TARGET,
+             "edge_type": "material", "visibility": "private", "confidence": "high",
+             "review_status": "policy_candidate", "evidence_ref": "fixture:row-a1"},
+            {"candidate_id": "candidate:a2", "from_zettel": SOURCE_A, "target": SOURCE_B,
+             "edge_type": "material", "visibility": "private", "confidence": "high",
+             "review_status": "policy_candidate", "evidence_ref": "fixture:row-a2"},
+        ]), indent=2), encoding="utf-8")
+        return plan_path
+
+    def test_second_edge_from_one_source_is_approved_only_after_the_batch_own_write(self) -> None:
+        # Two edges from the same source zet: the second item's fresh binding
+        # differs from the dialog's (the batch itself changed the source), so it
+        # is written under the identity rule, and only because the writer proved
+        # the bytes it read are exactly the bytes the batch wrote.
+        plan_path = self._two_edges_from_one_source_plan()
+        code, plan = self.run_cli("zettel-edge-batch", str(self.root), "--plan", str(plan_path), "--dry-run")
+        self.assertEqual(code, 0, plan)
+        code, result = self.run_cli("zettel-edge-batch", str(self.root), "--plan", str(plan_path),
+                                    "--approve", "--reviewed-by", REVIEWER)
+        self.assertEqual(code, 0, result)
+        self.assertEqual(result["summary"]["written_edge_count"], 2)
+        self.assertEqual(self.native.calls, 1)
+        after = self.files()
+        matches = []
+        for item in result["policy_writable_edges"]:
+            receipt = json.loads(after[item["receipt_path"]].decode("utf-8"))
+            matches.append(receipt["exact_human_approval"]["batch_item_binding"]["match"])
+        self.assertEqual(matches, ["exact", "identity_after_own_write"])
+        source_text = after[f"zettels/{SOURCE_A}.md"].decode("utf-8")
+        self.assertIn(TARGET, source_text)
+        self.assertIn(SOURCE_B, source_text)
+
+    def test_foreign_edit_after_the_batch_own_write_is_refused(self) -> None:
+        # The invariant "the only change since the dialog was the batch's own
+        # write" must hold at the moment the item writer reads the source, not
+        # only when the batch loop looked: a foreign edit landing after the
+        # first write and before the second item's fresh read is refused.
+        plan_path = self._two_edges_from_one_source_plan()
+        code, plan = self.run_cli("zettel-edge-batch", str(self.root), "--plan", str(plan_path), "--dry-run")
+        self.assertEqual(code, 0, plan)
+        before = self.files()
+        original_write = archive_services.zettel_edge_write
+        calls = {"approve": 0}
+
+        def foreign_edit_before_second_item(*args, **kwargs):
+            if kwargs.get("approve"):
+                calls["approve"] += 1
+                if calls["approve"] == 2:
+                    path = self.root / "zettels" / f"{SOURCE_A}.md"
+                    path.write_bytes(path.read_bytes() + b"\nforeign edit between the batch items\n")
+            return original_write(*args, **kwargs)
+
+        with patch.object(archive_services, "zettel_edge_write", side_effect=foreign_edit_before_second_item):
+            code, error = self.run_cli("zettel-edge-batch", str(self.root), "--plan", str(plan_path),
+                                       "--approve", "--reviewed-by", REVIEWER)
+        self.assertEqual(code, 1, error)
+        self.assertEqual(calls["approve"], 2)
+        self.assertEqual(error["reason_codes"], ["exact_human_approval_state_unknown"])
+        self.assertEqual(self.native.calls, 1)
+        # the batch rolled its snapshots back: no receipts, no edge, and the
+        # foreign paragraph is not reported as the batch's own work
+        self.assertFalse((self.root / plan["receipt_path"]).exists())
+        for item in plan["policy_writable_edges"]:
+            self.assertFalse((self.root / item["receipt_path"]).exists())
+        self.assertEqual(self.files()[f"zettels/{SOURCE_A}.md"], before[f"zettels/{SOURCE_A}.md"])
+        self.assertNotIn(str(self.root), "".join(self.outputs))
+
+    def test_item_authority_identity_rule_needs_the_exact_own_write_digest(self) -> None:
+        authority = archive_services._ExactBatchAuthority(
+            context=None, plan_sha256="sha256:" + "a" * 64, target_binding_sha256="sha256:" + "b" * 64,
+            item_bindings=frozenset(), item_identities=frozenset({"sha256:" + "c" * 64}),
+            receipt={"operation": "zettel_edge_batch"},
+        )
+        with self.assertRaises(archive_services.ArchiveServiceError) as bad_digest:
+            authority.for_item("sha256:" + "c" * 64, own_write_source_sha256="not-a-digest")
+        self.assertEqual(str(bad_digest.exception), "exact_batch_authority_invalid")
+        item = authority.for_item("sha256:" + "c" * 64, own_write_source_sha256="sha256:" + "d" * 64)
+        binding = SimpleNamespace(plan_sha256="sha256:" + "e" * 64, target_binding_sha256="sha256:" + "f" * 64)
+        claim = broker._ClaimedExactHumanApproval.__new__(broker._ClaimedExactHumanApproval)
+        for fresh in (None, "sha256:" + "0" * 64):
+            with self.assertRaises(archive_services.ArchiveServiceError) as refused:
+                item.item_approval(binding, claim=claim, item_identity_sha256="sha256:" + "c" * 64,
+                                   fresh_source_sha256=fresh)
+            self.assertEqual(str(refused.exception), "exact_batch_item_not_approved")
 
     def test_unbound_service_calls_fail_before_any_archive_read(self) -> None:
         before = self.files()

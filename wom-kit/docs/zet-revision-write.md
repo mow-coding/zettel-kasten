@@ -1,18 +1,20 @@
 # Canonical zet Revision Write
 
-Status: fixed closed in v0.4.12; v0.3 receipts remain readable
+Status: reopened through operation-specific exact human approval in v0.4.21; fixed closed from v0.4.0 to v0.4.20; v0.3 receipts remain readable
 
-`zet-revision-plan` can validate a private proposal against the current
-canonical zet for human review. In v0.4.12 that validation result is not an
-actionable handoff to `zet-revision-write`: its hashes and `plan_digest` are
-evidence only and grant no approval authority. The result reports
-`approval_fixed_closed`, `approved_write_implemented: false`, and
-`actionable_handoff_available: false`.
+`zet-revision-plan` validates a private proposal against the current
+canonical zet for human review. Its hashes and `plan_digest` are validation
+evidence only and grant no approval authority: the result reports
+`approval_status: approval_available`, `approved_write_implemented: true`,
+and `actionable_handoff_available: false`.
 
-The historical writer changed canonical bytes, private snapshot/manifest
-state, lock state, and receipt history as one compound effect. v0.4.12 has no
-exact-human binding for that complete effect set, so no supported preview,
-handoff, or apply workflow is exposed from the current validation result.
+The writer changes canonical bytes, private snapshot/manifest state, lock
+state, and receipt history as one effect. Since v0.4.21 that complete effect
+set is bound into one operation-specific exact human approval: a fresh
+private preflight, a content-free binding of the exact plan, one native
+dialog, and one authenticated one-use claim re-verified right after the
+dry-run point before the first byte changes. The receipt embeds the approval
+reference. From v0.4.0 to v0.4.20 the approve path was fixed closed.
 
 ## Step 1: Review The Proposal
 
@@ -39,20 +41,21 @@ They identify what was validated for review; operators do not need to copy or
 replay them. Review the complete private proposal and its current canonical
 zet together. The plan is not approval and writes nothing.
 
-## Step 2: Stop After Validation
+## Step 2: Preview, Then Approve The Exact Write
 
-Do not transfer the returned bindings into `zet-revision-write`, and do not
-edit the canonical zet by hand to bypass the closed workflow. v0.4.12 exposes
-no supported next-step writer command from a green validation result. No
-reviewer flags, validation digest, or stale v0.3 receipt can grant authority.
-
-A direct approval attempt remains fail-closed before private target read or
-mutation with the content-free reason code
-`compound_exact_human_approval_binding_required`; it writes nothing.
-
-The development-only historical dry-run code and old receipts may remain
-available for compatibility and audit. Their presence is not a product
-handoff, and operators must not be instructed to use them as one.
+Run `zet-revision-write --dry-run` with the four plan digests and a
+timezone-aware `--revision-at`; the preview reports `ready_to_apply` and
+writes nothing. Then run the same command with `--approve --reviewed-by
+<safe-actor-id>` and the two affirmation flags. WOM re-derives the plan,
+compares every digest, opens one native exact human approval dialog, and
+writes only after the authenticated claim is re-verified. A reviewer id that
+is not a safe actor id returns `zet_revision_write_reviewer_required`; a
+cancelled dialog writes nothing; a changed canonical zet or proposal is
+refused by the fresh preflight. Do not edit the canonical zet by hand to
+bypass this boundary. No reviewer flag, validation digest, or stale v0.3
+receipt grants authority by itself: the native dialog with its one-use claim
+is the only write authority. Unbound service calls return a content-free
+blocked document with `exact_human_approval_required`.
 
 ## Historical v0.3 Receipt Boundary
 
@@ -84,9 +87,9 @@ CLI output does not echo the zet id, canonical path, proposal filename,
 reviewer id, title, abstract, body, custom frontmatter value, provider URL,
 absolute path, or secret. The digest-only receipt path is safe to return.
 
-The supported v0.4.12 validation workflow does not enter that writer, create
-its lock, preserve a new snapshot, replace a canonical zet, or create a
-revision receipt.
+The validation workflow alone does not enter that writer, create its lock,
+preserve a new snapshot, replace a canonical zet, or create a revision
+receipt; only the approved write does.
 
 ## Historical Failure And Interruption Evidence
 
@@ -108,8 +111,9 @@ blocks and stays available for human inspection.
 
 ## Honest Stop
 
-A v0.4.12 validation result can prove only that one proposal was structurally
-checked against the exact current canonical bytes. It cannot report a writer
-preview, approval, or `applied` state. Historical `applied` receipts remain
-auditable evidence of their recorded local event but do not authorize replay.
-MCP exposes the read-only `zet_revision_plan` tool and no revision writer.
+A validation result can prove only that one proposal was structurally checked
+against the exact current canonical bytes. It cannot report a writer
+preview, approval, or `applied` state; only the approved write's receipt
+does. Historical `applied` receipts remain auditable evidence of their
+recorded local event but do not authorize replay. MCP exposes the read-only
+`zet_revision_plan` tool and no revision writer.

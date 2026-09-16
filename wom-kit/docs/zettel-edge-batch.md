@@ -1,6 +1,6 @@
 # Zettel Edge Batch
 
-Status: v0.4.0 dry-run-only batch and rollback planning boundary
+Status: v0.4.21 one-approval batch write and rollback (dry-run-only from v0.4.0 to v0.4.20)
 Scale checkpoint: Status: v0.3.108 approval-gated policy batch zettel edge write scale and rollback checkpoint
 Previous checkpoint: Status: v0.3.102 approval-gated policy batch zettel edge write ergonomics checkpoint
 
@@ -52,9 +52,12 @@ archive revert-batch <archive-root> `
   --format json
 ```
 
-Rollback approve is also unavailable in v0.4.0. This shape fails with the same
-code and writes nothing. There is no approved revert-batch command to copy or
-run.
+Since v0.4.21 the same command with `--approve --reviewed-by` removes every
+edge of that batch receipt under one count-first native dialog; each item
+revert re-verifies the batch claim and proves its own fresh binding is an
+approved item before it writes, and `zettel-edge-batch --approve` writes
+every policy-writable edge of the plan the same way. From v0.4.0 to v0.4.20
+both approve shapes were fixed closed and wrote nothing.
 
 Rollback alias:
 

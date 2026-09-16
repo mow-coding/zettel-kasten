@@ -739,8 +739,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/operator-contract.md",
       "packaged": "templates/ai-runtime/wom-archive/references/operator-contract.md",
-      "bytes": 77033,
-      "sha256": "4f1eff580144c44a4da3a2a27df329a9b3e9a1dbbab0e6561f67157691ed5009"
+      "bytes": 77429,
+      "sha256": "5d06bd9bbe3ed797eb0e22ae116b49cd484569e63f625576cd2477b628f8b268"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/reading-memory-and-revision.md",
@@ -1015,8 +1015,8 @@
     {
       "source": "docs/releases/v0.4.21.md",
       "packaged": "release-notes/v0.4.21.md",
-      "bytes": 7023,
-      "sha256": "8fdf0ef0fc646d88bc597efb2cd1de9018cf4c29ddfa5419bee65202e5bfcf88"
+      "bytes": 7068,
+      "sha256": "ef0e3c47614f3d0e75bbdc06c9c795e8daa9a937bb634cf8bea5050dd1b5e9a2"
     }
   ]
 }

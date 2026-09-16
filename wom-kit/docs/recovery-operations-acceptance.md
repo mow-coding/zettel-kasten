@@ -267,3 +267,17 @@ each unit passed. This register still records development evidence only:
 LR-01 keeps its pending installed/client acceptance until the public
 artifact, anonymous download and fresh-venv installation evidence exist,
 and no client outcome is claimed by publication.
+
+### 2026-09-17 v0.4.21 pre-merge review corrections
+
+A bounded adversarial review of the release diff (Claude Fable 5.1 with the
+user's Ultracode opt-in; three read-only lenses, one skeptic per finding)
+confirmed six defects before merge, all corrected in the candidate: the
+batch `identity_after_own_write` rule is now proven by the item writer's own
+fresh read against the digest of the bytes the batch wrote (a foreign edit
+between items is refused), the intake chain lists the capture step's durable
+writes when the capture reports failure and writes no chain receipt when
+nothing was written, and the packaged Runtime Skill operator contract plus
+the revision/discard/batch guides, matrix rows and READMEs no longer describe
+the reopened writers as fixed closed. Development evidence: 5 new tests,
+full cohort 2,185 OK. Still no client outcome is claimed.

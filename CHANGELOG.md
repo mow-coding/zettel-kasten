@@ -14,7 +14,7 @@ This project uses semantic versioning for public compatibility checkpoints.
 - Reopened `zettel-edge-batch`, `mint-zet-batch`, `retire-draft-batch` and
   `revert-batch` under one count-first dialog per batch; every item write
   re-verifies the batch claim and proves its own fresh binding is approved, and
-  batch and item receipts record which rule matched.
+  each item receipt records which rule matched.
 - Reopened `zet-revision-write` and `zet-revision-restore-write`; the reviewer's
   digest protocol is unchanged and bound into one exact approval verified right
   after the dry-run point, and receipts embed the approval reference.
