@@ -3262,6 +3262,35 @@ minutes and the third 75; the first (90) and fourth (45) already fit at
 54 and 33 minutes. The sharding test pins the new budgets. Rebalancing by
 measured duration is deferred to the v0.4.21+ train.
 
+## 2026-09-16 Release candidate CI: two environment flakes and their rerun
+
+Executing model: Claude Opus 5 at effort high, solo.
+
+Run 35027328853 on `b423d6bc` (the shard-budget commit) passed 12 of 14
+jobs, including the second Windows shard in 78 minutes under its new
+120-minute budget. Two jobs failed on tests that passed on the two
+previous runs of the same code and that pass locally:
+
+- Ubuntu py3.12 shard 2: the single-record original pre-claim review test
+  received `exact_human_approval_state_unknown` from
+  `git-backup-reconcile-plan --approve --review-original`. The code is
+  the workflow's deliberate opaque mapping of any unexpected exception,
+  including the test's own guards that run inside the workflow, so the
+  log cannot show the cause. Five consecutive local runs passed. The test
+  now records a guard failure before re-raising it and inspects the
+  outcome itself, so a recurrence names the guard; this diagnosability
+  change is committed after the release in the evidence branch, not in
+  the released tree.
+- Windows py3.12 shard 3: the Git MCP stdio test's real child process did
+  not answer `initialize` within the 30-second cold-start allowance on a
+  runner where the whole shard took 61 minutes against 55 the run before.
+
+Decision: rerun only the two failed jobs at the same commit (`gh run
+rerun --failed`); merge only if both pass. Both flakes are recorded as
+v0.4.21 hygiene items: a deterministic cause for the state-unknown
+mapping in that test, and a cold-start allowance that scales with the
+runner rather than a fixed 30 seconds.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)
