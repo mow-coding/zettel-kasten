@@ -2665,7 +2665,10 @@ approving_native = _ApprovingNative()
 synthetic_key_provider = _SyntheticKeyProvider()
 
 
-def _execute_with_synthetic_native(archive_root, context, writer):
+def _execute_with_synthetic_native(archive_root, context, writer, **review_options):
+    # v0.4.20 local recovery writers forward a local-only count-first target
+    # preview and its binding observer as keyword-only review options. They
+    # reach the same core with the same synthetic native and key provider.
     SAFETY_OBSERVATIONS["public_cli_approval_call_count"] += 1
     return exact_human_approval_workflow._execute_exact_human_approved_write_core(
         archive_root,
@@ -2673,6 +2676,7 @@ def _execute_with_synthetic_native(archive_root, context, writer):
         writer,
         native=approving_native,
         key_provider=synthetic_key_provider,
+        **review_options,
     )
 
 
@@ -2831,13 +2835,14 @@ locator_native = _ApprovingNative()
 locator_key_provider = _SyntheticKeyProvider()
 
 
-def _execute_locator_with_synthetic_native(archive_root, context, writer):
+def _execute_locator_with_synthetic_native(archive_root, context, writer, **review_options):
     return exact_human_approval_workflow._execute_exact_human_approved_write_core(
         archive_root,
         context,
         writer,
         native=locator_native,
         key_provider=locator_key_provider,
+        **review_options,
     )
 
 

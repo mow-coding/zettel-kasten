@@ -199,8 +199,8 @@ PREPARATION_CHECKS = (
 )
 PREPARATION_STATES = frozenset({"passed", "failed", "not_reached", "unavailable"})
 RUNTIME_BOUNDARY_SCHEMA = "wom-kit/test-runtime-boundary-observation/v1"
-RUNTIME_DIRECTORY_COMPARISON_LINE = 3345
-RUNTIME_COMPARISON_RAISES = {3346: "directory_identity", 3402: "file_size", 3405: "tree_generation"}
+RUNTIME_DIRECTORY_COMPARISON_LINE = 3358
+RUNTIME_COMPARISON_RAISES = {3359: "directory_identity", 3415: "file_size", 3418: "tree_generation"}
 RUNTIME_IDENTITY_FIELDS = ("device", "inode", "type", "size", "mtime_ns", "attributes")
 # Fixed WinNT.h vocabulary only; values never enter a failure envelope. The
 # shared EA/RECALL_ON_OPEN bit does not establish which provider meaning applies.

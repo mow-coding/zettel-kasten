@@ -1,6 +1,6 @@
 # Install WOM-kit As A Python Tool
 
-Status: v0.4.19 conditional GitHub wheel contract; runtime and capability truth
+Status: v0.4.20 conditional GitHub wheel contract; session-owned writes and draft promotion
 
 WOM-kit is a command-line tool. It should live in its own Python environment
 instead of being mixed into an application project's dependencies.
@@ -54,17 +54,17 @@ archive so it cannot become project input or an updater collision:
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0419-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0420-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.19/wom_kit-0.4.19-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.20/wom_kit-0.4.20-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-After the new process reports exactly `archive 0.4.19`, use that explicit
+After the new process reports exactly `archive 0.4.20`, use that explicit
 bootstrap executable for `project-version-update`. After approval succeeds,
 verify the project runtime and use its launcher:
 
@@ -116,7 +116,7 @@ bootstrap, use another external virtual environment:
 ```powershell
 $womToolRoot = Join-Path $env:LOCALAPPDATA "WOM\tool-v0419"
 py -3.12 -m venv $womToolRoot
-& "$womToolRoot\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.19/wom_kit-0.4.19-py3-none-any.whl"
+& "$womToolRoot\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.20/wom_kit-0.4.20-py3-none-any.whl"
 & "$womToolRoot\Scripts\archive.exe" --version
 ```
 

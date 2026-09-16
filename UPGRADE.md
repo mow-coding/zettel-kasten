@@ -24,6 +24,48 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.4.20 Session-Owned Writes And Draft Promotion
+
+Install the exact public wheel only after the matching release and asset exist.
+Use a new external CPython 3.12 environment so the real `python.exe -m pip`
+records the wheel hash in installed PEP 610 metadata.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0420-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.20/wom_kit-0.4.20-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+Require exactly `archive 0.4.20` from a new process. Publishing or installing
+the wheel changes no client archive, project runtime, or version pin. A client
+separately chooses and approves any project update.
+
+Drafts that v0.4.18 left unmintable need no repair command: `mint-zet` now
+treats the blank separator line that an older `zettel-edge` rewrite dropped as
+a normalization, and a draft's declared fidelity source may be linked as an
+asset. Re-run `mint-zet --dry-run` on those drafts after the update. A blocked
+`create-draft --approve` in text mode now prints the reason code and the
+blockers; a blocked dry-run returns no usable `approval_replay` values.
+
+Session-owned writes are opt-in: `work-session` registers an app and creates
+and claims a session, then `source-intake-record`, `source-intake-batch`,
+`zet-title-remap-write` and `git-backup-reconcile-plan` accept
+`--client-app-ref`, `--task-route-ref` and `--work-session-ref`. Existing
+controls, approvals and receipts keep their exact bytes; commands without
+session refs behave as before. The session Git backup commits only changes
+it can attribute to the session and leaves everything else
+`ownership_unverified`.
+
+After one reviewed project update, start the project launcher in a new process
+and verify its pin, source, launcher, and runtime evidence. Only that client-run
+result can show that the project was repaired.
+
 ## v0.4.19 Runtime And Capability Truth
 
 Install the exact public wheel only after the matching release and asset exist.

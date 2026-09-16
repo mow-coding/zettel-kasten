@@ -29,6 +29,7 @@ class ReleaseReadinessTests(unittest.TestCase):
                 "wom-kit/tools/check_korean_product_language.py",
                 "wom-kit/tools/check_public_privacy.py",
                 "wom-kit/tools/check_runtime_skill.py",
+                "wom-kit/tools/check_writer_session_coverage.py",
             ],
         )
 
@@ -46,7 +47,7 @@ class ReleaseReadinessTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertIn("PASS: public link hygiene", buffer.getvalue())
-        self.assertEqual(len(calls), 4)
+        self.assertEqual(len(calls), 5)
         self.assertTrue(all(command[0] == sys.executable for command in calls))
 
     def test_failure_returns_nonzero_and_identifies_failing_checker(self) -> None:

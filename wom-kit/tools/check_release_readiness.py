@@ -33,6 +33,7 @@ RELEASE_CHECKS: tuple[ReleaseCheck, ...] = (
     ReleaseCheck("Korean product-language hygiene", "wom-kit/tools/check_korean_product_language.py"),
     ReleaseCheck("public privacy hygiene", "wom-kit/tools/check_public_privacy.py"),
     ReleaseCheck("runtime skill package", "wom-kit/tools/check_runtime_skill.py"),
+    ReleaseCheck("writer-session coverage manifest", "wom-kit/tools/check_writer_session_coverage.py"),
 )
 
 

@@ -92,6 +92,17 @@ dry-run inputs while binding its own AI runtime identity, but v0.4.0 rejects
 the local native dialog or supply a claim. MCP `mint_zettel_check` remains
 preview-only.
 
+The fidelity source object must be UTF-8 text: the contract compares
+normalized text, so a binary original (PDF, spreadsheet, image) is refused
+with `source_fidelity_source_not_utf8`. Use its extracted or transcribed text
+objet as the fidelity source and link the binary original to the draft with
+`zettel-objet-link --role source_document`. Linking the declared fidelity
+source itself as an asset is allowed: that one `assets[].object_id` value is
+not treated as private authority exposure, while every other spelling of the
+object id and all source digests still block mint. A draft whose blank line
+after the closing `---` was dropped by an earlier rewrite is normalized by the
+mint verifier rather than blocked; writers now preserve that separator.
+
 ## v0.4.0 Session Evidence And Approval Link
 
 `source-fidelity-session-evidence --dry-run|--approve` can bind reviewed

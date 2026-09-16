@@ -6,6 +6,28 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.20 - 2026-09-16
+
+- Kept drafts mintable after WOM's own writes: `zettel-edge` preserves the
+  blank separator line, `mint-zet` normalizes one dropped by an earlier rewrite,
+  and the declared fidelity source may be linked as an asset without being
+  reported as private authority exposure (beta letters 159 and 160).
+- Made blocked results say why: a blocked `create-draft --dry-run` returns no
+  usable `approval_replay`, a blocked text-mode `--approve` prints the reason
+  code and blockers, `zettel-edge` carries a `detail_reason_code`, and the
+  exact `objet-capture-selection` returns its selection file path.
+- Added work-session identity to archive writes (`work-session`, and session
+  refs on `source-intake-record`, `source-intake-batch`, `zet-title-remap-write`
+  and `git-backup-reconcile-plan`) with retained original context for resume,
+  explicit original review and completed replay.
+- Added selective session Git backup of authenticated completion receipts,
+  intake outputs and canonical documents changed by a completed title recovery,
+  with HEAD/index/worktree proof; everything else stays `ownership_unverified`.
+- Added session-scoped compensation of a completed title recovery and a
+  count-first paged target preview for session and local recovery approvals.
+- Added the writer-session coverage gate to release readiness; it reports
+  5 integrated, 1 routed, 21 pending and 20 exempt approval paths of 47.
+
 ## v0.4.19 - 2026-09-05
 
 - Added four-state runtime observations so an unperformed or unavailable check

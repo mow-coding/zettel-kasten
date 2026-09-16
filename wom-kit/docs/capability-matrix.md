@@ -1,10 +1,26 @@
 ﻿# WOM-kit Capability Matrix
 
-Status: v0.4.19 runtime, updater, capability, and Windows child-process truth
+Status: v0.4.20 session-owned writes, selective Git ownership, and draft promotion truth
 Date: 2026-09-04
-Version: v0.4.19 implementation and release scope
+Version: v0.4.20 implementation and release scope
 
-The current v0.4.19 working tree keeps canonical command paths stable while one
+The current v0.4.20 working tree adds a work-session identity to archive
+writes: `work-session` registers apps and creates, claims, pauses, resumes and
+hands off sessions through exact native approval, and `source-intake-record`,
+`source-intake-batch`, `zet-title-remap-write` and `git-backup-reconcile-plan`
+accept session refs. Session-owned writes keep a private control that binds
+the original plan, establishment, actor generation and native context; resume,
+explicit original review and completed replay reuse it. The session Git backup
+commits only the session's authenticated completion receipts, intake outputs
+and canonical documents changed by a completed title recovery, proving HEAD
+preimage, worktree postimage and index for each document; everything else
+stays `ownership_unverified`. `zettel-edge` preserves the blank separator
+line, `mint-zet` normalizes one dropped by an older rewrite and accepts the
+declared fidelity source as an asset, blocked `create-draft` and `zettel-edge`
+results name their reason, and `tools/check_writer_session_coverage.py` reports
+5 integrated, 1 routed, 21 pending and 20 exempt approval paths of 47.
+
+The v0.4.19 working tree kept canonical command paths stable while one
 `CapabilityAvailability` decision is consumed by help, `capabilities`, Doctor
 suggestions, dry-run interpretation, and actual dispatch. Runtime and updater
 checks distinguish `passed`, `failed`, `not_reached`, and `unavailable`, so a
@@ -14,8 +30,8 @@ revalidated dimension by dimension without exposing compared values, and
 noninteractive Windows child processes use the common no-console policy while
 native approval and credential interaction remain visible.
 
-The current parser inventory has 46 approval-available, 68 fixed-closed, and
-201 not-exposed canonical paths, including ten conditional approval scopes.
+The current parser inventory has 47 approval-available, 68 fixed-closed, and
+201 not-exposed canonical paths, including eleven conditional approval scopes.
 The 68 fixed-closed paths comprise 67 compound-approval migrations plus
 `operation-control` with `operation_cancel_not_supported`. Cancellation has no
 writer; its status, wait, and recovery-plan dry-runs remain available. Historical
@@ -85,7 +101,7 @@ truthfully reports caller-input/body safety reads separately from
 Current release note: [v0.4.19](releases/v0.4.19.md).
 
 Current conditional wheel URL:
-`https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.19/wom_kit-0.4.19-py3-none-any.whl`.
+`https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.20/wom_kit-0.4.20-py3-none-any.whl`.
 
 The v0.4.11 checkpoint recorded the following historical runtime context:
 

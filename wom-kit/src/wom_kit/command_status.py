@@ -1,4 +1,4 @@
-"""Parser-derived, content-free command approval status inventory.
+"""Parser-derived, content-free command approval and invocation-effect facts.
 
 Current approval truth comes from an already-built ``argparse.ArgumentParser``;
 optional exposure history records a bounded audit of public source tags, not
@@ -1232,6 +1232,17 @@ def _capability_availability_for_command(
                 or "approval_surface_unavailable"
             )
 
+    work_session_scope_pending = (
+        canonical_path == "work-session" and invocation_available and requested_mode != "conflicting"
+        and (requested_mode != "approve" or (
+            approval_status == APPROVAL_AVAILABLE and argument_predicate_matched is None
+        ))
+    )
+    if work_session_scope_pending:
+        # An inventory says an option exists, not that every action supports
+        # it. Exact action/mode truth requires the trusted parsed namespace.
+        available, state = False, CAPABILITY_MODE_UNAVAILABLE
+        reason_code = detail_reason_code = "work_session_argument_scope_required"
     return {
         "schema": CAPABILITY_AVAILABILITY_SCHEMA,
         "canonical_path": canonical_path,
@@ -1244,7 +1255,7 @@ def _capability_availability_for_command(
         "approval_exposure_history": dict(command["approval_exposure_history"]),
         "dry_run_exposed": dry_run_exposed,
         "parser_derived": True,
-        "argument_scope_evaluated": requested_mode == "approve",
+        "argument_scope_evaluated": requested_mode == "approve" and not work_session_scope_pending,
         "prerequisites_evaluated": False,
         "private_values_echoed": False,
         "external_effects_performed": False,
@@ -1348,6 +1359,227 @@ def _selected_canonical_parser_path(
     return " ".join(canonical_segments), current
 
 
+# This is a bounded source audit, not an inference from command names or the
+# absence of --approve.  Keep it independent of the existing approval inventory
+# and its public schema.  An added option/changed handler invalidates coverage
+# until its effects have been reviewed; aliases share the canonical parser.
+_AUDITED_INVOCATION_OPTIONS = {
+    "work-session": ("--action --kind --ref --client-app-ref --workstream-ref --page-size --cursor "
+                     "--dry-run --approve --apply --resume --review-original --task-route-ref "
+                     "--work-session-ref --target-app-ref --request-stdin --progress --no-progress --format"),
+    "index": "--format --output --progress",
+    "index-health": "--dry-run --format --max-items --output --progress",
+    "staged-cleanup-check": (
+        "--deferred --dry-run --format --output --progress --staged"
+    ),
+    "ai-start-here": (
+        "--dry-run --expected-archive-id --expected-type --format --full-doctor "
+        "--no-redact-local-paths --output --progress --redact-local-paths --strict"
+    ),
+    "zet-catalog": (
+        "--continuation-token --coverage-mode --cursor --dry-run "
+        "--expected-snapshot-id --format --max-estimated-tokens --order "
+        "--output --page-size --progress --projection "
+        "--response-envelope-reserve-tokens --response-profile "
+        "--start-zettel-id --status"
+    ),
+    "upgrade-check": (
+        "--dry-run --format --output --progress --require-restore-drill"
+    ),
+    "zet-catalog-pass": (
+        "--dry-run --format --max-estimated-tokens --max-output-mib --order "
+        "--output --page-size --progress --projection "
+        "--response-envelope-reserve-tokens --start-zettel-id --status"
+    ),
+    "doctor": (
+        "--diagnostic-level --errors-only --format --json --no-progress "
+        "--object-byte-verification --output --progress --progress-detail "
+        "--progress-log --strict --summary"
+    ),
+    "credential-secure-list": "--format --verify",
+    "object-storage-upload-verify": (
+        "--dry-run --format --key-append-extension --key-prefix --key-strategy "
+        "--max-objects --only --provider-kind --store-ref"
+    ),
+    "notion-objet-link-index": (
+        "--dry-run --format --max-candidates --max-locators-per-zettel --max-zettels"
+    ),
+    "zet-catalog-pass-read": (
+        "--dry-run --expected-sha256 --input --page-index --progress"
+    ),
+}
+_AUDITED_SCRATCH_OUTPUT_COMMANDS = frozenset({
+    "index", "index-health", "staged-cleanup-check", "ai-start-here",
+    "zet-catalog", "upgrade-check",
+})
+_AUDITED_TRACKED_OUTPUT_COMMANDS = frozenset({
+    "index", "index-health", "staged-cleanup-check",
+})
+
+
+def _invocation_effect_option_value(
+    leaf_parser: argparse.ArgumentParser,
+    namespace: argparse.Namespace,
+    option: str,
+) -> str | bool | None:
+    """Inspect the final parsed value, never stringify a private input."""
+
+    action = next(
+        (item for item in leaf_parser._actions if option in item.option_strings),
+        None,
+    )
+    if action is None:
+        return None
+    value = getattr(namespace, action.dest, action.default)
+    if value is not None and type(value) not in {str, bool}:
+        raise ValueError("invocation_effect_namespace_value_invalid")
+    return value
+
+
+def _requested_invocation_intent(
+    leaf_parser: argparse.ArgumentParser,
+    namespace: argparse.Namespace,
+) -> str:
+    # These are requests, not supply verification, claim authentication, or
+    # permission to exempt an invocation from runtime/session/lock checks.
+    resume = _invocation_effect_option_value(leaf_parser, namespace, "--resume")
+    resume_id = _invocation_effect_option_value(
+        leaf_parser, namespace, "--resume-approval-id"
+    )
+    if resume is True or (type(resume_id) is str and bool(resume_id.strip())):
+        return "existing_resume"
+    if leaf_parser._defaults.get("_wom_project_runtime_effect") == "bootstrap_update":
+        return "bootstrap_candidate"
+    return "fresh"
+
+
+def resolve_namespace_invocation_effects(
+    parser: argparse.ArgumentParser,
+    namespace: argparse.Namespace,
+) -> dict[str, Any]:
+    """Describe audited potential effects without executing or authorizing them.
+
+    Consume the actual trusted parser and its final namespace, not raw argv.
+    ``effects=None`` means unknown, never read-only.  An audited list describes
+    potential effects after the bounded entry gate, not observed writes or a
+    successful run.  Path validity, providers, locks, current session ownership
+    and approval authority are deliberately not evaluated.  No caller should
+    treat ``human_approval_requirement=not_required`` as a session/lock waiver.
+    The entry gate covers only audited required-dry-run rejection, not every
+    possible argument or state failure. Terminal output and in-memory caches
+    are not persistent effects in this contract.
+
+    Temporary files and per-run progress records inherit their parent's effect;
+    this is not an instruction to request separate human approvals for them.
+    Historical resume remains independent and must retain its original binding.
+    """
+
+    if not isinstance(parser, argparse.ArgumentParser):
+        raise TypeError("invocation_effect_parser_invalid")
+    if not isinstance(namespace, argparse.Namespace):
+        raise TypeError("invocation_effect_namespace_invalid")
+    canonical_path, leaf_parser = _selected_canonical_parser_path(parser, namespace)
+    if _COMMAND_PATH_PATTERN.fullmatch(canonical_path) is None:
+        raise ValueError("invocation_effect_command_invalid")
+    result: dict[str, Any] = {
+        "canonical_path": canonical_path,
+        "coverage": "unknown",
+        "reason_code": "invocation_effects_not_audited",
+        "effects": None,
+        "effect_basis": "potential_not_observed",
+        "intent": _requested_invocation_intent(leaf_parser, namespace),
+        "intent_authority_verified": False,
+        "entry_gate": "not_evaluated",
+        "human_approval_requirement": "not_evaluated",
+        "session_requirement_evaluated": False,
+        "lock_requirement_evaluated": False,
+        "prerequisites_evaluated": False,
+        "execution_authorized": False,
+        "effects_performed": False,
+        "private_values_echoed": False,
+    }
+    audited_options = _AUDITED_INVOCATION_OPTIONS.get(canonical_path)
+    if audited_options is None:
+        return result
+    handler = leaf_parser._defaults.get("func")
+    option_names = {
+        option for action in leaf_parser._actions for option in action.option_strings
+    }
+    if (
+        # The supported `python -m wom_kit.archive_cli` entry defines the
+        # identical handlers as __main__; this check is audit drift detection,
+        # not authority to trust an arbitrary caller-supplied parser.
+        getattr(handler, "__module__", None) not in {"wom_kit.archive_cli", "__main__"}
+        or getattr(handler, "__name__", None)
+        != "command_" + canonical_path.replace("-", "_")
+        or getattr(namespace, "func", None) is not handler
+        or option_names != set(audited_options.split()) | {"--help", "-h"}
+    ):
+        result["reason_code"] = "invocation_effect_parser_contract_changed"
+        return result
+    result.update({
+        "coverage": "audited",
+        "reason_code": "invocation_effects_audited",
+        "entry_gate": "passed",
+        "human_approval_requirement": "not_required",
+    })
+    if canonical_path == "work-session":
+        mode = _work_session_namespace_mode(namespace)
+        if not mode["available"]:
+            result.update({"entry_gate": "work_session_mode_unavailable", "effects": []})
+            return result
+        effects = [{"kind": "local_read", "scope": "archive"}]
+        if mode["potential_write"]:
+            effects.append({"kind": "operational_metadata_write", "scope": "archive_session_operations"})
+        result.update({"effects": effects, "human_approval_requirement":
+                       "required" if mode["native_approval_required"] else "not_required"})
+        return result
+    if "--dry-run" in option_names and not _invocation_effect_option_value(
+        leaf_parser, namespace, "--dry-run"
+    ):
+        # All audited dry-run handlers reject this before touching local state.
+        result.update({
+            "entry_gate": "required_dry_run_missing",
+            "effects": [],
+        })
+        return result
+
+    effects = [{"kind": "local_read", "scope": "archive"}]
+
+    def add(kind: str, scope: str) -> None:
+        effects.append({"kind": kind, "scope": scope})
+
+    output = _invocation_effect_option_value(leaf_parser, namespace, "--output")
+    if canonical_path == "staged-cleanup-check" and _invocation_effect_option_value(
+        leaf_parser, namespace, "--deferred"
+    ):
+        # The CLI passes a truthy --deferred directly as Path to the reader;
+        # unlike --staged it is not constrained to the archive. Do not resolve
+        # or reveal the path just to describe this possible input-file read.
+        add("local_read", "explicit_input_file")
+    if canonical_path == "index":
+        add("generated_index_write", "archive_generated_index")
+    if canonical_path in _AUDITED_SCRATCH_OUTPUT_COMMANDS and output:
+        add("private_artifact_write", "archive_scratch")
+        if canonical_path in _AUDITED_TRACKED_OUTPUT_COMMANDS:
+            add("operational_metadata_write", "archive_operation_journal")
+    if canonical_path == "zet-catalog-pass":
+        add("private_artifact_write", "archive_scratch")
+    if canonical_path == "doctor":
+        if output:
+            add("private_artifact_write", "archive_relative_new_file")
+        if _invocation_effect_option_value(
+            leaf_parser, namespace, "--progress-log"
+        ) is not None:
+            add("operational_metadata_write", "outside_archive_new_file")
+    if canonical_path == "credential-secure-list" and _invocation_effect_option_value(
+        leaf_parser, namespace, "--verify"
+    ):
+        add("credential_store_read", "archive_authentication_key")
+    result["effects"] = effects
+    return result
+
+
 def _namespace_approval_scope_tokens(
     leaf_parser: argparse.ArgumentParser,
     namespace: argparse.Namespace,
@@ -1425,6 +1657,31 @@ def _namespace_approval_predicate_result(
     return result
 
 
+def _work_session_namespace_mode(namespace: argparse.Namespace) -> dict[str, Any]:
+    from .work_session_command_modes import resolve_work_session_mode
+    return resolve_work_session_mode(action=getattr(namespace, "action", "list"),
+                                     **{key: getattr(namespace, key, False) for key in
+                                        ("dry_run", "approve", "apply", "resume", "review_original")})
+
+
+def _apply_work_session_availability(availability: dict[str, Any], namespace) -> dict[str, Any]:
+    if availability.get("canonical_path") != "work-session" or namespace is None:
+        return availability
+    mode = _work_session_namespace_mode(namespace)
+    if mode is None or not mode["available"]:
+        return {**availability, "available": False, "state": CAPABILITY_MODE_UNAVAILABLE,
+                "reason_code": "work_session_mode_unavailable",
+                "detail_reason_code": "work_session_mode_unavailable",
+                "argument_scope_evaluated": namespace is not None}
+    # A supported action cannot override a closed approval surface or an
+    # invalid trusted-parser contract. Runtime/approval checks still follow.
+    if (availability.get("requested_mode") == "approve" and availability.get("available") is not True
+            and availability.get("reason_code") != "work_session_argument_scope_required"):
+        return availability
+    return {**availability, "available": True, "state": CAPABILITY_AVAILABLE,
+            "reason_code": None, "detail_reason_code": None, "argument_scope_evaluated": True}
+
+
 def resolve_namespace_capability_availability(
     parser: argparse.ArgumentParser,
     inventory: Mapping[str, Any],
@@ -1482,7 +1739,7 @@ def resolve_namespace_capability_availability(
         namespace,
         command.get("approval_scope"),
     )
-    return _capability_availability_for_command(
+    availability = _capability_availability_for_command(
         command,
         requested_mode=requested_mode,
         argument_tokens=argument_tokens,
@@ -1490,6 +1747,7 @@ def resolve_namespace_capability_availability(
             leaf_parser, namespace, command.get("approval_scope")
         ),
     )
+    return _apply_work_session_availability(availability, namespace)
 
 
 def _unresolved_suggested_command_status(
@@ -1762,6 +2020,7 @@ def resolve_suggested_command_mode(
         argument_tokens=argument_tokens,
         argument_predicate_matched=argument_predicate_matched,
     )
+    capability_availability = _apply_work_session_availability(capability_availability, parsed_namespace)
     requested_mode_available = capability_availability["available"]
     requested_mode_reason_code = capability_availability[
         "detail_reason_code"
@@ -1774,7 +2033,8 @@ def resolve_suggested_command_mode(
         requested_mode_reason_code = (
             "suggested_command_invocation_surface_unavailable"
         )
-    elif requested_mode == "dry_run" and requested_mode_available is False:
+    elif (requested_mode == "dry_run" and requested_mode_available is False
+          and command["canonical_path"] != "work-session"):
         requested_mode_reason_code = "suggested_command_dry_run_not_exposed"
 
     return {

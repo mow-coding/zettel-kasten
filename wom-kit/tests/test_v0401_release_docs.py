@@ -125,14 +125,14 @@ class V0401ReleaseDocsTests(unittest.TestCase):
             blocked,
         )
         counts = inventory["counts"]
-        self.assertEqual(counts["canonical_executable_command_count"], 315)
+        self.assertEqual(counts["canonical_executable_command_count"], 316)
         self.assertEqual(counts["alias_invocation_path_count"], 259)
-        self.assertEqual(counts["invocation_path_count"], 574)
-        self.assertEqual(counts["approval_available_command_count"], 46)
+        self.assertEqual(counts["invocation_path_count"], 575)
+        self.assertEqual(counts["approval_available_command_count"], 47)
         self.assertEqual(counts["approval_fixed_closed_command_count"], 68)
         self.assertEqual(counts["approval_not_exposed_command_count"], 201)
-        self.assertEqual(counts["conditional_approval_command_count"], 10)
-        self.assertEqual(counts["dry_run_exposed_command_count"], 272)
+        self.assertEqual(counts["conditional_approval_command_count"], 11)
+        self.assertEqual(counts["dry_run_exposed_command_count"], 273)
         self.assertEqual(counts["unmatched_fixed_closed_command_count"], 0)
         by_path = {
             row["canonical_path"]: row for row in inventory["commands"]

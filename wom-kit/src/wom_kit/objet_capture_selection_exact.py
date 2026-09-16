@@ -862,6 +862,16 @@ def _execute_core(
         "capability_scope": CAPABILITY_SCOPE,
         "general_intake_chain_complete": False,
         "requires_existing_source_intake_receipt": True,
+        # The selection file is named by its own document digest inside a
+        # fixed receipts directory; the next step (objet-capture --selection)
+        # needs exactly this archive-relative path (letter 160 ⑤). No staged
+        # or operator path is echoed.
+        "selection_path": fresh.selection_relative_path,
+        "files_written": (
+            [fresh.selection_relative_path]
+            if isinstance(fresh.selection_relative_path, str)
+            else []
+        ),
         "plan_sha256": fresh.manifest.manifest_sha256,
         "target_binding_sha256": fresh.manifest.target_set_sha256,
         "source_binding_sha256": fresh.manifest.source_set_sha256,
@@ -875,7 +885,7 @@ def _execute_core(
         "provider_calls_performed": False,
         "credential_values_read": False,
         "private_values_echoed": False,
-        "paths_echoed": False,
+        "paths_echoed": isinstance(fresh.selection_relative_path, str),
     }
 
 

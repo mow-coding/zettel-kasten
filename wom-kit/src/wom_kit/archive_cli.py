@@ -12543,7 +12543,86 @@ def _git_backup_progress_printer(event: Any) -> None:
     )
 
 
+def _command_session_git_backup(args: argparse.Namespace) -> int:
+    from .git_backup_session_command import dispatch_session_git_backup, _failure as session_git_failure
+    from .work_session_git_progress import _git_command_progress_observer
+
+    original_resume = bool(getattr(args, "resume", False))
+    original_review = bool(getattr(args, "review_original", False))
+    original_mode = original_resume or original_review
+    modes = int(bool(args.dry_run)) + int(bool(args.approve)) + int(original_resume)
+    forbidden = any(getattr(args, name, None) is not None for name in (
+        "expected_plan_sha256", "expected_hidden_effect_set_sha256", "expected_local_head_oid",
+        "expected_remote_oid", "selection_manifest", "resume_approval_id", "expected_manifest_sha256",
+    ))
+    if modes != 1 or forbidden or original_review and (not args.approve or original_resume):
+        return _git_backup_cli_error(
+            command="git-backup-reconcile-plan", dry_run=bool(args.dry_run),
+            reason_code="work_session_git_original_inputs_forbidden" if forbidden else "work_session_git_command_mode_required",
+        )
+    if original_mode and (
+        args.reviewed_by is not None or args.branch is not None or args.remote != "origin"
+        or args.max_changes != git_backup_planning.GIT_BACKUP_PLAN_DEFAULT_MAX_CHANGES
+        or args.max_changed_bytes != git_backup_planning.GIT_BACKUP_PLAN_DEFAULT_MAX_CHANGED_BYTES
+        or args.credential_mode != "anonymous"
+    ):
+        return _git_backup_cli_error(
+            command="git-backup-reconcile-plan", dry_run=False,
+            reason_code="work_session_git_original_inputs_forbidden",
+        )
+    mode = ("review_original" if original_review else
+            "resume" if original_resume else ("preview" if args.dry_run else "apply"))
+    dispatch_entered, original_verified = False, False
+    try:
+        with _git_command_progress_observer() as observer:
+            if observer.status()["mode"] == "unavailable":
+                return _git_backup_cli_error(
+                    command="git-backup-reconcile-plan", dry_run=bool(args.dry_run),
+                    reason_code="work_session_git_progress_unavailable",
+                )
+            dispatch_entered = True
+            result = dispatch_session_git_backup(
+                Path(args.archive_root), mode=mode,
+                client_app_ref=getattr(args, "client_app_ref", None), task_route_ref=getattr(args, "task_route_ref", None),
+                work_session_ref=getattr(args, "work_session_ref", None), reviewer_claim=args.reviewed_by,
+                options=None if original_mode else {
+                    "remote_name": args.remote, "branch": args.branch, "credential_mode": args.credential_mode,
+                    "max_changes": args.max_changes, "max_changed_bytes": args.max_changed_bytes,
+                },
+                progress=observer,
+            )
+            original_verified = type(result) is dict and result.get("original_commit_verified") is True
+            observed_progress = observer.status()
+        result = {**result, "progress_observation": {
+            "mode": observed_progress["mode"],
+            "live_heartbeat_used": observed_progress["heartbeat_available"],
+            "observer_closed": observer.status()["closed"],
+            "private_values_echoed": False,
+        }}
+    except KeyboardInterrupt:
+        result = session_git_failure(
+            "work_session_wait_cancelled", mode=mode, effects_started=dispatch_entered,
+            original_commit_verified=original_verified,
+        )
+    except Exception:
+        result = session_git_failure(
+            "work_session_git_progress_unavailable", mode=mode, effects_started=dispatch_entered,
+            original_commit_verified=original_verified,
+        )
+    print_json(result)
+    return 0 if result.get("ok") is True else 1
+
+
 def command_git_backup_reconcile_plan(args: argparse.Namespace) -> int:
+    if (getattr(args, "resume", False) or getattr(args, "review_original", False)
+            or any(getattr(args, name, None) is not None
+            for name in ("client_app_ref", "task_route_ref", "work_session_ref"))):
+        return _command_session_git_backup(args)
+    if args.expected_plan_sha256 is None:
+        return _git_backup_cli_error(
+            command="git-backup-reconcile-plan", reason_code="git_backup_expected_plan_required",
+            dry_run=bool(args.dry_run),
+        )
     resume_requested = bool(args.resume_approval_id)
     mode_count = int(bool(args.dry_run)) + int(bool(args.approve)) + int(
         resume_requested
@@ -16426,6 +16505,7 @@ def _zettel_edge_blocked_preview_projection(
         "receipt_path": receipt_path,
         "blockers": blockers,
         "reason_codes": ["zettel_edge_preflight_blocked"],
+        "detail_reason_code": _zettel_edge_detail_reason_code(blockers),
         "warnings": [],
         "would_change": [],
         "files_written": [],
@@ -16436,6 +16516,33 @@ def _zettel_edge_blocked_preview_projection(
         },
         "private_values_echoed": False,
     }
+
+
+_ZETTEL_EDGE_DETAIL_REASON_CODES: tuple[tuple[str, str], ...] = (
+    ("edge already exists on the source zettel.", "zettel_edge_already_exists"),
+    ("edge receipt already exists.", "zettel_edge_receipt_already_exists"),
+    ("source and target must be different.", "zettel_edge_self_reference"),
+    ("target zettel id was not found.", "zettel_edge_target_missing"),
+    ("target zettel content is unavailable.", "zettel_edge_target_unavailable"),
+    ("target object_id was not found in objects/manifests/files.jsonl.", "zettel_edge_target_missing"),
+    ("target principal id is ambiguous.", "zettel_edge_target_ambiguous"),
+    ("source zettel frontmatter edges must be a list.", "zettel_edge_source_frontmatter_invalid"),
+    ("edge_type must be defined in zettel-kasten/types.yml.", "zettel_edge_type_unknown"),
+)
+
+
+def _zettel_edge_detail_reason_code(blockers: list[str]) -> str:
+    """Name the first blocked condition with a fixed code (letter 160 ⑥)."""
+
+    for blocker in blockers:
+        for sentence, code in _ZETTEL_EDGE_DETAIL_REASON_CODES:
+            if blocker == sentence:
+                return code
+        if blocker.startswith("Active link type contract"):
+            return "zettel_edge_type_contract_blocked"
+        if blocker.startswith("target_ref must be"):
+            return "zettel_edge_target_ref_invalid"
+    return "zettel_edge_preflight_blocked"
 
 
 def command_zettel_edge(args: argparse.Namespace) -> int:
@@ -20046,6 +20153,8 @@ def command_authoring_conventions(args: argparse.Namespace) -> int:
 
 
 def command_source_intake_record(args: argparse.Namespace) -> int:
+    if _source_intake_session_selected(args):
+        return _command_session_source_intake(args, record=True)
     reporter = CommandProgressReporter(
         bool(getattr(args, "progress", False)),
         label="source-intake-record",
@@ -20062,7 +20171,8 @@ def command_source_intake_record(args: argparse.Namespace) -> int:
         )
 
     try:
-        if args.dry_run == args.approve:
+        if (args.dry_run == args.approve or not args.source_intake_plan
+                or bool(getattr(args, "resume", False))):
             raise source_intake_record_exact.SourceIntakeRecordExactError(
                 "source_intake_record_request_invalid"
             )
@@ -20105,7 +20215,85 @@ def command_source_intake_record(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def _source_intake_session_selected(args: argparse.Namespace) -> bool:
+    return bool(getattr(args, "review_original", False)) or any(getattr(args, name, None) is not None
+               for name in ("client_app_ref", "task_route_ref", "work_session_ref"))
+
+
+def _command_session_source_intake(args: argparse.Namespace, *, record: bool) -> int:
+    from .source_intake_session_command import (
+        dispatch_session_source_intake, dispatch_session_source_intake_record, _failure, _project_progress,
+    )
+
+    original_resume = bool(getattr(args, "resume", False))
+    original_review = bool(getattr(args, "review_original", False))
+    original = original_resume or original_review
+    mode = "review_original" if original_review else "resume" if original_resume else ("preview" if args.dry_run else "apply")
+    path = args.source_intake_plan if record else args.manifest
+    forbidden = (any(getattr(args, name, None) is not None
+                     for name in ("expected_plan_sha256", "resume_approval_id", "execution_sha256"))
+                 or bool(getattr(args, "reconcile", False)))
+    mode_count = sum((bool(args.dry_run), bool(args.approve), original_resume))
+    if (forbidden or mode_count != 1
+            or original_review and (not args.approve or original_resume)
+            or original and (path is not None or args.reviewed_by is not None)
+            or args.dry_run and args.reviewed_by is not None):
+        result = _failure("work_session_intake_original_inputs_forbidden" if original or forbidden
+                          else "work_session_intake_command_invalid", mode=mode)
+    else:
+        reporter, entered, original_verified = None, False, False
+        try:
+            progress_setting = getattr(args, "progress", None)
+            reporter = CommandProgressReporter(True if progress_setting is None else bool(progress_setting),
+                label="source-intake-record" if record else "source-intake-batch", heartbeat_interval_seconds=5.0)
+            reporter.progress("source-intake-session", "start", None, None)
+
+            def progress(event):
+                projected = _project_progress(event)
+                if projected is not None:
+                    stage, current, total = projected
+                    reporter.progress(stage, "start" if current is None else "progress", current, total)
+
+            entered = True
+            dispatch = dispatch_session_source_intake_record if record else dispatch_session_source_intake
+            input_path = {"plan_path": path} if record else {"request_path": path}
+            result = dispatch(Path(args.archive_root), mode=mode,
+                client_app_ref=getattr(args, "client_app_ref", None),
+                task_route_ref=getattr(args, "task_route_ref", None),
+                work_session_ref=getattr(args, "work_session_ref", None),
+                reviewer_claim=args.reviewed_by, progress=progress, **input_path)
+            original_verified = type(result) is dict and result.get("original_completion_verified") is True
+        except KeyboardInterrupt:
+            result = _failure("work_session_wait_cancelled", mode=mode, effects_started=entered,
+                              original_completion_verified=original_verified)
+        except Exception:
+            result = _failure("work_session_intake_command_unavailable", mode=mode, effects_started=entered,
+                              original_completion_verified=original_verified)
+        finally:
+            if reporter is not None:
+                try:
+                    reporter.close()
+                except KeyboardInterrupt:
+                    result = _failure("work_session_wait_cancelled", mode=mode, effects_started=entered,
+                                      original_completion_verified=original_verified)
+                except Exception:
+                    result = _failure("work_session_intake_command_unavailable", mode=mode, effects_started=entered,
+                                      original_completion_verified=original_verified)
+    if args.format == "json":
+        print_json(result)
+    else:
+        state = "blocked" if result.get("ok") is not True else ("ready_for_write" if mode == "preview" else "completed")
+        print("Session source intake: " + state)
+    return 0 if result.get("ok") is True else 1
+
+
+def _command_session_source_intake_batch(args: argparse.Namespace) -> int:
+    return _command_session_source_intake(args, record=False)
+
+
 def command_source_intake_batch(args: argparse.Namespace) -> int:
+    if _source_intake_session_selected(args):
+        return _command_session_source_intake_batch(args)
     reporter = CommandProgressReporter(
         bool(getattr(args, "progress", True)),
         label="source-intake-batch",
@@ -20652,7 +20840,20 @@ def command_zet_title_remap_write(args: argparse.Namespace) -> int:
     source_mirror = getattr(args, "source_mirror", None)
     resume_recovery = bool(getattr(args, "resume_recovery", False))
     revert_recovery = bool(getattr(args, "revert_recovery", False))
-    recovery_mode = bool(source_mirror or resume_recovery or revert_recovery)
+    review_original = bool(getattr(args, "review_original", False))
+    recovery_mode = bool(source_mirror or resume_recovery or revert_recovery or review_original)
+    if review_original and (resume_recovery or revert_recovery or not getattr(args, "client_app_ref", None)
+                            or not getattr(args, "task_route_ref", None)):
+        return _recognized_command_cli_error(args, command="zet-title-remap-write",
+            lifecycle_action="zet_title_local_recovery", error_class="usage",
+            reason_code="local_recovery_session_original_inputs_invalid",
+            text_message="Original review requires the retained app/task and cannot be combined with resume or revert.", exit_code=2)
+    if not recovery_mode and any(getattr(args, name, None) is not None for name in (
+            "client_app_ref", "task_route_ref", "work_session_ref")):
+        return _recognized_command_cli_error(args, command="zet-title-remap-write",
+            lifecycle_action="zet_title_local_recovery", error_class="usage",
+            reason_code="local_recovery_session_mode_required",
+            text_message="Session title recovery requires source evidence or original recovery resume.", exit_code=2)
     if recovery_mode:
         if bool(args.dry_run) == bool(args.approve):
             return _recognized_command_cli_error(
@@ -20705,7 +20906,7 @@ def command_zet_title_remap_write(args: argparse.Namespace) -> int:
                 text_message="The local-recovery manifest SHA-256 is invalid.",
                 exit_code=2,
             )
-        if resume_recovery and not args.approve:
+        if (resume_recovery or review_original) and not args.approve:
             return _recognized_command_cli_error(
                 args,
                 command="zet-title-remap-write",
@@ -20715,7 +20916,7 @@ def command_zet_title_remap_write(args: argparse.Namespace) -> int:
                 text_message="Recovery resume requires --approve.",
                 exit_code=2,
             )
-        if (resume_recovery or revert_recovery) and source_mirror:
+        if (resume_recovery or revert_recovery or review_original) and source_mirror:
             return _recognized_command_cli_error(
                 args,
                 command="zet-title-remap-write",
@@ -20728,7 +20929,7 @@ def command_zet_title_remap_write(args: argparse.Namespace) -> int:
                 ),
                 exit_code=2,
             )
-        if not (resume_recovery or revert_recovery) and not source_mirror:
+        if not (resume_recovery or revert_recovery or review_original) and not source_mirror:
             return _recognized_command_cli_error(
                 args,
                 command="zet-title-remap-write",
@@ -20769,7 +20970,7 @@ def command_zet_title_remap_write(args: argparse.Namespace) -> int:
                 allowed_domains={"zet_title_recovery"},
                 plan_factory=(
                     None
-                    if resume_recovery or revert_recovery
+                    if resume_recovery or revert_recovery or review_original
                     else plan_factory
                 ),
                 expected_manifest_sha256=expected_manifest,
@@ -23711,6 +23912,35 @@ def _execute_local_recovery_cli_mode(
         or "person:local-recovery-operator"
     )
     exact_progress = _local_recovery_exact_progress(reporter)
+    if any(getattr(args, name, None) is not None for name in (
+            "client_app_ref", "task_route_ref", "work_session_ref")):
+        from .local_recovery_session import _dispatch_session_local_recovery
+
+        review_original = bool(getattr(args, "review_original", False))
+        original_mode = resume or review_original
+        if (expected_manifest_sha256 or (resume and review_original) or (revert and original_mode)
+                or (original_mode and getattr(args, "reviewed_by", None) is not None)):
+            return ({"schema_version": "wom-kit/local-recovery-execution-result/v0.1", "ok": False,
+                "state": "blocked", "reason_codes": ["local_recovery_session_original_inputs_invalid"],
+                "effects_state": "none", "private_values_echoed": False, "paths_echoed": False}, False)
+
+        def session_progress(event):
+            if type(event) is ExactOperationProgress:
+                exact_progress(event)
+            elif type(event) is dict and event.get("phase", event.get("stage")) in {
+                    "waiting_for_writer", "writer_acquired_revalidation_required"}:
+                reporter.progress("local-recovery-" + event.get("phase", event.get("stage")), "apply", None, None)
+
+        result = _dispatch_session_local_recovery(archive_root,
+            mode=("review_original" if review_original else "resume" if resume
+                  else ("revert_preview" if bool(args.dry_run) else "revert") if revert
+                  else "preview" if bool(args.dry_run) else "apply"),
+            client_app_ref=getattr(args, "client_app_ref", None),
+            task_route_ref=getattr(args, "task_route_ref", None),
+            work_session_ref=getattr(args, "work_session_ref", None),
+            plan_factory=None if revert else plan_factory, allowed_domains=allowed_domains,
+            reviewer_claim=None if original_mode else reviewer, progress=session_progress)
+        return result, result.get("effects_state") != "none"
     if resume or revert:
         control_discovery = None
         if expected_manifest_sha256:
@@ -25428,19 +25658,50 @@ def _binding_with_primary_bound_zettel_preview(
         return binding
 
 
+def _bounded_preflight_blockers(blockers: Any) -> list[str]:
+    """Keep only short blocker sentences the same dry-run already exposes.
+
+    Some blockers name an operator-supplied value such as the proposed draft
+    path; they are the same sentences the JSON dry-run returns, so this adds
+    no new exposure class, only a second channel (stderr) for text mode.
+    """
+
+    if not isinstance(blockers, (list, tuple)):
+        return []
+    kept: list[str] = []
+    for item in blockers:
+        if not isinstance(item, str):
+            continue
+        text = " ".join(item.split())
+        if not text or len(text) > 160 or len(text.encode("utf-8")) > 640:
+            continue
+        kept.append(text)
+        if len(kept) == 8:
+            break
+    return kept
+
+
 def _exact_human_approval_cli_error(
     args: argparse.Namespace,
     *,
     lifecycle_action: str,
     reason_code: str,
+    preflight_blockers: Any = None,
 ) -> int:
-    """Emit only a fixed code after an approval-boundary failure."""
+    """Emit only a fixed code after an approval-boundary failure.
+
+    ``preflight_blockers`` are the same dry-run sentences the caller already
+    computed for this request; repeating them here (letter 160 ③) saves the
+    operator a second --format json round trip. They are bounded; they never
+    carry body text or credential values.
+    """
 
     safe_reason = (
         reason_code
         if re.fullmatch(r"[a-z][a-z0-9_]{0,95}", str(reason_code or ""))
         else "exact_human_approval_state_unknown"
     )
+    blockers = _bounded_preflight_blockers(preflight_blockers)
     if getattr(args, "format", None) == "json":
         command = str(getattr(args, "command", "") or "")
         print_json(
@@ -25457,6 +25718,7 @@ def _exact_human_approval_cli_error(
                 "lifecycle_action": lifecycle_action,
                 "error_class": "policy",
                 "reason_codes": [safe_reason],
+                "blockers": blockers,
                 "exit_code": 1,
                 "effects_state": "none",
                 "files_written": [],
@@ -25470,9 +25732,17 @@ def _exact_human_approval_cli_error(
         )
     elif safe_reason == "exact_human_approval_preflight_blocked":
         print(
-            "Exact human approval preflight was blocked; the write did not start.",
+            "Exact human approval preflight was blocked; the write did not start. "
+            "reason_codes: exact_human_approval_preflight_blocked",
             file=sys.stderr,
         )
+        for blocker in blockers:
+            print(f"BLOCKED: {blocker}", file=sys.stderr)
+        if not blockers:
+            print(
+                "Run the same command with --dry-run --format json to see the blockers.",
+                file=sys.stderr,
+            )
     elif safe_reason == "compound_exact_human_approval_binding_required":
         print(
             "Exact compound human-approval binding is not implemented for "
@@ -25987,6 +26257,11 @@ def command_create_draft(args: argparse.Namespace) -> int:
                     args,
                     lifecycle_action="create_draft",
                     reason_code="exact_human_approval_preflight_blocked",
+                    preflight_blockers=(
+                        preview.get("blockers")
+                        if isinstance(preview, dict)
+                        else None
+                    ),
                 )
             context = _exact_human_approval_context(
                 archive_root,
@@ -28246,6 +28521,7 @@ def command_ai_artifact_inventory(args: argparse.Namespace) -> int:
             include_roots=args.include_root,
             project_root=getattr(args, "project_root", None),
             max_items=args.max_items,
+            cursor=getattr(args, "cursor", None),
             show_relative_paths=args.show_relative_paths,
             dry_run=True,
         )
@@ -28261,6 +28537,9 @@ def command_ai_artifact_inventory(args: argparse.Namespace) -> int:
         print(f"Archive: {result.get('archive_id') or '-'}")
         print(f"Candidates: {result.get('total_candidate_count', 0)}")
         print(f"Listed: {result.get('item_count', 0)}")
+        pagination = result.get("pagination") or {}
+        if pagination.get("next_cursor") is not None:
+            print(f"Next cursor: {pagination['next_cursor']}")
         counts = result.get("fate_counts") if isinstance(result.get("fate_counts"), dict) else {}
         if counts:
             print("Fates:")
@@ -28289,6 +28568,7 @@ def command_artifact_lifecycle_inventory(args: argparse.Namespace) -> int:
             Path(args.archive_root),
             max_entries_per_root=args.max_entries_per_root,
             max_items=args.max_items,
+            cursor=getattr(args, "cursor", None),
             show_relative_paths=args.show_relative_paths,
             dry_run=True,
         )
@@ -28309,6 +28589,9 @@ def command_artifact_lifecycle_inventory(args: argparse.Namespace) -> int:
         print(f"Review candidates: {result.get('review_candidate_count', 0)}")
         print(f"Listed: {result.get('item_count', 0)}")
         print(f"Inventory digest: {result.get('inventory_digest') or '-'}")
+        pagination = result.get("pagination") or {}
+        if pagination.get("next_cursor") is not None:
+            print(f"Next cursor: {pagination['next_cursor']}")
         if result.get("blockers"):
             print("Blockers:")
             for blocker in result["blockers"]:
@@ -30228,6 +30511,65 @@ def command_principal_register(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def command_work_session(args: argparse.Namespace) -> int:
+    """Shared query/management routing; no app or task identity is inferred."""
+    from .work_session_command import (WorkSessionRequestError, dispatch_work_session_management,
+                                       management_failure, read_private_request)
+    from .work_session_command_modes import resolve_work_session_mode
+    from .work_session_query import WorkSessionQueryError, query_work_sessions
+
+    flags = {key: getattr(args, key, False) for key in
+             ("dry_run", "approve", "apply", "resume", "review_original")}
+    resolved = resolve_work_session_mode(action=args.action, **flags)
+    if not resolved["available"]:
+        print_json(management_failure("work_session_mode_unavailable"))
+        return 1
+    if resolved["mode"] != "read_only_query":
+        if (args.ref is not None or args.workstream_ref is not None or args.cursor is not None
+                or args.kind != "session" or args.page_size != 20):
+            print_json(management_failure("work_session_request_invalid"))
+            return 1
+        try:
+            request = read_private_request(sys.stdin) if args.request_stdin else None
+        except WorkSessionRequestError:
+            print_json(management_failure("work_session_request_invalid"))
+            return 1
+        result = dispatch_work_session_management(
+            args.archive_root, action=args.action, **flags, client_app_ref=args.client_app_ref,
+            task_route_ref=args.task_route_ref, work_session_ref=args.work_session_ref,
+            target_app_ref=args.target_app_ref, request=request,
+            progress=(lambda event: print("[wom] work-session: " + (
+                "rechecking state" if event.get("stage") == "writer_acquired_revalidation_required"
+                else "waiting for writer"), file=sys.stderr, flush=True))
+                     if args.progress else (lambda _event: None),
+        )
+        print_json(result)
+        return 0 if result.get("ok") else 1
+    if (args.request_stdin or args.task_route_ref is not None or args.work_session_ref is not None
+            or args.target_app_ref is not None):
+        print_json(management_failure("work_session_request_invalid"))
+        return 1
+    try:
+        result = query_work_sessions(
+            args.archive_root, action=args.action, kind=args.kind, reference=args.ref,
+            client_app_ref=args.client_app_ref, workstream_ref=args.workstream_ref,
+            page_size=args.page_size, cursor=args.cursor,
+        )
+    except WorkSessionQueryError as error:
+        result = {"ok": False, "schema": "wom-kit/work-session-query/v1",
+                  "reason_code": error.code, "read_only": True, "private_values_echoed": False}
+    print_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def _work_session_native_scope(args: argparse.Namespace) -> bool:
+    from .work_session_command_modes import resolve_work_session_mode
+    return resolve_work_session_mode(
+        action=args.action, approve=True, dry_run=False,
+        **{key: getattr(args, key, False) for key in ("apply", "resume", "review_original")},
+    )["native_approval_required"] is True
+
+
 def command_principal_list(args: argparse.Namespace) -> int:
     try:
         result = completion_workflows.principal_list(
@@ -30666,7 +31008,11 @@ def print_objet_capture_selection_exact_result(
             else "no"
         )
     )
-    print("- paths shown: no")
+    selection_path = result.get("selection_path")
+    if isinstance(selection_path, str) and selection_path:
+        print(f"- selection file: {selection_path}")
+    else:
+        print("- paths shown: no")
     for blocker in result.get("blockers", []):
         print(f"BLOCKED: {blocker}")
 
@@ -36647,9 +36993,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     git_backup_reconcile.add_argument(
         "--expected-plan-sha256",
-        required=True,
-        help="Exact plan SHA-256 from the reviewed git-backup-plan result.",
+        help="Required for the legacy route; session-scoped work computes its exact plan internally.",
     )
+    git_backup_reconcile.add_argument("--client-app-ref", help="Explicit registered app for session-scoped Git work.")
+    git_backup_reconcile.add_argument("--task-route-ref", help="Retained opaque task route; never inferred from the latest task.")
+    git_backup_reconcile.add_argument("--work-session-ref", help="Explicit current session for preview/approve; optional assertion for original resume.")
+    git_backup_reconcile.add_argument("--resume", action="store_true",
+        help="Continue this route's original Git operation without new approval IDs, hashes or reviewer.")
+    git_backup_reconcile.add_argument("--review-original", action="store_true",
+        help="With --approve and retained app/task refs: review only the same original operation whose claim was never published.")
     git_backup_reconcile.add_argument(
         "--expected-hidden-effect-set-sha256",
         help="Optional exact hidden-effect-set SHA-256 from the reviewed plan.",
@@ -36711,7 +37063,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     git_backup_reconcile.add_argument(
         "--reviewed-by",
-        help="Safe reviewer claim required for approve or resume.",
+        help="Reviewer required for fresh approval or legacy resume; forbidden on session original resume/re-review.",
     )
     git_backup_reconcile.add_argument(
         "--resume-approval-id",
@@ -39367,7 +39719,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Record a reviewed source-intake dry-run plan under receipts/sources/.",
     )
     source_intake_record.add_argument("archive_root", help="Archive root to update.")
-    source_intake_record.add_argument("--source-intake-plan", required=True, help="JSON file from source-intake --dry-run.")
+    source_intake_record.add_argument("--source-intake-plan", help="JSON file from source-intake --dry-run. Required except session original --resume or --approve --review-original.")
+    source_intake_record.add_argument("--client-app-ref", help="Explicit registered app selects the session-bound single receipt route.")
+    source_intake_record.add_argument("--task-route-ref", help="Original task route retained by the AI.")
+    source_intake_record.add_argument("--work-session-ref", help="Current session for fresh recording; optional assertion on original --resume.")
+    source_intake_record.add_argument("--resume", action="store_true", help="With session references, resume the original approved record without plan, reviewer, hash or approval ID.")
+    source_intake_record.add_argument("--review-original", action="store_true", help="With --approve and retained app/task refs, review only the original record whose claim was never published; omit plan and reviewer.")
     source_intake_record.add_argument("--dry-run", action="store_true", help="Preview validation without writing files.")
     source_intake_record.add_argument("--approve", action="store_true", help="Write the reviewed source-intake plan record.")
     source_intake_record.add_argument("--reviewed-by", help="Reviewer id required when --approve is used.")
@@ -39375,13 +39732,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--expected-plan-sha256",
         help="Optional expert binding to the exact manifest SHA-256 shown by --dry-run.",
     )
-    source_intake_record.add_argument(
+    source_intake_record_progress = source_intake_record.add_mutually_exclusive_group()
+    source_intake_record_progress.add_argument(
         "--progress",
         action="store_true",
-        help="Print content-free progress and heartbeats to stderr.",
+        help="Print content-free progress and heartbeats to stderr (default for the session route).",
     )
+    source_intake_record_progress.add_argument("--no-progress", dest="progress", action="store_false", help="Disable progress output.")
+    source_intake_record.set_defaults(progress=None)
     source_intake_record.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
-    source_intake_record.set_defaults(func=command_source_intake_record)
+    source_intake_record.set_defaults(func=command_source_intake_record, _wom_project_runtime_resume_effect=True)
 
     source_intake_batch = subcommands.add_parser(
         "source-intake-batch",
@@ -39390,25 +39750,29 @@ def build_parser() -> argparse.ArgumentParser:
     source_intake_batch.add_argument("archive_root", help="Archive root to inspect or update.")
     source_intake_batch.add_argument(
         "--manifest",
-        required=True,
-        help="JSON batch request; relative paths resolve from the archive root.",
+        help="JSON batch request; relative paths resolve from the archive root. Required except session original --resume or --approve --review-original.",
     )
+    source_intake_batch.add_argument("--client-app-ref", help="Explicit registered app selects the session-bound intake route.")
+    source_intake_batch.add_argument("--task-route-ref", help="Original task route retained by the AI for session intake.")
+    source_intake_batch.add_argument("--work-session-ref", help="Current session for fresh intake; optional assertion on session original --resume.")
+    source_intake_batch.add_argument("--review-original", action="store_true", help="With --approve and retained app/task refs, review only the original batch whose claim was never published; omit manifest and reviewer.")
     source_intake_batch.add_argument("--dry-run", action="store_true", help="Preview all item plans without writing.")
     source_intake_batch.add_argument("--approve", action="store_true", help="Record the reviewed item plans and batch receipt.")
     source_intake_batch.add_argument(
         "--expected-plan-sha256",
-        help="Complete plan_sha256 from the reviewed dry-run; required with --approve.",
+        help="Legacy complete plan_sha256 from dry-run; required with unscoped --approve, forbidden with session references.",
     )
     source_intake_batch.add_argument(
         "--reviewed-by",
-        help="Safe reviewer id required with --approve or --resume.",
+        help="Safe reviewer id required with --approve or legacy --resume; forbidden on session original --resume.",
     )
     source_intake_batch.add_argument(
         "--resume",
         action="store_true",
         help=(
             "Resume exactly one authenticated interrupted run for this unchanged "
-            "manifest and reviewer; no private-folder inspection or copied IDs."
+            "manifest and reviewer; no private-folder inspection or copied IDs. "
+            "With session references use only the retained app/task route, without a manifest or reviewer."
         ),
     )
     source_intake_batch.add_argument(
@@ -39688,6 +40052,11 @@ def build_parser() -> argparse.ArgumentParser:
             "recovery; its path and values are never echoed."
         ),
     )
+    zet_title_remap_write.add_argument("--client-app-ref", help="Explicit app for session-owned local title recovery.")
+    zet_title_remap_write.add_argument("--task-route-ref", help="Retained caller task for local title recovery or original resume.")
+    zet_title_remap_write.add_argument("--work-session-ref", help="Current session for fresh recovery; optional assertion on original resume.")
+    zet_title_remap_write.add_argument("--review-original", action="store_true",
+        help="Explicitly review the retained session original only when its approval was never created; existing approval resumes directly.")
     zet_title_remap_write.add_argument(
         "--expected-identifier-title-count",
         type=int,
@@ -39729,6 +40098,7 @@ def build_parser() -> argparse.ArgumentParser:
                 "--source-mirror",
                 "--resume-recovery",
                 "--revert-recovery",
+                "--review-original",
             ],
             "outside_scope_status": "approval_fixed_closed",
             "outside_scope_reason_code": (
@@ -42509,7 +42879,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--fidelity-source-object-id",
         help=(
             "Content-addressed source object id in "
-            "sha256:<64 lowercase hex> form; no local source path is accepted."
+            "sha256:<64 lowercase hex> form; no local source path is accepted. "
+            "The object must be UTF-8 text: source fidelity compares normalized "
+            "text, so link a binary original (PDF, spreadsheet, image) with "
+            "zettel-objet-link instead of naming it here."
         ),
     )
     fidelity_authority.add_argument(
@@ -43134,7 +43507,8 @@ def build_parser() -> argparse.ArgumentParser:
             "without scanning, and its files are never inventory or GC candidates."
         ),
     )
-    ai_artifact_inventory.add_argument("--max-items", type=int, default=100, help="Maximum listed candidates; capped at 1000.")
+    ai_artifact_inventory.add_argument("--max-items", type=int, default=100, help="Maximum candidates per page, not the total listing limit; capped at 1000.")
+    ai_artifact_inventory.add_argument("--cursor", help="Continue the same metadata snapshot using the previous page's next_cursor.")
     ai_artifact_inventory.add_argument(
         "--show-relative-paths",
         action="store_true",
@@ -43164,9 +43538,13 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=artifact_lifecycle_inventory.DEFAULT_MAX_ITEMS,
         help=(
-            "Maximum content-free review rows listed; "
+            "Maximum content-free review rows per page, not the total listing limit; "
             f"capped at {artifact_lifecycle_inventory.MAX_ITEMS}."
         ),
+    )
+    artifact_lifecycle.add_argument(
+        "--cursor",
+        help="Continue the same metadata snapshot using the previous page's next_cursor.",
     )
     artifact_lifecycle.add_argument(
         "--show-relative-paths",
@@ -46839,6 +47217,55 @@ def build_parser() -> argparse.ArgumentParser:
     )
     init.set_defaults(func=command_init)
 
+    work_session = subcommands.add_parser(
+        "work-session", help="Query sessions or explicitly start, hand off, accept, claim, pause, resume or complete a task.",
+        description=("List or inspect opaque app, workstream and session references. "
+                     "Private labels and claim tokens are never printed. "
+                     "Registration supports --dry-run then --apply/--resume using the original selection. "
+                     "Request-init prepares a new routing-only task reference for an explicit registered app; "
+                     "it does not create, approve or save a task. Retain its output before create, "
+                     "and use the same task reference for resume instead of initializing another request. "
+                     "Create uses --approve, or --resume with the original app/task references; "
+                     "--approve --review-original reopens only the original unclaimed human decision. "
+                     "Create has no dry-run preview yet. Claim uses --apply/--resume. "
+                     "Pause and paused-session resume use --apply for a new state transition; "
+                     "their --resume continues only the original transition without generating a new claim. "
+                     "Complete closes only session metadata; it does not delete or clean up archive data. "
+                     "The AI retains original opaque references; humans do not copy hashes or JSON. "
+                     "Handoff uses --approve with the current session and target app; "
+                     "accept uses --approve with a new task route and the predecessor session. "
+                     "Accept creates an unclaimed successor, not artifact ownership. "
+                     "Their --resume or --approve --review-original selects only original evidence. "
+                     "Recover uses --approve for the same app's explicit claimed session; "
+                     "it changes its claim only after the existing OS lock and human decision, never by age."),
+    )
+    work_session.add_argument("archive_root", help="Archive root.")
+    work_session.add_argument("--action", choices=["list", "inspect", "register-app", "request-init", "create", "claim", "pause", "resume", "complete", "handoff", "accept", "recover"], default="list")
+    work_session.add_argument("--kind", choices=["app", "workstream", "session"], default="session")
+    work_session.add_argument("--ref", help="Opaque reference to inspect.")
+    work_session.add_argument("--client-app-ref", help="Explicit registered app for management, or query filter.")
+    work_session.add_argument("--workstream-ref", help="Filter listed sessions by their workstream reference.")
+    work_session.add_argument("--page-size", type=int, default=20, help="Rows per page, from 1 through 2000.")
+    work_session.add_argument("--cursor", help="Continuation cursor from the same generation and query.")
+    work_session.add_argument("--dry-run", action="store_true", help="Read-only query, routing request-init or registration preview; not create.")
+    work_session.add_argument("--approve", action="store_true", help="Request the existing native decision for create, handoff, accept or recover.")
+    work_session.add_argument("--apply", action="store_true", help="Apply registration, claim, pause, completion or a new paused-session resume.")
+    work_session.add_argument("--resume", action="store_true", help="Continue the original operation; never create a new approval.")
+    work_session.add_argument("--review-original", action="store_true", help="With create/handoff/accept/recover --approve: review only original pre-claim content.")
+    work_session.add_argument("--task-route-ref", help="Original opaque task route retained by the AI before mutation.")
+    work_session.add_argument("--work-session-ref", help="Original session for claim/state/handoff/recover, or predecessor for a new accept. Omit for accept original resume.")
+    work_session.add_argument("--target-app-ref", help="Exact registered receiving app for handoff, including its original continuation.")
+    work_session.add_argument("--request-stdin", action="store_true", help="AI-only bounded private JSON input; never credential input.")
+    work_session.add_argument("--progress", action=argparse.BooleanOptionalAction, default=True,
+                              help="Content-free startup status on stderr; disable with --no-progress.")
+    work_session.add_argument("--format", choices=["json"], default="json")
+    work_session.set_defaults(func=command_work_session, _wom_approval_scope={
+        "kind": "namespace_predicate", "predicate_ref": "work_session_original_human_decision",
+        "outside_scope_status": command_status.APPROVAL_FIXED_CLOSED,
+        "outside_scope_reason_code": command_status.COMPOUND_APPROVAL_REASON_CODE,
+    })
+    setattr(work_session, command_status._APPROVAL_SCOPE_PREDICATE_ATTRIBUTE, _work_session_native_scope)
+
     _mark_compound_approval_help(parser)
     return parser
 
@@ -46993,10 +47420,24 @@ def _project_write_runtime_guard(
         getattr(args, "resume", False)
         or str(getattr(args, "resume_approval_id", "") or "").strip()
     )
+    invocation_effects = getattr(args, "_wom_invocation_effects", None)
+    audited_write_effect = (
+        type(invocation_effects) is dict
+        and invocation_effects.get("coverage") == "audited"
+        and invocation_effects.get("entry_gate") == "passed"
+        and type(invocation_effects.get("effects")) is list
+        and any(
+            type(effect) is dict and effect.get("kind") in {
+                "generated_index_write", "private_artifact_write", "operational_metadata_write",
+            }
+            for effect in invocation_effects["effects"]
+        )
+    )
     if (
         runtime_effect != "project_write"
         and not bool(getattr(args, "approve", False))
         and not resume_write_effect
+        and not audited_write_effect
     ):
         return None
     candidate_attributes = (
@@ -47327,7 +47768,7 @@ def main(argv: list[str] | None = None) -> int:
     _harden_std_streams()
     raw_argv = sys.argv[1:] if argv is None else list(argv)
     parser = build_parser()
-    json_requested = any(
+    json_requested = raw_argv[:1] == ["work-session"] or any(
         item == "--format=json"
         or (item == "--format" and index + 1 < len(raw_argv) and raw_argv[index + 1] == "json")
         for index, item in enumerate(raw_argv)
@@ -47337,6 +47778,8 @@ def main(argv: list[str] | None = None) -> int:
         and raw_argv[0]
         in {
             "credential-adopt",
+            "zet-title-remap-write",
+            "title-remap-write",
             "credential-secure-list",
             "credential-lifecycle",
             "notion-page-recovery-plan",
@@ -47352,8 +47795,14 @@ def main(argv: list[str] | None = None) -> int:
             "zettel-objet-link",
             "zet-objet-link",
             "migrate",
+            "work-session",
         }
     )
+    if raw_argv and raw_argv[0] in {"source-intake-batch", "source-intake-record", "zet-title-remap-write", "title-remap-write"}:
+        option_tokens = raw_argv[:raw_argv.index("--")] if "--" in raw_argv else raw_argv
+        privacy_sensitive_command = privacy_sensitive_command or any(
+            token.split("=", 1)[0] in {"--client-app-ref", "--task-route-ref", "--work-session-ref", "--review-original"}
+            for token in option_tokens)
     delegated_args: argparse.Namespace | None = None
     if raw_argv[:1] == ["find-objet"]:
         delegated_args = argparse.Namespace(
@@ -47406,6 +47855,23 @@ def main(argv: list[str] | None = None) -> int:
         else:
             with redirect_stderr(parser_stderr):
                 args = parser.parse_args(raw_argv)
+                if (getattr(args, "func", None) is command_git_backup_reconcile_plan
+                        and args.expected_plan_sha256 is None
+                        and not getattr(args, "resume", False)
+                        and not getattr(args, "review_original", False)
+                        and not any(getattr(args, name, None) is not None
+                                    for name in ("client_app_ref", "task_route_ref", "work_session_ref"))):
+                    parser.error("the following arguments are required: --expected-plan-sha256")
+                if (getattr(args, "func", None) is command_source_intake_batch
+                        and args.manifest is None
+                        and not (_source_intake_session_selected(args) and
+                                 (getattr(args, "resume", False) or getattr(args, "review_original", False)))):
+                    parser.error("the following arguments are required: --manifest")
+                if (getattr(args, "func", None) is command_source_intake_record
+                        and args.source_intake_plan is None
+                        and not (_source_intake_session_selected(args) and
+                                 (getattr(args, "resume", False) or getattr(args, "review_original", False)))):
+                    parser.error("the following arguments are required: --source-intake-plan")
     except SystemExit as exc:
         exit_code = int(exc.code or 0)
         if not exit_code:
@@ -47545,6 +48011,15 @@ def main(argv: list[str] | None = None) -> int:
                 json_requested=json_requested,
             )
 
+    try:
+        invocation_effects = command_status.resolve_namespace_invocation_effects(parser, args)
+    except (TypeError, ValueError):
+        # An unaudited invocation is not declared read-only. Preserve existing
+        # explicit runtime/approval/resume guards while coverage is integrated.
+        invocation_effects = {"coverage": "unknown", "effects": None,
+                              "reason_code": "invocation_effects_unresolved",
+                              "execution_authorized": False, "private_values_echoed": False}
+    setattr(args, "_wom_invocation_effects", invocation_effects)
     runtime_blocker = _project_write_runtime_guard(args, raw_argv)
     if runtime_blocker is not None:
         if json_requested:
