@@ -59,7 +59,7 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
         }
         self.assertEqual(
             len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS),
-            67,
+            65,
         )
         for exact_batch_command in (
             "source-intake-batch",
@@ -200,7 +200,7 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
         for command_name, expected in (
             ("zet-revision-plan", "approval_fixed_closed"),
             ("zet-revision-write", f"Unavailable in v{archive_cli.__version__}"),
-            ("discard-draft", f"Unavailable in v{archive_cli.__version__}"),
+            ("mint-zet-batch", f"Unavailable in v{archive_cli.__version__}"),
         ):
             with self.subTest(command=command_name):
                 completed = subprocess.run(

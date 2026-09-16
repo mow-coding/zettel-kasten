@@ -29,7 +29,7 @@ in their original private custody. The developer does not update their lifecycle
 | WS-02 | v0.4.20 | New writes carry session binding; old approved operations resume without rewriting their authority | batch/record intake and Git have scoped CLI/MCP source evidence; intake original review and unrelated-app continuation development verified; title apply/original review/resume now has CLI/MCP development evidence (25 recovery plus 30 adapter/transport tests and independent review); canonical document before/after transition observation development verified (21 recovery plus one MCP projection test, independent read-only review); authenticated whole-document Git ownership for completed title recoveries development verified (7 tests over a real repository; HEAD preimage, worktree postimage, index, original authentication); session-scoped title revert development verified (compensation as a bound apply over the observed post subset; 3 tests); all-writer/effect coverage unfinished |
 | WS-03 | v0.4.20 | Local-only count-first target preview with 20-item pages and safe title/filename/short-ID fallback | preview and paging components implemented; session decisions and local recovery writers (legacy and session-scoped apply) show the count-first paged preview with a live target-binding observer; other writer families and installed acceptance pending |
 | WS-04 | v0.4.20 | Complete cursor pagination and exact selected/excluded Git coverage; selected-session non-force commit/push plus independent remote-ref proof | pagination and authenticated receipt/metadata selective Git source journeys verified; canonical zettel documents changed by completed session title recoveries are now selected with HEAD/index/worktree proof (scope v3); generic ownership of other outputs, responsibility integration and installed/release acceptance pending |
-| LR-01 | v0.4.21 | Draft discard/restore, semantic revision/restore, mint/retire/edge batches work through exact approval | planned |
+| LR-01 | v0.4.21 | Draft discard/restore, semantic revision/restore, mint/retire/edge batches work through exact approval | discard-draft and discard-draft-restore reopened through exact approval with development evidence (6 new tests, receipts carry the approval reference); revision/restore and the batches pending |
 | LR-02 | v0.4.21 | Source-property backfill classifies every mirror page and supports apply/resume/independent comparison/field revert | older domain exists; client closure unconfirmed |
 | LR-03 | v0.4.21 | Identifier-like title proposals and historical title receipts are individually classified; insufficient evidence remains review | older planner exists; client writes unconfirmed |
 | LR-04 | v0.4.21 | Locator records, occurrence anchors, and markup have separate validated outcomes; existing correct links survive | older partial result; recovery pending |
@@ -200,3 +200,14 @@ journeys only. WS-02 all-writer coverage (21 pending paths), WS-03 and
 WS-04 installed acceptance for the remaining writer families, and every
 client feedback outcome remain open. No feedback letter's `resolved_in` is
 set by this release.
+
+### 2026-09-16 v0.4.21 LR-01a: discard-draft and restore reopened
+
+Both writers accept `--approve` again, only through operation-specific exact
+human approval: fresh private preflight, digest comparison, binding from the
+fresh plan, native dialog, authenticated one-use claim re-verified under the
+per-draft lock, approval reference embedded in the receipt. Development
+evidence and the exact inventory change (49 available, 66 fixed-closed) are in
+the [v0.4.21 implementation record](../../meeting-minutes/2026-09-16-v0421-local-repairs-implementation.md).
+Not released; letters 157-160 stay open until the client runs the released
+command.

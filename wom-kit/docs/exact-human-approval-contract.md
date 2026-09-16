@@ -173,8 +173,12 @@ and does not infer success, failure, or cancellation, automatically retry, or
 delete that evidence. A full authenticated terminal handoff and terminal
 cleanup outcome reconstruction remain a v0.4.16 follow-up.
 
-The current parser-derived inventory is 47 approval-available, 68 fixed-closed,
-and 201 not-exposed paths. The fixed-closed set includes 67 compound-approval
+The current parser-derived inventory is 49 approval-available, 66 fixed-closed,
+and 201 not-exposed paths. v0.4.21 reopened `discard-draft` and
+`discard-draft-restore` through operation-specific exact human approval;
+each writer re-derives its plan under its own lock, binds the fresh plan,
+and re-authenticates the one-use claim before the first byte changes.
+The fixed-closed set includes 65 compound-approval
 migrations and the separately unsupported `operation-control` cancel writer,
 whose reason is `operation_cancel_not_supported`. Its status, wait, and
 recovery-plan actions remain read-only and available with `--dry-run`.

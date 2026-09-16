@@ -140,9 +140,11 @@ class V0400ReleaseDocsTests(unittest.TestCase):
                 "source-intake-record",
                 "source-intake-batch",
                 "objet-capture-batch",
+                "discard-draft",
+                "discard-draft-restore",
             }
         )
-        self.assertEqual(len(current_blocked), 67)
+        self.assertEqual(len(current_blocked), 65)
         self.assertEqual(len(historical_blocked), 79)
         self.assertNotIn("migrate", current_blocked)
         self.assertNotIn("zettel-objet-link", current_blocked)

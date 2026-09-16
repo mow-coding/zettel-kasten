@@ -192,6 +192,8 @@ class ExactHumanApprovalOperation(Enum):
     local_recovery = "local_recovery"
     local_recovery_revert = "local_recovery_revert"
     work_session = "work_session"
+    draft_discard = "draft_discard"
+    draft_discard_restore = "draft_discard_restore"
 
 
 def _validated_target_preview_text(value: str | None) -> str | None:
@@ -448,6 +450,8 @@ _OPERATION_LABELS = {
     ExactHumanApprovalOperation.local_recovery: "검증된 로컬 복구",
     ExactHumanApprovalOperation.local_recovery_revert: "로컬 복구 되돌리기",
     ExactHumanApprovalOperation.work_session: "앱과 작업 연결",
+    ExactHumanApprovalOperation.draft_discard: "발행 전 초안 버리기",
+    ExactHumanApprovalOperation.draft_discard_restore: "버린 초안 복원",
 }
 
 _OPERATION_QUESTIONS = {
@@ -510,6 +514,10 @@ _OPERATION_QUESTIONS = {
     ),
     ExactHumanApprovalOperation.local_recovery_revert: (
         "이 로컬 복구가 바꾼 필드만 되돌릴까요?"
+    ),
+    ExactHumanApprovalOperation.draft_discard: "발행하지 않은 이 초안을 버릴까요?",
+    ExactHumanApprovalOperation.draft_discard_restore: (
+        "버린 초안을 원래 바이트 그대로 복원할까요?"
     ),
 }
 
@@ -605,6 +613,14 @@ _OPERATION_SUMMARIES = {
         "이 복구 manifest가 바꾼 필드만 원래 값으로 되돌리고 "
         "관계없는 필드와 본문은 유지합니다."
     ),
+    ExactHumanApprovalOperation.draft_discard: (
+        "초안 파일을 inbox에서 제거하고 같은 바이트를 스냅샷과 영수증으로 "
+        "보관합니다. 정본 zet와 발행 영수증은 건드리지 않습니다."
+    ),
+    ExactHumanApprovalOperation.draft_discard_restore: (
+        "버릴 때 보관한 스냅샷 바이트를 원래 inbox 경로에 그대로 되돌리고 "
+        "복원 영수증 하나만 추가합니다."
+    ),
 }
 
 _OPERATION_APPROVE_BUTTONS = {
@@ -634,6 +650,8 @@ _OPERATION_APPROVE_BUTTONS = {
     ExactHumanApprovalOperation.object_storage_formal_adoption: "정식 채택",
     ExactHumanApprovalOperation.local_recovery: "복구 실행",
     ExactHumanApprovalOperation.local_recovery_revert: "복구 되돌리기",
+    ExactHumanApprovalOperation.draft_discard: "초안 버리기",
+    ExactHumanApprovalOperation.draft_discard_restore: "초안 복원",
 }
 
 

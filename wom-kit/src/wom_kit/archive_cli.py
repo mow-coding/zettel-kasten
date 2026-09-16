@@ -24700,36 +24700,169 @@ def _print_draft_discard_result(
         print(f"NEXT: {action}")
 
 
-def command_discard_draft(args: argparse.Namespace) -> int:
-    if args.approve:
+def _draft_discard_exact_approval_route(
+    args: argparse.Namespace,
+    *,
+    command: str,
+    lifecycle_action: str,
+    plan: Callable[[], dict[str, Any]],
+    binding_builder: Callable[
+        [dict[str, Any]],
+        operation_approval_binding.ExactOperationApprovalBinding,
+    ],
+    writer: Callable[
+        [operation_approval_binding.ExactOperationApprovalBinding, Any, str],
+        dict[str, Any],
+    ],
+    draft_relative_key: str,
+    draft_sha256_key: str,
+) -> int:
+    """Shared v0.4.21 --approve route for discard-draft and its restore.
+
+    A fresh private preflight decides; the caller's expected service digest
+    must equal the fresh one; the exact binding is derived from that fresh
+    plan; the native dialog and authenticated claim are the only authority.
+    Every failure maps to a fixed reason code and no private value is echoed.
+    """
+
+    reviewer = str(args.reviewed_by or "").strip()
+    if not reviewer:
         return _exact_human_approval_cli_error(
             args,
-            lifecycle_action="discard_draft_apply",
-            reason_code=command_status.COMPOUND_APPROVAL_REASON_CODE,
+            lifecycle_action=lifecycle_action,
+            reason_code=f"{lifecycle_action}_reviewer_required",
         )
+    expected_service_plan_sha256 = str(
+        args.expected_plan_sha256 or ""
+    ).strip().lower()
+    if SHA256_RE.fullmatch(expected_service_plan_sha256) is None:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code=f"{lifecycle_action}_expected_plan_sha256_invalid",
+        )
+    archive_root = Path(args.archive_root)
+    try:
+        preview = plan()
+        if preview.get("ok") is not True or preview.get("blockers"):
+            return _exact_human_approval_cli_error(
+                args,
+                lifecycle_action=lifecycle_action,
+                reason_code=f"{lifecycle_action}_preflight_blocked",
+                preflight_blockers=preview.get("blockers"),
+            )
+        summary = (
+            preview.get("summary")
+            if isinstance(preview.get("summary"), dict)
+            else {}
+        )
+        service_plan_sha256 = str(summary.get("plan_sha256") or "")
+        if SHA256_RE.fullmatch(service_plan_sha256) is None or not (
+            secrets.compare_digest(
+                expected_service_plan_sha256, service_plan_sha256
+            )
+        ):
+            return _exact_human_approval_cli_error(
+                args,
+                lifecycle_action=lifecycle_action,
+                reason_code=f"{lifecycle_action}_plan_changed",
+            )
+        binding = binding_builder(preview)
+        binding = _binding_with_primary_bound_zettel_preview(
+            binding,
+            archive_root,
+            relative_path=summary.get(draft_relative_key),
+            expected_file_sha256=summary.get(draft_sha256_key),
+        )
+        context = binding.context(
+            archive_id=archive_services.read_archive_id(archive_root),
+            reviewer_claim=reviewer,
+        )
+        result = _execute_exact_human_approved_write(
+            archive_root,
+            context,
+            lambda claim: writer(binding, claim, reviewer),
+        )
+    except ExactHumanApprovalWorkflowError as error:
+        no_effect = error.code in {
+            "exact_human_approval_cancelled",
+            "exact_human_approval_operation_failed",
+            "exact_human_approval_writer_result_invalid",
+        }
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code=(
+                f"{lifecycle_action}_workflow_precondition_failed"
+                if no_effect
+                else "exact_human_approval_state_unknown"
+            ),
+        )
+    except (
+        archive_services.ArchiveServiceError,
+        operation_approval_binding.OperationApprovalBindingError,
+        ExactHumanApprovalError,
+        ExactHumanApprovalWindowsError,
+        OSError,
+    ):
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code=f"{lifecycle_action}_workflow_failed_safely",
+        )
+    _print_draft_discard_result(result, args.format)
+    return 0 if result.get("ok") else 1
+
+
+def command_discard_draft(args: argparse.Namespace) -> int:
     if args.dry_run == args.approve:
         print(
             "discard-draft requires exactly one of --dry-run or --approve.",
             file=sys.stderr,
         )
         return 1
-    try:
-        if args.dry_run:
-            result = completion_workflows.draft_discard_plan(
-                Path(args.archive_root),
-                zettel_id=args.zettel_id,
-                relative_path=args.path,
-                reason=args.reason,
-            )
-        else:
-            result = completion_workflows.draft_discard_apply(
-                Path(args.archive_root),
+    if args.approve:
+        archive_root = Path(args.archive_root)
+
+        def _write_discard(binding, claim, reviewer) -> dict[str, Any]:
+            return completion_workflows.draft_discard_apply(
+                archive_root,
                 zettel_id=args.zettel_id,
                 relative_path=args.path,
                 reason=args.reason,
                 expected_plan_sha256=args.expected_plan_sha256,
-                reviewed_by=args.reviewed_by,
+                reviewed_by=reviewer,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=(
+                    binding.target_binding_sha256
+                ),
+                exact_human_approval_claim=claim,
             )
+
+        return _draft_discard_exact_approval_route(
+            args,
+            command="discard-draft",
+            lifecycle_action="discard_draft_apply",
+            plan=lambda: completion_workflows.draft_discard_plan(
+                archive_root,
+                zettel_id=args.zettel_id,
+                relative_path=args.path,
+                reason=args.reason,
+            ),
+            binding_builder=(
+                operation_approval_binding.draft_discard_approval_binding
+            ),
+            writer=_write_discard,
+            draft_relative_key="draft_path",
+            draft_sha256_key="draft_sha256",
+        )
+    try:
+        result = completion_workflows.draft_discard_plan(
+            Path(args.archive_root),
+            zettel_id=args.zettel_id,
+            relative_path=args.path,
+            reason=args.reason,
+        )
     except Exception:
         print("discard-draft failed safely.", file=sys.stderr)
         return 1
@@ -24738,31 +24871,50 @@ def command_discard_draft(args: argparse.Namespace) -> int:
 
 
 def command_discard_draft_restore(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="discard_draft_restore",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
     if args.dry_run == args.approve:
         print(
             "discard-draft-restore requires exactly one of --dry-run or --approve.",
             file=sys.stderr,
         )
         return 1
-    try:
-        if args.dry_run:
-            result = completion_workflows.draft_discard_restore_plan(
-                Path(args.archive_root),
-                receipt=args.receipt,
-            )
-        else:
-            result = completion_workflows.draft_discard_restore(
-                Path(args.archive_root),
+    if args.approve:
+        archive_root = Path(args.archive_root)
+
+        def _write_restore(binding, claim, reviewer) -> dict[str, Any]:
+            return completion_workflows.draft_discard_restore(
+                archive_root,
                 receipt=args.receipt,
                 expected_plan_sha256=args.expected_plan_sha256,
-                reviewed_by=args.reviewed_by,
+                reviewed_by=reviewer,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=(
+                    binding.target_binding_sha256
+                ),
+                exact_human_approval_claim=claim,
             )
+
+        return _draft_discard_exact_approval_route(
+            args,
+            command="discard-draft-restore",
+            lifecycle_action="discard_draft_restore",
+            plan=lambda: completion_workflows.draft_discard_restore_plan(
+                archive_root,
+                receipt=args.receipt,
+            ),
+            binding_builder=(
+                operation_approval_binding.draft_discard_restore_approval_binding
+            ),
+            writer=_write_restore,
+            # The draft is absent before a restore; the snapshot digest is the
+            # bound content, so no bound-file preview is attempted here.
+            draft_relative_key="restore_path_absent",
+            draft_sha256_key="restore_sha256",
+        )
+    try:
+        result = completion_workflows.draft_discard_restore_plan(
+            Path(args.archive_root),
+            receipt=args.receipt,
+        )
     except Exception:
         print("discard-draft-restore failed safely.", file=sys.stderr)
         return 1
@@ -41881,12 +42033,14 @@ def build_parser() -> argparse.ArgumentParser:
     discard_draft = subcommands.add_parser(
         "discard-draft",
         help=(
-            "Preview reversible discard of one unminted inbox draft; approval "
-            "remains fixed closed in this release."
+            "Preview or approve reversible discard of one unminted inbox "
+            "draft through exact human approval."
         ),
         description=(
-            "Build a reversible discard validation preview without writing. "
-            "The approval mode remains fixed closed in this release."
+            "Build a reversible discard validation preview without writing, "
+            "or approve the discard through the native exact human approval "
+            "dialog. The dry-run digest is validation only; the dialog and "
+            "its authenticated claim are the sole write authority."
         ),
     )
     discard_draft.add_argument("archive_root")

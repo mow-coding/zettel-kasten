@@ -295,7 +295,7 @@ class Letter137AdditionalPublicCliBoundaryTests(_CliAssertions):
             ],
             "parcel": ["pack"],
         }
-        self.assertEqual(len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS), 67)
+        self.assertEqual(len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS), 65)
         for exact_batch_command in (
             "source-intake-batch",
             "objet-capture-batch",

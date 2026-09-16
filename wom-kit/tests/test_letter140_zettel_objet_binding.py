@@ -514,6 +514,8 @@ class Letter140ZettelObjetBindingTests(unittest.TestCase):
             "zettel_edge",
             "zettel_objet_link",
             "retire_draft",
+            "draft_discard",
+            "draft_discard_restore",
         }
         self.assertEqual(set(source["properties"]["operation"]["enum"]), expected)
         self.assertEqual(

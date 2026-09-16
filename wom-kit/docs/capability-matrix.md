@@ -30,9 +30,13 @@ revalidated dimension by dimension without exposing compared values, and
 noninteractive Windows child processes use the common no-console policy while
 native approval and credential interaction remain visible.
 
-The current parser inventory has 47 approval-available, 68 fixed-closed, and
+The current parser inventory has 49 approval-available, 66 fixed-closed, and
 201 not-exposed canonical paths, including eleven conditional approval scopes.
-The 68 fixed-closed paths comprise 67 compound-approval migrations plus
+v0.4.21 reopened `discard-draft` and `discard-draft-restore` through
+operation-specific exact human approval (beta letters 157-160); their
+dry-run digest stays validation only and the native dialog with its
+authenticated claim is the sole write authority.
+The 66 fixed-closed paths comprise 65 compound-approval migrations plus
 `operation-control` with `operation_cancel_not_supported`. Cancellation has no
 writer; its status, wait, and recovery-plan dry-runs remain available. Historical
 v0.4.12 counts below describe that release, not this current inventory.

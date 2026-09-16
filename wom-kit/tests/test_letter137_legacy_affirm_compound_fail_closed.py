@@ -320,8 +320,12 @@ class Letter137LegacyAffirmServiceBoundaryTests(_BoundaryAssertions):
             resolver.assert_not_called()
 
     def test_discard_approve_routes_block_before_plan_or_archive_read(self) -> None:
+        # v0.4.21 reopened both writers through exact human approval. Without
+        # an authenticated claim they must still fail before the plan core or
+        # any archive read, and echo nothing private.
         with tempfile.TemporaryDirectory() as tmp:
             root = self._archive_root(Path(tmp))
+            before = _archive_snapshot(root)
             with (
                 mock.patch.object(
                     completion_workflows,
@@ -334,30 +338,28 @@ class Letter137LegacyAffirmServiceBoundaryTests(_BoundaryAssertions):
                     side_effect=AssertionError("restore plan entered"),
                 ) as restore_plan,
             ):
-                self._assert_service_block(
-                    root=root,
-                    lifecycle_action="discard_draft_apply",
-                    invoke=lambda: completion_workflows.draft_discard_apply(
+                with self.assertRaises(archive_services.ArchiveServiceError) as apply_error:
+                    completion_workflows.draft_discard_apply(
                         root,
                         zettel_id=PRIVATE_ZETTEL,
                         reason=PRIVATE_REASON,
                         expected_plan_sha256=PRIVATE_DIGEST,
                         reviewed_by=PRIVATE_REVIEWER,
-                    ),
-                )
-                self._assert_service_block(
-                    root=root,
-                    lifecycle_action="discard_draft_restore",
-                    invoke=lambda: completion_workflows.draft_discard_restore(
+                    )
+                with self.assertRaises(archive_services.ArchiveServiceError) as restore_error:
+                    completion_workflows.draft_discard_restore(
                         root,
                         receipt=PRIVATE_RECEIPT,
                         expected_plan_sha256=PRIVATE_DIGEST,
                         reviewed_by=PRIVATE_REVIEWER,
-                    ),
-                )
-
+                    )
+            for error in (apply_error, restore_error):
+                self.assertEqual(str(error.exception), "exact_human_approval_required")
+                for private in (*PRIVATE_VALUES, str(root)):
+                    self.assertNotIn(private, repr(error.exception))
             discard_plan.assert_not_called()
             restore_plan.assert_not_called()
+            self.assertEqual(_archive_snapshot(root), before)
 
 
 class Letter137LegacyAffirmCliBoundaryTests(_BoundaryAssertions):
@@ -670,14 +672,37 @@ class Letter137LegacyAffirmCliBoundaryTests(_BoundaryAssertions):
                 "discard_draft_restore",
             ),
         )
+        # v0.4.21: the reopened routes run a private preflight first. On an
+        # archive that does not exist the writer is never entered, the error
+        # is a fixed code, and no private argument is echoed.
         for arguments, service, action in calls:
             with self.subTest(action=action):
-                self._assert_cli_block(
-                    arguments=arguments,
-                    service_module=completion_workflows,
-                    service_name=service,
-                    lifecycle_action=action,
+                args = self.parser.parse_args(arguments)
+                stdout, stderr = io.StringIO(), io.StringIO()
+                with (
+                    mock.patch.object(
+                        completion_workflows,
+                        service,
+                        side_effect=AssertionError("writer entered"),
+                    ) as writer,
+                    redirect_stdout(stdout),
+                    redirect_stderr(stderr),
+                ):
+                    code = args.func(args)
+                self.assertEqual(code, 1, stderr.getvalue())
+                writer.assert_not_called()
+                result = json.loads(stdout.getvalue())
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["state"], "blocked")
+                self.assertEqual(result["lifecycle_action"], action)
+                self.assertEqual(
+                    result["reason_codes"],
+                    [f"{action}_expected_plan_sha256_invalid"],
                 )
+                self.assertIs(result["private_values_echoed"], False)
+                rendered = stdout.getvalue() + stderr.getvalue()
+                for private in PRIVATE_VALUES:
+                    self.assertNotIn(private, rendered)
 
 
 if __name__ == "__main__":

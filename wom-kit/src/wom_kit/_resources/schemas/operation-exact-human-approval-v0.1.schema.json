@@ -22,7 +22,9 @@
         "mint_zet",
         "zettel_edge",
         "zettel_objet_link",
-        "retire_draft"
+        "retire_draft",
+        "draft_discard",
+        "draft_discard_restore"
       ]
     },
     "plan_sha256": {"$ref": "#/$defs/sha256_ref"},

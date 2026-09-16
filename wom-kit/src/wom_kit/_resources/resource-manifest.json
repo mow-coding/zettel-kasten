@@ -145,14 +145,14 @@
     {
       "source": "schemas/draft-discard-receipt.schema.json",
       "packaged": "schemas/draft-discard-receipt.schema.json",
-      "bytes": 1605,
-      "sha256": "3cf180f4a684e409ebbf8ac2122011fc369c90910dcd108e948b2bdd33b5a7d5"
+      "bytes": 2810,
+      "sha256": "07b331aa9d4ca9127bb1d66c75819bd8441ea46c273c1b45076d452cf0d18e5f"
     },
     {
       "source": "schemas/draft-discard-restore-receipt.schema.json",
       "packaged": "schemas/draft-discard-restore-receipt.schema.json",
-      "bytes": 1107,
-      "sha256": "c1d75c0479e51033440b7770a5437b77b538192c5db9bf8276e2e5582d88254c"
+      "bytes": 2320,
+      "sha256": "9e6920210f2f0050b8c49a14756334fc9b64998b474f8e0da1ada2b79970dde5"
     },
     {
       "source": "schemas/duplicate-object-reconciliation-receipt-v0.1.schema.json",
@@ -337,8 +337,8 @@
     {
       "source": "schemas/operation-exact-human-approval-v0.1.schema.json",
       "packaged": "schemas/operation-exact-human-approval-v0.1.schema.json",
-      "bytes": 1647,
-      "sha256": "d8f0de0538b683f0367cac7720605c8719ccc8f94a324d2db1b3d0d081fb4dbe"
+      "bytes": 1705,
+      "sha256": "91d274a6770539e66974b111ebcbb05d924b4c1f9a04941027b66dd49f4823c6"
     },
     {
       "source": "schemas/operator-feedback-delivery-receipt.schema.json",

@@ -1233,6 +1233,163 @@ def retire_draft_approval_binding(
     )
 
 
+_DRAFT_DISCARD_SUMMARY_TEXT = (
+    "zettel_id",
+    "draft_path",
+    "draft_sha256",
+    "reason_sha256",
+    "snapshot_path",
+    "receipt_path",
+    "plan_sha256",
+)
+_DRAFT_DISCARD_RESTORE_SUMMARY_TEXT = (
+    "zettel_id",
+    "restore_path",
+    "restore_sha256",
+    "restore_receipt_path",
+    "plan_sha256",
+)
+
+
+def _required_summary_text(
+    summary: Mapping[str, Any],
+    names: tuple[str, ...],
+) -> dict[str, str]:
+    values = {name: summary.get(name) for name in names}
+    if any(
+        type(value) is not str or not value.strip()
+        for value in values.values()
+    ):
+        raise _fail("operation_approval_plan_invalid")
+    return values  # type: ignore[return-value]
+
+
+def draft_discard_approval_binding(
+    dry_run: Mapping[str, Any],
+) -> ExactOperationApprovalBinding:
+    """Bind one reversible unminted-draft discard (v0.4.21 LR-01).
+
+    The service plan exposes only identifiers, archive-relative paths, and
+    digests; the reason text never leaves the private receipt.  Paths and
+    the id are reduced to digests before the public binding is returned.
+    """
+
+    plan = _plain_mapping(dry_run)
+    if plan.get("ok") is not True or plan.get("dry_run") is not True:
+        raise _fail("operation_approval_plan_blocked")
+    if (
+        plan.get("lifecycle_action") != "discard_draft_plan"
+        or plan.get("validation_status") != "ready"
+        or plan.get("blockers") != []
+    ):
+        raise _fail("operation_approval_plan_invalid")
+    summary = _plain_mapping(plan.get("summary"))
+    text = _required_summary_text(summary, _DRAFT_DISCARD_SUMMARY_TEXT)
+    if (
+        not text["draft_path"].startswith("inbox/")
+        or not text["draft_path"].endswith(".md")
+        or summary.get("mint_receipt_present") is not False
+        or summary.get("canonical_twin_present") is not False
+        or summary.get("exact_byte_restore_supported") is not True
+    ):
+        raise _fail("operation_approval_plan_invalid")
+    target = {
+        "zettel_id_digest": _sha256(text["zettel_id"]),
+        "draft_path_digest": _sha256(text["draft_path"]),
+        "draft_sha256": _sha_ref(text["draft_sha256"]),
+        "reason_sha256": _sha_ref(text["reason_sha256"]),
+        "snapshot_path_digest": _sha256(text["snapshot_path"]),
+        "receipt_path_digest": _sha256(text["receipt_path"]),
+    }
+    basis = {
+        "schema_version": BINDING_SCHEMA_VERSION,
+        "operation": "draft_discard",
+        "target": target,
+        "service_plan_sha256": _sha_ref(text["plan_sha256"]),
+        "warnings": plan.get("warnings"),
+        "would_change_digest": _sha256(plan.get("would_change")),
+    }
+    preview_identity = _required_target_preview_identity(
+        _target_preview_leaf(text["draft_path"]),
+        text["zettel_id"],
+    )
+    return ExactOperationApprovalBinding(
+        operation=ExactHumanApprovalOperation.draft_discard,
+        plan_sha256=_sha256(basis),
+        target_binding_sha256=_sha256(target),
+        warning_codes=_warning_codes(plan.get("warnings")),
+        review_binding_codes=(
+            "draft_digest",
+            "reason_digest",
+            "receipt_path_digest",
+            "snapshot_path_digest",
+            "warning_codes",
+        ),
+        target_preview=ExactHumanApprovalTargetPreview(
+            kind="draft",
+            primary=preview_identity,
+        ),
+    )
+
+
+def draft_discard_restore_approval_binding(
+    dry_run: Mapping[str, Any],
+) -> ExactOperationApprovalBinding:
+    """Bind one exact-byte restore of a discarded draft (v0.4.21 LR-01)."""
+
+    plan = _plain_mapping(dry_run)
+    if plan.get("ok") is not True or plan.get("dry_run") is not True:
+        raise _fail("operation_approval_plan_blocked")
+    if (
+        plan.get("lifecycle_action") != "discard_draft_restore_plan"
+        or plan.get("state") != "ready"
+        or plan.get("blockers") != []
+    ):
+        raise _fail("operation_approval_plan_invalid")
+    summary = _plain_mapping(plan.get("summary"))
+    text = _required_summary_text(summary, _DRAFT_DISCARD_RESTORE_SUMMARY_TEXT)
+    if (
+        not text["restore_path"].startswith("inbox/")
+        or not text["restore_path"].endswith(".md")
+        or summary.get("exact_byte_restore") is not True
+    ):
+        raise _fail("operation_approval_plan_invalid")
+    target = {
+        "zettel_id_digest": _sha256(text["zettel_id"]),
+        "restore_path_digest": _sha256(text["restore_path"]),
+        "restore_sha256": _sha_ref(text["restore_sha256"]),
+        "restore_receipt_path_digest": _sha256(text["restore_receipt_path"]),
+    }
+    basis = {
+        "schema_version": BINDING_SCHEMA_VERSION,
+        "operation": "draft_discard_restore",
+        "target": target,
+        "service_plan_sha256": _sha_ref(text["plan_sha256"]),
+        "warnings": plan.get("warnings"),
+        "would_change_digest": _sha256(plan.get("would_change")),
+    }
+    preview_identity = _required_target_preview_identity(
+        _target_preview_leaf(text["restore_path"]),
+        text["zettel_id"],
+    )
+    return ExactOperationApprovalBinding(
+        operation=ExactHumanApprovalOperation.draft_discard_restore,
+        plan_sha256=_sha256(basis),
+        target_binding_sha256=_sha256(target),
+        warning_codes=_warning_codes(plan.get("warnings")),
+        review_binding_codes=(
+            "restore_digest",
+            "restore_path_digest",
+            "restore_receipt_path_digest",
+            "warning_codes",
+        ),
+        target_preview=ExactHumanApprovalTargetPreview(
+            kind="draft",
+            primary=preview_identity,
+        ),
+    )
+
+
 def exact_operation_manifest_approval_binding(
     manifest: ExactOperationManifest,
     *,
