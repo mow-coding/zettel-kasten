@@ -70,8 +70,9 @@ class SessionIntakeGitPublicWorkflowTests(unittest.TestCase):
         with patch.object(cli.sys, "stdin", supplied), redirect_stdout(output), redirect_stderr(errors):
             code = cli.main([command, str(self.root), "--format", "json", *progress_flags, *flags])
         result = json.loads(output.getvalue())
-        self.assertEqual(code == 0, ok, result)
-        self.assertIs(result["ok"], ok, result)
+        if ok is not None:  # None: the caller inspects the outcome itself
+            self.assertEqual(code == 0, ok, result)
+            self.assertIs(result["ok"], ok, result)
         if command == "git-backup-reconcile-plan":
             # This in-process StringIO embedding is explicitly non-live. Its
             # real fixed observer still emits closed progress at callbacks.

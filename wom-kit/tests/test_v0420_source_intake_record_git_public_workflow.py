@@ -206,16 +206,25 @@ class SingleRecordGitPublicWorkflowTests(unittest.TestCase):
         pending = self.base.routing(case["a"])._read(current=False)._raw
         self.assertEqual(set(self.root.joinpath(approval.CLAIMS_RELATIVE_ROOT).glob("*.json")), case["claims"])
         self.assertEqual(self.git("rev-parse", "HEAD").stdout.strip(), case["baseline"])
-        observed = []
+        observed, guard_failures = [], []
         request_native = broker._request_exact_human_approval_core
 
         def review(context, **options):
             observed.append(approval.exact_human_approval_context_sha256(context))
-            self.assertEqual(self.base.routing(case["a"])._read(current=False)._raw, pending)
+            try:
+                self.assertEqual(self.base.routing(case["a"])._read(current=False)._raw, pending)
+            except AssertionError as error:
+                # The workflow maps a guard failure to the opaque
+                # exact_human_approval_state_unknown; keep the detail visible.
+                guard_failures.append(str(error))
+                raise
             return request_native(context, **options)
 
         with self.forbid_discovery(), patch.object(broker, "_request_exact_human_approval_core", side_effect=review):
-            result = self.call("git-backup-reconcile-plan", *case["a"]["refs"], "--approve", "--review-original")
+            result = self.call("git-backup-reconcile-plan", *case["a"]["refs"], "--approve", "--review-original",
+                               ok=None)
+        self.assertEqual(guard_failures, [])
+        self.assertTrue(result["ok"], result)
         self.assertTrue(result["native_approval_redisplayed"])
         self.assertEqual(observed, [pointer["context_sha256"]])
         self.verify_finished(case, result, original, pointer)
