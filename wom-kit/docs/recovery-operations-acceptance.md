@@ -433,3 +433,18 @@ external locator, objet link, objet rediscovery, derived text, paired intake:
 commands and evidence that implement them and keep their client-closure
 state, which only a client run can change. Recorded in the
 [v0.4.23 implementation record](../../meeting-minutes/2026-09-17-v0423-carried-work-implementation.md).
+
+### 2026-09-18 v0.4.23 released
+
+v0.4.23 is public: tag `v0.4.23` on main `ad0738f3`, one wheel
+`wom_kit-0.4.23-py3-none-any.whl` (SHA-256
+`f90e72402b5dfac51658ed332308b18e43a10a78349a3cca71f0f820580d818c`),
+candidate CI 14/14 on the merged head, exact-merge installed verification,
+anonymous download and two fresh-venv installations recorded in the
+[release evidence](../../meeting-minutes/2026-09-18-v0423-release-evidence.md).
+This is release acceptance of the artifact and the installed synthetic
+journeys only: letter 160 ② (binary fidelity source), LR-06a (the
+session-bound create-draft) and the revalidated rows LR-02 through LR-05
+and LR-07 remain open for client closure, letter 160 ④ stays unreproduced,
+and no feedback letter's `resolved_in` is set by this release. v0.4.24
+starts with the session permission modes the user decided on.
