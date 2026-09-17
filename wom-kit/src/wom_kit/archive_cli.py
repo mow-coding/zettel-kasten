@@ -460,6 +460,7 @@ from .exact_human_approval_windows import (
     exact_human_approval_warning_codes,
     ExactHumanApprovalWindowsError,
 )
+from .exact_human_approval import exact_human_approval_context_sha256
 from .exact_human_approval_workflow import (
     ExactHumanApprovalWorkflowError,
     _abandon_started_exact_human_approved_claims_core,
@@ -26794,6 +26795,150 @@ def _create_draft_ai_provenance_scope(args: argparse.Namespace) -> bool:
         local_ai_sessions=build_local_ai_session_refs(args),
     )
 
+def _create_draft_session_selected(args: argparse.Namespace) -> bool:
+    return any(getattr(args, name, None) is not None
+               for name in ("client_app_ref", "task_route_ref", "work_session_ref"))
+
+
+def _command_session_create_draft(
+    args: argparse.Namespace,
+    archive_root: Path,
+    create_kwargs: dict[str, Any],
+) -> int:
+    """v0.4.23 LR-06a: one AI draft bound to the caller's claimed work session.
+
+    The claimed session is verified under the held archive writer lane, its
+    content-free scope digest is frozen into the reviewed fidelity plan, the
+    same facts are re-verified after the dialog and before the claim is
+    published, the actor records the operation as pending and then completed,
+    and the receipt carries the session binding. The dialog, the one-use claim
+    and the draft writer are unchanged.
+    """
+
+    from . import work_session_native_write as native_write
+    from . import work_session_service as sessions
+
+    refs = dict(
+        client_app_ref=getattr(args, "client_app_ref", None),
+        task_route_ref=getattr(args, "task_route_ref", None),
+        work_session_ref=getattr(args, "work_session_ref", None),
+    )
+    reporter = CommandProgressReporter(bool(getattr(args, "progress", False)), label="create-draft")
+    code = "work_session_native_write_invalid"
+    try:
+        sessions._refs(refs["client_app_ref"], refs["task_route_ref"], refs["work_session_ref"],
+                       require_session=True)
+
+        def run(held):
+            scope, _store, routing, selected = native_write.native_write_scope_held(
+                archive_root, held=held, kind="create_draft", **refs)
+            bound_kwargs = dict(create_kwargs, work_session_binding=scope.binding.document(),
+                                work_session_scope_sha256=scope.scope_sha256)
+            if args.dry_run:
+                preview = archive_services.create_draft_zettel(archive_root, dry_run=True, **bound_kwargs)
+                return preview
+            preview = archive_services.create_draft_zettel(
+                archive_root, dry_run=True, approved=True, **bound_kwargs)
+            write_preflight = preview.get("write_preflight")
+            if isinstance(write_preflight, dict) and write_preflight.get("state") in {"failed", "unavailable"}:
+                return {"_cli_error": ("archive_index_observation_unavailable"
+                                       if write_preflight.get("state") == "unavailable"
+                                       else archive_services.INDEX_REBUILD_REQUIRED)}
+            plan_sha256 = _source_fidelity_plan_sha256_from_result(preview)
+            body_sha256 = preview.get("body_sha256")
+            expected_plan = str(args.expected_source_fidelity_plan_sha256 or "").strip().lower()
+            expected_body = str(args.expected_body_sha256 or "").strip().lower()
+            if (preview.get("ok") is not True
+                    or not isinstance(plan_sha256, str) or not SHA256_RE.fullmatch(plan_sha256)
+                    or not isinstance(body_sha256, str) or not SHA256_RE.fullmatch(body_sha256)
+                    or not secrets.compare_digest(plan_sha256, expected_plan)
+                    or not secrets.compare_digest(body_sha256, expected_body)):
+                return {"_preflight_blocked": preview.get("blockers") if isinstance(preview, dict) else None}
+            context = _exact_human_approval_context(
+                archive_root,
+                operation=ExactHumanApprovalOperation.create_draft,
+                plan_sha256=plan_sha256,
+                target_binding_sha256=body_sha256,
+                reviewer_claim=args.draft_approved_by,
+                review_binding_codes=(
+                    "body_digest_reviewed",
+                    "draft_identity_reviewed",
+                    "source_fidelity_reviewed",
+                ),
+                warnings=(preview.get("warnings") if isinstance(preview.get("warnings"), list) else []),
+                target_preview=_draft_exact_human_approval_target_preview(
+                    primary=PurePosixPath(str(preview.get("proposed_path") or args.draft_id)).name,
+                    title=args.title,
+                ),
+            )
+            context_sha256 = exact_human_approval_context_sha256(context)
+            state: dict[str, Any] = {}
+
+            @contextmanager
+            def post_decision():
+                state["routing"], state["selected"] = native_write.revalidate_scope_held(
+                    archive_root, scope, held=held, **refs)[1:]
+                yield None
+
+            @contextmanager
+            def publication():
+                state["pending"] = native_write.publish_pending_held(
+                    scope, state["routing"], state["selected"], held=held,
+                    plan_sha256=plan_sha256, context_sha256=context_sha256)
+                yield
+
+            def finish(_claim):
+                native_write.publish_completed_held(
+                    scope, state["routing"], state["pending"], held=held,
+                    plan_sha256=plan_sha256, context_sha256=context_sha256)
+
+            def writer(approval_claim):
+                return archive_services.create_draft_zettel(
+                    archive_root, dry_run=False, approved=True,
+                    exact_human_approval_claim=approval_claim, **bound_kwargs)
+
+            return _execute_exact_human_approved_write_core(
+                archive_root, context, writer,
+                post_decision_boundary=post_decision,
+                claim_publication_boundary=publication,
+                claim_succeeded_finalizer=finish,
+            )
+
+        result = sessions._write(
+            archive_root, cancel_requested=lambda: False,
+            progress=lambda event: None, run=run)
+    except sessions.WorkSessionServiceError as error:
+        code = error.code if isinstance(getattr(error, "code", None), str) else code
+        return _create_draft_cli_error(args, reason_code=code,
+            message="create-draft could not verify the current work session; private values were not echoed.")
+    except (ExactHumanApprovalError, ExactHumanApprovalWindowsError, ExactHumanApprovalWorkflowError) as exc:
+        return _exact_human_approval_cli_error(args, lifecycle_action="create_draft",
+            reason_code=getattr(exc, "code", "exact_human_approval_state_unknown"))
+    except Exception as error:
+        native_code = getattr(error, "code", None)
+        if type(error).__name__ == "WorkSessionNativeWriteError" and isinstance(native_code, str):
+            code = native_code
+        return _create_draft_cli_error(args, reason_code=code,
+            message="create-draft could not bind the work session; private values were not echoed.")
+    finally:
+        reporter.close() if hasattr(reporter, "close") else None
+    if isinstance(result, dict) and "_cli_error" in result:
+        return _create_draft_cli_error(args, reason_code=result["_cli_error"],
+            message="Draft approval is blocked by its index prerequisite; no approval window was opened.",
+            next_safe_actions=list(archive_services.INDEX_REBUILD_NEXT_SAFE_ACTIONS))
+    if isinstance(result, dict) and "_preflight_blocked" in result:
+        return _exact_human_approval_cli_error(args, lifecycle_action="create_draft",
+            reason_code="exact_human_approval_preflight_blocked",
+            preflight_blockers=result["_preflight_blocked"])
+    if args.format == "json":
+        print_json(result)
+    else:
+        if _print_exact_human_reconciliation_notice(result):
+            return 1
+        print(("Draft dry-run for " if result.get("dry_run") else "Draft created: ")
+              + str((result.get("frontmatter_preview") or {}).get("id") or result.get("path") or ""))
+    return 0 if result.get("ok", True) else 1
+
 
 def command_create_draft(args: argparse.Namespace) -> int:
     if args.list_kinds:
@@ -26952,6 +27097,17 @@ def command_create_draft(args: argparse.Namespace) -> int:
                 args.expected_source_fidelity_plan_sha256
             ),
         )
+        if _create_draft_session_selected(args):
+            if not ai_creation_mode or bool(args.dry_run) == bool(args.approve):
+                return _create_draft_cli_error(
+                    args,
+                    reason_code="work_session_native_write_mode_required",
+                    message=(
+                        "A session-bound create-draft is an AI-assisted/generated draft "
+                        "with exactly one of --dry-run or --approve."
+                    ),
+                )
+            return _command_session_create_draft(args, archive_root, create_kwargs)
         if ai_creation_mode and args.approve:
             preview = archive_services.create_draft_zettel(
                 archive_root,
@@ -43733,6 +43889,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="List valid note kinds from this archive's zettel-rules and exit (read-only, writes nothing).",
     )
     create_draft.add_argument("--facet", action="append", help="Facet in KEY=VALUE form. May be repeated; at least one is required for AI-assisted/generated drafts.")
+    create_draft.add_argument("--client-app-ref", help="Registered app of the current work session; with --task-route-ref and --work-session-ref the AI draft is bound to that claimed session (v0.4.23).")
+    create_draft.add_argument("--task-route-ref", help="Task route retained by the AI for the current work session.")
+    create_draft.add_argument("--work-session-ref", help="Claimed work session that owns this draft creation.")
     create_draft.add_argument("--dry-run", action="store_true", help="Preview draft creation without writing files.")
     create_draft.add_argument(
         "--approve",

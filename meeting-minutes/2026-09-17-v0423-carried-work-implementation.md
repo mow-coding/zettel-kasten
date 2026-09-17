@@ -118,6 +118,71 @@ wheel: results are recorded below as they complete.
   letter's shape, but it is the nearest reproducible way to get a
   wrapper-only refusal.
 
+## Unit U3 (LR-06a): create-draft bound to a claimed work session
+
+Scope decision: LR-06 integrates thirty pending writer paths, and each
+integrated writer so far carries four modules and several test modules. The
+v0.4.23 unit integrates the most-used native writer, `create-draft`, through
+one reusable module (`work_session_native_write.py`) that the other native
+single writers can adopt one by one; the remaining paths keep their pending
+targets in the coverage manifest.
+
+Design:
+
+- Fresh writes only. `create-draft` gains `--client-app-ref`,
+  `--task-route-ref` and `--work-session-ref`; with any of them the draft
+  must be an AI-assisted/generated draft with exactly one of `--dry-run` or
+  `--approve`, and the command runs inside the session service's held
+  archive writer lane (`work_session_service._write`: lock, runtime guard).
+- Ownership is verified read-only by the existing
+  `_require_actor_selection_for_write_held` (registered app, retained task
+  route, currently claimed session, no pending operation) and frozen into a
+  `NativeWriteScope` whose digest covers the session binding, the task route
+  and the claim ref. The actor image and registry generation are kept for
+  compare-and-swap but deliberately excluded from the digest, because the
+  operation itself changes them and an exact replay must reproduce the
+  reviewed plan.
+- The scope digest is frozen into the reviewed fidelity plan
+  (`work_session_scope_sha256` in the plan authority, absent for sessionless
+  plans, so every existing plan digest is unchanged) and therefore into the
+  native dialog's plan binding. The review binding codes are unchanged: the
+  service recomputes the same three codes for the claim's context, and the
+  plan digest already carries the session.
+- After the dialog and before the claim is published, the scope is
+  recomputed and must match; the claim publication records the operation as
+  pending on the actor (`kind: create_draft`, plan and context digests); the
+  succeeded finalizer replaces it with the completed selector under CAS.
+  `work_session_actor` learns the `create_draft` operation kind.
+- The draft receipt carries `work_session_binding` (the content-free binding
+  document) and `work_session_scope_sha256` as paired optional fields; both
+  receipt schemas, the private receipt shape validator and the
+  approval-integrity validator accept exactly that pair, and the mint-time
+  verifier recomputes the plan with the stored scope digest. Results carry a
+  content-free `work_session` block; no label, reviewer id or path is
+  echoed.
+- Refusals before any dialog: missing session ref
+  (`work_session_task_context_required`), a session of another task
+  (`work_session_task_context_mismatch`), a pending operation on the actor
+  (`work_session_original_operation_pending`), both modes or a human draft
+  (`work_session_native_write_mode_required` / the generic mode conflict).
+- Coverage manifest: `create-draft` becomes `session_integrated` with
+  `test_v0423_create_draft_session` as evidence (6 integrated, 29 pending,
+  20 exempt of 56); the counts pinned by the release-doc tests move at the
+  bump. MCP exposure of the session refs for create-draft is not part of
+  this unit.
+
+Evidence: `tests/test_v0423_create_draft_session.py` (4 tests: session-bound
+preview and approve with receipt attribution, actor completion, mint-time
+verification and idempotent replay; refusals without a dialog; the scope
+helpers' CAS and pending guards; the coverage gate). Regression cohort
+(every v0.4.20 work-session, source-intake, local-recovery, git-backup,
+session and invocation module, capability availability, the capability
+matrix docs, letter 137 approval integrity, the v0.3.313 fidelity tests,
+the exact operation manifest, predecessor surfaces and the private objet
+metadata index): 1,224 tests, one pin moved — the coverage-gate test that
+used `create-draft` as its example of a writer without session refs now
+uses `promote`.
+
 ## Client boundary
 
 Nothing here sets any letter's `resolved_in`. Client-side confirmation of ②

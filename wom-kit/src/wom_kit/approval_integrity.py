@@ -689,7 +689,16 @@ def _fidelity_receipt_shape_and_bindings_valid(
         "content_contract",
         "result",
     }
-    if set(receipt) != outer_keys:
+    if set(receipt) - {"work_session_binding", "work_session_scope_sha256"} != outer_keys:
+        return False
+    session_keys = {"work_session_binding", "work_session_scope_sha256"}.intersection(receipt)
+    if session_keys and (
+        len(session_keys) != 2
+        or type(receipt.get("work_session_scope_sha256")) is not str
+        or re.fullmatch(r"sha256:[0-9a-f]{64}", receipt["work_session_scope_sha256"]) is None
+        or not isinstance(receipt.get("work_session_binding"), Mapping)
+        or type(receipt["work_session_binding"].get("binding_sha256")) is not str
+    ):
         return False
     if not (
         receipt.get("schema")

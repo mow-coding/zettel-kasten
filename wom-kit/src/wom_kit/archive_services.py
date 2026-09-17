@@ -1410,6 +1410,7 @@ SOURCE_FIDELITY_REVIEW_BINDING_SCHEMA = (
 SOURCE_FIDELITY_MODES = frozenset(
     {"verbatim", "faithful_summary", "sanitized_derivative"}
 )
+SHA256_REF_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 SOURCE_FIDELITY_COMPARISON_BASIS = "utf8_newlines_lf"
 # v0.4.23 (beta letter 160 ②): a binary original may be the fidelity source
 # of a summary or derivative draft; its identity is the raw byte digest and
@@ -36443,6 +36444,7 @@ def _source_fidelity_plan_sha256(
     region: dict[str, Any] | None,
     frontmatter: dict[str, Any],
     frontmatter_authority_sha256: str | None = None,
+    work_session_scope_sha256: str | None = None,
 ) -> str:
     fidelity_authority = {
         key: value
@@ -36471,6 +36473,10 @@ def _source_fidelity_plan_sha256(
             or _source_fidelity_frontmatter_authority_sha256(frontmatter)
         ),
     }
+    if work_session_scope_sha256 is not None:
+        # v0.4.23 LR-06a: a session-bound draft freezes the claimed session
+        # scope into the reviewed plan; sessionless plans keep their bytes.
+        authority["work_session_scope_sha256"] = work_session_scope_sha256
     return _source_fidelity_digest_json(authority)
 
 
@@ -36814,13 +36820,15 @@ def _source_fidelity_draft_receipt(
     candidate_created_at: str,
     fidelity: dict[str, Any],
     plan_sha256: str,
+    work_session_binding: dict[str, Any] | None = None,
+    work_session_scope_sha256: str | None = None,
 ) -> dict[str, Any]:
     receipt_schema = (
         SOURCE_FIDELITY_DRAFT_RECEIPT_SCHEMA_V2
         if fidelity.get("schema") == SOURCE_FIDELITY_SCHEMA_V2
         else SOURCE_FIDELITY_DRAFT_RECEIPT_SCHEMA_V1
     )
-    return {
+    receipt = {
         "schema": receipt_schema,
         "action": "create_source_fidelity_draft",
         "archive_id": archive_id,
@@ -36847,6 +36855,13 @@ def _source_fidelity_draft_receipt(
             "share_performed": False,
         },
     }
+    if work_session_binding is not None or work_session_scope_sha256 is not None:
+        if work_session_binding is None or work_session_scope_sha256 is None:
+            raise ArchiveServiceError("create_draft_work_session_scope_invalid")
+        receipt["work_session_binding"] = json_safe(work_session_binding)
+        receipt["work_session_scope_sha256"] = work_session_scope_sha256
+    return receipt
+
 
 
 def _source_fidelity_existing_state(
@@ -36926,6 +36941,24 @@ def _source_fidelity_publish_create_only(
         raise ArchiveServiceError(conflict_code) from exc
     return True
 
+def _create_draft_work_session_projection(
+    work_session_binding: dict[str, Any] | None,
+    work_session_scope_sha256: str | None,
+) -> dict[str, Any]:
+    """Content-free session attribution for a result; absent when unbound."""
+
+    if work_session_binding is None or work_session_scope_sha256 is None:
+        return {}
+    return {
+        "work_session": {
+            "bound": True,
+            "scope_sha256": work_session_scope_sha256,
+            "work_session_binding_sha256": work_session_binding.get("binding_sha256"),
+            "private_values_echoed": False,
+        }
+    }
+
+
 
 def create_draft_zettel(
     archive_root: Path | str,
@@ -36964,7 +36997,19 @@ def create_draft_zettel(
     fidelity_session_evidence_id: str | None = None,
     expected_source_fidelity_plan_sha256: str | None = None,
     exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
+    work_session_binding: dict[str, Any] | None = None,
+    work_session_scope_sha256: str | None = None,
 ) -> dict[str, Any]:
+    # v0.4.23 LR-06a: both session facts or neither; the caller verified
+    # ownership under its held lane and this writer only freezes them.
+    if (work_session_binding is None) != (work_session_scope_sha256 is None):
+        raise ArchiveServiceError("create_draft_work_session_scope_invalid")
+    if work_session_scope_sha256 is not None and (
+        not isinstance(work_session_binding, dict)
+        or not isinstance(work_session_binding.get("binding_sha256"), str)
+        or SHA256_REF_RE.fullmatch(work_session_scope_sha256) is None
+    ):
+        raise ArchiveServiceError("create_draft_work_session_scope_invalid")
     ai_request_declared = _source_fidelity_ai_provenance_declared(
         creation_mode=creation_mode,
         created_by=created_by,
@@ -37499,6 +37544,7 @@ def create_draft_zettel(
             frontmatter_authority_sha256=(
                 source_fidelity_frontmatter_authority_sha256
             ),
+            work_session_scope_sha256=work_session_scope_sha256,
         )
         source_fidelity["creation_plan_sha256"] = (
             source_fidelity_plan_sha256
@@ -37572,6 +37618,8 @@ def create_draft_zettel(
             candidate_created_at=now,
             fidelity=source_fidelity,
             plan_sha256=source_fidelity_plan_sha256,
+            work_session_binding=work_session_binding,
+            work_session_scope_sha256=work_session_scope_sha256,
         )
         fidelity_receipt_bytes = (
             json.dumps(
@@ -37724,6 +37772,7 @@ def create_draft_zettel(
         ),
         "source_fidelity_plan_sha256": source_fidelity_plan_sha256,
         "source_fidelity_draft_receipt_path": fidelity_receipt_relative,
+        **_create_draft_work_session_projection(work_session_binding, work_session_scope_sha256),
         "first_read_check": first_read_check,
         "existing_draft_title_check": existing_draft_title_check,
         "blockers": unique_preserve_order(blockers),
@@ -37883,6 +37932,7 @@ def create_draft_zettel(
         ),
         "source_fidelity_plan_sha256": source_fidelity_plan_sha256,
         "source_fidelity_draft_receipt_path": fidelity_receipt_relative,
+        **_create_draft_work_session_projection(work_session_binding, work_session_scope_sha256),
         "first_read_check": first_read_check,
         "existing_draft_title_check": existing_draft_title_check,
         "warnings": unique_preserve_order(warnings),
@@ -38062,6 +38112,45 @@ def _source_fidelity_find_exact_regions(
     return positions
 
 
+_SOURCE_FIDELITY_RECEIPT_SESSION_KEYS = frozenset(
+    {"work_session_binding", "work_session_scope_sha256"}
+)
+_WORK_SESSION_BINDING_KEYS = frozenset({
+    "schema", "client_app_ref", "workstream_ref", "work_session_ref", "revision",
+    "archive_identity_sha256", "client_app_label_sha256", "workstream_label_sha256",
+    "binding_sha256",
+})
+
+
+def _source_fidelity_receipt_session_attribution_valid(value: dict[str, Any]) -> bool:
+    """v0.4.23: optional, paired, content-free session attribution."""
+
+    present = _SOURCE_FIDELITY_RECEIPT_SESSION_KEYS.intersection(value)
+    if not present:
+        return True
+    if present != _SOURCE_FIDELITY_RECEIPT_SESSION_KEYS:
+        return False
+    binding = value.get("work_session_binding")
+    scope = value.get("work_session_scope_sha256")
+    return bool(
+        isinstance(scope, str)
+        and SHA256_REF_RE.fullmatch(scope) is not None
+        and isinstance(binding, dict)
+        and set(binding) == _WORK_SESSION_BINDING_KEYS
+        and isinstance(binding.get("revision"), int)
+        and not isinstance(binding.get("revision"), bool)
+        and all(
+            isinstance(binding.get(key), str) and binding[key]
+            for key in _WORK_SESSION_BINDING_KEYS - {"revision"}
+        )
+        and all(
+            SHA256_REF_RE.fullmatch(binding[key]) is not None
+            for key in ("archive_identity_sha256", "client_app_label_sha256",
+                        "workstream_label_sha256", "binding_sha256")
+        )
+    )
+
+
 def _source_fidelity_private_receipt_shape_valid_v1(value: Any) -> bool:
     """Validate the complete private receipt contract without a runtime dependency.
 
@@ -38071,7 +38160,7 @@ def _source_fidelity_private_receipt_shape_valid_v1(value: Any) -> bool:
     region shapes before mint trusts any receipt field.
     """
 
-    if not isinstance(value, dict) or set(value) != {
+    if not isinstance(value, dict) or set(value) - _SOURCE_FIDELITY_RECEIPT_SESSION_KEYS != {
         "schema",
         "action",
         "archive_id",
@@ -38089,6 +38178,8 @@ def _source_fidelity_private_receipt_shape_valid_v1(value: Any) -> bool:
         "content_contract",
         "result",
     }:
+        return False
+    if not _source_fidelity_receipt_session_attribution_valid(value):
         return False
     if (
         value.get("schema") != SOURCE_FIDELITY_DRAFT_RECEIPT_SCHEMA_V1
@@ -38887,6 +38978,11 @@ def _source_fidelity_verify_for_mint(
         creation_plan_sha256
     ):
         expected_creation_plan = _source_fidelity_plan_sha256(
+            work_session_scope_sha256=(
+                private_receipt.get("work_session_scope_sha256")
+                if isinstance(private_receipt.get("work_session_scope_sha256"), str)
+                else None
+            ),
             archive_id=str(private_receipt.get("archive_id") or ""),
             archive_type=(
                 private_receipt.get("archive_type")
@@ -39044,6 +39140,12 @@ def _source_fidelity_verify_for_mint(
     current_plan_sha256: str | None = None
     if not blockers:
         current_plan_sha256 = _source_fidelity_plan_sha256(
+            work_session_scope_sha256=(
+                private_receipt.get("work_session_scope_sha256")
+                if isinstance(private_receipt, dict)
+                and isinstance(private_receipt.get("work_session_scope_sha256"), str)
+                else None
+            ),
             archive_id=archive_id,
             archive_type=archive_type,
             draft_id=str(frontmatter.get("id") or path.stem),

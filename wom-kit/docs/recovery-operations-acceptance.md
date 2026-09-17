@@ -362,6 +362,23 @@ text-mode `--approve` prints its reason codes, so the client's next
 occurrence is self-diagnosing. Recorded in the
 [v0.4.23 implementation record](../../meeting-minutes/2026-09-17-v0423-carried-work-implementation.md).
 
+### 2026-09-17 v0.4.23 U3 (LR-06a): create-draft session integration
+
+Development verified (Claude Fable 5.1, solo): `create-draft` with
+`--client-app-ref`, `--task-route-ref` and `--work-session-ref` runs under
+the held session lane, freezes the claimed session's content-free scope
+digest into the reviewed fidelity plan and the native dialog, re-verifies it
+after the dialog, records the operation as pending then completed on the
+actor, and writes the binding into the draft receipt; sessionless
+create-draft and every existing plan digest are unchanged. The reusable
+`work_session_native_write` module is the template for the other native
+single writers. Coverage: 6 integrated, 29 pending, 20 exempt of 56.
+Evidence: 4 tests in `test_v0423_create_draft_session.py`; regression cohort
+recorded in the
+[v0.4.23 implementation record](../../meeting-minutes/2026-09-17-v0423-carried-work-implementation.md).
+LR-06 remains open for the 29 pending paths; installed/client acceptance
+pending.
+
 ### 2026-09-17 v0.4.21 released
 
 v0.4.21 is public: tag `v0.4.21` on main `70536034`, one wheel
