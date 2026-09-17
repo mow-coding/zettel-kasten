@@ -13,7 +13,7 @@ from jsonschema import Draft202012Validator
 
 from wom_kit import archive_services
 
-import tests.test_v03313_source_fidelity as _fixture_module
+import test_v03313_source_fidelity as _fixture_module
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
 # Not valid UTF-8 (0xff 0xfe) and carries NUL bytes, like a real xlsx/pdf header.
