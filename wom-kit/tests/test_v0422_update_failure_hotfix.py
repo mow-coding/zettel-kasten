@@ -250,11 +250,18 @@ class UpgradeCheckNoticeTests(unittest.TestCase):
         root = Path(temporary.name) / "archive"
         shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", root)
         out, err = io.StringIO(), io.StringIO()
+        err.isatty = lambda: True  # an operator watching a terminal
         with redirect_stdout(out), redirect_stderr(err):
             archive_cli.main(["upgrade-check", str(root), "--dry-run", "--format", "json"])
         self.assertIn("[upgrade-check] running the full deep Doctor scan", err.getvalue())
         self.assertIn("not required before project-version-update", err.getvalue())
         self.assertNotIn(str(root), err.getvalue())
+        json.loads(out.getvalue())  # the result stream is untouched
+        # a redirected stderr (scripts, JSON consumers) keeps its exact bytes
+        quiet_out, quiet_err = io.StringIO(), io.StringIO()
+        with redirect_stdout(quiet_out), redirect_stderr(quiet_err):
+            archive_cli.main(["upgrade-check", str(root), "--dry-run", "--format", "json"])
+        self.assertEqual(quiet_err.getvalue(), "")
 
 
 if __name__ == "__main__":
