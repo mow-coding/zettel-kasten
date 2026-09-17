@@ -105269,10 +105269,27 @@ def read_pyproject_version_text(text: str) -> str | None:
 
 WOM_KIT_VERSION_METADATA_MAX_BYTES = 64 * 1024
 WOM_KIT_VERSION_PIN_MAX_BYTES = 1024
-WOM_KIT_VERSION_GIT_PROBE_BUDGET_SECONDS = 12.0
+# v0.4.22 (beta letter 161 ①): 12 s was exhausted on a cold NTFS cache while
+# another disk-heavy command ran; the shared read-only budget is 45 s and a
+# skipped probe is reported as budget exhaustion, never as misconfiguration.
+WOM_KIT_VERSION_GIT_PROBE_BUDGET_SECONDS = 45.0
 WOM_KIT_WINDOWS_PATH_PROBE_TIMEOUT_SECONDS = 2.0
 WOM_KIT_WINDOWS_PATH_MAX_CANDIDATES = 64
 _WOM_KIT_GIT_PROBE_BUDGET_LOCAL = threading.local()
+
+
+def _wom_kit_git_probe_budget_summary() -> dict[str, Any] | None:
+    """Return the active read-only Git probe budget state, content-free."""
+
+    state = getattr(_WOM_KIT_GIT_PROBE_BUDGET_LOCAL, "state", None)
+    if not isinstance(state, dict):
+        return None
+    return {
+        "budget_seconds": float(state.get("budget_seconds") or 0.0),
+        "git_calls_started": int(state.get("git_calls_started") or 0),
+        "git_calls_skipped": int(state.get("git_calls_skipped") or 0),
+        "budget_exhausted": bool(state.get("exhausted")),
+    }
 
 
 @contextmanager
@@ -108892,6 +108909,10 @@ def wom_kit_runtime_alignment(
             if unavailable_integrity
             else "project_wrapper_missing_or_outside_mirror"
         )
+        if unavailable_integrity and (
+            _wom_kit_git_probe_budget_summary() or {}
+        ).get("budget_exhausted"):
+            reason_code = "project_git_probe_budget_exhausted"
     else:
         assert mirror_project_root is not None
         assert mirror_path is not None
@@ -108915,6 +108936,10 @@ def wom_kit_runtime_alignment(
                 else "project_source_update_required"
             )
             reason_code = str(integrity["reason_code"])
+            if unavailable_integrity and (
+                _wom_kit_git_probe_budget_summary() or {}
+            ).get("budget_exhausted"):
+                reason_code = "project_git_probe_budget_exhausted"
         elif normalized_running == normalized_source:
             status = "aligned"
             reason_code = "running_version_matches_project_source"
@@ -120497,6 +120522,31 @@ def _project_update_claim_store_absent_read_only(
         return False
 
 
+def _project_update_assert_abandon_started_approval_allowed(
+    state: _ProjectVersionUpdateDurableApprovalState,
+) -> None:
+    """Refuse to abandon unless nothing past the lock backlink was written.
+
+    Exactly one ``lock_backlinked`` checkpoint and a ``prewrite_exact`` live
+    classification prove that the approved writer never appended
+    ``approval_bound`` or any component intent, so closing the started claim
+    strands nothing.  Any other shape keeps the claim for ordinary resume.
+    """
+
+    inspection = state.transaction.inspect()
+    phases = [item.phase for item in inspection.journal.verified_prefix]
+    live = _project_update_live_component_sha256(state)
+    classification = state.transaction.classify_live_components(live)
+    if (
+        inspection.journal.state != "exact"
+        or phases != ["lock_backlinked"]
+        or classification.overall != "prewrite_exact"
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_abandon_unavailable"
+        )
+
+
 def _project_update_cancel_claimless_preapproval_state(
     state: _ProjectVersionUpdateDurableApprovalState,
     *,
@@ -126362,8 +126412,18 @@ def _wom_kit_project_version_update_resume_live_transaction(
     _legacy_recovery_resume_boundary: (
         Callable[[], Any] | None
     ) = None,
+    abandon_started_approval: bool = False,
 ) -> dict[str, Any]:
-    """Resume an authenticated claim/transaction pair with zero new native UI."""
+    """Resume an authenticated claim/transaction pair with zero new native UI.
+
+    ``abandon_started_approval`` (v0.4.22, beta letters 161/162) is the
+    human-reviewed exit for a started claim whose writer failed before the
+    ``approval_bound`` checkpoint: the started claim is closed as failed and
+    the ordinary claimless pre-approval cancellation releases the
+    reservation.  It is refused unless the transaction journal holds exactly
+    the ``lock_backlinked`` checkpoint and every live component is still at
+    its pre-write state.
+    """
 
     def report_progress(stage: str, event: str) -> None:
         if progress_callback is None:
@@ -126934,6 +126994,7 @@ def _wom_kit_project_version_update_resume_live_transaction(
             expected_approval_root=_expected_approval_root,
             expected_archive_id=_expected_archive_id,
         )
+        state.progress_callback = progress_callback
     except project_update_transaction.ProjectUpdateTransactionError as failure:
         if failure.code != "project_update_transaction_not_found":
             raise
@@ -127034,6 +127095,8 @@ def _wom_kit_project_version_update_resume_live_transaction(
             or _approval_identifier_supplied
         ),
     )
+    if abandon_started_approval:
+        _project_update_assert_abandon_started_approval_allowed(state)
     try:
         with _project_update_terminal_execution_lease(
             state,
@@ -127050,6 +127113,11 @@ def _wom_kit_project_version_update_resume_live_transaction(
                 succeeded_guard,
                 state.reviewer,
                 candidate_missing_handler=candidate_missing_handler,
+                **(
+                    {"abandon_started_approval": True}
+                    if abandon_started_approval
+                    else {}
+                ),
             )
             if not isinstance(result, Mapping):
                 raise ArchiveServiceError(
@@ -128051,6 +128119,11 @@ class _ProjectVersionUpdateDurableApprovalState:
     # Private, in-process-only recovery authority.  It contains callbacks and
     # path objects and is deliberately excluded from every preview/receipt.
     legacy_prewrite_recovery_control: dict[str, Any] | None = None
+    # v0.4.22: observational stage progress for the post-approval writer;
+    # never part of any binding, preview, receipt or digest.
+    progress_callback: (
+        Callable[[str, str, int | None, int | None], None] | None
+    ) = None
 
     def checkpoint_head(self) -> project_update_transaction.ProjectUpdateCheckpoint:
         journal = self.transaction.inspect().journal
@@ -132534,12 +132607,29 @@ def _project_update_build_domain_result(
     }
 
 
+def _project_update_report_stage(
+    state: _ProjectVersionUpdateDurableApprovalState,
+    stage: str,
+    event: str,
+) -> None:
+    """Emit one content-free stage event; observation never changes results."""
+
+    callback = getattr(state, "progress_callback", None)
+    if callback is None:
+        return
+    try:
+        callback(stage, event, None, None)
+    except Exception:
+        return
+
+
 def _project_update_durable_writer(
     state: _ProjectVersionUpdateDurableApprovalState,
     claim: _ClaimedExactHumanApproval,
 ) -> dict[str, Any]:
     """Resume-safe exact component writer; it deliberately keeps the lock."""
 
+    _project_update_report_stage(state, "post-claim-revalidate", "start")
     if not _project_update_terminal_execution_lease_is_held(state):
         raise ArchiveServiceError(
             "project_version_update_terminal_execution_boundary_unknown"
@@ -132565,6 +132655,7 @@ def _project_update_durable_writer(
     )
     if not component_started:
         _project_update_assert_approved_snapshot_unchanged(state)
+    _project_update_report_stage(state, "post-claim-revalidate", "done")
     reference_sha256, approval_mac_sha256 = _project_update_claim_authority(
         state,
         claim,
@@ -132596,6 +132687,7 @@ def _project_update_durable_writer(
             state.transaction.inspect().journal.verified_prefix
         )
     if not any(item.phase == "approval_bound" for item in checkpoints):
+        _project_update_report_stage(state, "approval-bound", "start")
         state.transaction.append(
             phase="approval_bound",
             stage="verified",
@@ -132605,6 +132697,8 @@ def _project_update_durable_writer(
             approval_reference_sha256=reference_sha256,
             approval_mac_sha256=approval_mac_sha256,
         )
+    _project_update_report_stage(state, "approval-bound", "done")
+    _project_update_report_stage(state, "durable-write", "start")
 
     for component in state.transaction.intent.components:
         checkpoints = list(
@@ -138981,6 +139075,11 @@ def _wom_kit_project_version_update_legacy_core_generator(
             # enter its historical rollback path after a durable component
             # failure or after successful terminal finalization.
             durable_handoff_complete = True
+            if progress_callback is not None:
+                try:
+                    progress_callback("native-approval", "start", None, None)
+                except Exception:
+                    pass
             yield _ProjectVersionUpdatePreparedApproval(
                 preview=copy.deepcopy(prepared_preview),
                 state=durable_approval_state,
@@ -140772,6 +140871,7 @@ def _wom_kit_project_version_update_legacy_core(
     ):
         prepared = prepared_preview
         state = prepared.state
+        state.progress_callback = safe_progress_callback
         continuation_used = False
 
         def durable_continue_after_approval(

@@ -24,6 +24,62 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.4.22 Project-Update Failure Truth And Started-Claim Abandon
+
+Install the exact public wheel only after the matching release and asset exist.
+Use a new external CPython 3.12 environment so the real `python.exe -m pip`
+records the wheel hash in installed PEP 610 metadata.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0422-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.22/wom_kit-0.4.22-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+Require exactly `archive 0.4.22` from a new process. Publishing or installing
+the wheel changes no client archive, project runtime, or version pin. A client
+separately chooses and approves any project update.
+
+If a reviewed `project-version-update --approve` failed after the native
+dialog and left the project reserved (the claim `started`, the lock and the
+`private/version-updates/update_*` transaction present, `--resume` failing in
+preflight), the v0.4.22 updater reports the refusing gate as `cause_code` and
+`cause_stage` and its journal names the stage it stopped in. To release the
+reservation without a second dialog, run the v0.4.22 bootstrap `archive` from
+the project root that started the update (an older project launcher does not
+know the flag):
+
+```powershell
+archive project-version-update <project-root> --resume --abandon-started-approval --affirm-external-writers-quiescent --format json
+archive project-version-update <project-root> --resume --affirm-external-writers-quiescent --format json
+```
+
+The first command is allowed only while the journal proves no component write
+started (`prewrite_exact`); otherwise it returns
+`project_version_update_abandon_unavailable` and writes nothing. The second
+command returns `preapproval_scaffold_cancelled` with the lock and the
+transaction removed and the version pin unchanged; a fresh `--dry-run` and
+`--approve` then open one new dialog. A claim that failed for any other reason
+still blocks resume discovery.
+
+`version` reports a skipped Git probe as `project_git_probe_budget_exhausted`
+(the shared budget is now 45 seconds) instead of a misconfigured origin;
+`operation-control` started from an archive root finds the owning project's
+journal and reports `inspection_root_resolved_to_parent_project: true`;
+`upgrade-check` without `--progress` prints its full deep Doctor scope to a
+terminal stderr first (a redirected stderr is unchanged) and is not required
+before an update.
+
+After one reviewed project update, start the project launcher in a new process
+and verify its pin, source, launcher, and runtime evidence. Only that client-run
+result can show that the project was repaired.
+
 ## v0.4.21 Reopened Writers And One-Approval Intake
 
 Install the exact public wheel only after the matching release and asset exist.

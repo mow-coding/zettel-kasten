@@ -188,6 +188,10 @@ class CiUnittestShardingTests(unittest.TestCase):
                 else "75"
                 if row["shard_index_zero"] == "0"
                 or (windows and row["shard_index_zero"] == "2")
+                # v0.4.22: the last Windows shard ran 40.7 min on the
+                # v0.4.21 candidate and was cut at 45 by runner variance.
+                else "60"
+                if windows and row["shard_index_zero"] == "3"
                 else "45"
             )
             self.assertEqual(

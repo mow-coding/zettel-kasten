@@ -76,7 +76,13 @@ starting a new result binding. A pending terminal-delivery resume must omit
 
 ## Inspect, wait, or recover
 
-Use the exact root that started the command and the exact opaque reference:
+Use the exact root that started the command and the exact opaque reference.
+Since v0.4.22, when an archive root's only blocker is `operation_not_found`
+for `status`, `wait` or `recovery-plan`, the command retries once with the
+parent project root that owns the archive (the project whose
+`.zettel-kasten` journal recorded a `project-version-update` started from the
+project root) and reports `inspection_root_resolved_to_parent_project: true`;
+nothing is written either way.
 
 ```powershell
 archive operation-control <project-or-archive-root> `

@@ -1,6 +1,6 @@
 # Exact Human Approval Contract
 
-Status: v0.4.19 field-level updater revalidation; v0.4.0 one-use authority baseline preserved
+Status: v0.4.22 operator abandon of a started project-update claim; v0.4.19 field-level updater revalidation; v0.4.0 one-use authority baseline preserved
 
 ## Purpose
 
@@ -284,8 +284,21 @@ durable effects occurred: an immutable operation receipt may already exist
 even when a later index update or final verification failed. The returned
 content-free `approval_claim_reconciliation_required` code means the claim
 requires reconciliation and must never be reported as clean failure or
-retried automatically. Terminal `failed` is reserved for a future path with
-verifiable before-mutation proof.
+retried automatically. Terminal `failed` is reserved for a path with
+verifiable before-mutation proof. Since v0.4.22 `project-version-update
+--resume --abandon-started-approval` is that path for one operation: after
+human review it finalizes the started claim of the exact transaction context
+as `failed` with `operator_abandoned_before_domain_write`, only while the
+transaction journal proves that no component write started (journal state
+`exact`, verified phases `lock_backlinked` only, live classification
+`prewrite_exact`) and only when the claim's own authenticated checkpoint guard
+passes; it opens no dialog and writes nothing else. Resume discovery treats
+exactly that failure code as absence, so the ordinary claimless cancellation
+can release the lock and reservation; a claim that failed for any other reason
+still blocks discovery. Since v0.4.22 a failure raised by the approved writer
+or the claim broker also carries a content-free `cause_code` and `cause_stage`
+(`domain_writer` or `key_or_claim`), restricted to fixed codes of the
+project-update and approval families; exception chaining stays `from None`.
 There is no claim expiry: one workflow invocation consumes the one-use
 authority. A later attempt normally requires a new live review. The narrow
 v0.4.8 exception is `duplicate-object-reconcile --revert --resume`: when one

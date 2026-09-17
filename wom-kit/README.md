@@ -10,28 +10,37 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.4.21 GitHub Release, when present, uses the self-contained wheel
+The exact v0.4.22 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0421-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0422-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.21/wom_kit-0.4.21-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.22/wom_kit-0.4.22-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-Run the version check in a new process and require exactly `archive 0.4.21`.
+Run the version check in a new process and require exactly `archive 0.4.22`.
 The dedicated external CPython 3.12 environment and exact real
 `python.exe -m pip` path retain the wheel SHA-256 required by the updater. A
 user-scoped `uv tool` environment whose installed metadata omits that archive
 hash is not project-updater supply evidence. Installing the bootstrap does not
 silently update a project-local WOM-kit source mirror or its pin.
+
+v0.4.22 makes a `project-version-update` that fails after the native approval
+report the refusing fixed gate (`cause_code`, `cause_stage`) and the journal
+stage it stopped in, adds `--resume --abandon-started-approval` to close a
+stuck `started` claim while the journal proves nothing was written so the
+claimless cancellation can release the lock and reservation, reports a
+skipped `version` Git probe as `project_git_probe_budget_exhausted` instead of
+a misconfigured origin, and lets `operation-control` find the owning project's
+journal from an archive root (beta letters 161 and 162).
 
 v0.4.21 reopens `discard-draft`, `discard-draft-restore`, the `zettel-edge`,
 `mint-zet` and `retire-draft` batches, `revert-batch`, `zet-revision-write` and
