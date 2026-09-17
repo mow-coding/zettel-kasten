@@ -29,7 +29,9 @@ class WriterSessionCoverageGateTests(unittest.TestCase):
         paths["synthetic-retired-command"] = {"status": "pending", "target": "v0.4.21"}
         paths["work-session"] = {"status": "pending", "target": "v0.4.21"}
         paths["mint-zet"] = {"status": "session_integrated", "evidence": ["test_missing_module"]}
-        paths["zet-title-remap-revert"]["route"] = "create-draft"
+        # v0.4.23: create-draft exposes session refs itself; route through a
+        # pending native writer that still has none.
+        paths["zet-title-remap-revert"]["route"] = "promote"
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "manifest.json"
             path.write_text(json.dumps(manifest), encoding="utf-8")
@@ -41,8 +43,8 @@ class WriterSessionCoverageGateTests(unittest.TestCase):
         self.assertIn("work-session: marked pending but already exposes session refs", joined)
         self.assertIn("mint-zet: session_integrated but mint-zet exposes no session refs", joined)
         self.assertIn("evidence test module missing: test_missing_module", joined)
-        self.assertIn("zet-title-remap-revert: session_integrated but create-draft exposes no session refs", joined)
-        self.assertIn("route create-draft is not itself session_integrated", joined)
+        self.assertIn("zet-title-remap-revert: session_integrated but promote exposes no session refs", joined)
+        self.assertIn("route promote is not itself session_integrated", joined)
         self.assertNotEqual(subject.main(["--manifest", str(path.with_name("absent.json")), "--format", "json"]), 0)
 
 

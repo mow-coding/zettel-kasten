@@ -1,6 +1,6 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.4.22",
+  "version": "0.4.23",
   "source_of_truth": "wom-kit source resource directories",
   "file_count": 169,
   "files": [
@@ -547,14 +547,14 @@
     {
       "source": "schemas/source-fidelity-draft-receipt-v0.2.schema.json",
       "packaged": "schemas/source-fidelity-draft-receipt-v0.2.schema.json",
-      "bytes": 10541,
-      "sha256": "65e422b0d2fb91aa07c180d88c30e851b1221887b7364de5c4e36240f402210d"
+      "bytes": 15783,
+      "sha256": "71af51b735f7376ba492c1783743768f5e52533e6c3cd1c6ec9e1a05075abcc8"
     },
     {
       "source": "schemas/source-fidelity-draft-receipt.schema.json",
       "packaged": "schemas/source-fidelity-draft-receipt.schema.json",
-      "bytes": 5883,
-      "sha256": "dd89ecccbfa5acb7491f2ea4bc23d149151bbc1842191ac9924af6fc9fdc9c19"
+      "bytes": 9042,
+      "sha256": "4271d3922ca00d77189157c78554dfea4ac10642c9d63128a58563c3ebf2a1ef"
     },
     {
       "source": "schemas/source-fidelity-session-evidence-receipt-v0.1.schema.json",
@@ -1013,10 +1013,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.4.22.md",
-      "packaged": "release-notes/v0.4.22.md",
-      "bytes": 8402,
-      "sha256": "9381aeffaf4f991e511dff672285d93711b2510b5f0028660a79dbe6b012dbee"
+      "source": "docs/releases/v0.4.23.md",
+      "packaged": "release-notes/v0.4.23.md",
+      "bytes": 6483,
+      "sha256": "6cbbf462354d09649d80ad919681fe8b6e143f79d652dc533ded319d17e318f7"
     }
   ]
 }

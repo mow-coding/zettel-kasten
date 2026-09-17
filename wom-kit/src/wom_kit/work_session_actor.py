@@ -40,7 +40,9 @@ _KEYS = frozenset({
 })
 _CONTINUATION_KEYS = frozenset({"pending_registry_intent_plan_sha256", "last_completed_operation"})
 _EXTENSION_KEYS = _CONTINUATION_KEYS | {"established_origin", "pending_operation_kind"}
-_DOMAIN_OPERATION_KINDS = frozenset({"git_backup", "source_intake_batch", "source_intake_record", "local_recovery"})
+_DOMAIN_OPERATION_KINDS = frozenset({"git_backup", "source_intake_batch", "source_intake_record", "local_recovery",
+                                     # v0.4.23 LR-06a: native single writers bound by scope digest
+                                     "create_draft"})
 _PENDING_OPERATION_KINDS = _DOMAIN_OPERATION_KINDS | {"human_session_decision"}
 _UNSET = object()
 _ERRORS = frozenset({

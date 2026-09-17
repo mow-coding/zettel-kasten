@@ -23,19 +23,60 @@
     "result"
   ],
   "properties": {
-    "schema": {"const": "wom-kit/source-fidelity-draft-receipt/v0.1"},
-    "action": {"const": "create_source_fidelity_draft"},
-    "archive_id": {"type": "string", "minLength": 1},
-    "archive_type": {"type": ["string", "null"]},
-    "draft_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"},
-    "draft_path": {"type": "string", "pattern": "^inbox/[A-Za-z0-9_-]+\\.md$"},
-    "body_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-    "creation_mode": {"enum": ["ai_assisted", "ai_generated"]},
-    "frontmatter_authority_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-    "source_fidelity_plan_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-    "reviewed_by": {"type": "string", "minLength": 1},
-    "review_binding_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-    "candidate_created_at": {"type": "string", "minLength": 1},
+    "schema": {
+      "const": "wom-kit/source-fidelity-draft-receipt/v0.1"
+    },
+    "action": {
+      "const": "create_source_fidelity_draft"
+    },
+    "archive_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "archive_type": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "draft_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+    },
+    "draft_path": {
+      "type": "string",
+      "pattern": "^inbox/[A-Za-z0-9_-]+\\.md$"
+    },
+    "body_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "creation_mode": {
+      "enum": [
+        "ai_assisted",
+        "ai_generated"
+      ]
+    },
+    "frontmatter_authority_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "source_fidelity_plan_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "reviewed_by": {
+      "type": "string",
+      "minLength": 1
+    },
+    "review_binding_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "candidate_created_at": {
+      "type": "string",
+      "minLength": 1
+    },
     "source_fidelity": {
       "type": "object",
       "additionalProperties": false,
@@ -58,8 +99,16 @@
         "evidence_id"
       ],
       "properties": {
-        "schema": {"const": "wom-kit/source-fidelity/v0.1"},
-        "mode": {"enum": ["verbatim", "faithful_summary", "sanitized_derivative"]},
+        "schema": {
+          "const": "wom-kit/source-fidelity/v0.1"
+        },
+        "mode": {
+          "enum": [
+            "verbatim",
+            "faithful_summary",
+            "sanitized_derivative"
+          ]
+        },
         "audience": {
           "enum": [
             "private_self",
@@ -69,7 +118,12 @@
             "legal_copyright_request"
           ]
         },
-        "comparison_basis": {"const": "utf8_newlines_lf"},
+        "comparison_basis": {
+          "enum": [
+            "utf8_newlines_lf",
+            "bytes"
+          ]
+        },
         "source": {
           "type": "object",
           "additionalProperties": false,
@@ -85,80 +139,245 @@
             "source_locator_stored"
           ],
           "properties": {
-            "object_id": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
-            "raw_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-            "raw_size_bytes": {"type": "integer", "minimum": 0},
-            "normalized_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-            "normalized_size_bytes": {"type": "integer", "minimum": 0},
-            "comparison_basis": {"const": "utf8_newlines_lf"},
-            "newline_transformation_applied": {"type": "boolean"},
-            "source_text_stored": {"const": false},
-            "source_locator_stored": {"const": false}
+            "object_id": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            "raw_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "raw_size_bytes": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "normalized_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "normalized_size_bytes": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "comparison_basis": {
+              "enum": [
+                "utf8_newlines_lf",
+                "bytes"
+              ]
+            },
+            "newline_transformation_applied": {
+              "type": "boolean"
+            },
+            "source_text_stored": {
+              "const": false
+            },
+            "source_locator_stored": {
+              "const": false
+            }
           }
         },
         "region": {
           "oneOf": [
-            {"type": "null"},
+            {
+              "type": "null"
+            },
             {
               "type": "object",
               "additionalProperties": false,
-              "required": ["offset_bytes", "length_bytes", "sha256"],
+              "required": [
+                "offset_bytes",
+                "length_bytes",
+                "sha256"
+              ],
               "properties": {
-                "offset_bytes": {"type": "integer", "minimum": 0},
-                "length_bytes": {"type": "integer", "minimum": 0},
-                "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                "offset_bytes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "length_bytes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
               }
             }
           ]
         },
-        "byte_exact": {"const": false},
-        "mechanically_verified": {"type": "boolean"},
-        "semantic_fidelity_machine_verified": {"const": false},
-        "human_review_required": {"const": true},
-        "source_changed": {"const": false},
-        "share_performed": {"const": false},
-        "source_text_stored": {"const": false},
-        "source_locator_stored": {"const": false},
-        "creation_plan_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-        "evidence_id": {"type": "string", "pattern": "^source-fidelity-evidence:[0-9a-f]{24}$"}
+        "byte_exact": {
+          "const": false
+        },
+        "mechanically_verified": {
+          "type": "boolean"
+        },
+        "semantic_fidelity_machine_verified": {
+          "const": false
+        },
+        "human_review_required": {
+          "const": true
+        },
+        "source_changed": {
+          "const": false
+        },
+        "share_performed": {
+          "const": false
+        },
+        "source_text_stored": {
+          "const": false
+        },
+        "source_locator_stored": {
+          "const": false
+        },
+        "creation_plan_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "evidence_id": {
+          "type": "string",
+          "pattern": "^source-fidelity-evidence:[0-9a-f]{24}$"
+        }
       },
       "if": {
-        "properties": {"mode": {"const": "verbatim"}},
-        "required": ["mode"]
+        "properties": {
+          "mode": {
+            "const": "verbatim"
+          }
+        },
+        "required": [
+          "mode"
+        ]
       },
       "then": {
         "properties": {
-          "region": {"type": "object"},
-          "mechanically_verified": {"const": true}
+          "region": {
+            "type": "object"
+          },
+          "mechanically_verified": {
+            "const": true
+          }
         }
       },
       "else": {
         "properties": {
-          "region": {"type": "null"},
-          "mechanically_verified": {"const": false}
+          "region": {
+            "type": "null"
+          },
+          "mechanically_verified": {
+            "const": false
+          }
         }
       }
     },
     "content_contract": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["source_text_stored", "source_locator_stored", "source_path_stored"],
+      "required": [
+        "source_text_stored",
+        "source_locator_stored",
+        "source_path_stored"
+      ],
       "properties": {
-        "source_text_stored": {"const": false},
-        "source_locator_stored": {"const": false},
-        "source_path_stored": {"const": false}
+        "source_text_stored": {
+          "const": false
+        },
+        "source_locator_stored": {
+          "const": false
+        },
+        "source_path_stored": {
+          "const": false
+        }
       }
     },
     "result": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["draft_written_create_only", "receipt_written_create_only", "source_changed", "share_performed"],
+      "required": [
+        "draft_written_create_only",
+        "receipt_written_create_only",
+        "source_changed",
+        "share_performed"
+      ],
       "properties": {
-        "draft_written_create_only": {"const": true},
-        "receipt_written_create_only": {"const": true},
-        "source_changed": {"const": false},
-        "share_performed": {"const": false}
+        "draft_written_create_only": {
+          "const": true
+        },
+        "receipt_written_create_only": {
+          "const": true
+        },
+        "source_changed": {
+          "const": false
+        },
+        "share_performed": {
+          "const": false
+        }
       }
+    },
+    "work_session_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "client_app_ref",
+        "workstream_ref",
+        "work_session_ref",
+        "revision",
+        "archive_identity_sha256",
+        "client_app_label_sha256",
+        "workstream_label_sha256",
+        "binding_sha256"
+      ],
+      "properties": {
+        "schema": {
+          "type": "string"
+        },
+        "client_app_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "workstream_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "work_session_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "archive_identity_sha256": {
+          "$ref": "#/$defs/sha256_ref"
+        },
+        "client_app_label_sha256": {
+          "$ref": "#/$defs/sha256_ref"
+        },
+        "workstream_label_sha256": {
+          "$ref": "#/$defs/sha256_ref"
+        },
+        "binding_sha256": {
+          "$ref": "#/$defs/sha256_ref"
+        }
+      }
+    },
+    "work_session_scope_sha256": {
+      "$ref": "#/$defs/sha256_ref"
+    }
+  },
+  "dependentRequired": {
+    "work_session_binding": [
+      "work_session_scope_sha256"
+    ],
+    "work_session_scope_sha256": [
+      "work_session_binding"
+    ]
+  },
+  "$defs": {
+    "sha256_ref": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
     }
   }
 }

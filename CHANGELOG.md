@@ -6,6 +6,26 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.23 - 2026-09-18
+
+- Let a binary original (PDF, spreadsheet, image) be the fidelity source of a
+  `faithful_summary` or `sanitized_derivative` draft on a second comparison
+  basis, `bytes` (raw digest as normalized digest, no transformation, no
+  source text or locator stored); `verbatim` still requires UTF-8 text and
+  names the two accepting modes (beta letter 160 ②). Both draft receipt
+  schemas accept the two-value basis enum; text receipts are byte-identical.
+- Bound `create-draft` to a claimed work session: with `--client-app-ref`,
+  `--task-route-ref` and `--work-session-ref` the ownership facts are frozen
+  into the reviewed fidelity plan and the native dialog, re-verified after the
+  dialog, recorded on the actor as pending then completed, and written into
+  the receipt (`work_session_binding`, `work_session_scope_sha256`); the
+  reusable `work_session_native_write` module is the template for the other
+  native writers. Coverage: 6 integrated, 29 pending, 20 exempt of 56 (LR-06a).
+- Reproduced beta letter 160 ④ on its exact PowerShell 5.1 wrapper shape: not
+  confirmed, no code change. Revalidated the carried rows LR-02 through LR-05
+  and LR-07 against their existing domain cohorts; they stay open for client
+  closure.
+
 ## v0.4.22 - 2026-09-17
 
 - Made a `project-version-update` failure after the native approval say where

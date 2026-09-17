@@ -1410,7 +1410,19 @@ SOURCE_FIDELITY_REVIEW_BINDING_SCHEMA = (
 SOURCE_FIDELITY_MODES = frozenset(
     {"verbatim", "faithful_summary", "sanitized_derivative"}
 )
+SHA256_REF_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 SOURCE_FIDELITY_COMPARISON_BASIS = "utf8_newlines_lf"
+# v0.4.23 (beta letter 160 ②): a binary original may be the fidelity source
+# of a summary or derivative draft; its identity is the raw byte digest and
+# no text normalization is claimed. verbatim keeps requiring UTF-8 text.
+SOURCE_FIDELITY_BYTES_COMPARISON_BASIS = "bytes"
+SOURCE_FIDELITY_COMPARISON_BASES = (
+    SOURCE_FIDELITY_COMPARISON_BASIS,
+    SOURCE_FIDELITY_BYTES_COMPARISON_BASIS,
+)
+SOURCE_FIDELITY_BINARY_SOURCE_MODES = frozenset(
+    {"faithful_summary", "sanitized_derivative"}
+)
 SOURCE_FIDELITY_DRAFT_RECEIPTS_DIR = "receipts/source-fidelity/drafts"
 SOURCE_FIDELITY_MAX_SOURCE_BYTES = 16 * 1024 * 1024
 SOURCE_FIDELITY_MAX_DRAFT_BYTES = 32 * 1024 * 1024
@@ -35093,6 +35105,8 @@ def source_fidelity_policy() -> dict[str, Any]:
         "schema": SOURCE_FIDELITY_SCHEMA,
         "modes": sorted(SOURCE_FIDELITY_MODES),
         "comparison_basis": SOURCE_FIDELITY_COMPARISON_BASIS,
+        "comparison_bases": list(SOURCE_FIDELITY_COMPARISON_BASES),
+        "binary_source_modes": sorted(SOURCE_FIDELITY_BINARY_SOURCE_MODES),
         "authority_kinds": [
             "manifested_object",
             "reviewed_session_evidence",
@@ -35312,8 +35326,15 @@ def _source_fidelity_manifest_object_provenance(
 def _source_fidelity_read_manifested_object(
     root: Path,
     object_id_value: Any,
+    *,
+    binary_basis_allowed: bool = False,
 ) -> tuple[dict[str, Any] | None, bytes | None, list[str]]:
-    """Read one local content-addressed UTF-8 objet without reflecting its content."""
+    """Read one local content-addressed objet without reflecting its content.
+
+    Text objets are normalized to UTF-8/LF. With ``binary_basis_allowed`` a
+    non-UTF-8 (or NUL-carrying) objet is evidence on the ``bytes`` basis:
+    its normalized digest is its raw digest and no transformation is claimed.
+    """
 
     blockers: list[str] = []
     object_id = str(object_id_value or "").strip().lower()
@@ -35365,6 +35386,25 @@ def _source_fidelity_read_manifested_object(
     try:
         source_text = raw.decode("utf-8")
     except UnicodeDecodeError:
+        source_text = None
+    if binary_basis_allowed and (source_text is None or "\x00" in source_text):
+        evidence = {
+            "authority_kind": "manifested_object",
+            "object_id": object_id,
+            "raw_sha256": digest,
+            "raw_size_bytes": len(raw),
+            "normalized_sha256": _source_fidelity_digest_bytes(raw),
+            "normalized_size_bytes": len(raw),
+            "comparison_basis": SOURCE_FIDELITY_BYTES_COMPARISON_BASIS,
+            "newline_transformation_applied": False,
+            "source_text_stored": False,
+            "source_locator_stored": False,
+            "provenance": _source_fidelity_manifest_object_provenance(
+                root, record
+            ),
+        }
+        return evidence, raw, unique_preserve_order(blockers)
+    if source_text is None:
         return None, None, unique_preserve_order(
             [*blockers, "source_fidelity_source_not_utf8"]
         )
@@ -36404,6 +36444,7 @@ def _source_fidelity_plan_sha256(
     region: dict[str, Any] | None,
     frontmatter: dict[str, Any],
     frontmatter_authority_sha256: str | None = None,
+    work_session_scope_sha256: str | None = None,
 ) -> str:
     fidelity_authority = {
         key: value
@@ -36432,6 +36473,10 @@ def _source_fidelity_plan_sha256(
             or _source_fidelity_frontmatter_authority_sha256(frontmatter)
         ),
     }
+    if work_session_scope_sha256 is not None:
+        # v0.4.23 LR-06a: a session-bound draft freezes the claimed session
+        # scope into the reviewed plan; sessionless plans keep their bytes.
+        authority["work_session_scope_sha256"] = work_session_scope_sha256
     return _source_fidelity_digest_json(authority)
 
 
@@ -36489,7 +36534,11 @@ def _source_fidelity_safe_projection(
         "schema": fidelity_schema,
         "mode": fidelity.get("mode"),
         "audience": fidelity.get("audience"),
-        "comparison_basis": SOURCE_FIDELITY_COMPARISON_BASIS,
+        "comparison_basis": (
+            fidelity.get("comparison_basis")
+            if fidelity.get("comparison_basis") in SOURCE_FIDELITY_COMPARISON_BASES
+            else SOURCE_FIDELITY_COMPARISON_BASIS
+        ),
         "evidence_id": fidelity.get("evidence_id"),
         "creation_plan_sha256": fidelity.get("creation_plan_sha256"),
         "byte_exact": False,
@@ -36572,7 +36621,11 @@ def _source_fidelity_prepare_candidate(
         )
     elif object_authority_supplied:
         source, normalized_source, source_blockers = (
-            _source_fidelity_read_manifested_object(root, object_id_value)
+            _source_fidelity_read_manifested_object(
+                root,
+                object_id_value,
+                binary_basis_allowed=mode in SOURCE_FIDELITY_BINARY_SOURCE_MODES,
+            )
         )
     else:
         source, normalized_source, source_blockers = (
@@ -36581,14 +36634,26 @@ def _source_fidelity_prepare_candidate(
             )
         )
     blockers.extend(source_blockers)
-    source_has_reviewable_text = bool(
-        normalized_source is not None
-        and normalized_source.decode("utf-8").lstrip("\ufeff").strip()
+    source_comparison_basis = (
+        str(source.get("comparison_basis") or SOURCE_FIDELITY_COMPARISON_BASIS)
+        if isinstance(source, dict)
+        else SOURCE_FIDELITY_COMPARISON_BASIS
     )
-    if normalized_source is not None and not source_has_reviewable_text:
-        blockers.append(
-            "source_fidelity_source_must_contain_non_whitespace_text"
+    if source_comparison_basis == SOURCE_FIDELITY_BYTES_COMPARISON_BASIS:
+        # A binary original is bound by identity only; there is no text to
+        # review mechanically and the draft never contains its bytes.
+        source_has_reviewable_text = False
+        if not normalized_source:
+            blockers.append("source_fidelity_binary_source_empty")
+    else:
+        source_has_reviewable_text = bool(
+            normalized_source is not None
+            and normalized_source.decode("utf-8").lstrip("\ufeff").strip()
         )
+        if normalized_source is not None and not source_has_reviewable_text:
+            blockers.append(
+                "source_fidelity_source_must_contain_non_whitespace_text"
+            )
     context = (
         normalize_draft_body(context_body).encode("utf-8")
         if context_body
@@ -36714,7 +36779,7 @@ def _source_fidelity_prepare_candidate(
         "schema": fidelity_schema,
         "mode": mode,
         "audience": audience,
-        "comparison_basis": SOURCE_FIDELITY_COMPARISON_BASIS,
+        "comparison_basis": source_comparison_basis,
         "source": receipt_source,
         "region": region,
         "byte_exact": False,
@@ -36734,7 +36799,7 @@ def _source_fidelity_prepare_candidate(
                 "region": region,
                 "mode": mode,
                 "audience": audience,
-                "comparison_basis": SOURCE_FIDELITY_COMPARISON_BASIS,
+                "comparison_basis": source_comparison_basis,
             }
         )[:24]
     )
@@ -36755,13 +36820,15 @@ def _source_fidelity_draft_receipt(
     candidate_created_at: str,
     fidelity: dict[str, Any],
     plan_sha256: str,
+    work_session_binding: dict[str, Any] | None = None,
+    work_session_scope_sha256: str | None = None,
 ) -> dict[str, Any]:
     receipt_schema = (
         SOURCE_FIDELITY_DRAFT_RECEIPT_SCHEMA_V2
         if fidelity.get("schema") == SOURCE_FIDELITY_SCHEMA_V2
         else SOURCE_FIDELITY_DRAFT_RECEIPT_SCHEMA_V1
     )
-    return {
+    receipt = {
         "schema": receipt_schema,
         "action": "create_source_fidelity_draft",
         "archive_id": archive_id,
@@ -36788,6 +36855,13 @@ def _source_fidelity_draft_receipt(
             "share_performed": False,
         },
     }
+    if work_session_binding is not None or work_session_scope_sha256 is not None:
+        if work_session_binding is None or work_session_scope_sha256 is None:
+            raise ArchiveServiceError("create_draft_work_session_scope_invalid")
+        receipt["work_session_binding"] = json_safe(work_session_binding)
+        receipt["work_session_scope_sha256"] = work_session_scope_sha256
+    return receipt
+
 
 
 def _source_fidelity_existing_state(
@@ -36867,6 +36941,24 @@ def _source_fidelity_publish_create_only(
         raise ArchiveServiceError(conflict_code) from exc
     return True
 
+def _create_draft_work_session_projection(
+    work_session_binding: dict[str, Any] | None,
+    work_session_scope_sha256: str | None,
+) -> dict[str, Any]:
+    """Content-free session attribution for a result; absent when unbound."""
+
+    if work_session_binding is None or work_session_scope_sha256 is None:
+        return {}
+    return {
+        "work_session": {
+            "bound": True,
+            "scope_sha256": work_session_scope_sha256,
+            "work_session_binding_sha256": work_session_binding.get("binding_sha256"),
+            "private_values_echoed": False,
+        }
+    }
+
+
 
 def create_draft_zettel(
     archive_root: Path | str,
@@ -36905,7 +36997,19 @@ def create_draft_zettel(
     fidelity_session_evidence_id: str | None = None,
     expected_source_fidelity_plan_sha256: str | None = None,
     exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
+    work_session_binding: dict[str, Any] | None = None,
+    work_session_scope_sha256: str | None = None,
 ) -> dict[str, Any]:
+    # v0.4.23 LR-06a: both session facts or neither; the caller verified
+    # ownership under its held lane and this writer only freezes them.
+    if (work_session_binding is None) != (work_session_scope_sha256 is None):
+        raise ArchiveServiceError("create_draft_work_session_scope_invalid")
+    if work_session_scope_sha256 is not None and (
+        not isinstance(work_session_binding, dict)
+        or not isinstance(work_session_binding.get("binding_sha256"), str)
+        or SHA256_REF_RE.fullmatch(work_session_scope_sha256) is None
+    ):
+        raise ArchiveServiceError("create_draft_work_session_scope_invalid")
     ai_request_declared = _source_fidelity_ai_provenance_declared(
         creation_mode=creation_mode,
         created_by=created_by,
@@ -37440,6 +37544,7 @@ def create_draft_zettel(
             frontmatter_authority_sha256=(
                 source_fidelity_frontmatter_authority_sha256
             ),
+            work_session_scope_sha256=work_session_scope_sha256,
         )
         source_fidelity["creation_plan_sha256"] = (
             source_fidelity_plan_sha256
@@ -37513,6 +37618,8 @@ def create_draft_zettel(
             candidate_created_at=now,
             fidelity=source_fidelity,
             plan_sha256=source_fidelity_plan_sha256,
+            work_session_binding=work_session_binding,
+            work_session_scope_sha256=work_session_scope_sha256,
         )
         fidelity_receipt_bytes = (
             json.dumps(
@@ -37598,13 +37705,14 @@ def create_draft_zettel(
     elif is_ai_draft:
         write_preflight = {"state": "not_reached", "reason_code": "draft_input_validation_blocked"}
         if "source_fidelity_source_not_utf8" in blockers:
-            # Letter 160 ②: the fidelity contract compares normalized UTF-8
-            # text, so a binary original cannot be the fidelity source yet.
+            # Letter 160 ②: verbatim compares normalized UTF-8 text, so a
+            # binary original can only back a summary or derivative draft.
             write_next_safe_actions = [
-                "Use a UTF-8 text objet (for example the extracted or transcribed text) as "
-                "--fidelity-source-object-id; source fidelity compares normalized text only.",
+                "verbatim needs a UTF-8 text objet; use --source-fidelity faithful_summary or "
+                "sanitized_derivative to bind a binary original by its byte digest "
+                "(comparison_basis: bytes), or name the extracted text objet instead.",
                 "Link the binary original (PDF, spreadsheet, image) to the draft afterwards with "
-                "zettel-objet-link --role source_document instead of naming it as the fidelity source.",
+                "zettel-objet-link --role source_document when it should stay an attachment only.",
             ]
 
     approval_replay = {
@@ -37664,6 +37772,7 @@ def create_draft_zettel(
         ),
         "source_fidelity_plan_sha256": source_fidelity_plan_sha256,
         "source_fidelity_draft_receipt_path": fidelity_receipt_relative,
+        **_create_draft_work_session_projection(work_session_binding, work_session_scope_sha256),
         "first_read_check": first_read_check,
         "existing_draft_title_check": existing_draft_title_check,
         "blockers": unique_preserve_order(blockers),
@@ -37823,6 +37932,7 @@ def create_draft_zettel(
         ),
         "source_fidelity_plan_sha256": source_fidelity_plan_sha256,
         "source_fidelity_draft_receipt_path": fidelity_receipt_relative,
+        **_create_draft_work_session_projection(work_session_binding, work_session_scope_sha256),
         "first_read_check": first_read_check,
         "existing_draft_title_check": existing_draft_title_check,
         "warnings": unique_preserve_order(warnings),
@@ -38002,6 +38112,45 @@ def _source_fidelity_find_exact_regions(
     return positions
 
 
+_SOURCE_FIDELITY_RECEIPT_SESSION_KEYS = frozenset(
+    {"work_session_binding", "work_session_scope_sha256"}
+)
+_WORK_SESSION_BINDING_KEYS = frozenset({
+    "schema", "client_app_ref", "workstream_ref", "work_session_ref", "revision",
+    "archive_identity_sha256", "client_app_label_sha256", "workstream_label_sha256",
+    "binding_sha256",
+})
+
+
+def _source_fidelity_receipt_session_attribution_valid(value: dict[str, Any]) -> bool:
+    """v0.4.23: optional, paired, content-free session attribution."""
+
+    present = _SOURCE_FIDELITY_RECEIPT_SESSION_KEYS.intersection(value)
+    if not present:
+        return True
+    if present != _SOURCE_FIDELITY_RECEIPT_SESSION_KEYS:
+        return False
+    binding = value.get("work_session_binding")
+    scope = value.get("work_session_scope_sha256")
+    return bool(
+        isinstance(scope, str)
+        and SHA256_REF_RE.fullmatch(scope) is not None
+        and isinstance(binding, dict)
+        and set(binding) == _WORK_SESSION_BINDING_KEYS
+        and isinstance(binding.get("revision"), int)
+        and not isinstance(binding.get("revision"), bool)
+        and all(
+            isinstance(binding.get(key), str) and binding[key]
+            for key in _WORK_SESSION_BINDING_KEYS - {"revision"}
+        )
+        and all(
+            SHA256_REF_RE.fullmatch(binding[key]) is not None
+            for key in ("archive_identity_sha256", "client_app_label_sha256",
+                        "workstream_label_sha256", "binding_sha256")
+        )
+    )
+
+
 def _source_fidelity_private_receipt_shape_valid_v1(value: Any) -> bool:
     """Validate the complete private receipt contract without a runtime dependency.
 
@@ -38011,7 +38160,7 @@ def _source_fidelity_private_receipt_shape_valid_v1(value: Any) -> bool:
     region shapes before mint trusts any receipt field.
     """
 
-    if not isinstance(value, dict) or set(value) != {
+    if not isinstance(value, dict) or set(value) - _SOURCE_FIDELITY_RECEIPT_SESSION_KEYS != {
         "schema",
         "action",
         "archive_id",
@@ -38029,6 +38178,8 @@ def _source_fidelity_private_receipt_shape_valid_v1(value: Any) -> bool:
         "content_contract",
         "result",
     }:
+        return False
+    if not _source_fidelity_receipt_session_attribution_valid(value):
         return False
     if (
         value.get("schema") != SOURCE_FIDELITY_DRAFT_RECEIPT_SCHEMA_V1
@@ -38118,7 +38269,12 @@ def _source_fidelity_private_receipt_shape_valid_v1(value: Any) -> bool:
         or mode not in SOURCE_FIDELITY_MODES
         or fidelity.get("audience") not in ZET_QUALITY_AUDIENCES
         or fidelity.get("comparison_basis")
-        != SOURCE_FIDELITY_COMPARISON_BASIS
+        not in SOURCE_FIDELITY_COMPARISON_BASES
+        or (
+            fidelity.get("comparison_basis")
+            == SOURCE_FIDELITY_BYTES_COMPARISON_BASIS
+            and mode not in SOURCE_FIDELITY_BINARY_SOURCE_MODES
+        )
         or fidelity.get("byte_exact") is not False
         or fidelity.get("mechanically_verified") is not (mode == "verbatim")
         or fidelity.get("semantic_fidelity_machine_verified") is not False
@@ -38167,7 +38323,18 @@ def _source_fidelity_private_receipt_shape_valid_v1(value: Any) -> bool:
         or not isinstance(source.get("normalized_size_bytes"), int)
         or source["normalized_size_bytes"] < 0
         or source.get("comparison_basis")
-        != SOURCE_FIDELITY_COMPARISON_BASIS
+        not in SOURCE_FIDELITY_COMPARISON_BASES
+        or source.get("comparison_basis") != fidelity.get("comparison_basis")
+        or (
+            source.get("comparison_basis")
+            == SOURCE_FIDELITY_BYTES_COMPARISON_BASIS
+            and (
+                source.get("newline_transformation_applied") is not False
+                or source.get("normalized_sha256") != source.get("raw_sha256")
+                or source.get("normalized_size_bytes")
+                != source.get("raw_size_bytes")
+            )
+        )
         or not isinstance(source.get("newline_transformation_applied"), bool)
         or source.get("source_text_stored") is not False
         or source.get("source_locator_stored") is not False
@@ -38677,7 +38844,11 @@ def _source_fidelity_verify_for_mint(
         blockers.append("source_fidelity_mode_invalid")
     if audience not in ZET_QUALITY_AUDIENCES:
         blockers.append("source_fidelity_audience_invalid")
-    if fidelity.get("comparison_basis") != SOURCE_FIDELITY_COMPARISON_BASIS:
+    stored_comparison_basis = fidelity.get("comparison_basis")
+    if stored_comparison_basis not in SOURCE_FIDELITY_COMPARISON_BASES or (
+        stored_comparison_basis == SOURCE_FIDELITY_BYTES_COMPARISON_BASIS
+        and mode not in SOURCE_FIDELITY_BINARY_SOURCE_MODES
+    ):
         blockers.append("source_fidelity_comparison_basis_invalid")
     archive_config = read_archive_config(root)
     archive_id = str(archive_config.get("archive_id") or "")
@@ -38712,6 +38883,10 @@ def _source_fidelity_verify_for_mint(
             _source_fidelity_read_manifested_object(
                 root,
                 source_meta.get("object_id"),
+                binary_basis_allowed=(
+                    source_meta.get("comparison_basis")
+                    == SOURCE_FIDELITY_BYTES_COMPARISON_BASIS
+                ),
             )
         )
         if (
@@ -38793,7 +38968,7 @@ def _source_fidelity_verify_for_mint(
                 "region": stored_region,
                 "mode": mode,
                 "audience": audience,
-                "comparison_basis": SOURCE_FIDELITY_COMPARISON_BASIS,
+                "comparison_basis": stored_comparison_basis,
             }
         )[:24]
     )
@@ -38803,6 +38978,11 @@ def _source_fidelity_verify_for_mint(
         creation_plan_sha256
     ):
         expected_creation_plan = _source_fidelity_plan_sha256(
+            work_session_scope_sha256=(
+                private_receipt.get("work_session_scope_sha256")
+                if isinstance(private_receipt.get("work_session_scope_sha256"), str)
+                else None
+            ),
             archive_id=str(private_receipt.get("archive_id") or ""),
             archive_type=(
                 private_receipt.get("archive_type")
@@ -38960,6 +39140,12 @@ def _source_fidelity_verify_for_mint(
     current_plan_sha256: str | None = None
     if not blockers:
         current_plan_sha256 = _source_fidelity_plan_sha256(
+            work_session_scope_sha256=(
+                private_receipt.get("work_session_scope_sha256")
+                if isinstance(private_receipt, dict)
+                and isinstance(private_receipt.get("work_session_scope_sha256"), str)
+                else None
+            ),
             archive_id=archive_id,
             archive_type=archive_type,
             draft_id=str(frontmatter.get("id") or path.stem),
