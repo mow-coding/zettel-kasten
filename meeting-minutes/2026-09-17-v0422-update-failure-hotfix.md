@@ -182,6 +182,23 @@ version truth and the philosophy evidence. The register gains row UF-01 and
 two execution-log entries. Attribution of the release commits: Claude Fable
 5.1.
 
+## Release candidate (PR #104)
+
+[PR #104](https://github.com/mow-coding/zettel-kasten/pull/104) carries the
+hotfix, the bump and two candidate-CI corrections. The first candidate run
+found, on the Ubuntu shards, that the merged-stream CLI test runner parses
+stdout and stderr as one JSON document (the new `upgrade-check` notice is now
+printed only when stderr is a terminal, so scripted and JSON consumers keep
+their exact bytes) and that the v0.4.20 cause-allowlist test expected an
+in-family but unlisted token to be dropped (the v0.4.22 contract carries
+fixed tokens of the project-update and approval families, all literal in
+source; the test's unlisted case now uses an out-of-family token). The
+second run passed every shard except Windows shard 4/4, which was cut at its
+45-minute budget with no failing test (the v0.4.21 candidate took 40.7
+minutes on the same shard; every Windows shard ran 6-10% slower today), so
+that budget is raised to 60 minutes in the workflow. Records: the register's
+"v0.4.22 release candidate" entry.
+
 ## Client boundary
 
 Nothing here sets any letter's `resolved_in`. After v0.4.22 is public the

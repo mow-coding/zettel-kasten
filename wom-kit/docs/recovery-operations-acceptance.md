@@ -331,6 +331,17 @@ transaction removed, pin unchanged) and a fresh approve reached
 session-scope pre-approval of letter 161 (awaits the maintainer), the
 journal schema, and the carried LR rows.
 
+### 2026-09-17 v0.4.22 release candidate
+
+Scope decision (Claude Fable 5.1; standing train approval): v0.4.22 ships
+UF-01 alone, ahead of the carried LR rows, because no v0.4.21 repair reaches
+the client until the update itself works. Candidate PR #104 (`c3bfb0be` plus
+the CI corrections `cd1d7464`): the `upgrade-check` scope notice is printed
+only on a terminal stderr, the cause-allowlist test's unlisted case uses an
+out-of-family token, and the Windows shard 4/4 CI budget moves from 45 to 60
+minutes after a run was cut at the cap with no failing test. Details in the
+[v0.4.22 hotfix record](../../meeting-minutes/2026-09-17-v0422-update-failure-hotfix.md).
+
 ### 2026-09-17 v0.4.21 released
 
 v0.4.21 is public: tag `v0.4.21` on main `70536034`, one wheel
