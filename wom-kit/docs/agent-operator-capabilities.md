@@ -1,8 +1,11 @@
 # Agent Operator Capabilities Manifest
 
-Status: v0.4.22 project-update failure truth, started-claim abandon, and writer-session coverage gate
+Status: v0.4.23 binary fidelity sources, session-bound drafts, and writer-session coverage gate
 
-v0.4.22 adds no command path: `project-version-update --resume` gains the
+v0.4.23 adds no command path: `create-draft` gains `--client-app-ref`,
+`--task-route-ref` and `--work-session-ref` (a session-bound AI draft) and a
+binary objet may be its fidelity source in the summary and derivative modes.
+v0.4.22 added no command path either: `project-version-update --resume` gained the
 `--abandon-started-approval` flag, failures after the native approval carry a
 fixed `cause_code` and `cause_stage`, and `operation-control` finds the owning
 project's journal from an archive root; inventory, availability and dispatch
@@ -134,7 +137,7 @@ field remain `history_not_audited`. Inventory, shared capability availability,
 and command help consume the same content-free history. Current availability
 continues to be parser-derived; history does not grant execution authority.
 
-For the current v0.4.22 working-tree parser, the inventory snapshot is:
+For the current v0.4.23 working-tree parser, the inventory snapshot is:
 
 ```text
 canonical executable command paths: 317

@@ -1,12 +1,15 @@
 ﻿# WOM-kit Capability Matrix
 
-Status: v0.4.22 project-update failure truth, started-claim abandon, and session-owned writes truth
+Status: v0.4.23 binary fidelity sources, session-bound drafts, and session-owned writes truth
 Date: 2026-09-04
-Version: v0.4.22 implementation and release scope
+Version: v0.4.23 implementation and release scope
 
-The current v0.4.22 working tree changes no writer: it makes a
+The current v0.4.23 working tree lets a binary original be the fidelity
+source of a summary or derivative draft on a `bytes` basis and binds
+`create-draft` to a claimed work session (the first native writer of LR-06;
+6 of 56 approval paths are session-integrated). The v0.4.22 tree made a
 `project-version-update` that fails after the native approval report the
-refusing fixed gate and the journal stage it stopped in, and adds
+refusing fixed gate and the journal stage it stopped in, and added
 `--resume --abandon-started-approval` so a stuck `started` claim can be closed
 while the journal proves nothing was written (beta letters 161 and 162). The
 v0.4.21 tree reopened eight writers that beta letters 157-160 reported as

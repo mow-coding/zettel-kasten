@@ -2,6 +2,43 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.4.23 바이너리 fidelity 원본과 세션에 묶인 초안
+
+일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.
+새 외부 CPython 3.12 환경의 실제 `python.exe -m pip`를 사용해 설치된 PEP 610
+metadata에 wheel hash가 남게 합니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0423-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.23/wom_kit-0.4.23-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+새 process에서 정확히 `archive 0.4.23`이 나와야 합니다. wheel을 공개하거나 설치하는
+것만으로 client archive, project runtime, version pin은 바뀌지 않습니다. project
+update는 client가 따로 선택하고 승인합니다.
+
+이제 PDF·스프레드시트·이미지 오브제도 `--source-fidelity faithful_summary` 또는
+`sanitized_derivative` 초안의 `--fidelity-source-object-id`가 될 수 있고, 영수증에는
+`comparison_basis: bytes`가 남습니다. `verbatim`은 여전히 UTF-8 텍스트 오브제만
+받습니다. 기존 텍스트 영수증은 바뀌지 않습니다.
+
+`create-draft --client-app-ref <app> --task-route-ref <route>
+--work-session-ref <session>`은 AI 초안 하나를 claim한 작업 세션에 묶습니다. 먼저
+같은 ref로 `--dry-run`(계획 digest에 세션이 이미 들어감), 그다음 같은 ref와 replay
+값으로 `--approve`를 실행하세요. 영수증에 세션 binding이 남고 결과에는 내용 없는
+`work_session` 블록이 붙습니다. ref 없이 실행하면 예전과 완전히 같습니다.
+
+검토한 project update 한 번 뒤에는 새 process에서 project launcher를 시작해 pin,
+source, launcher, runtime 근거를 확인하세요. 그 client 실행 결과만이 project가
+고쳐졌음을 보여 줍니다.
+
 ## v0.4.22 project update 실패 사실성과 started claim 포기
 
 일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.
