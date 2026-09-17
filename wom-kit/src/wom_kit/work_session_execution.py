@@ -149,14 +149,23 @@ def _local_preview(prepared):
     refs = [("workstream", session["workstream_ref"]), ("client_app", session["client_app_ref"])]
     if session["handoff_app_ref"] is not None:
         refs.append(("client_app", session["handoff_app_ref"]))
-    return TargetCollectionPreview(items=tuple(
+    items = [
         TargetCollectionItem(
             identity_sha256=registry._digest({"archive": prepared.manifest.archive_identity_sha256,
                                              "kind": kind, "ref": ref}),
             kind=kind,
             title=document["workstreams" if kind == "workstream" else "apps"][ref]["label"],
         ) for kind, ref in refs
-    ))
+    ]
+    if prepared.transition.action == "set-permission-mode":
+        # v0.4.24: the reviewer sees the exact mode and every granted kind;
+        # both are already bound by the post-image digest.
+        from . import work_session_permission as permission
+        items.extend(permission.preview_items(
+            archive_identity_sha256=prepared.manifest.archive_identity_sha256,
+            permission=session.get("permission"),
+        ))
+    return TargetCollectionPreview(items=tuple(items))
 
 
 def _execute_session_decision_core(
@@ -182,7 +191,7 @@ def _execute_session_decision_held(
     work_session_ref=None, label=None, claim_ref=None, target_app_ref=None,
     native=None, key_provider=None,
     before_claim_publication: Callable[[operation.PreparedSessionDecision, ExactHumanApprovalContext], None] | None = None,
-    task_route_ref=None,
+    task_route_ref=None, permission=None,
 ) -> dict[str, Any]:
     """Internal composition seam; a same-archive held OS lock is mandatory.
 
@@ -197,7 +206,7 @@ def _execute_session_decision_held(
     transition = registry.plan_transition(
         store.read(), action=action, client_app_ref=client_app_ref,
         work_session_ref=work_session_ref, label=label,
-        claim_ref=claim_ref, target_app_ref=target_app_ref,
+        claim_ref=claim_ref, target_app_ref=target_app_ref, permission=permission,
     )
     prepared = operation.prepare_session_decision(transition, task_route_ref=task_route_ref)
     context = prepared.context(archive_id=archive_id, reviewer_claim=reviewer_claim)

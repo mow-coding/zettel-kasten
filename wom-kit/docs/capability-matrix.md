@@ -4,7 +4,13 @@ Status: v0.4.23 binary fidelity sources, session-bound drafts, and session-owned
 Date: 2026-09-04
 Version: v0.4.23 implementation and release scope
 
-The current v0.4.23 working tree lets a binary original be the fidelity
+The current v0.4.24 working tree lets the person who claimed a work session
+grant it one permission mode — `manual`, `limited` or `allow_all` — through
+one exact native decision (`work-session --action set-permission-mode`); a
+write the mode permits opens no dialog but still publishes its own one-use
+claim, which records `work_session_permission_mode` as its mechanism, while
+project updates, remote providers, the session lifecycle, repairs and
+overrides always ask. The v0.4.23 tree lets a binary original be the fidelity
 source of a summary or derivative draft on a `bytes` basis and binds
 `create-draft` to a claimed work session (the first native writer of LR-06;
 6 of 56 approval paths are session-integrated). The v0.4.22 tree made a
@@ -28,7 +34,7 @@ stays `ownership_unverified`. `zettel-edge` preserves the blank separator
 line, `mint-zet` normalizes one dropped by an older rewrite and accepts the
 declared fidelity source as an asset, blocked `create-draft` and `zettel-edge`
 results name their reason, and `tools/check_writer_session_coverage.py` reports
-5 integrated, 1 routed, 21 pending and 20 exempt approval paths of 47.
+6 integrated, 1 routed, 29 pending and 20 exempt approval paths of 56.
 
 The v0.4.19 working tree kept canonical command paths stable while one
 `CapabilityAvailability` decision is consumed by help, `capabilities`, Doctor

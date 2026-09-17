@@ -233,7 +233,9 @@ def _decode(store, raw: bytes, manifest_sha256: str) -> operation.PreparedSessio
     row = document["transition"]
     if type(row) is not dict or set(row) != {"action", "before_sha256", "after", "result_refs", "plan_sha256", "request", "generated_refs"}:
         raise _fail()
-    if (type(row["request"]) is not dict or set(row["request"]) != _REQUEST_KEYS
+    if (type(row["request"]) is not dict
+            or set(row["request"]) != (_REQUEST_KEYS | {"permission"} if row["action"] == "set-permission-mode"
+                                       else _REQUEST_KEYS)
             or row["request"]["action"] != row["action"]
             or type(row["result_refs"]) is not list or len(row["result_refs"]) > 2
             or type(row["generated_refs"]) is not list or len(row["generated_refs"]) > 2

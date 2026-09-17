@@ -36,6 +36,7 @@ in their original private custody. The developer does not update their lifecycle
 | LR-05 | v0.4.23 | Already captured objects become linked, awaiting a human target, or no existing target without recapture | existing `objet-rediscovery-plan` and `zettel-objet-link` domain revalidated at v0.4.23 (`test_objet_rediscovery`, `test_v045_local_objet_link_recovery`, the letter 140 link service/CLI/binding tests, the letter 137 fail-closed test and the CLI group); client application pending |
 | LR-06 | v0.4.21 | Source properties/title/locator/object links/edges each apply, resume and revert; unrelated later field changes survive | common-writer integration pending |
 | LR-07 | v0.4.23 | Filename/metadata finds the actual object and linked zet; paired original/derived intake preserves original bytes; display projection never edits canonical content | existing paired original/derived intake revalidated at v0.4.23 (`test_v03315_objet_capture_batch_derived_text` and the CLI derived/paired group); client reverification pending |
+| SP-01 | v0.4.24 | A claimed work session carries one human-granted permission mode (manual / limited / allow_all); a permitted write skips the dialog but still publishes its own one-use claim that records the permission mechanism; always-dialog operations (project update, providers, session lifecycle, repairs, overrides) can never be granted; pause, handoff, complete, accept and recover clear the grant; a grant revoked before the claim fails closed | development verified on the synthetic session fixture (8 tests: one dialog per grant, dialogless permitted write with the mechanism in the claim, environment-context grant, stale route and manual still ask, pause clears, revoke fails closed, always-dialog exclusion, modes/MCP/registry); installed/client acceptance pending |
 | UF-01 | v0.4.22 | A reviewed project update that fails after the native approval names the refusing fixed gate and the journal stage; a claim left `started` with nothing written can be closed after human review and the reservation released by the ordinary claimless cancellation; a skipped `version` Git probe is never reported as a misconfigured origin; `operation-control` finds the owning project's journal from the archive root; `upgrade-check` announces its scope | development verified on synthetic two-step fixtures (stuck state reproduced with the released v0.4.21 wheel; cause, stage names, abandon, claimless cancellation and a fresh approve verified with the hotfix wheel; 10 new tests); the refusing gate of the client run is unknown until the client's next run reports it; installed/client acceptance pending |
 | NP-01 | v0.4.22 | Existing native credential components feed one scoped broker; one safe entry supports fresh-process reuse without secret export | partial components; end-to-end pending |
 | NP-02 | v0.4.22 | Evidence-built missing-page cohort, workspace separation, five-page canary, raw/body/property/media/parent recovery and ledger | planned integration |
@@ -433,3 +434,22 @@ external locator, objet link, objet rediscovery, derived text, paired intake:
 commands and evidence that implement them and keep their client-closure
 state, which only a client run can change. Recorded in the
 [v0.4.23 implementation record](../../meeting-minutes/2026-09-17-v0423-carried-work-implementation.md).
+
+### 2026-09-18 v0.4.24 SP-01: session permission modes development verified
+
+Decision (the user, 2026-09-17; Claude Fable 5.1, solo after one bounded
+read-only code map): per-work-session permission modes like the Codex and
+Claude desktop apps, built as the first v0.4.24 unit, with the client reply
+waiting until v0.4.24 is public. The grant is one exact human decision on the
+claimed session (`work-session --action set-permission-mode --approve`),
+stored as one optional session-row key, cleared with the claim, and enforced
+at the broker's single choke point from the caller's retained refs
+(`WOM_CLIENT_APP_REF`, `WOM_TASK_ROUTE_REF`, `WOM_WORK_SESSION_REF`, or a
+command's explicit session refs). A permitted write mints its claim with the
+`work_session_permission_mode` mechanism and results carry
+`approval_mechanism` / `live_dialog_shown`; the five-key receipt reference is
+unchanged. Project updates and credential writes always ask (the user's
+unanswered question defaulted to my recommendation). Evidence:
+`tests/test_v0424_session_permission_modes.py` (8 tests) plus the session
+and approval regression cohort recorded in the
+[v0.4.24 implementation record](../../meeting-minutes/2026-09-18-v0424-session-permission-modes-implementation.md).
