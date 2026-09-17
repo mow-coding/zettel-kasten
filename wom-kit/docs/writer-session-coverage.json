@@ -2,63 +2,256 @@
   "schema": "wom-kit/writer-session-coverage/v1",
   "description": "Every parser path whose --approve is available must be classified here. session_integrated paths expose the session refs (or name the route that does); pending paths are still owned by the recovery train; legacy_exception paths are deliberately outside session scope per the 2026-09-05 writer-coverage decisions 6 and 7. The checker fails on any unclassified, stale or misclassified path; it never reports all-writer coverage while pending is non-empty.",
   "paths": {
-    "git-backup-reconcile-plan": {"status": "session_integrated", "evidence": ["test_v0420_work_session_git_workflow", "test_v0420_local_recovery_git_provenance"]},
-    "source-intake-batch": {"status": "session_integrated", "evidence": ["test_v0420_session_intake_git_public_workflow"]},
-    "source-intake-record": {"status": "session_integrated", "evidence": ["test_v0420_source_intake_record_git_public_workflow"]},
-    "work-session": {"status": "session_integrated", "evidence": ["test_v0420_work_session_execution"]},
-    "zet-title-remap-write": {"status": "session_integrated", "evidence": ["test_v0420_local_recovery_session", "test_v0420_local_recovery_mcp"]},
-    "zet-revision-write": {"status": "pending", "target": "v0.4.21", "note": "Reopened through exact approval in v0.4.21 LR-01; session refs follow with LR-06."},
-    "zet-revision-restore-write": {"status": "pending", "target": "v0.4.21", "note": "Reopened through exact approval in v0.4.21 LR-01; session refs follow with LR-06."},
-    "zet-title-remap-revert": {"status": "session_integrated", "route": "zet-title-remap-write", "evidence": ["test_v0420_local_recovery_session_revert"], "note": "Session-scoped compensation runs through zet-title-remap-write --revert-recovery; this command keeps the legacy receipt-bound route."},
-
-    "zettel-objet-link": {"status": "pending", "target": "v0.4.20"},
-    "objet-capture-selection": {"status": "pending", "target": "v0.4.20"},
-    "objet-capture": {"status": "pending", "target": "v0.4.20"},
-    "objet-capture-batch": {"status": "pending", "target": "v0.4.21"},
-    "source-intake-chain": {"status": "pending", "target": "v0.4.21", "note": "New in v0.4.21 LR-01e: record, selection and capture under one exact approval; session refs follow with LR-06."},
-    "create-draft": {"status": "pending", "target": "v0.4.21"},
-    "discard-draft": {"status": "pending", "target": "v0.4.21", "note": "Reopened through exact approval in v0.4.21 LR-01; session refs follow with LR-06."},
-    "discard-draft-restore": {"status": "pending", "target": "v0.4.21", "note": "Reopened through exact approval in v0.4.21 LR-01; session refs follow with LR-06."},
-    "mint-zet": {"status": "pending", "target": "v0.4.21"},
-    "mint-zet-batch": {"status": "pending", "target": "v0.4.21", "note": "Reopened under one exact approval per batch in v0.4.21 LR-01; session refs follow with LR-06."},
-    "promote": {"status": "pending", "target": "v0.4.21"},
-    "retire-draft": {"status": "pending", "target": "v0.4.21"},
-    "retire-draft-batch": {"status": "pending", "target": "v0.4.21", "note": "Reopened under one exact approval per batch in v0.4.21 LR-01; session refs follow with LR-06."},
-    "zettel-edge": {"status": "pending", "target": "v0.4.21"},
-    "zettel-edge-batch": {"status": "pending", "target": "v0.4.21", "note": "Reopened under one exact approval per batch in v0.4.21 LR-01; session refs follow with LR-06."},
-    "revert-batch": {"status": "pending", "target": "v0.4.21", "note": "Reopened under one exact approval per batch in v0.4.21 LR-01; session refs follow with LR-06."},
-    "revert-edge": {"status": "pending", "target": "v0.4.21"},
-    "source-fidelity-session-evidence": {"status": "pending", "target": "v0.4.21"},
-    "external-locator-record": {"status": "pending", "target": "v0.4.21"},
-    "duplicate-object-reconcile": {"status": "pending", "target": "v0.4.21"},
-    "human-artifact-register-root": {"status": "pending", "target": "v0.4.24"},
-    "human-artifact-transition": {"status": "pending", "target": "v0.4.24"},
-    "approval-integrity-overlay": {"status": "pending", "target": "v0.4.24"},
-    "migrate": {"status": "pending", "target": "v0.4.24"},
-    "credential-adopt": {"status": "pending", "target": "v0.4.22"},
-    "object-storage": {"status": "pending", "target": "v0.4.23"},
-    "object-storage-adopt-existing": {"status": "pending", "target": "v0.4.23"},
-    "relation-candidate-decide": {"status": "pending", "target": "v0.4.24"},
-
-    "project-version-update": {"status": "legacy_exception", "reason": "bootstrap: the updater must run before a working session system exists (decision 6)"},
-    "operator-feedback-compose": {"status": "legacy_exception", "reason": "emergency feedback preservation stays explicit and session-free (decision 6)"},
-    "operator-feedback-record": {"status": "legacy_exception", "reason": "emergency feedback preservation stays explicit and session-free (decision 6)"},
-    "operator-feedback-mark-delivered": {"status": "legacy_exception", "reason": "local delivery bookkeeping on feedback records; no archive domain write"},
-    "operational-context": {"status": "legacy_exception", "reason": "local operator context record; no exact-native approval implementation"},
-    "session-handoff-checkpoint": {"status": "legacy_exception", "reason": "legacy handoff keeps its v1 digest and receipt; not an exact-native writer"},
-    "approval-handoff-record": {"status": "legacy_exception", "reason": "legacy handoff keeps its v1 digest and receipt; not an exact-native writer"},
-    "ai-usage-record": {"status": "legacy_exception", "reason": "local usage record; no archive domain write"},
-    "project-intake-decisions": {"status": "legacy_exception", "reason": "saved local intake decision plan; no provider or domain write"},
-    "project-intake-record-answer": {"status": "legacy_exception", "reason": "saved local intake answer; no provider or domain write"},
-    "project-intake-unpack-choice": {"status": "legacy_exception", "reason": "saved local intake choice; no provider or domain write"},
-    "record-attestation-review-candidate": {"status": "legacy_exception", "reason": "local attestation evidence; no archive domain write"},
-    "record-attestation-statement-draft": {"status": "legacy_exception", "reason": "local attestation evidence; no archive domain write"},
-    "shared-update-attestation-review": {"status": "legacy_exception", "reason": "local attestation evidence; no archive domain write"},
-    "credential-access-approval-plan": {"status": "legacy_exception", "reason": "saved local plan; the credential writers themselves are v0.4.22 scope"},
-    "activity-group-membership-removal-plan": {"status": "legacy_exception", "reason": "saved local plan; no archive domain write"},
-    "imap-mailbox-adapter-audit-write": {"status": "legacy_exception", "reason": "local IMAP evidence; the unavailable IMAP provider writers stay closed"},
-    "imap-mailbox-header-scan-receipt-audit": {"status": "legacy_exception", "reason": "local IMAP evidence; the unavailable IMAP provider writers stay closed"},
-    "imap-mailbox-material-capture-approval-plan": {"status": "legacy_exception", "reason": "local IMAP plan; the unavailable IMAP provider writers stay closed"},
-    "imap-mailbox-material-selection-record": {"status": "legacy_exception", "reason": "local IMAP evidence; the unavailable IMAP provider writers stay closed"}
+    "git-backup-reconcile-plan": {
+      "status": "session_integrated",
+      "evidence": [
+        "test_v0420_work_session_git_workflow",
+        "test_v0420_local_recovery_git_provenance"
+      ]
+    },
+    "source-intake-batch": {
+      "status": "session_integrated",
+      "evidence": [
+        "test_v0420_session_intake_git_public_workflow"
+      ]
+    },
+    "source-intake-record": {
+      "status": "session_integrated",
+      "evidence": [
+        "test_v0420_source_intake_record_git_public_workflow"
+      ]
+    },
+    "work-session": {
+      "status": "session_integrated",
+      "evidence": [
+        "test_v0420_work_session_execution"
+      ]
+    },
+    "zet-title-remap-write": {
+      "status": "session_integrated",
+      "evidence": [
+        "test_v0420_local_recovery_session",
+        "test_v0420_local_recovery_mcp"
+      ]
+    },
+    "zet-revision-write": {
+      "status": "pending",
+      "target": "v0.4.21",
+      "note": "Reopened through exact approval in v0.4.21 LR-01; session refs follow with LR-06."
+    },
+    "zet-revision-restore-write": {
+      "status": "pending",
+      "target": "v0.4.21",
+      "note": "Reopened through exact approval in v0.4.21 LR-01; session refs follow with LR-06."
+    },
+    "zet-title-remap-revert": {
+      "status": "session_integrated",
+      "route": "zet-title-remap-write",
+      "evidence": [
+        "test_v0420_local_recovery_session_revert"
+      ],
+      "note": "Session-scoped compensation runs through zet-title-remap-write --revert-recovery; this command keeps the legacy receipt-bound route."
+    },
+    "zettel-objet-link": {
+      "status": "pending",
+      "target": "v0.4.20"
+    },
+    "objet-capture-selection": {
+      "status": "pending",
+      "target": "v0.4.20"
+    },
+    "objet-capture": {
+      "status": "pending",
+      "target": "v0.4.20"
+    },
+    "objet-capture-batch": {
+      "status": "pending",
+      "target": "v0.4.21"
+    },
+    "source-intake-chain": {
+      "status": "pending",
+      "target": "v0.4.21",
+      "note": "New in v0.4.21 LR-01e: record, selection and capture under one exact approval; session refs follow with LR-06."
+    },
+    "create-draft": {
+      "status": "session_integrated",
+      "evidence": [
+        "test_v0423_create_draft_session"
+      ]
+    },
+    "discard-draft": {
+      "status": "pending",
+      "target": "v0.4.21",
+      "note": "Reopened through exact approval in v0.4.21 LR-01; session refs follow with LR-06."
+    },
+    "discard-draft-restore": {
+      "status": "pending",
+      "target": "v0.4.21",
+      "note": "Reopened through exact approval in v0.4.21 LR-01; session refs follow with LR-06."
+    },
+    "mint-zet": {
+      "status": "pending",
+      "target": "v0.4.21"
+    },
+    "mint-zet-batch": {
+      "status": "pending",
+      "target": "v0.4.21",
+      "note": "Reopened under one exact approval per batch in v0.4.21 LR-01; session refs follow with LR-06."
+    },
+    "promote": {
+      "status": "pending",
+      "target": "v0.4.21"
+    },
+    "retire-draft": {
+      "status": "pending",
+      "target": "v0.4.21"
+    },
+    "retire-draft-batch": {
+      "status": "pending",
+      "target": "v0.4.21",
+      "note": "Reopened under one exact approval per batch in v0.4.21 LR-01; session refs follow with LR-06."
+    },
+    "zettel-edge": {
+      "status": "pending",
+      "target": "v0.4.21"
+    },
+    "zettel-edge-batch": {
+      "status": "pending",
+      "target": "v0.4.21",
+      "note": "Reopened under one exact approval per batch in v0.4.21 LR-01; session refs follow with LR-06."
+    },
+    "revert-batch": {
+      "status": "pending",
+      "target": "v0.4.21",
+      "note": "Reopened under one exact approval per batch in v0.4.21 LR-01; session refs follow with LR-06."
+    },
+    "revert-edge": {
+      "status": "pending",
+      "target": "v0.4.21"
+    },
+    "source-fidelity-session-evidence": {
+      "status": "pending",
+      "target": "v0.4.21"
+    },
+    "external-locator-record": {
+      "status": "pending",
+      "target": "v0.4.21"
+    },
+    "duplicate-object-reconcile": {
+      "status": "pending",
+      "target": "v0.4.21"
+    },
+    "human-artifact-register-root": {
+      "status": "pending",
+      "target": "v0.4.24"
+    },
+    "human-artifact-transition": {
+      "status": "pending",
+      "target": "v0.4.24"
+    },
+    "approval-integrity-overlay": {
+      "status": "pending",
+      "target": "v0.4.24"
+    },
+    "migrate": {
+      "status": "pending",
+      "target": "v0.4.24"
+    },
+    "credential-adopt": {
+      "status": "pending",
+      "target": "v0.4.22"
+    },
+    "object-storage": {
+      "status": "pending",
+      "target": "v0.4.23"
+    },
+    "object-storage-adopt-existing": {
+      "status": "pending",
+      "target": "v0.4.23"
+    },
+    "relation-candidate-decide": {
+      "status": "pending",
+      "target": "v0.4.24"
+    },
+    "project-version-update": {
+      "status": "legacy_exception",
+      "reason": "bootstrap: the updater must run before a working session system exists (decision 6)"
+    },
+    "operator-feedback-compose": {
+      "status": "legacy_exception",
+      "reason": "emergency feedback preservation stays explicit and session-free (decision 6)"
+    },
+    "operator-feedback-record": {
+      "status": "legacy_exception",
+      "reason": "emergency feedback preservation stays explicit and session-free (decision 6)"
+    },
+    "operator-feedback-mark-delivered": {
+      "status": "legacy_exception",
+      "reason": "local delivery bookkeeping on feedback records; no archive domain write"
+    },
+    "operational-context": {
+      "status": "legacy_exception",
+      "reason": "local operator context record; no exact-native approval implementation"
+    },
+    "session-handoff-checkpoint": {
+      "status": "legacy_exception",
+      "reason": "legacy handoff keeps its v1 digest and receipt; not an exact-native writer"
+    },
+    "approval-handoff-record": {
+      "status": "legacy_exception",
+      "reason": "legacy handoff keeps its v1 digest and receipt; not an exact-native writer"
+    },
+    "ai-usage-record": {
+      "status": "legacy_exception",
+      "reason": "local usage record; no archive domain write"
+    },
+    "project-intake-decisions": {
+      "status": "legacy_exception",
+      "reason": "saved local intake decision plan; no provider or domain write"
+    },
+    "project-intake-record-answer": {
+      "status": "legacy_exception",
+      "reason": "saved local intake answer; no provider or domain write"
+    },
+    "project-intake-unpack-choice": {
+      "status": "legacy_exception",
+      "reason": "saved local intake choice; no provider or domain write"
+    },
+    "record-attestation-review-candidate": {
+      "status": "legacy_exception",
+      "reason": "local attestation evidence; no archive domain write"
+    },
+    "record-attestation-statement-draft": {
+      "status": "legacy_exception",
+      "reason": "local attestation evidence; no archive domain write"
+    },
+    "shared-update-attestation-review": {
+      "status": "legacy_exception",
+      "reason": "local attestation evidence; no archive domain write"
+    },
+    "credential-access-approval-plan": {
+      "status": "legacy_exception",
+      "reason": "saved local plan; the credential writers themselves are v0.4.22 scope"
+    },
+    "activity-group-membership-removal-plan": {
+      "status": "legacy_exception",
+      "reason": "saved local plan; no archive domain write"
+    },
+    "imap-mailbox-adapter-audit-write": {
+      "status": "legacy_exception",
+      "reason": "local IMAP evidence; the unavailable IMAP provider writers stay closed"
+    },
+    "imap-mailbox-header-scan-receipt-audit": {
+      "status": "legacy_exception",
+      "reason": "local IMAP evidence; the unavailable IMAP provider writers stay closed"
+    },
+    "imap-mailbox-material-capture-approval-plan": {
+      "status": "legacy_exception",
+      "reason": "local IMAP plan; the unavailable IMAP provider writers stay closed"
+    },
+    "imap-mailbox-material-selection-record": {
+      "status": "legacy_exception",
+      "reason": "local IMAP evidence; the unavailable IMAP provider writers stay closed"
+    }
   }
 }

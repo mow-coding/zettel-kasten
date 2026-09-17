@@ -24,6 +24,45 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.4.23 Binary Fidelity Sources And Session-Bound Drafts
+
+Install the exact public wheel only after the matching release and asset exist.
+Use a new external CPython 3.12 environment so the real `python.exe -m pip`
+records the wheel hash in installed PEP 610 metadata.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0423-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.23/wom_kit-0.4.23-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+Require exactly `archive 0.4.23` from a new process. Publishing or installing
+the wheel changes no client archive, project runtime, or version pin. A client
+separately chooses and approves any project update.
+
+A PDF, spreadsheet or image objet may now be `--fidelity-source-object-id` of
+a `--source-fidelity faithful_summary` or `sanitized_derivative` draft; the
+receipt records `comparison_basis: bytes`. `verbatim` still needs a UTF-8 text
+objet. Existing text receipts are unchanged.
+
+`create-draft --client-app-ref <app> --task-route-ref <route>
+--work-session-ref <session>` binds one AI-assisted or AI-generated draft to a
+claimed work session: run `--dry-run` first with the refs (the plan digest
+already carries the session), then `--approve` with the same refs and the
+replay values. The receipt carries the session binding and results carry a
+content-free `work_session` block. Without the refs, create-draft behaves
+exactly as before.
+
+After one reviewed project update, start the project launcher in a new process
+and verify its pin, source, launcher, and runtime evidence. Only that client-run
+result can show that the project was repaired.
+
 ## v0.4.22 Project-Update Failure Truth And Started-Claim Abandon
 
 Install the exact public wheel only after the matching release and asset exist.

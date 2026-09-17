@@ -30,12 +30,12 @@ in their original private custody. The developer does not update their lifecycle
 | WS-03 | v0.4.20 | Local-only count-first target preview with 20-item pages and safe title/filename/short-ID fallback | preview and paging components implemented; session decisions and local recovery writers (legacy and session-scoped apply) show the count-first paged preview with a live target-binding observer; other writer families and installed acceptance pending |
 | WS-04 | v0.4.20 | Complete cursor pagination and exact selected/excluded Git coverage; selected-session non-force commit/push plus independent remote-ref proof | pagination and authenticated receipt/metadata selective Git source journeys verified; canonical zettel documents changed by completed session title recoveries are now selected with HEAD/index/worktree proof (scope v3); generic ownership of other outputs, responsibility integration and installed/release acceptance pending |
 | LR-01 | v0.4.21 | Draft discard/restore, semantic revision/restore, mint/retire/edge batches work through exact approval | discard-draft, discard-draft-restore, zettel-edge-batch, mint-zet-batch, retire-draft-batch, revert-batch, zet-revision-write and zet-revision-restore-write reopened through exact approval with development evidence (20 new tests; batches take one count-first dialog and every item write re-verifies the batch claim; the revision pair binds its own digest protocol to the dialog; `source-intake-chain` runs record, selection and capture under one approval, 27 new tests); installed/client acceptance pending |
-| LR-02 | v0.4.21 | Source-property backfill classifies every mirror page and supports apply/resume/independent comparison/field revert | older domain exists; client closure unconfirmed |
-| LR-03 | v0.4.21 | Identifier-like title proposals and historical title receipts are individually classified; insufficient evidence remains review | older planner exists; client writes unconfirmed |
-| LR-04 | v0.4.21 | Locator records, occurrence anchors, and markup have separate validated outcomes; existing correct links survive | older partial result; recovery pending |
-| LR-05 | v0.4.21 | Already captured objects become linked, awaiting a human target, or no existing target without recapture | classification/application pending |
+| LR-02 | v0.4.23 | Source-property backfill classifies every mirror page and supports apply/resume/independent comparison/field revert | existing `notion-source-properties` domain revalidated at v0.4.23 (`test_notion_property_backfill`, `test_notion_property_backfill_cli` and the CLI group: 42 tests); client closure unconfirmed |
+| LR-03 | v0.4.23 | Identifier-like title proposals and historical title receipts are individually classified; insufficient evidence remains review | existing `zet-title-remap-plan` / `-receipt-audit` / `-recovery-plan` planner revalidated at v0.4.23 (`test_v045_local_locator_title_recovery` and the CLI title-remap group); client writes unconfirmed |
+| LR-04 | v0.4.23 | Locator records, occurrence anchors, and markup have separate validated outcomes; existing correct links survive | existing `external-locator-*` and anchor domain revalidated at v0.4.23 (`test_v045_local_locator_title_recovery`, `test_v0420_work_session_git_anchors` and the CLI locator group); client recovery pending |
+| LR-05 | v0.4.23 | Already captured objects become linked, awaiting a human target, or no existing target without recapture | existing `objet-rediscovery-plan` and `zettel-objet-link` domain revalidated at v0.4.23 (`test_objet_rediscovery`, `test_v045_local_objet_link_recovery`, the letter 140 link service/CLI/binding tests, the letter 137 fail-closed test and the CLI group); client application pending |
 | LR-06 | v0.4.21 | Source properties/title/locator/object links/edges each apply, resume and revert; unrelated later field changes survive | common-writer integration pending |
-| LR-07 | v0.4.21 | Filename/metadata finds the actual object and linked zet; paired original/derived intake preserves original bytes; display projection never edits canonical content | preserve and reverify existing paths |
+| LR-07 | v0.4.23 | Filename/metadata finds the actual object and linked zet; paired original/derived intake preserves original bytes; display projection never edits canonical content | existing paired original/derived intake revalidated at v0.4.23 (`test_v03315_objet_capture_batch_derived_text` and the CLI derived/paired group); client reverification pending |
 | UF-01 | v0.4.22 | A reviewed project update that fails after the native approval names the refusing fixed gate and the journal stage; a claim left `started` with nothing written can be closed after human review and the reservation released by the ordinary claimless cancellation; a skipped `version` Git probe is never reported as a misconfigured origin; `operation-control` finds the owning project's journal from the archive root; `upgrade-check` announces its scope | development verified on synthetic two-step fixtures (stuck state reproduced with the released v0.4.21 wheel; cause, stage names, abandon, claimless cancellation and a fresh approve verified with the hotfix wheel; 10 new tests); the refusing gate of the client run is unknown until the client's next run reports it; installed/client acceptance pending |
 | NP-01 | v0.4.22 | Existing native credential components feed one scoped broker; one safe entry supports fresh-process reuse without secret export | partial components; end-to-end pending |
 | NP-02 | v0.4.22 | Evidence-built missing-page cohort, workspace separation, five-page canary, raw/body/property/media/parent recovery and ledger | planned integration |
@@ -283,6 +283,20 @@ the revision/discard/batch guides, matrix rows and READMEs no longer describe
 the reopened writers as fixed closed. Development evidence: 5 new tests,
 full cohort 2,185 OK. Still no client outcome is claimed.
 
+### 2026-09-17 v0.4.21 released
+
+v0.4.21 is public: tag `v0.4.21` on main `70536034`, one wheel
+`wom_kit-0.4.21-py3-none-any.whl` (SHA-256
+`73f13ff73ca983b5ac196ca5d8f01b818c739becc1b1fc7eb09e8c79f46527db`),
+candidate CI 14/14 with no rerun on the merged head, exact-merge installed
+verification, anonymous download and two fresh-venv installations recorded
+in the [release evidence](../../meeting-minutes/2026-09-17-v0421-release-evidence.md).
+This is release acceptance of the artifact and the installed synthetic
+journeys only. LR-01's client outcome (letters 157-160 and the letter-160
+intake chain), LR-06 session integration of the 30 pending paths, and the
+carried rows LR-02 through LR-05 and LR-07 remain open. No feedback letter's
+`resolved_in` is set by this release.
+
 ### 2026-09-17 letters 161/162: the v0.4.21 update failure (plan addition)
 
 Beta letters 161 and 162 report that the client's reviewed
@@ -341,7 +355,6 @@ only on a terminal stderr, the cause-allowlist test's unlisted case uses an
 out-of-family token, and the Windows shard 4/4 CI budget moves from 45 to 60
 minutes after a run was cut at the cap with no failing test. Details in the
 [v0.4.22 hotfix record](../../meeting-minutes/2026-09-17-v0422-update-failure-hotfix.md).
-
 ### 2026-09-17 v0.4.22 released
 
 v0.4.22 is public: tag `v0.4.22` on main `4a4b1850`, one wheel
@@ -356,16 +369,67 @@ resume on the client's reserved project, then one reviewed update) remains
 open, and no feedback letter's `resolved_in` is set by this release. The
 carried rows are in the v0.4.23 candidate (PR #105).
 
-### 2026-09-17 v0.4.21 released
+### 2026-09-17 v0.4.23 U1: binary originals as the fidelity source (letter 160 ②)
 
-v0.4.21 is public: tag `v0.4.21` on main `70536034`, one wheel
-`wom_kit-0.4.21-py3-none-any.whl` (SHA-256
-`73f13ff73ca983b5ac196ca5d8f01b818c739becc1b1fc7eb09e8c79f46527db`),
-candidate CI 14/14 with no rerun on the merged head, exact-merge installed
-verification, anonymous download and two fresh-venv installations recorded
-in the [release evidence](../../meeting-minutes/2026-09-17-v0421-release-evidence.md).
-This is release acceptance of the artifact and the installed synthetic
-journeys only. LR-01's client outcome (letters 157-160 and the letter-160
-intake chain), LR-06 session integration of the 30 pending paths, and the
-carried rows LR-02 through LR-05 and LR-07 remain open. No feedback letter's
-`resolved_in` is set by this release.
+Development verified (Claude Fable 5.1, solo): `create-draft` with a binary
+objet as `--fidelity-source-object-id` previews and approves in
+`faithful_summary` and `sanitized_derivative` on a second comparison basis,
+`bytes` (raw digest as normalized digest, no newline transformation, no
+source text or locator stored); `verbatim` still requires UTF-8 text and
+names the two accepting modes in its next safe action. Every basis check
+(plan builder, private receipt shape, mint-time verifier and evidence id,
+approval integrity) accepts both bases with consistency; both draft receipt
+schemas relax the basis const to the two-value enum without changing ids;
+text receipts keep their bytes. Evidence: 6 new tests in
+`test_v0423_binary_fidelity_source.py` and a 112-test fidelity/integrity
+regression cohort. Recorded in the
+[v0.4.23 implementation record](../../meeting-minutes/2026-09-17-v0423-carried-work-implementation.md);
+installed/client acceptance pending.
+
+### 2026-09-17 v0.4.23 U2: letter 160 ④ reproduction attempt
+
+On Windows PowerShell 5.1 with the letter's exact wrapper shape
+(`function Approve([scriptblock]$cmd){ & $cmd > $out 2>&1 }`) and the
+v0.4.22 hotfix wheel, an AI-authored `create-draft --approve` replay reached
+the native approval dialog both directly and inside the wrapper; the human
+route returned the same fixed-closed answer both ways. Not reproduced; no
+code change. A command re-quoted through a second shell layer does lose its
+quotes and is refused as `cli_arguments_invalid`, which is the nearest
+wrapper-only refusal and is not the letter's shape. Since v0.4.20 a blocked
+text-mode `--approve` prints its reason codes, so the client's next
+occurrence is self-diagnosing. Recorded in the
+[v0.4.23 implementation record](../../meeting-minutes/2026-09-17-v0423-carried-work-implementation.md).
+
+### 2026-09-17 v0.4.23 U3 (LR-06a): create-draft session integration
+
+Development verified (Claude Fable 5.1, solo): `create-draft` with
+`--client-app-ref`, `--task-route-ref` and `--work-session-ref` runs under
+the held session lane, freezes the claimed session's content-free scope
+digest into the reviewed fidelity plan and the native dialog, re-verifies it
+after the dialog, records the operation as pending then completed on the
+actor, and writes the binding into the draft receipt; sessionless
+create-draft and every existing plan digest are unchanged. The reusable
+`work_session_native_write` module is the template for the other native
+single writers. Coverage: 6 integrated, 29 pending, 20 exempt of 56.
+Evidence: 4 tests in `test_v0423_create_draft_session.py`; regression cohort
+recorded in the
+[v0.4.23 implementation record](../../meeting-minutes/2026-09-17-v0423-carried-work-implementation.md).
+LR-06 remains open for the 29 pending paths; installed/client acceptance
+pending.
+
+### 2026-09-17 v0.4.23 U4: carried rows LR-02 through LR-05 and LR-07 revalidated
+
+Development revalidation (Claude Fable 5.1, solo) of the existing domains
+behind the carried rows, on the v0.4.23 tree with the U1 and U3 changes
+applied: the domain cohort (`test_notion_property_backfill`,
+`test_notion_property_backfill_cli`, `test_v045_local_locator_title_recovery`,
+`test_v0420_work_session_git_anchors`, `test_objet_rediscovery`,
+`test_v045_local_objet_link_recovery`, the letter 140 `zettel-objet-link`
+service/CLI/binding tests, the letter 137 objet-link fail-closed test and
+`test_v03315_objet_capture_batch_derived_text`: 173 tests) and the matching
+`test_cli` groups (source properties, property backfill, title remap,
+external locator, objet link, objet rediscovery, derived text, paired intake:
+66 tests) pass. No behaviour was changed by this pass; the rows now name the
+commands and evidence that implement them and keep their client-closure
+state, which only a client run can change. Recorded in the
+[v0.4.23 implementation record](../../meeting-minutes/2026-09-17-v0423-carried-work-implementation.md).

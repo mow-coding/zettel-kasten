@@ -34,10 +34,10 @@ not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.4.22
+v0.4.23
 ```
 
-Previous public baseline: v0.4.21.
+Previous public baseline: v0.4.22.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -58,13 +58,13 @@ not proof that the asset is available.
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0422-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0423-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.22/wom_kit-0.4.22-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.23/wom_kit-0.4.23-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
@@ -115,6 +115,7 @@ approval-gated write, or docs-only), see the
 - v0.4.16 preserves an authenticated project-update result before cleanup and reports cleanup, owned-resource close, Git-runner close, durable output handoff, and attention truth independently. Its immutable journal and `active` -> `display-pending` -> `consumed` handoff reuse the exact bound output for identical at-least-once display without rerunning the writer; consumed state is history, and acknowledgement does not prove a person or model saw stdout. A complete legacy cleanup tombstone is recoverable only after exact validation, proof-only state attributes no past success, and partial or malformed residue stays fail-closed. Canonical `python -m wom_kit.archive_cli` runtime binding verifies all three core modules against receipt bytes with content-free diagnostics. The narrow create-only feedback lane also covers runtime mismatch, product vocabulary no longer trips value-shaped secret checks by wording alone, and caller-input/body safety reads are reported truthfully. Publishing or installing the release changes no client archive; the client separately chooses a reviewed project update. See the [v0.4.16 release notes](wom-kit/docs/releases/v0.4.16.md),
 - v0.4.17 gives fresh project-update preview and approval the same read-only terminal-cleanup preflight. Exact WOM-produced preapproval-abort history routes to identifier-free `--resume`, which compacts only plan-bound private control evidence into canonical proof history without running the project-domain writer, changing source/runtime/pin/archive content, or asking a person to count artifacts. Known cleanup gates return fixed privacy-safe reason codes and useful next actions; partial, changed, ambiguous, mixed, or unsafe residue remains fail-closed and must not be edited manually. Publishing or installing the release changes no client archive; the client separately chooses recovery and one reviewed project update. See the [v0.4.17 release notes](wom-kit/docs/releases/v0.4.17.md),
 - v0.4.18 finishes one completed project-update original that outlived its own cleanup after the project moved to another version. Dry-run, approval, and identifier-free `--resume` classify that directory the same way; resume re-authenticates the original approval claim from the archive, cleans only that private control directory into one canonical proof, attributes no past success, and grants no fresh approval authority. When the live pin still matches, the v0.4.16 replay contract stays in force with the same cleanup as fallback. The redacted failure artifact may now carry one fixed inner reason code, and `marker.json` is documented as an identity anchor rather than a lifecycle record. Publishing or installing the release changes no client archive. See the [v0.4.18 release notes](wom-kit/docs/releases/v0.4.18.md),
+- v0.4.23 lets a binary original (PDF, spreadsheet, image) be the fidelity source of a `faithful_summary` or `sanitized_derivative` draft on a `bytes` comparison basis (`verbatim` still requires UTF-8 text), binds `create-draft` to a claimed work session (`--client-app-ref`, `--task-route-ref`, `--work-session-ref`: the session scope is frozen into the reviewed plan and the receipt; 6 of 56 approval paths are now session-integrated), and revalidates the carried rows LR-02 through LR-05 and LR-07 (beta letter 160 ②, LR-06a). Existing plan digests, receipts and schema ids keep their bytes.
 - v0.4.22 makes a `project-version-update` that fails after the native approval say which fixed gate refused (`cause_code`, `cause_stage`) and which journal stage it stopped in, adds `--resume --abandon-started-approval` to close a stuck `started` claim while the journal proves nothing was written so the ordinary claimless cancellation releases the lock and reservation, reports a skipped `version` Git probe as `project_git_probe_budget_exhausted` (45-second budget) instead of a misconfigured origin, lets `operation-control` find the owning project's journal from an archive root, and makes `upgrade-check` announce its full deep Doctor scope (beta letters 161 and 162). No writer, approval binding, receipt or schema changes.
 - v0.4.21 reopens `discard-draft`, `discard-draft-restore`, the `zettel-edge`, `mint-zet` and `retire-draft` batches, `revert-batch`, `zet-revision-write` and `zet-revision-restore-write` through the same operation-specific exact human approval every other v0.4 writer uses (beta letters 157-160), and adds `source-intake-chain`, which runs the record → selection → capture intake of one staged original under one native approval instead of three (letter 160). No new approval system and no fixed-closed migration is opened; the writer-session coverage gate reports 6 integrated, 30 pending and 20 exempt paths of 56.
 - v0.4.20 gives archive writes a work-session identity, adds selective Git backup of the session's own authenticated outputs and whole canonical documents, and fixes two v0.4.18 defects that left drafts unmintable after WOM's own `zettel-edge` and asset-link writes (beta letters 159 and 160). Blocked `create-draft` and `zettel-edge` results now say why, and the writer-session coverage gate reports exactly which approval paths are integrated, pending or exempt. Publishing or installing the release changes no client archive. See the [v0.4.20 release notes](wom-kit/docs/releases/v0.4.20.md),
@@ -540,7 +541,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
-v0.4.22 (current checkpoint)
+v0.4.23 (current checkpoint)
 ```
 
 Public releases from `v0.2.5` onward are tagged as compatibility checkpoints.
