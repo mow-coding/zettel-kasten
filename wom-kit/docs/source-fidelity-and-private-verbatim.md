@@ -37,6 +37,22 @@ The source authority is a manifested local content-addressed objet. Mutable
 paths are not durable evidence and are never copied into public output or
 receipts.
 
+## Binary originals as the fidelity source (v0.4.23)
+
+A PDF, spreadsheet, image or any objet that is not UTF-8 text may be the
+fidelity source of a `faithful_summary` or `sanitized_derivative` draft
+(beta letter 160 ②). Such a source is bound on the `bytes` comparison basis:
+the receipt records the raw digest as the normalized digest, no newline
+transformation, and the same absent-source-text and absent-locator facts.
+Nothing is extracted, transcribed or claimed about the content; the draft is
+the reviewed candidate and the human review remains required exactly as for
+a text source. `verbatim` still requires a UTF-8 text objet, because only a
+text region can be compared mechanically; a binary source there returns
+`source_fidelity_source_not_utf8`. The policy projection lists both bases
+(`comparison_bases`) and the modes that accept a binary source
+(`binary_source_modes`); existing text receipts keep the
+`utf8_newlines_lf` basis byte for byte.
+
 ## What verbatim means
 
 `utf8_newlines_lf` converts CRLF and lone CR to LF and makes no other text
