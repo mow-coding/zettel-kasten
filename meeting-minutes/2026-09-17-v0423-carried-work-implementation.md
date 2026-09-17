@@ -183,6 +183,18 @@ metadata index): 1,224 tests, one pin moved — the coverage-gate test that
 used `create-draft` as its example of a writer without session refs now
 uses `promote`.
 
+## Unit U4: carried rows LR-02 through LR-05 and LR-07 revalidated
+
+These rows describe domains that already exist (`notion-source-properties`,
+the `zet-title-remap-*` planner and audits, `external-locator-*` and
+`anchor-zet`, `objet-rediscovery-plan` and `zettel-objet-link`, the paired
+original/derived capture batch) and whose remaining state is client closure.
+Decision: no new feature is invented for them in v0.4.23; the pass proves that
+the U1 and U3 changes did not move them and names, per row, the commands and
+test evidence a client run can be compared against. Cohorts: 173 domain
+tests and 66 `test_cli` group tests pass on the v0.4.23 tree. The register
+rows now carry the v0.4.23 revalidation and keep their client-pending state.
+
 ## Client boundary
 
 Nothing here sets any letter's `resolved_in`. Client-side confirmation of ②
