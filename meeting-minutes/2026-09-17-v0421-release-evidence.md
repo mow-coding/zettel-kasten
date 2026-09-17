@@ -140,8 +140,19 @@ recovery.
 The work-session worktree and branch are preserved until this evidence
 record merges; they hold no unmerged product change (the released tree
 equals the branch tree). The untracked local supplement checker copies are
-deleted after this record. `wom-kit/dist-v0421` is untracked and holds the
-uploaded wheel bytes.
+deleted after this record.
+
+Correction recorded after publication: the wheel from the pre-release
+supplement run on `0d795a0c` (`wom-kit/dist-v0421/`, SHA-256 `b29c0ac9…`,
+not the published bytes) was swept into commit `459ba86c` by a broad
+`git add -A wom-kit` and is therefore part of the released tree and the
+`v0.4.21` tag. It is a build artifact of public source only (the public
+privacy hygiene gate and the wheel's own secret/user-path scans passed), it
+is not packaged into any wheel, and it is not the published artifact. The
+tag and history are not rewritten; the file is removed by a follow-up commit
+and `dist-*/` is ignored from now on. The published wheel's provenance
+above (built from the exact-merge checkout, digest `73f13ff7…`) is
+unaffected.
 
 Public release, local installed verification and source tests do not set
 any feedback letter's `resolved_in`. The client AI must use the exact
