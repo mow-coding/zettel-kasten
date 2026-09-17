@@ -26,7 +26,8 @@ This project uses semantic versioning for public compatibility checkpoints.
   misconfigured origin; `operation-control` started from an archive root
   retries once with the owning project root
   (`inspection_root_resolved_to_parent_project`); `upgrade-check` without
-  `--progress` announces its full deep Doctor scope on stderr first.
+  `--progress` announces its full deep Doctor scope on a terminal stderr
+  first (a redirected stderr is unchanged).
 
 ## v0.4.21 - 2026-09-16
 

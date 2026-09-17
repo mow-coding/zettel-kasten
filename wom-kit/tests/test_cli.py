@@ -80037,8 +80037,10 @@ state:
                     True,
                 ),
                 (
+                    # v0.4.22: fixed tokens of the project-update and approval
+                    # families are carried; a token outside them never is.
                     "unlisted_code",
-                    "project_version_update_other_gate",
+                    "other_family_gate",
                     "candidate_missing_handler",
                     False,
                 ),

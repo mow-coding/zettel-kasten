@@ -72,8 +72,9 @@ still blocks resume discovery.
 (the shared budget is now 45 seconds) instead of a misconfigured origin;
 `operation-control` started from an archive root finds the owning project's
 journal and reports `inspection_root_resolved_to_parent_project: true`;
-`upgrade-check` without `--progress` prints its full deep Doctor scope to
-stderr first and is not required before an update.
+`upgrade-check` without `--progress` prints its full deep Doctor scope to a
+terminal stderr first (a redirected stderr is unchanged) and is not required
+before an update.
 
 After one reviewed project update, start the project launcher in a new process
 and verify its pin, source, launcher, and runtime evidence. Only that client-run

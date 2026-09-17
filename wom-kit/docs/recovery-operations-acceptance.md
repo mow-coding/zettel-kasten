@@ -283,6 +283,20 @@ the revision/discard/batch guides, matrix rows and READMEs no longer describe
 the reopened writers as fixed closed. Development evidence: 5 new tests,
 full cohort 2,185 OK. Still no client outcome is claimed.
 
+### 2026-09-17 v0.4.21 released
+
+v0.4.21 is public: tag `v0.4.21` on main `70536034`, one wheel
+`wom_kit-0.4.21-py3-none-any.whl` (SHA-256
+`73f13ff73ca983b5ac196ca5d8f01b818c739becc1b1fc7eb09e8c79f46527db`),
+candidate CI 14/14 with no rerun on the merged head, exact-merge installed
+verification, anonymous download and two fresh-venv installations recorded
+in the [release evidence](../../meeting-minutes/2026-09-17-v0421-release-evidence.md).
+This is release acceptance of the artifact and the installed synthetic
+journeys only. LR-01's client outcome (letters 157-160 and the letter-160
+intake chain), LR-06 session integration of the 30 pending paths, and the
+carried rows LR-02 through LR-05 and LR-07 remain open. No feedback letter's
+`resolved_in` is set by this release.
+
 ### 2026-09-17 letters 161/162: the v0.4.21 update failure (plan addition)
 
 Beta letters 161 and 162 report that the client's reviewed
@@ -331,6 +345,16 @@ transaction removed, pin unchanged) and a fresh approve reached
 session-scope pre-approval of letter 161 (awaits the maintainer), the
 journal schema, and the carried LR rows.
 
+### 2026-09-17 v0.4.22 release candidate
+
+Scope decision (Claude Fable 5.1; standing train approval): v0.4.22 ships
+UF-01 alone, ahead of the carried LR rows, because no v0.4.21 repair reaches
+the client until the update itself works. Candidate PR #104 (`c3bfb0be` plus
+the CI corrections `cd1d7464`): the `upgrade-check` scope notice is printed
+only on a terminal stderr, the cause-allowlist test's unlisted case uses an
+out-of-family token, and the Windows shard 4/4 CI budget moves from 45 to 60
+minutes after a run was cut at the cap with no failing test. Details in the
+[v0.4.22 hotfix record](../../meeting-minutes/2026-09-17-v0422-update-failure-hotfix.md).
 ### 2026-09-17 v0.4.23 U1: binary originals as the fidelity source (letter 160 ②)
 
 Development verified (Claude Fable 5.1, solo): `create-draft` with a binary
@@ -395,17 +419,3 @@ external locator, objet link, objet rediscovery, derived text, paired intake:
 commands and evidence that implement them and keep their client-closure
 state, which only a client run can change. Recorded in the
 [v0.4.23 implementation record](../../meeting-minutes/2026-09-17-v0423-carried-work-implementation.md).
-
-### 2026-09-17 v0.4.21 released
-
-v0.4.21 is public: tag `v0.4.21` on main `70536034`, one wheel
-`wom_kit-0.4.21-py3-none-any.whl` (SHA-256
-`73f13ff73ca983b5ac196ca5d8f01b818c739becc1b1fc7eb09e8c79f46527db`),
-candidate CI 14/14 with no rerun on the merged head, exact-merge installed
-verification, anonymous download and two fresh-venv installations recorded
-in the [release evidence](../../meeting-minutes/2026-09-17-v0421-release-evidence.md).
-This is release acceptance of the artifact and the installed synthetic
-journeys only. LR-01's client outcome (letters 157-160 and the letter-160
-intake chain), LR-06 session integration of the 30 pending paths, and the
-carried rows LR-02 through LR-05 and LR-07 remain open. No feedback letter's
-`resolved_in` is set by this release.

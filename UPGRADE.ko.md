@@ -48,8 +48,8 @@ archive project-version-update <project-root> --resume --affirm-external-writers
 `project_git_probe_budget_exhausted`로 보고합니다(공유 예산은 이제 45초).
 archive root에서 시작한 `operation-control`은 archive를 소유한 project의 journal을
 찾아 `inspection_root_resolved_to_parent_project: true`를 보고합니다. `--progress`
-없는 `upgrade-check`는 전체 deep Doctor 범위를 stderr에 먼저 알리며, update 전에
-필수가 아닙니다.
+없는 `upgrade-check`는 터미널 stderr에 전체 deep Doctor 범위를 먼저 알리고(리다이렉트된
+stderr는 그대로), update 전에 필수가 아닙니다.
 
 검토한 project update 한 번 뒤에는 새 process에서 project launcher를 시작해 pin,
 source, launcher, runtime 근거를 확인하세요. 그 client 실행 결과만이 project가

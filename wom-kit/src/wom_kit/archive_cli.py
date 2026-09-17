@@ -33913,15 +33913,24 @@ def command_recovery_plan(args: argparse.Namespace) -> int:
     return 0
 
 
+def _stderr_is_terminal() -> bool:
+    try:
+        return bool(sys.stderr.isatty())
+    except Exception:
+        return False
+
+
 def command_upgrade_check(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("Upgrade check is read-only and requires --dry-run.", file=sys.stderr)
         return 1
     archive_root = Path(args.archive_root)
     reporter = CommandProgressReporter(bool(getattr(args, "progress", False)), label="upgrade-check")
-    if not bool(getattr(args, "progress", False)):
+    if not bool(getattr(args, "progress", False)) and _stderr_is_terminal():
         # v0.4.22 (beta letter 161 ②): the full deep Doctor scan can run for
-        # tens of minutes on a large archive; say so before going silent.
+        # tens of minutes on a large archive; tell the waiting operator before
+        # going silent. A redirected stderr (scripts, JSON consumers, the
+        # merged-stream test runner) keeps its exact bytes.
         print(
             "[upgrade-check] running the full deep Doctor scan (every zet and object "
             "hash); large archives take many minutes and stdout stays empty until "
