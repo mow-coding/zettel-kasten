@@ -6,6 +6,33 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.24 - 2026-09-18
+
+- Added per-work-session permission modes — `manual`, `limited`, `allow_all`
+  — granted by one exact human decision on the claimed session
+  (`work-session --action set-permission-mode --approve`; approve
+  `--review-original` and `--resume` continue it like handoff, accept and
+  recover). A write the mode permits opens no native dialog but still
+  publishes its own one-use claim bound to its exact plan and target digests;
+  the claim records `interactive_intent.mechanism:
+  work_session_permission_mode`, results report
+  `exact_human_approval.approval_mechanism` and `live_dialog_shown`, and the
+  five-key receipt reference is unchanged (beta letters 160 and 161).
+- The AI client passes its retained refs as `WOM_CLIENT_APP_REF`,
+  `WOM_TASK_ROUTE_REF` and `WOM_WORK_SESSION_REF` (a command's explicit
+  session refs take precedence); the broker resolves the grant read-only at
+  its single choke point, re-checks it before the claim is published
+  (`exact_human_approval_permission_revoked` fails closed) and any doubt
+  opens the dialog as before.
+- Never grantable in any mode: `project_version_update`, `git_backup`, the
+  Notion backfill and object-storage kinds, `work_session`,
+  `integrity_repair`, `duplicate_object_reconcile`, `local_recovery` and its
+  revert, `warning_override`, `human_artifact_lifecycle`; credential writers
+  keep the Windows credential native path. Pause, complete, handoff, the
+  successor's accept and recover clear the grant; a new claim starts manual.
+  `work-session --action inspect` reports `permission_mode` and
+  `permitted_operations`. No plan digest, receipt schema or resume path changes.
+
 ## v0.4.23 - 2026-09-18
 
 - Let a binary original (PDF, spreadsheet, image) be the fidelity source of a

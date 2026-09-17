@@ -35,7 +35,7 @@ wom-kit/docs/releases/에만 쌓고, baseline 사다리와 tag 목록을 여기�
 v0.4.21
 ```
 
-이전 공개 기준: v0.4.22.
+이전 공개 기준: v0.4.23.
 
 전체 릴리스 이력은 [CHANGELOG.md](CHANGELOG.md)와 [wom-kit/docs/releases/](wom-kit/docs/releases/)를 보세요.
 
@@ -55,13 +55,13 @@ Roadmap 요약: `v0.1.x`는 아이디어/프로토콜 언어 라인, `v0.2.x`는
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0423-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0424-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.23/wom_kit-0.4.23-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.24/wom_kit-0.4.24-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
@@ -107,6 +107,7 @@ archive runtime-skill-install --dry-run --format json
 - v0.4.16은 cleanup 전에 인증된 project-update 결과를 durable terminal handoff로 보존하고 transaction cleanup·owned-resource close·Git-runner close·durable output handoff·attention을 각각 정직하게 보고합니다. 불변 journal과 `active` -> `display-pending` -> `consumed` 상태는 이미 결속된 동일 output을 재사용해 writer 재실행 없이 같은 결과를 at-least-once로 표시합니다. consumed는 이력이며 acknowledgement는 사람이나 AI가 stdout을 실제로 봤다는 증거가 아닙니다. 완전한 legacy cleanup tombstone만 exact 검증 뒤 복구하고, proof-only 상태는 과거 성공을 주장하지 않으며, 일부·malformed residue는 계속 fail-closed입니다. 표준 `python -m wom_kit.archive_cli` 실행은 세 core module을 receipt byte와 대조하고 경로·해시 없는 진단만 냅니다. create-only feedback lane은 runtime mismatch도 다루며, product vocabulary는 단어만으로 secret 오탐되지 않되 실제 credential shape는 계속 fail-closed입니다. caller input과 body를 safety 검사로 읽었는지도 별도 필드에 정확히 표시합니다. 공개·설치만으로 client archive는 바뀌지 않으며 project update는 client가 별도로 선택합니다. [v0.4.16 릴리스 노트](wom-kit/docs/releases/v0.4.16.md)를 보세요.
 - v0.4.17은 fresh project-update dry-run과 approval이 같은 read-only terminal-cleanup preflight를 사용하게 합니다. WOM이 만든 exact preapproval-abort 이력은 identifier 없는 `--resume`으로 보내고, project-domain writer나 source·runtime·pin·archive content를 바꾸지 않은 채 plan에 결속된 비공개 control evidence만 canonical proof 이력으로 정리합니다. 사람은 artifact 개수·해시·내부 ID를 확인하지 않습니다. 알려진 cleanup gate는 고정된 privacy-safe reason code와 실제 다음 행동을 반환하며, 일부·변경·모호·혼합·unsafe residue는 계속 fail-closed이고 손으로 고치면 안 됩니다. 공개·설치만으로 client archive는 바뀌지 않으며 client가 복구와 한 번의 검토된 project update를 별도로 선택합니다. [v0.4.17 릴리스 노트](wom-kit/docs/releases/v0.4.17.md)를 보세요.
 - v0.4.18은 project가 다른 버전으로 넘어간 뒤에도 자기 cleanup을 끝내지 못한 채 남은 완료된 project-update 원본 하나를 마무리합니다. dry-run·approval·identifier 없는 `--resume`이 그 directory를 같은 방식으로 분류하고, resume은 archive에서 원래 승인 claim을 다시 인증한 뒤 그 비공개 control directory만 canonical proof 하나로 정리하며, 과거 성공을 주장하지 않고 새 approval 권한도 만들지 않습니다. live pin이 아직 일치하면 v0.4.16 재생 계약이 그대로 적용되고 같은 정리가 fallback이 됩니다. redacted 실패 산출물은 이제 고정된 내부 reason code 하나를 담을 수 있고, `marker.json`은 lifecycle 기록이 아니라 identity anchor로 문서화됩니다. 공개·설치만으로 client archive는 바뀌지 않습니다. [v0.4.18 릴리스 노트](wom-kit/docs/releases/v0.4.18.md)를 보세요.
+- v0.4.24는 Codex·Claude 데스크톱 앱의 세션별 권한 수준처럼, claim한 작업 세션에 사람이 승인 창 한 번으로 부여하는 세션 승인 모드(`manual`·`limited`·`allow_all`, `work-session --action set-permission-mode`)를 더합니다. 모드가 허용하는 쓰기는 승인 창 없이 실행되지만 여전히 자기 몫의 1회용 claim을 남기고 그 claim에 `work_session_permission_mode` 방식이 기록되며, project update·원격 provider·세션 생명주기·복구·override·자격증명 쓰기는 항상 승인 창을 엽니다. pause·complete·handoff하면 세션은 다시 manual로 돌아갑니다(베타 편지 160·161). 계획 digest·영수증 schema·resume 경로는 바뀌지 않습니다.
 - v0.4.23은 바이너리 원본(PDF·스프레드시트·이미지)을 `faithful_summary`/`sanitized_derivative` 초안의 fidelity 원본으로 `bytes` 비교 기준으로 받게 하고(`verbatim`은 여전히 UTF-8 텍스트만), `create-draft`를 claim한 작업 세션에 묶으며(`--client-app-ref`·`--task-route-ref`·`--work-session-ref`: 세션 범위가 검토된 계획과 영수증에 고정; 승인 경로 56개 중 6개가 세션 통합됨), 이월된 LR-02~LR-05·LR-07 행을 재검증합니다(베타 편지 160 ②, LR-06a). 기존 계획 digest·영수증·schema id의 바이트는 그대로입니다.
 - v0.4.22는 native 승인 뒤에 실패한 `project-version-update`가 어느 고정 gate에서 거부됐는지(`cause_code`, `cause_stage`)와 journal의 어느 단계에서 멈췄는지 말하게 하고, journal이 아무것도 쓰지 않았음을 증명하는 동안 멈춘 `started` claim을 닫는 `--resume --abandon-started-approval`을 추가해 기존의 claim 없는 취소가 잠금과 예약을 풀게 하며, `version`이 건너뛴 Git probe를 잘못 설정된 origin 대신 `project_git_probe_budget_exhausted`(예산 45초)로 보고하게 하고, archive root에서 시작한 `operation-control`이 소유 project의 journal을 찾게 하며, `upgrade-check`가 전체 deep Doctor 범위를 먼저 알리게 합니다(베타 편지 161·162). writer, 승인 binding, 영수증, schema는 바뀌지 않습니다.
 - v0.4.21은 베타 편지 157-160이 회귀로 보고한 여덟 writer(`discard-draft`, `discard-draft-restore`, `zettel-edge`·`mint-zet`·`retire-draft` 배치, `revert-batch`, `zet-revision-write`, `zet-revision-restore-write`)를 다른 v0.4 writer와 같은 작업별 정확 사람 승인으로 다시 열고, 스테이징 원본 1개의 반입 근거 기록 → 선정 → 보존을 승인 세 번 대신 한 번으로 실행하는 `source-intake-chain`을 추가합니다(편지 160). 새 승인 체계나 닫힌 migration 개방은 없으며, writer-session coverage gate는 56개 중 통합 6, 보류 30, 예외 20을 보고합니다.
@@ -441,7 +442,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
-v0.4.23 (현재 checkpoint)
+v0.4.24 (현재 checkpoint)
 ```
 
 `v0.2.5` 이후의 공개 릴리스에는 compatibility checkpoint tag가 붙습니다. 전체

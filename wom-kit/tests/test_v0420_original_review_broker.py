@@ -59,7 +59,7 @@ class OriginalReviewBrokerTests(unittest.TestCase):
         parameters = inspect.signature(subject._execute_exact_human_approved_write_core).parameters
         self.assertEqual(set(parameters), {"archive_root", "context", "writer", "native", "key_provider",
             "post_decision_boundary", "claim_publication_boundary", "claim_succeeded_finalizer",
-            "target_collection", "observe_target_binding"})
+            "target_collection", "observe_target_binding", "session_permission"})
         with patch.object(subject, "_authenticated_resume_candidates_with_key_core",
                           side_effect=AssertionError("fresh must not scan")):
             result = subject._execute_exact_human_approved_write_core(self.root, self.context,

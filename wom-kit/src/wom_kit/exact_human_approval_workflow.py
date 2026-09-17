@@ -21,9 +21,11 @@ operation is performed.
 
 from __future__ import annotations
 
+import hmac
+
 import os
 import re
-from contextlib import AbstractContextManager, nullcontext
+from contextlib import contextmanager, AbstractContextManager, nullcontext
 from pathlib import Path
 from enum import Enum
 from typing import Any, Callable, Mapping, Protocol, TypeVar
@@ -46,6 +48,8 @@ from .exact_human_approval_windows import (
     ExactHumanApprovalWindowsError,
     _ExactHumanApprovalNative,
     _request_exact_human_approval_core,
+    CURRENT_INTERACTIVE_INTENT_MECHANISM,
+    PERMISSION_INTERACTIVE_INTENT_MECHANISM,
 )
 from .target_collection_preview import TargetCollectionPreview
 
@@ -100,6 +104,27 @@ _CAUSE_CODE_RE = re.compile(r"[a-z][a-z0-9_]{0,95}")
 _CAUSE_STAGES = frozenset({"candidate_missing_handler", "domain_writer", "key_or_claim"})
 
 
+# v0.4.24: "not supplied" means resolve the caller's work-session permission
+# grant from the process environment; None means no grant (always dialog).
+_UNSET_SESSION_PERMISSION = object()
+
+
+def _resolved_session_permission(archive_root, session_permission, context):
+    """The grant that may skip the dialog for this exact context, or None."""
+
+    from . import work_session_permission as permission
+
+    if session_permission is _UNSET_SESSION_PERMISSION:
+        if context.operation in permission.ALWAYS_DIALOG_OPERATIONS:
+            return None
+        grant = permission.resolve_grant_from_environment(archive_root)
+    else:
+        grant = session_permission
+    if grant is None or type(grant) is not permission.SessionPermissionGrant:
+        return None
+    return grant if grant.permits(context.operation) else None
+
+
 class ExactHumanApprovalWorkflowError(RuntimeError):
     _CODES = {
         "exact_human_approval_cancelled",
@@ -112,6 +137,7 @@ class ExactHumanApprovalWorkflowError(RuntimeError):
         "exact_human_approval_writer_result_invalid",
         "exact_human_approval_operation_failed",
         "exact_human_approval_state_unknown",
+        "exact_human_approval_permission_revoked",
     }
 
     def __init__(
@@ -358,6 +384,7 @@ def _execute_exact_human_approved_write_core(
     claim_succeeded_finalizer: _ClaimSucceededFinalizer | None = None,
     target_collection: TargetCollectionPreview | None = None,
     observe_target_binding: Callable[[], str] | None = None,
+    session_permission: Any = _UNSET_SESSION_PERMISSION,
 ) -> dict[str, Any]:
     """Original entry: preserve the fresh broker signature, order and bytes."""
     return _execute_exact_human_approved_write_with_review_kind_core(
@@ -367,6 +394,7 @@ def _execute_exact_human_approved_write_core(
         claim_publication_boundary=claim_publication_boundary,
         claim_succeeded_finalizer=claim_succeeded_finalizer,
         target_collection=target_collection, observe_target_binding=observe_target_binding,
+        session_permission=session_permission,
     )
 
 
@@ -427,6 +455,7 @@ def _execute_exact_human_approved_write_with_review_kind_core(
     claim_succeeded_finalizer: _ClaimSucceededFinalizer | None = None,
     target_collection: TargetCollectionPreview | None = None,
     observe_target_binding: Callable[[], str] | None = None,
+    session_permission: Any = _UNSET_SESSION_PERMISSION,
 ) -> dict[str, Any]:
     """Internal fakeable orchestration core for production and bounded tests.
 
@@ -455,17 +484,69 @@ def _execute_exact_human_approved_write_with_review_kind_core(
             "target_collection": target_collection,
             "observe_target_binding": observe_target_binding,
         }
-    try:
-        decision = _request_exact_human_approval_core(
-            context,
-            intent=ExactHumanApprovalIntent.live_write,
-            native=native,
-            **review_options,
+    interactive_intent_mechanism = CURRENT_INTERACTIVE_INTENT_MECHANISM
+    grant = (
+        _resolved_session_permission(archive_root, session_permission, context)
+        if review_kind is _ExactHumanApprovalReviewKind.fresh
+        else None
+    )
+    if grant is not None:
+        # v0.4.24: the work session's human-granted permission mode stands
+        # in for the dialog. The claim, its bindings, the writer and the
+        # finalizer are unchanged; only the decision source differs, and
+        # the claim records that. The dialog path's live target check is
+        # reproduced here so a stale target cannot reach the claim.
+        from .exact_human_approval_windows import _ExactHumanApprovalDecision
+
+        if observe_target_binding is not None:
+            try:
+                observed = observe_target_binding()
+            except BaseException:
+                raise _fail("exact_human_approval_operation_failed") from None
+            if (
+                type(observed) is not str
+                or not hmac.compare_digest(observed, context.target_binding_sha256)
+            ):
+                raise _fail("exact_human_approval_operation_failed")
+        decision = _ExactHumanApprovalDecision(
+            approved=True,
+            synthetic_acknowledged=False,
+            reason_code="exact_human_approval_approved",
+            plan_sha256=context.plan_sha256,
+            target_binding_sha256=context.target_binding_sha256,
         )
-    except ExactHumanApprovalWindowsError:
-        raise _fail("exact_human_approval_operation_failed") from None
-    if decision.approved is not True:
-        raise _fail("exact_human_approval_cancelled")
+        interactive_intent_mechanism = PERMISSION_INTERACTIVE_INTENT_MECHANISM
+        original_publication_boundary = claim_publication_boundary
+
+        @contextmanager
+        def _permission_publication_boundary():
+            from . import work_session_permission as permission
+
+            # The mode may have been cleared (pause, handoff, complete,
+            # recover) between the decision and the claim: fail closed.
+            if not permission.grant_still_permits(archive_root, grant, context.operation):
+                raise _fail("exact_human_approval_permission_revoked")
+            inner = (
+                original_publication_boundary()
+                if original_publication_boundary is not None
+                else nullcontext()
+            )
+            with inner as value:
+                yield value
+
+        claim_publication_boundary = _permission_publication_boundary
+    else:
+        try:
+            decision = _request_exact_human_approval_core(
+                context,
+                intent=ExactHumanApprovalIntent.live_write,
+                native=native,
+                **review_options,
+            )
+        except ExactHumanApprovalWindowsError:
+            raise _fail("exact_human_approval_operation_failed") from None
+        if decision.approved is not True:
+            raise _fail("exact_human_approval_cancelled")
 
     def _with_key(
         key: memoryview,
@@ -494,6 +575,7 @@ def _execute_exact_human_approved_write_with_review_kind_core(
                     context,
                     decision,
                     key,
+                    interactive_intent_mechanism=interactive_intent_mechanism,
                     bound_archive_root=(
                         filesystem_boundary[0]
                         if filesystem_boundary is not None
