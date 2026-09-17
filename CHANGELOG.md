@@ -6,6 +6,29 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.22 - 2026-09-17
+
+- Made a `project-version-update` failure after the native approval say where
+  it stopped: the result and the diagnostics record carry a content-free
+  `cause_code`, `cause_stage` (`domain_writer` or `key_or_claim`) and
+  `cause_code_source: fixed_literal_allowlist`, and the operation journal names
+  the `materialize-runtime-candidate`, `native-approval`,
+  `post-claim-revalidate`, `approval-bound` and `durable-write` stages (beta
+  letters 161 and 162).
+- Added `--resume --abandon-started-approval`, which closes a stuck `started`
+  claim as `failed` with `operator_abandoned_before_domain_write` only while the
+  transaction journal proves no component write started; the following plain
+  `--resume` runs the claimless cancellation (`preapproval_scaffold_cancelled`)
+  and a fresh `--approve` opens one new dialog. A claim that failed for any
+  other reason still blocks resume discovery.
+- Raised the shared Git probe budget of `version` from 12 to 45 seconds and
+  report a skipped probe as `project_git_probe_budget_exhausted` instead of a
+  misconfigured origin; `operation-control` started from an archive root
+  retries once with the owning project root
+  (`inspection_root_resolved_to_parent_project`); `upgrade-check` without
+  `--progress` announces its full deep Doctor scope on a terminal stderr
+  first (a redirected stderr is unchanged).
+
 ## v0.4.21 - 2026-09-16
 
 - Reopened `discard-draft` and `discard-draft-restore` through operation-specific

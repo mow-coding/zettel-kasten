@@ -129,6 +129,14 @@ COMMAND_STAGES = {
             "project-preflight",
             "fetch-release",
             "verify-release",
+            # v0.4.22 (beta letter 161): the stages between verify-release
+            # and the first component write now have public names, so a
+            # journal that ends in result_unavailable says where it stopped.
+            "materialize-runtime-candidate",
+            "native-approval",
+            "post-claim-revalidate",
+            "approval-bound",
+            "durable-write",
             "checkout-release",
             "write-pins",
             "write-receipt",
@@ -1668,6 +1676,12 @@ class OperationRunJournal:
 
     def _safe_stage(self, stage: object) -> str:
         value = str(stage or "").strip().lower()
+        if (
+            self.command == "project-version-update"
+            and value.startswith("project-runtime-candidate-")
+        ):
+            # Candidate-build substages are one public bucket.
+            return "materialize-runtime-candidate"
         return value if value in COMMAND_STAGES[self.command] else "unknown"
 
     def _record(

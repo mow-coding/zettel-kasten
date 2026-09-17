@@ -1,8 +1,11 @@
 # WOM-kit Version Truth Source
 
-Status: v0.4.21 reopened writers, one-approval intake chain, and session-owned writes
+Status: v0.4.22 project-update failure truth, started-claim abandon, and session-owned writes
 
-Current checkpoint: Status: v0.4.21 reopened writers and one-approval intake chain with installed-wheel hash evidence
+Previous checkpoint: Status: v0.4.21 reopened writers, one-approval intake chain, and session-owned writes
+
+Current checkpoint: Status: v0.4.22 project-update failure truth and started-claim abandon with installed-wheel hash evidence
+Previous checkpoint: Status: v0.4.21 reopened writers and one-approval intake chain with installed-wheel hash evidence
 Previous checkpoint: Status: v0.4.20 session-owned writes and whole-document Git ownership with installed-wheel hash evidence
 Previous checkpoint: Status: v0.4.19 runtime and capability truth with installed-wheel hash evidence
 
@@ -54,22 +57,22 @@ or runtime workflow. This page defines the safe order for checking them.
 
 ## Current Public Tool
 
-The v0.4.21 URL is a conditional release-artifact contract. Use it only after
+The v0.4.22 URL is a conditional release-artifact contract. Use it only after
 the matching public GitHub Release exists and lists the exact wheel:
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0421-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0422-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.21/wom_kit-0.4.21-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.22/wom_kit-0.4.22-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-Require exactly `archive 0.4.21` from a new process. The external CPython 3.12
+Require exactly `archive 0.4.22` from a new process. The external CPython 3.12
 environment and exact real `python.exe -m pip` retain the wheel SHA-256 in the
 installed PEP 610 metadata. A user-scoped tool environment without that archive
 hash is not project-updater supply evidence. A bootstrap install alone changes
@@ -174,12 +177,18 @@ Exact launcher and module paths remain redacted by default. Use
 never edits PATH, replaces a launcher, installs Python, or changes a project.
 
 `--progress` writes an immediate content-free line to stderr before source and
-Git provenance work. All Git reads in one version inspection share a 12-second
-total budget, in addition to the existing per-child limits. Once that deadline
-is exhausted, later Git probes are skipped and the result reports
-`source_probe_budget.budget_exhausted: true`; no write process is started. This
-prevents a chain of stuck Git or credential-helper children from leaving the
-operator with indefinite silence.
+Git provenance work. All Git reads in one version inspection share a 45-second
+total budget (12 seconds before v0.4.22), in addition to the existing per-child
+limits. Once that deadline is exhausted, later Git probes are skipped and the
+result reports `source_probe_budget.budget_exhausted: true`; no write process
+is started. This prevents a chain of stuck Git or credential-helper children
+from leaving the operator with indefinite silence. Since v0.4.22 a skipped
+probe is never reported as a configuration fact: when the budget is exhausted,
+`runtime_alignment.reason_code` is `project_git_probe_budget_exhausted` rather
+than `project_origin_not_configured`,
+`project_source_tag_not_reachable_from_origin_main` or
+`project_source_observation_unavailable` (beta letter 161 observed the
+mislabel under disk contention).
 
 ## Source Of Truth
 

@@ -130,7 +130,9 @@ jobs:
             shard_index: 4
             shard_index_zero: 3
             shard_count: 4
-            timeout-minutes: 45
+            # v0.4.22: 45 was hit by runner variance alone (v0.4.21 candidate
+            # took 40.7 min; the same shard with no failing test was cut at 45.3).
+            timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
         with:

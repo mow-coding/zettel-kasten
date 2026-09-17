@@ -1,9 +1,13 @@
 # Agent Operator Capabilities Manifest
 
-Status: v0.4.21 reopened writers, one-approval intake chain, and writer-session coverage gate
+Status: v0.4.22 project-update failure truth, started-claim abandon, and writer-session coverage gate
 
-v0.4.21 adds one canonical command, `source-intake-chain`, and reopens eight
-writers through operation-specific exact human approval; the availability
+v0.4.22 adds no command path: `project-version-update --resume` gains the
+`--abandon-started-approval` flag, failures after the native approval carry a
+fixed `cause_code` and `cause_stage`, and `operation-control` finds the owning
+project's journal from an archive root; inventory, availability and dispatch
+are unchanged. v0.4.21 added one canonical command, `source-intake-chain`, and
+reopened eight writers through operation-specific exact human approval; the availability
 decision, help, `capabilities`, Doctor suggestions and dispatch keep the same
 content-free contract. v0.4.20 added the writer-session coverage gate that
 classifies every approval-available path as integrated, pending or exempt.
@@ -130,7 +134,7 @@ field remain `history_not_audited`. Inventory, shared capability availability,
 and command help consume the same content-free history. Current availability
 continues to be parser-derived; history does not grant execution authority.
 
-For the current v0.4.21 working-tree parser, the inventory snapshot is:
+For the current v0.4.22 working-tree parser, the inventory snapshot is:
 
 ```text
 canonical executable command paths: 317

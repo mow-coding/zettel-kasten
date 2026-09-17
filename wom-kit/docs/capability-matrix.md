@@ -1,12 +1,17 @@
 ﻿# WOM-kit Capability Matrix
 
-Status: v0.4.21 reopened writers, one-approval intake chain, and session-owned writes truth
+Status: v0.4.22 project-update failure truth, started-claim abandon, and session-owned writes truth
 Date: 2026-09-04
-Version: v0.4.21 implementation and release scope
+Version: v0.4.22 implementation and release scope
 
-The current v0.4.21 working tree reopens eight writers that beta letters
-157-160 reported as regressions and adds the one-approval `source-intake-chain`
-(see the inventory paragraph below). The v0.4.20 tree added a work-session identity to archive
+The current v0.4.22 working tree changes no writer: it makes a
+`project-version-update` that fails after the native approval report the
+refusing fixed gate and the journal stage it stopped in, and adds
+`--resume --abandon-started-approval` so a stuck `started` claim can be closed
+while the journal proves nothing was written (beta letters 161 and 162). The
+v0.4.21 tree reopened eight writers that beta letters 157-160 reported as
+regressions and added the one-approval `source-intake-chain` (see the
+inventory paragraph below). The v0.4.20 tree added a work-session identity to archive
 writes: `work-session` registers apps and creates, claims, pauses, resumes and
 hands off sessions through exact native approval, and `source-intake-record`,
 `source-intake-batch`, `zet-title-remap-write` and `git-backup-reconcile-plan`

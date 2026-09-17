@@ -754,6 +754,31 @@ def _authenticated_claim_routing_core(
     return str(parsed["context_sha256"]), str(parsed["status"])
 
 
+def _authenticated_claim_failure_code_core(
+    archive_root: Path | str,
+    approval_id: str,
+    receipt_authentication_key: bytes | bytearray | memoryview,
+    *,
+    bound_archive_root: Path | None = None,
+    claim_parent_binding: dict[str, Any] | None = None,
+) -> tuple[str, str, str | None]:
+    """Authenticate the context digest, status and fixed failure code only."""
+
+    parsed, _archive_id = _authenticated_claim_document_core(
+        archive_root,
+        approval_id,
+        receipt_authentication_key,
+        bound_archive_root=bound_archive_root,
+        claim_parent_binding=claim_parent_binding,
+    )
+    failure_code = parsed.get("failure_code")
+    return (
+        str(parsed["context_sha256"]),
+        str(parsed["status"]),
+        failure_code if type(failure_code) is str else None,
+    )
+
+
 def _authenticated_claim_reference_core(
     archive_root: Path | str,
     approval_id: str,

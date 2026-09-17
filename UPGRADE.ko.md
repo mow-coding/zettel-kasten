@@ -2,6 +2,59 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.4.22 project update 실패 사실성과 started claim 포기
+
+일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.
+새 외부 CPython 3.12 환경의 실제 `python.exe -m pip`를 사용해 설치된 PEP 610
+metadata에 wheel hash가 남게 합니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0422-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.22/wom_kit-0.4.22-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+새 process에서 정확히 `archive 0.4.22`가 나와야 합니다. wheel을 공개하거나 설치하는
+것만으로 client archive, project runtime, version pin은 바뀌지 않습니다. project
+update는 client가 따로 선택하고 승인합니다.
+
+검토한 `project-version-update --approve`가 native 대화상자 뒤에 실패하고 project를
+예약 상태로 남겼다면(claim이 `started`, 잠금과 `private/version-updates/update_*`
+transaction이 남아 있고 `--resume`이 preflight에서 실패), v0.4.22 updater는 거부한
+gate를 `cause_code`와 `cause_stage`로 보고하고 journal은 멈춘 단계의 이름을
+남깁니다. 두 번째 대화상자 없이 예약을 풀려면 update를 시작한 project root에서
+v0.4.22 bootstrap의 `archive`를 실행하세요(이전 project launcher는 이 flag를
+모릅니다):
+
+```powershell
+archive project-version-update <project-root> --resume --abandon-started-approval --affirm-external-writers-quiescent --format json
+archive project-version-update <project-root> --resume --affirm-external-writers-quiescent --format json
+```
+
+첫 명령은 journal이 component 쓰기가 시작되지 않았음(`prewrite_exact`)을 증명할
+때만 허용되고, 그 밖에는 `project_version_update_abandon_unavailable`을 돌려주며
+아무것도 쓰지 않습니다. 두 번째 명령은 잠금과 transaction을 지우고 version pin은
+그대로 둔 채 `preapproval_scaffold_cancelled`를 돌려주고, 새 `--dry-run`과
+`--approve`가 새 대화상자 하나를 엽니다. 다른 이유로 실패한 claim은 여전히 resume
+탐색을 막습니다.
+
+`version`은 건너뛴 Git probe를 잘못 설정된 origin 대신
+`project_git_probe_budget_exhausted`로 보고합니다(공유 예산은 이제 45초).
+archive root에서 시작한 `operation-control`은 archive를 소유한 project의 journal을
+찾아 `inspection_root_resolved_to_parent_project: true`를 보고합니다. `--progress`
+없는 `upgrade-check`는 터미널 stderr에 전체 deep Doctor 범위를 먼저 알리고(리다이렉트된
+stderr는 그대로), update 전에 필수가 아닙니다.
+
+검토한 project update 한 번 뒤에는 새 process에서 project launcher를 시작해 pin,
+source, launcher, runtime 근거를 확인하세요. 그 client 실행 결과만이 project가
+고쳐졌음을 보여 줍니다.
+
 ## v0.4.21 다시 연 writer와 승인 한 번의 반입
 
 일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.
