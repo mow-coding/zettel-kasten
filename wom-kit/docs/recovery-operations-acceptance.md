@@ -468,3 +468,17 @@ unanswered question defaulted to my recommendation). Evidence:
 `tests/test_v0424_session_permission_modes.py` (8 tests) plus the session
 and approval regression cohort recorded in the
 [v0.4.24 implementation record](../../meeting-minutes/2026-09-18-v0424-session-permission-modes-implementation.md).
+
+### 2026-09-18 v0.4.24 released
+
+v0.4.24 is public: tag `v0.4.24` on main `17ab3940`, one wheel
+`wom_kit-0.4.24-py3-none-any.whl` (SHA-256
+`44f964abc601f2d858e84586f112f4d65f1ab58dd3a88f708b8f8c89b23367b0`),
+candidate CI 14/14 on the merged head, exact-merge installed verification,
+anonymous download and two fresh-venv installations recorded in the
+[release evidence](../../meeting-minutes/2026-09-18-v0424-release-evidence.md).
+This is release acceptance of the artifact and the installed synthetic
+journeys only: SP-01 (session permission modes) stays open for client
+closure — the client grants a mode on its own claimed session and observes
+a permitted write run without a dialog while its receipt still names a
+claim — and no feedback letter's `resolved_in` is set by this release.
