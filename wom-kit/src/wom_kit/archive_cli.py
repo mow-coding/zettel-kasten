@@ -43795,9 +43795,10 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Content-addressed source object id in "
             "sha256:<64 lowercase hex> form; no local source path is accepted. "
-            "The object must be UTF-8 text: source fidelity compares normalized "
-            "text, so link a binary original (PDF, spreadsheet, image) with "
-            "zettel-objet-link instead of naming it here."
+            "verbatim requires a UTF-8 text objet (normalized-text comparison); "
+            "faithful_summary and sanitized_derivative also accept a binary "
+            "original (PDF, spreadsheet, image), bound by its byte digest with "
+            "comparison_basis bytes."
         ),
     )
     fidelity_authority.add_argument(

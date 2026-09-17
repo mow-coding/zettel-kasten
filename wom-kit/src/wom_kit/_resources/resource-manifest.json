@@ -547,14 +547,14 @@
     {
       "source": "schemas/source-fidelity-draft-receipt-v0.2.schema.json",
       "packaged": "schemas/source-fidelity-draft-receipt-v0.2.schema.json",
-      "bytes": 10541,
-      "sha256": "65e422b0d2fb91aa07c180d88c30e851b1221887b7364de5c4e36240f402210d"
+      "bytes": 10571,
+      "sha256": "08ad227c146412f54046c8f622a98cc96f7a19c699e1b1ddcb022f630e5f62a5"
     },
     {
       "source": "schemas/source-fidelity-draft-receipt.schema.json",
       "packaged": "schemas/source-fidelity-draft-receipt.schema.json",
-      "bytes": 5883,
-      "sha256": "dd89ecccbfa5acb7491f2ea4bc23d149151bbc1842191ac9924af6fc9fdc9c19"
+      "bytes": 5903,
+      "sha256": "65384d580e96ae170d72dd36acc83a73481abbf085db2e94519ab89e3ec30858"
     },
     {
       "source": "schemas/source-fidelity-session-evidence-receipt-v0.1.schema.json",

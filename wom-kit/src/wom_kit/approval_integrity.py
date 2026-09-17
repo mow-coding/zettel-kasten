@@ -779,7 +779,11 @@ def _fidelity_receipt_shape_and_bindings_valid(
             "public_web",
             "legal_copyright_request",
         }
-        and fidelity.get("comparison_basis") == "utf8_newlines_lf"
+        and fidelity.get("comparison_basis") in {"utf8_newlines_lf", "bytes"}
+        and (
+            fidelity.get("comparison_basis") == "utf8_newlines_lf"
+            or mode in {"faithful_summary", "sanitized_derivative"}
+        )
         and fidelity.get("byte_exact") is False
         and fidelity.get("mechanically_verified") is (mode == "verbatim")
         and fidelity.get("semantic_fidelity_machine_verified") is False
@@ -834,6 +838,8 @@ def _fidelity_receipt_shape_and_bindings_valid(
     }
     if not isinstance(source, Mapping):
         return False
+    if source.get("comparison_basis") != fidelity.get("comparison_basis"):
+        return False
     for name in ("raw_sha256", "normalized_sha256"):
         if type(source.get(name)) is not str or _HEX64_RE.fullmatch(
             source[name]
@@ -847,7 +853,15 @@ def _fidelity_receipt_shape_and_bindings_valid(
         ):
             return False
     if not (
-        source.get("comparison_basis") == "utf8_newlines_lf"
+        source.get("comparison_basis") in {"utf8_newlines_lf", "bytes"}
+        and (
+            source.get("comparison_basis") == "utf8_newlines_lf"
+            or (
+                source.get("newline_transformation_applied") is False
+                and source.get("normalized_sha256") == source.get("raw_sha256")
+                and source.get("normalized_size_bytes") == source.get("raw_size_bytes")
+            )
+        )
         and type(source.get("newline_transformation_applied")) is bool
         and source.get("source_text_stored") is False
         and source.get("source_locator_stored") is False
@@ -855,6 +869,11 @@ def _fidelity_receipt_shape_and_bindings_valid(
         return False
 
     authority_kind = source.get("authority_kind")
+    if (
+        authority_kind == "reviewed_session_evidence"
+        and source.get("comparison_basis") != "utf8_newlines_lf"
+    ):
+        return False
     if authority_kind == "manifested_object":
         if set(source) != common_source_keys | {"object_id", "provenance"}:
             return False

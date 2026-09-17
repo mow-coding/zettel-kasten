@@ -69,7 +69,7 @@
             "legal_copyright_request"
           ]
         },
-        "comparison_basis": {"const": "utf8_newlines_lf"},
+        "comparison_basis": {"enum": ["utf8_newlines_lf", "bytes"]},
         "source": {
           "type": "object",
           "additionalProperties": false,
@@ -90,7 +90,7 @@
             "raw_size_bytes": {"type": "integer", "minimum": 0},
             "normalized_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
             "normalized_size_bytes": {"type": "integer", "minimum": 0},
-            "comparison_basis": {"const": "utf8_newlines_lf"},
+            "comparison_basis": {"enum": ["utf8_newlines_lf", "bytes"]},
             "newline_transformation_applied": {"type": "boolean"},
             "source_text_stored": {"const": false},
             "source_locator_stored": {"const": false}

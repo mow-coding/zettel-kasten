@@ -331,6 +331,37 @@ transaction removed, pin unchanged) and a fresh approve reached
 session-scope pre-approval of letter 161 (awaits the maintainer), the
 journal schema, and the carried LR rows.
 
+### 2026-09-17 v0.4.23 U1: binary originals as the fidelity source (letter 160 ②)
+
+Development verified (Claude Fable 5.1, solo): `create-draft` with a binary
+objet as `--fidelity-source-object-id` previews and approves in
+`faithful_summary` and `sanitized_derivative` on a second comparison basis,
+`bytes` (raw digest as normalized digest, no newline transformation, no
+source text or locator stored); `verbatim` still requires UTF-8 text and
+names the two accepting modes in its next safe action. Every basis check
+(plan builder, private receipt shape, mint-time verifier and evidence id,
+approval integrity) accepts both bases with consistency; both draft receipt
+schemas relax the basis const to the two-value enum without changing ids;
+text receipts keep their bytes. Evidence: 6 new tests in
+`test_v0423_binary_fidelity_source.py` and a 112-test fidelity/integrity
+regression cohort. Recorded in the
+[v0.4.23 implementation record](../../meeting-minutes/2026-09-17-v0423-carried-work-implementation.md);
+installed/client acceptance pending.
+
+### 2026-09-17 v0.4.23 U2: letter 160 ④ reproduction attempt
+
+On Windows PowerShell 5.1 with the letter's exact wrapper shape
+(`function Approve([scriptblock]$cmd){ & $cmd > $out 2>&1 }`) and the
+v0.4.22 hotfix wheel, an AI-authored `create-draft --approve` replay reached
+the native approval dialog both directly and inside the wrapper; the human
+route returned the same fixed-closed answer both ways. Not reproduced; no
+code change. A command re-quoted through a second shell layer does lose its
+quotes and is refused as `cli_arguments_invalid`, which is the nearest
+wrapper-only refusal and is not the letter's shape. Since v0.4.20 a blocked
+text-mode `--approve` prints its reason codes, so the client's next
+occurrence is self-diagnosing. Recorded in the
+[v0.4.23 implementation record](../../meeting-minutes/2026-09-17-v0423-carried-work-implementation.md).
+
 ### 2026-09-17 v0.4.21 released
 
 v0.4.21 is public: tag `v0.4.21` on main `70536034`, one wheel
