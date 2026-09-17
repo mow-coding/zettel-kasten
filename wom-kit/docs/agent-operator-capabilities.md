@@ -1,6 +1,6 @@
 # Agent Operator Capabilities Manifest
 
-Status: v0.4.23 binary fidelity sources, session-bound drafts, and writer-session coverage gate
+Status: v0.4.24 session permission modes, binary fidelity sources, and writer-session coverage gate
 
 v0.4.24 adds no command path: `work-session` gains the human action
 `set-permission-mode` (approve, approve `--review-original`, resume), the
@@ -143,7 +143,7 @@ field remain `history_not_audited`. Inventory, shared capability availability,
 and command help consume the same content-free history. Current availability
 continues to be parser-derived; history does not grant execution authority.
 
-For the current v0.4.23 working-tree parser, the inventory snapshot is:
+For the current v0.4.24 working-tree parser, the inventory snapshot is:
 
 ```text
 canonical executable command paths: 317

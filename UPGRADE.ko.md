@@ -2,6 +2,46 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.4.24 세션 승인 모드
+
+일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.
+새 외부 CPython 3.12 환경의 실제 `python.exe -m pip`를 사용해 설치된 PEP 610
+metadata에 wheel hash가 남게 합니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0424-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.24/wom_kit-0.4.24-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+새 process에서 정확히 `archive 0.4.24`가 나와야 합니다. wheel을 공개하거나 설치하는
+것만으로 client archive, project runtime, version pin은 바뀌지 않습니다. project
+update는 client가 따로 선택하고 승인합니다.
+
+이제 작업 세션을 claim한 사람이 그 세션의 쓰기를 어떻게 승인할지 한 번에 정할 수
+있습니다. `work-session --action set-permission-mode --approve --client-app-ref
+<app> --task-route-ref <route> --work-session-ref <session> --request-stdin`에
+`{"reviewer_claim": "<id>", "permission_mode": "manual" | "limited" |
+"allow_all", "operations": [...]}`를 주면 승인 창이 한 번 열리고, 모드와
+(`limited`이면) 허용할 작업 종류가 모두 표시됩니다. 그 뒤 AI client가
+`WOM_CLIENT_APP_REF`, `WOM_TASK_ROUTE_REF`, `WOM_WORK_SESSION_REF`를 환경 변수로
+내보내면, 모드가 허용하는 쓰기는 승인 창 없이 실행되되 여전히 자기 몫의 1회용
+claim을 남기고 결과에 `approval_mechanism: work_session_permission_mode`와
+`live_dialog_shown: false`를 적습니다. project update, 원격 provider, 세션
+생명주기, 복구, override, 자격증명 쓰기는 항상 승인 창을 엽니다. 세션을 pause·
+complete·handoff하면 다시 manual로 돌아갑니다. 부여가 없거나 ref가 없으면 모든
+명령은 예전과 완전히 같습니다.
+
+검토한 project update 한 번 뒤에는 새 process에서 project launcher를 시작해 pin,
+source, launcher, runtime 근거를 확인하세요. 그 client 실행 결과만이 project가
+고쳐졌음을 보여 줍니다.
+
 ## v0.4.23 바이너리 fidelity 원본과 세션에 묶인 초안
 
 일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.

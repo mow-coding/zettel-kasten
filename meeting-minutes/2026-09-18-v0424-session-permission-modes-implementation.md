@@ -153,3 +153,21 @@ the client workspace read only, explicit staging, every decision recorded.
   verbatim by every historical release-docs test, so they move only in the
   version bump (with the pins), not in the feature unit; the first doc test
   run caught the prefix I had added and it was reverted (244 doc tests green).
+- Regression cohort (session, approval broker, recent exact-approval
+  families; 1039 tests, 97 minutes): one failure, the broker-core signature
+  pin in `test_v0420_original_review_broker` (new `session_permission`
+  parameter), updated. MCP, query and management modules (189 tests) green.
+  Feature commit `7c2f7f95`; main `a684801b` (v0.4.23 evidence, #107)
+  merged in, register conflict resolved chronologically (v0.4.23 released
+  entry, then SP-01).
+- Bump to 0.4.24 (`bump_v0424.py` + `prose_v0424.py` parametrized from the
+  v0.4.23 scripts; supply lock sha `41cfa672…`; packaged note resynced, 169
+  resources). Pins that the sweep could not reach and were edited by hand:
+  the Korean previous-baseline line in `test_v0413_release_docs`, the
+  `CURRENT_RUNTIME_STATUS` f-string phrase in `test_capability_matrix_docs`,
+  and the MCP / resource canonical digests in `test_v03299` (the MCP surface
+  changed by the new `set-permission-mode` enum value; the work-session tool
+  is already in `MCP_ADDITIONS`, so the additive-contract test needed no new
+  clause). New `tests/test_v0424_release_docs.py` (9 tests) derived from the
+  v0.4.23 one. Release readiness, public privacy and Korean-language gates
+  pass.

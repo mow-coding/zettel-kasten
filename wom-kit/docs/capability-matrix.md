@@ -1,8 +1,8 @@
 ﻿# WOM-kit Capability Matrix
 
-Status: v0.4.23 binary fidelity sources, session-bound drafts, and session-owned writes truth
+Status: v0.4.24 session permission modes, session-bound drafts, and session-owned writes truth
 Date: 2026-09-04
-Version: v0.4.23 implementation and release scope
+Version: v0.4.24 implementation and release scope
 
 The current v0.4.24 working tree lets the person who claimed a work session
 grant it one permission mode — `manual`, `limited` or `allow_all` — through
