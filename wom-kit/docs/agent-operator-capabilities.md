@@ -1,8 +1,14 @@
 # Agent Operator Capabilities Manifest
 
-Status: v0.4.23 binary fidelity sources, session-bound drafts, and writer-session coverage gate
+Status: v0.4.24 session permission modes, binary fidelity sources, and writer-session coverage gate
 
-v0.4.23 adds no command path: `create-draft` gains `--client-app-ref`,
+v0.4.24 adds no command path: `work-session` gains the human action
+`set-permission-mode` (approve, approve `--review-original`, resume), the
+AI client may export `WOM_CLIENT_APP_REF`, `WOM_TASK_ROUTE_REF` and
+`WOM_WORK_SESSION_REF` so the approval broker can find the session's grant,
+and every write result's `exact_human_approval` block reports
+`approval_mechanism` and `live_dialog_shown`; inventory, availability and
+dispatch are unchanged. v0.4.23 adds no command path: `create-draft` gains `--client-app-ref`,
 `--task-route-ref` and `--work-session-ref` (a session-bound AI draft) and a
 binary objet may be its fidelity source in the summary and derivative modes.
 v0.4.22 added no command path either: `project-version-update --resume` gained the
@@ -137,7 +143,7 @@ field remain `history_not_audited`. Inventory, shared capability availability,
 and command help consume the same content-free history. Current availability
 continues to be parser-derived; history does not grant execution authority.
 
-For the current v0.4.23 working-tree parser, the inventory snapshot is:
+For the current v0.4.24 working-tree parser, the inventory snapshot is:
 
 ```text
 canonical executable command paths: 317

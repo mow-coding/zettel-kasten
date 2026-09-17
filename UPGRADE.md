@@ -24,6 +24,46 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.4.24 Session Permission Modes
+
+Install the exact public wheel only after the matching release and asset exist.
+Use a new external CPython 3.12 environment so the real `python.exe -m pip`
+records the wheel hash in installed PEP 610 metadata.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0424-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.24/wom_kit-0.4.24-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+Require exactly `archive 0.4.24` from a new process. Publishing or installing
+the wheel changes no client archive, project runtime, or version pin. A client
+separately chooses and approves any project update.
+
+A person who has claimed a work session can now decide once how that session's
+writes are approved. `work-session --action set-permission-mode --approve
+--client-app-ref <app> --task-route-ref <route> --work-session-ref <session>
+--request-stdin` with `{"reviewer_claim": "<id>", "permission_mode": "manual" |
+"limited" | "allow_all", "operations": [...]}` opens one native dialog that
+lists the mode and, for `limited`, every granted operation kind. Afterwards the
+AI client exports `WOM_CLIENT_APP_REF`, `WOM_TASK_ROUTE_REF` and
+`WOM_WORK_SESSION_REF`; a write the mode permits runs without a dialog, still
+publishes its own one-use claim, and reports `approval_mechanism:
+work_session_permission_mode` with `live_dialog_shown: false`. Project updates,
+remote providers, the session lifecycle, repairs, overrides and credential
+writes always ask. Pausing, completing or handing off the session returns it to
+manual. Without a grant or the refs, every command behaves exactly as before.
+
+After one reviewed project update, start the project launcher in a new process
+and verify its pin, source, launcher, and runtime evidence. Only that client-run
+result can show that the project was repaired.
+
 ## v0.4.23 Binary Fidelity Sources And Session-Bound Drafts
 
 Install the exact public wheel only after the matching release and asset exist.

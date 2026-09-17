@@ -34,8 +34,15 @@ MAX_ENTITIES = 100_000
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _GENERATION_NAME = re.compile(r"([0-9]{12})\.json\Z")
 _ACTIONS = frozenset({"register-app", "create", "claim", "pause", "resume",
-                      "handoff", "accept", "complete", "recover"})
-_HUMAN_ACTIONS = frozenset({"create", "handoff", "accept", "recover"})
+                      "handoff", "accept", "complete", "recover", "set-permission-mode"})
+_HUMAN_ACTIONS = frozenset({"create", "handoff", "accept", "recover", "set-permission-mode"})
+# v0.4.24: a claimed session may carry one human-granted permission mode.
+# manual == no key; the key is optional so every historical generation
+# keeps validating, and it is never part of the WorkSessionBinding digest.
+_PERMISSION_MODES = frozenset({"limited", "allow_all"})
+_SESSION_KEYS = frozenset({"client_app_ref", "workstream_ref", "revision", "state",
+                           "claim_ref", "predecessor_ref", "handoff_app_ref"})
+_OPERATION_TOKEN = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
 _STATES = frozenset({"created", "claimed", "paused", "handoff_pending", "handed_off", "completed"})
 _ERRORS = frozenset({"work_session_registry_invalid", "work_session_registry_changed",
                     "work_session_path_unsafe", "work_session_durability_unknown",
@@ -50,6 +57,20 @@ class WorkSessionRegistryError(RuntimeError):
 
 def _fail(code: str) -> WorkSessionRegistryError:
     return WorkSessionRegistryError(code)
+
+
+def _validate_permission(value: Any) -> None:
+    """Content-free grant: a mode and sorted unique operation tokens."""
+    if value is None:
+        return
+    if (type(value) is not dict or set(value) != {"mode", "operations"}
+            or value["mode"] not in _PERMISSION_MODES
+            or type(value["operations"]) is not list or len(value["operations"]) > 64
+            or any(type(item) is not str or _OPERATION_TOKEN.fullmatch(item) is None
+                   for item in value["operations"])
+            or value["operations"] != sorted(set(value["operations"]))
+            or (value["mode"] == "allow_all") != (value["operations"] == [])):
+        raise _fail("work_session_registry_invalid")
 
 
 def _canonical(value: Any) -> bytes:
@@ -216,8 +237,7 @@ def _validate_document(document: Any) -> None:
             raise _fail("work_session_registry_invalid")
     for ref, session in sessions.items():
         if (not _ref(ref, "work_session") or type(session) is not dict
-                or set(session) != {"client_app_ref", "workstream_ref", "revision", "state",
-                                    "claim_ref", "predecessor_ref", "handoff_app_ref"}
+                or set(session) not in (_SESSION_KEYS, _SESSION_KEYS | {"permission"})
                 or not _ref(session["client_app_ref"], "client_app")
                 or not _ref(session["workstream_ref"], "workstream")
                 or session["client_app_ref"] not in apps or session["workstream_ref"] not in streams
@@ -233,6 +253,10 @@ def _validate_document(document: Any) -> None:
         claim = session["claim_ref"]
         if ((session["state"] == "claimed" and not _ref(claim, "claim"))
                 or (session["state"] != "claimed" and claim is not None)):
+            raise _fail("work_session_registry_invalid")
+        permission = session.get("permission")
+        _validate_permission(permission)
+        if permission is not None and session["state"] != "claimed":
             raise _fail("work_session_registry_invalid")
         destination = session["handoff_app_ref"]
         if (session["state"] == "handoff_pending") != (destination is not None):
@@ -328,10 +352,14 @@ class RegistryTransition:
 def plan_transition(snapshot: RegistrySnapshot, *, action: str, client_app_ref: str | None = None,
                     work_session_ref: str | None = None, label: str | None = None,
                     claim_ref: str | None = None, target_app_ref: str | None = None,
+                    permission: dict[str, Any] | None = None,
                     _ref_factory: Callable[[str], str] = _new_ref) -> RegistryTransition:
     """Plan one exact transition; does not grant approval or write any file."""
     if type(snapshot) is not RegistrySnapshot or type(action) is not str or action not in _ACTIONS:
         raise _fail("work_session_transition_invalid")
+    if permission is not None and action != "set-permission-mode":
+        raise _fail("work_session_transition_invalid")
+    _validate_permission(permission)
     for value, prefix in ((client_app_ref, "client_app"), (work_session_ref, "work_session"),
                           (claim_ref, "claim"), (target_app_ref, "client_app")):
         if value is not None and not _ref(value, prefix):
@@ -339,6 +367,10 @@ def plan_transition(snapshot: RegistrySnapshot, *, action: str, client_app_ref: 
     before_sha256 = snapshot.sha256
     request = {"action": action, "client_app_ref": client_app_ref, "work_session_ref": work_session_ref,
                "label": label, "claim_ref": claim_ref, "target_app_ref": target_app_ref}
+    if action == "set-permission-mode":
+        # Only this action carries the seventh key; every historical request
+        # keeps its exact six-key shape and digest.
+        request["permission"] = deepcopy(permission)
     document = deepcopy(snapshot._document)
     apps, streams, sessions = (document[name] for name in ("apps", "workstreams", "sessions"))
     generated: list[str] = []
@@ -386,6 +418,7 @@ def plan_transition(snapshot: RegistrySnapshot, *, action: str, client_app_ref: 
                                       "revision": 1, "state": "created", "claim_ref": None,
                                       "predecessor_ref": work_session_ref, "handoff_app_ref": None}
                 session.update(state="handed_off", handoff_app_ref=None)
+                session.pop("permission", None)
                 stream["active_session_ref"] = next_ref
                 apps[client_app_ref]["identity_level"] = "human_confirmed"
                 refs = (next_ref,)
@@ -403,6 +436,7 @@ def plan_transition(snapshot: RegistrySnapshot, *, action: str, client_app_ref: 
                     if state != "claimed" or claim_ref is not None or target_app_ref is not None:
                         raise _fail("work_session_claim_conflict")
                     session["claim_ref"] = new_ref("claim")
+                    session.pop("permission", None)
                 else:
                     if (state != "claimed" or not _ref(claim_ref, "claim")
                             or not hmac.compare_digest(session["claim_ref"], claim_ref)):
@@ -411,12 +445,23 @@ def plan_transition(snapshot: RegistrySnapshot, *, action: str, client_app_ref: 
                         if target_app_ref not in apps or target_app_ref == client_app_ref:
                             raise _fail("work_session_transition_invalid")
                         session.update(state="handoff_pending", handoff_app_ref=target_app_ref, claim_ref=None)
+                        session.pop("permission", None)
                     elif action in {"pause", "complete"}:
                         if target_app_ref is not None:
                             raise _fail("work_session_transition_invalid")
                         session.update(state="paused" if action == "pause" else "completed", claim_ref=None)
+                        session.pop("permission", None)
                         if action == "complete":
                             stream["active_session_ref"] = None
+                    elif action == "set-permission-mode":
+                        # A human decision on the exact claimed session; manual
+                        # (None) removes the key rather than storing a mode.
+                        if target_app_ref is not None:
+                            raise _fail("work_session_transition_invalid")
+                        if permission is None:
+                            session.pop("permission", None)
+                        else:
+                            session["permission"] = deepcopy(permission)
                     else:
                         raise _fail("work_session_transition_invalid")
                 refs = (work_session_ref,)

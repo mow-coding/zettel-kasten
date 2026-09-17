@@ -44,6 +44,9 @@ CURRENT_INTERACTIVE_INTENT_MECHANISM = (
 LEGACY_INTERACTIVE_INTENT_MECHANISMS = frozenset(
     {"windows_task_dialog_checkbox_and_button"}
 )
+# v0.4.24: a claim minted under the work session's human-granted permission
+# mode. It is not a live-dialog mechanism and is never presented as one.
+PERMISSION_INTERACTIVE_INTENT_MECHANISM = "work_session_permission_mode"
 
 APPROVE_BUTTON_ID = 1001
 IDCANCEL = 2
@@ -740,6 +743,15 @@ _WORK_SESSION_ACTION_COPY = {
         "중단된 작업을 이 앱에서 다시 맡을까요?",
         "중단된 작업을 이어갈 책임을 이 앱에 배정합니다. 이전 승인이나 작성 기록은 바꾸지 않습니다.",
         "중단 작업 맡기",
+    ),
+    # v0.4.24: per-session permission mode. The listed kinds run without a
+    # dialog until the session is paused, handed off or completed; project
+    # updates and credential writes always ask.
+    "work_session_set_permission_mode": (
+        "이 작업 세션의 승인 방식을 바꿀까요?",
+        "아래에 표시된 작업 종류는 이 세션을 멈추거나 넘기거나 끝내기 전까지 승인 창 없이 실행됩니다. "
+        "각 쓰기의 내용은 지금처럼 기록되고, 프로젝트 업데이트와 자격증명 쓰기는 항상 창을 띄웁니다.",
+        "승인 방식 바꾸기",
     ),
 }
 

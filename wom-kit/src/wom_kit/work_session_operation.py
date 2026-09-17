@@ -24,7 +24,8 @@ from .operation_approval_binding import exact_operation_manifest_approval_bindin
 
 _KIND = "work_session_generation"
 _FIELD = "immutable_registry_generation"
-_ACTIONS = {"create": "start", "handoff": "handoff", "accept": "accept", "recover": "recover"}
+_ACTIONS = {"create": "start", "handoff": "handoff", "accept": "accept", "recover": "recover",
+            "set-permission-mode": "set_permission_mode"}
 
 
 def _fail():

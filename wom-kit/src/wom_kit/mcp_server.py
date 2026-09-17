@@ -114,7 +114,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "type": "object", "additionalProperties": False,
             "properties": {
                 "archive_root": {"type": "string"},
-                "action": {"type": "string", "enum": ["register-app", "request-init", "create", "claim", "pause", "resume", "complete", "handoff", "accept", "recover"]},
+                "action": {"type": "string", "enum": ["register-app", "request-init", "create", "claim", "pause", "resume", "complete", "handoff", "accept", "recover", "set-permission-mode"]},
                 "dry_run": {"type": "boolean", "default": False},
                 "approve": {"type": "boolean", "default": False},
                 "apply": {"type": "boolean", "default": False},
@@ -4089,7 +4089,7 @@ def tool_archive_work_session_manage(arguments: dict[str, Any]) -> dict[str, Any
     if (type(arguments) is not dict or any(type(key) is not str for key in arguments)
             or set(arguments) - allowed
             or type(arguments.get("action")) is not str
-            or arguments["action"] not in {"register-app", "request-init", "create", "claim", "pause", "resume", "complete", "handoff", "accept", "recover"}):
+            or arguments["action"] not in {"register-app", "request-init", "create", "claim", "pause", "resume", "complete", "handoff", "accept", "recover", "set-permission-mode"}):
         raise InvalidParamsError()
     if (any(type(arguments[key]) is not bool for key in flags if key in arguments)
             or any(type(arguments[key]) is not str for key in refs if key in arguments)

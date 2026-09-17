@@ -59,6 +59,10 @@ def _row(document, kind, reference):
             "client_app_ref", "workstream_ref", "revision", "state", "predecessor_ref", "handoff_app_ref",
         )})
         row["ownership_state_is_write_authority"] = False
+        # v0.4.24: the content-free permission mode (manual when absent).
+        permission = value.get("permission")
+        row["permission_mode"] = "manual" if permission is None else permission["mode"]
+        row["permitted_operations"] = [] if permission is None else list(permission["operations"])
     return row
 
 

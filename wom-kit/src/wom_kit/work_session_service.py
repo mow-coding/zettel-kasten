@@ -18,6 +18,8 @@ from . import work_session_actor as actor
 from . import work_session_claim as claim
 from . import work_session_handoff as handoff
 from . import work_session_lifecycle as lifecycle
+from . import work_session_permission as permission_mode_module
+from . import work_session_permission_mode as permission_facade
 from . import work_session_registration as registration
 from . import work_session_recovery as recovery
 from . import work_session_registry as registry
@@ -34,7 +36,8 @@ _RUNTIME_BLOCKERS = frozenset({
 _ERRORS = (frozenset({"work_session_service_invalid", "work_session_service_unavailable",
                      "work_session_wait_cancelled", "work_session_wait_root_changed"})
            | _RUNTIME_BLOCKERS | registration._ERRORS | lifecycle._ERRORS
-           | claim._ERRORS | rereview._ERRORS | session_state._ERRORS | handoff._ERRORS | recovery._ERRORS)
+           | claim._ERRORS | rereview._ERRORS | session_state._ERRORS | handoff._ERRORS | recovery._ERRORS
+           | permission_facade._ERRORS)
 
 
 class WorkSessionServiceError(ValueError):
@@ -55,10 +58,12 @@ def _safe_call(call):
     except (registration.WorkSessionRegistrationError, lifecycle.WorkSessionLifecycleError,
             claim.WorkSessionClaimError, rereview.WorkSessionRereviewError,
             session_state.WorkSessionStateError, handoff.WorkSessionHandoffError,
-            recovery.WorkSessionRecoveryError) as error:
+            recovery.WorkSessionRecoveryError, permission_facade.WorkSessionPermissionModeError,
+            permission_mode_module.WorkSessionPermissionError) as error:
         code = error.code if type(error.code) is str and error.code in _ERRORS else code
         committed = (isinstance(error, (claim.WorkSessionClaimError, session_state.WorkSessionStateError,
-                                       handoff.WorkSessionHandoffError, recovery.WorkSessionRecoveryError))
+                                       handoff.WorkSessionHandoffError, recovery.WorkSessionRecoveryError,
+                                       permission_facade.WorkSessionPermissionModeError))
                      and error.original_commit_verified is True)
     except WorkSessionWaitError as error:
         if error.args in (("work_session_wait_cancelled",), ("work_session_wait_root_changed",)):
@@ -318,6 +323,45 @@ def review_original_task_handoff(root, *, client_app_ref, task_route_ref, work_s
             run=lambda held: handoff._review_original_handoff_held(
                 resolved, held=held, client_app_ref=client_app_ref, task_route_ref=task_route_ref,
                 work_session_ref=work_session_ref, target_app_ref=target_app_ref))
+    return _safe_call(run)
+
+
+def set_permission_mode(root, *, client_app_ref, task_route_ref, work_session_ref,
+                        original_resume, reviewer_claim=None, permission_mode=None, operations=None,
+                        cancel_requested=lambda: False, progress=lambda _event: None):
+    """v0.4.24: one human decision sets manual / limited / allow_all on the claimed session."""
+    def run():
+        if type(original_resume) is not bool:
+            raise WorkSessionServiceError()
+        _refs(client_app_ref, task_route_ref, work_session_ref, require_session=True)
+        if original_resume:
+            if reviewer_claim is not None or permission_mode is not None or operations is not None:
+                raise WorkSessionServiceError("work_session_task_context_mismatch")
+            grant = None
+        else:
+            if (type(reviewer_claim) is not str
+                    or native_approval._REVIEWER_CLAIM_RE.fullmatch(reviewer_claim) is None):
+                raise WorkSessionServiceError()
+            grant = permission_mode_module.normalize_grant(permission_mode, operations)
+        resolved = _root(root)
+        return _write(resolved, cancel_requested=cancel_requested, progress=progress,
+            run=lambda held: permission_facade._set_permission_mode_held(
+                resolved, held=held, client_app_ref=client_app_ref, task_route_ref=task_route_ref,
+                work_session_ref=work_session_ref, permission=grant,
+                original_resume=original_resume, reviewer_claim=reviewer_claim))
+    return _safe_call(run)
+
+
+def review_original_permission_mode(root, *, client_app_ref, task_route_ref, work_session_ref,
+                                    cancel_requested=lambda: False, progress=lambda _event: None):
+    """Explicit original re-review of a permission-mode decision; no replacement reviewer."""
+    def run():
+        _refs(client_app_ref, task_route_ref, work_session_ref, require_session=True)
+        resolved = _root(root)
+        return _write(resolved, cancel_requested=cancel_requested, progress=progress,
+            run=lambda held: permission_facade._review_original_permission_mode_held(
+                resolved, held=held, client_app_ref=client_app_ref, task_route_ref=task_route_ref,
+                work_session_ref=work_session_ref))
     return _safe_call(run)
 
 

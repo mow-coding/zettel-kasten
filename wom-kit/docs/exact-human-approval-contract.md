@@ -1,6 +1,6 @@
 # Exact Human Approval Contract
 
-Status: v0.4.22 operator abandon of a started project-update claim; v0.4.19 field-level updater revalidation; v0.4.0 one-use authority baseline preserved
+Status: v0.4.24 per-session permission modes; v0.4.22 operator abandon of a started project-update claim; v0.4.19 field-level updater revalidation; v0.4.0 one-use authority baseline preserved
 
 ## Purpose
 
@@ -266,6 +266,24 @@ biometric identity, or protection from a malicious process already controlling
 the same desktop session. The reviewer id remains a claimed provenance label;
 it does not delegate machine verification work to the person.
 
+Since v0.4.24 a claimed work session may carry a permission mode granted by
+one such dialog (`work-session --action set-permission-mode --approve`):
+`manual` (every write opens the dialog), `limited` (the operation kinds shown
+in that dialog run without one) or `allow_all`. A write the mode permits
+produces its decision without a dialog, but nothing else changes: the same
+one-use claim is minted for the exact plan and target digests, the grant is
+re-resolved immediately before the claim is published and fails closed if
+the session was paused, handed off, completed or recovered in the meantime
+(`exact_human_approval_permission_revoked`), and the claim records
+`interactive_intent.mechanism: work_session_permission_mode` instead of a
+task-dialog mechanism. Such a claim is not a human-presence proof for that
+write; it is the session decision's authority applied to one exact plan,
+and results say so (`exact_human_approval.approval_mechanism`,
+`live_dialog_shown: false`). Project updates, remote providers, the
+session lifecycle, repairs and overrides cannot be granted in any mode;
+credential writers use the Windows credential native path and are
+unaffected. Dry-run still never opens a window and never issues authority.
+
 ## One-use claim and durable linkage
 
 There is no separately issued, expiring approval token. After the live dialog
@@ -340,13 +358,17 @@ Public privacy projections expose neither the private duplicate-reconciliation
 plan object nor verified source-evidence bytes. CLI and MCP compose those
 private engines internally and return only content-free plan/result documents.
 
-Together these records preserve four separate facts:
+Together these records preserve five separate facts:
 
-1. the exact content-free context shown in the native dialog;
+1. the exact content-free context shown in the native dialog, or bound
+   without one under a session permission mode;
 2. whether its one-use authority reached `started`, `succeeded`, or `failed`;
 3. what the archive operation durably reported;
 4. whether a separate approval link proves the original effect was created by
-   that claim.
+   that claim;
+5. since v0.4.24, how the decision was obtained: a live task dialog or the
+   work session's permission mode (`interactive_intent.mechanism` in the
+   claim; the receipt names the claim).
 
 ## Legacy evidence
 

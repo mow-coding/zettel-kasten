@@ -32,6 +32,7 @@ import yaml
 
 from .exact_human_approval_windows import (
     CURRENT_INTERACTIVE_INTENT_MECHANISM,
+    PERMISSION_INTERACTIVE_INTENT_MECHANISM,
     ExactHumanApprovalContext,
     ExactHumanApprovalOperation,
     LEGACY_INTERACTIVE_INTENT_MECHANISMS,
@@ -410,6 +411,7 @@ def _validate_claim_document(
         not in {
             CURRENT_INTERACTIVE_INTENT_MECHANISM,
             *LEGACY_INTERACTIVE_INTENT_MECHANISMS,
+            PERMISSION_INTERACTIVE_INTENT_MECHANISM,
         }
         or interactive_intent.get("confirmed") is not True
     ):
@@ -1129,6 +1131,9 @@ class _ClaimedExactHumanApproval:
         default=None,
         repr=False,
     )
+    # v0.4.24: how this claim was obtained (live dialog, or the work
+    # session's human-granted permission mode); projected, never bound.
+    _mechanism: str = field(default=CURRENT_INTERACTIVE_INTENT_MECHANISM, repr=False)
     _status: str = field(default="started", init=False)
     _lock: Any = field(default_factory=threading.RLock, init=False, repr=False)
 
@@ -1162,6 +1167,8 @@ class _ClaimedExactHumanApproval:
             "one_use": True,
             "status": self._status,
             "reviewer_identity_authenticated": False,
+            "approval_mechanism": self._mechanism,
+            "live_dialog_shown": self._mechanism != PERMISSION_INTERACTIVE_INTENT_MECHANISM,
         }
 
     def _assert_current_status(self, expected_status: str) -> dict[str, Any]:
@@ -1580,8 +1587,18 @@ def _claim_exact_human_approval_core(
     random_hex: Callable[[int], str] = secrets.token_hex,
     bound_archive_root: Path | None = None,
     claim_parent_binding: dict[str, Any] | None = None,
+    interactive_intent_mechanism: str = CURRENT_INTERACTIVE_INTENT_MECHANISM,
 ) -> _ClaimedExactHumanApproval:
-    """Persist an authenticated started claim after an exact live decision."""
+    """Persist an authenticated started claim after an exact live decision.
+
+    v0.4.24: ``interactive_intent_mechanism`` names how the decision was
+    obtained; the permission-mode literal is the only non-dialog value.
+    """
+    if interactive_intent_mechanism not in {
+        CURRENT_INTERACTIVE_INTENT_MECHANISM,
+        PERMISSION_INTERACTIVE_INTENT_MECHANISM,
+    }:
+        raise _fail("exact_human_approval_decision_required")
 
     root, archive_id = _archive_identity(archive_root)
     if type(context) is not ExactHumanApprovalContext:
@@ -1640,7 +1657,7 @@ def _claim_exact_human_approval_core(
                 "reviewer_claim_sha256": reviewer_claim_sha256,
                 "reviewer_identity_authenticated": False,
                 "interactive_intent": {
-                    "mechanism": CURRENT_INTERACTIVE_INTENT_MECHANISM,
+                    "mechanism": interactive_intent_mechanism,
                     "confirmed": True,
                 },
                 "approved_at": approved_at,
@@ -1695,6 +1712,7 @@ def _claim_exact_human_approval_core(
         if reread["status"] != "started":
             raise _fail("exact_human_approval_claim_commit_failed")
         return _ClaimedExactHumanApproval(
+            _mechanism=interactive_intent_mechanism,
             _path=claim_path,
             _archive_id=archive_id,
             _key=key,
@@ -1783,6 +1801,7 @@ def _rehydrate_exact_human_approval_core(
         ):
             raise _fail("exact_human_approval_claim_state_invalid")
         claim = _ClaimedExactHumanApproval(
+            _mechanism=str(document["interactive_intent"]["mechanism"]),
             _path=claims_root / f"{approval_id}.json",
             _archive_id=archive_id,
             _key=key,
