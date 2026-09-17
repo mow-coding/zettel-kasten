@@ -342,6 +342,20 @@ out-of-family token, and the Windows shard 4/4 CI budget moves from 45 to 60
 minutes after a run was cut at the cap with no failing test. Details in the
 [v0.4.22 hotfix record](../../meeting-minutes/2026-09-17-v0422-update-failure-hotfix.md).
 
+### 2026-09-17 v0.4.22 released
+
+v0.4.22 is public: tag `v0.4.22` on main `4a4b1850`, one wheel
+`wom_kit-0.4.22-py3-none-any.whl` (SHA-256
+`2c6ac4ac9f7d87e73987a40b9344731dd2e19e02bbd9019b692846da63d875d6`),
+candidate CI 14/14 on the merged head, exact-merge installed verification,
+anonymous download and two fresh-venv installations recorded in the
+[release evidence](../../meeting-minutes/2026-09-17-v0422-release-evidence.md).
+This is release acceptance of the artifact and the installed synthetic
+journeys only. UF-01's client outcome (letters 161 and 162: the abandon and
+resume on the client's reserved project, then one reviewed update) remains
+open, and no feedback letter's `resolved_in` is set by this release. The
+carried rows are in the v0.4.23 candidate (PR #105).
+
 ### 2026-09-17 v0.4.21 released
 
 v0.4.21 is public: tag `v0.4.21` on main `70536034`, one wheel
