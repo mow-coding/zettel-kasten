@@ -462,6 +462,7 @@ from .exact_human_approval_windows import (
 )
 from .exact_human_approval_workflow import (
     ExactHumanApprovalWorkflowError,
+    _abandon_started_exact_human_approved_claims_core,
     _execute_exact_human_approved_write,
     _execute_exact_human_approved_write_core,
     _resume_exact_human_approved_transaction_auto_core,
@@ -10372,7 +10373,17 @@ _PROJECT_VERSION_UPDATE_CONTENT_FREE_CAUSE_CODES = frozenset(
     }
 )
 _PROJECT_VERSION_UPDATE_CONTENT_FREE_CAUSE_STAGES = frozenset(
-    {"candidate_missing_handler"}
+    {"candidate_missing_handler", "domain_writer", "key_or_claim"}
+)
+# v0.4.22 (beta letters 161/162): fixed reason-code families that the domain
+# writer, the transaction, the runtime candidate and the approval broker
+# raise.  Each is a literal token; none carries a path, value or free text.
+_PROJECT_VERSION_UPDATE_CONTENT_FREE_CAUSE_PREFIXES = (
+    "project_version_update_",
+    "project_update_",
+    "project_runtime_",
+    "project_git_",
+    "exact_human_approval_",
 )
 _PROJECT_VERSION_UPDATE_CAUSE_TOKEN_RE = re.compile(r"[a-z][a-z0-9_]{0,95}")
 
@@ -10389,7 +10400,13 @@ def _project_version_update_content_free_cause(
     if (
         type(cause_code) is not str
         or type(cause_stage) is not str
-        or cause_code not in _PROJECT_VERSION_UPDATE_CONTENT_FREE_CAUSE_CODES
+        or _PROJECT_VERSION_UPDATE_CAUSE_TOKEN_RE.fullmatch(cause_code) is None
+        or (
+            cause_code not in _PROJECT_VERSION_UPDATE_CONTENT_FREE_CAUSE_CODES
+            and not cause_code.startswith(
+                _PROJECT_VERSION_UPDATE_CONTENT_FREE_CAUSE_PREFIXES
+            )
+        )
         or cause_stage
         not in _PROJECT_VERSION_UPDATE_CONTENT_FREE_CAUSE_STAGES
     ):
@@ -10414,6 +10431,36 @@ def _project_version_update_privacy_safe_failure_result(
     if len(error.args) != 1 or type(error.args[0]) is not str:
         return None
     private_code = error.args[0]
+    if private_code == "project_version_update_abandon_unavailable":
+        return {
+            "schema": "wom-kit/project-version-update-cli-failure/v0.4.19",
+            "ok": False,
+            "status": "abandon_unavailable",
+            "lifecycle_action": "project_version_update",
+            "error_class": "precondition",
+            "reason_code": private_code,
+            "reason_codes": [private_code],
+            "blockers": [private_code],
+            "effects_state": "unchanged",
+            "automatic_retry_authorized": False,
+            "fresh_approval_authorized": False,
+            "repair_authorized": False,
+            "cleanup_authorized": False,
+            "lock_steal_authorized": False,
+            "existing_operation_resume_required": True,
+            "existing_operation_presence": "present",
+            "project_domain_files_written": False,
+            "files_written": [],
+            "private_paths_echoed": False,
+            "private_identifiers_echoed": False,
+            "private_values_echoed": False,
+            "raw_errors_echoed": False,
+            "next_safe_actions": [
+                "The transaction is past its lock backlink or a live component already differs from its pre-write state, so the started approval cannot be abandoned; the claim was left untouched.",
+                "Continue it with project-version-update --resume --affirm-external-writers-quiescent, or inspect it with operation-control --action recovery-plan --dry-run.",
+                "Preserve the lock and transaction directory; do not delete control evidence.",
+            ],
+        }
     if private_code in {
         "project_update_transaction_reservation_busy",
         "project_update_transaction_reservation_guard_unavailable",
@@ -10581,6 +10628,8 @@ def _command_project_version_update_core(
         write_requested = bool(
             args.approve or getattr(args, "resume", False)
         )
+        if bool(getattr(args, "abandon_started_approval", False)) and not getattr(args, "resume", False):
+            raise ValueError("project_version_update_abandon_requires_resume")
         if getattr(args, "resume", False):
             if not bool(args.affirm_external_writers_quiescent):
                 raise ValueError("project_version_update_quiescence_required")
@@ -10810,6 +10859,7 @@ def _command_project_version_update_core(
                     ) = None,
                     recovery_key_provider: Any | None = None,
                     resume_existing_composite: bool = False,
+                    abandon_started_approval: bool = False,
                 ) -> Mapping[str, Any]:
                     binding = (
                         operation_approval_binding
@@ -10863,6 +10913,20 @@ def _command_project_version_update_core(
                                 approval_root
                             )
                         )
+                        abandon_result: dict[str, Any] | None = None
+                        if abandon_started_approval:
+                            # v0.4.22: close the started claim(s) first; the
+                            # ordinary discovery below then finds zero
+                            # candidates and cancels the scaffold.
+                            abandon_result = (
+                                _abandon_started_exact_human_approved_claims_core(
+                                    approval_root,
+                                    context,
+                                    started_checkpoint_guard,
+                                    key_provider=legacy_recovery_key_provider,
+                                    resume_boundary=resume_boundary,
+                                )
+                            )
                         resume_result = (
                             _resume_exact_human_approved_transaction_auto_core(
                                 approval_root,
@@ -10905,6 +10969,11 @@ def _command_project_version_update_core(
                                 )
                                 is True
                                 or cli_identifier_supplied
+                            ),
+                            **(
+                                {"abandoned_started_approval": abandon_result}
+                                if abandon_result is not None
+                                else {}
                             ),
                         }
                     return _execute_project_version_update_exact_human_approved_write(
@@ -11032,6 +11101,9 @@ def _command_project_version_update_core(
                                 str(args.approval_id or "").strip()
                             ),
                             _archive_identity_metadata_read=True,
+                            abandon_started_approval=bool(
+                                getattr(args, "abandon_started_approval", False)
+                            ),
                             _expected_approval_root=approval_root,
                             _expected_archive_id=held_archive_id,
                             _legacy_recovery_key_provider=(
@@ -12332,24 +12404,46 @@ def command_operation_status_taxonomy(args: argparse.Namespace) -> int:
 def command_operation_control(args: argparse.Namespace) -> int:
     action = str(args.action)
     root = Path(args.inspection_root)
-    if action == "status":
-        result = operation_control.inspect_operation(
-            root,
-            args.operation_ref,
-            action="status",
-        )
-    elif action == "wait":
-        result = operation_control.wait_operation(
-            root,
-            args.operation_ref,
-            args.timeout_seconds,
-        )
-    elif action == "recovery-plan":
-        result = operation_control.recovery_plan(
-            root,
-            args.operation_ref,
-        )
-    else:
+    # v0.4.22 (beta letter 161 ④): an approved project update started with
+    # the archive root writes its journal under the parent project, exactly
+    # as the updater rebinds its control root.  A read action that finds no
+    # journal under the archive root is retried once with that parent.
+    inspection_roots = [root]
+    if action in {"status", "wait", "recovery-plan"}:
+        try:
+            parent_project = (
+                archive_services._project_update_resume_project_root_read_only(root)
+            )
+        except (OSError, ValueError):
+            parent_project = root
+        if Path(parent_project) != Path(os.path.abspath(str(root.expanduser()))):
+            inspection_roots.append(Path(parent_project))
+    result: dict[str, Any] = {}
+    for index, inspection_root in enumerate(inspection_roots):
+        if action == "status":
+            result = operation_control.inspect_operation(
+                inspection_root,
+                args.operation_ref,
+                action="status",
+            )
+        elif action == "wait":
+            result = operation_control.wait_operation(
+                inspection_root,
+                args.operation_ref,
+                args.timeout_seconds,
+            )
+        elif action == "recovery-plan":
+            result = operation_control.recovery_plan(
+                inspection_root,
+                args.operation_ref,
+            )
+        else:
+            break
+        if list(result.get("blockers") or []) != ["operation_not_found"]:
+            if index > 0:
+                result["inspection_root_resolved_to_parent_project"] = True
+            break
+    if action not in {"status", "wait", "recovery-plan"}:
         result = operation_control.unsupported_cancel(
             root,
             args.operation_ref,
@@ -33669,6 +33763,17 @@ def command_upgrade_check(args: argparse.Namespace) -> int:
         return 1
     archive_root = Path(args.archive_root)
     reporter = CommandProgressReporter(bool(getattr(args, "progress", False)), label="upgrade-check")
+    if not bool(getattr(args, "progress", False)):
+        # v0.4.22 (beta letter 161 ②): the full deep Doctor scan can run for
+        # tens of minutes on a large archive; say so before going silent.
+        print(
+            "[upgrade-check] running the full deep Doctor scan (every zet and object "
+            "hash); large archives take many minutes and stdout stays empty until "
+            "the result. Pass --progress for stage output. This check is not required "
+            "before project-version-update.",
+            file=sys.stderr,
+            flush=True,
+        )
     output_metadata: dict[str, Any] | None = None
     try:
         reporter.progress("doctor", "start", None, None)
@@ -37202,6 +37307,17 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Resume one exact started or succeeded approval transaction "
             "without displaying a second native approval."
+        ),
+    )
+    project_version_update.add_argument(
+        "--abandon-started-approval",
+        action="store_true",
+        help=(
+            "With --resume only: after human review, close the started approval "
+            "claim of a transaction whose writer failed before its first "
+            "approval_bound checkpoint, then release the reservation and lock "
+            "through the ordinary claimless cancellation. Refused when anything "
+            "past the lock backlink was written."
         ),
     )
     project_version_update.add_argument(

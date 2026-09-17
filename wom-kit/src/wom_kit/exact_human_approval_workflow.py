@@ -34,6 +34,7 @@ from .exact_human_approval import (
     _ClaimedExactHumanApproval,
     _authenticated_claim_routing_core,
     _claim_exact_human_approval_core,
+    _authenticated_claim_failure_code_core,
     _rehydrate_existing_exact_human_approval_core,
     _rehydrate_exact_human_approval_core,
     _rehydrate_succeeded_exact_human_approval_core,
@@ -94,7 +95,9 @@ class _ArchiveAuthenticationKeyProvider(Protocol):
 
 
 _CAUSE_CODE_RE = re.compile(r"[a-z][a-z0-9_]{0,95}")
-_CAUSE_STAGES = frozenset({"candidate_missing_handler"})
+# v0.4.22 (beta letters 161/162): the domain writer and the key/claim stage may
+# also carry one fixed inner code.  The stage names are fixed literals.
+_CAUSE_STAGES = frozenset({"candidate_missing_handler", "domain_writer", "key_or_claim"})
 
 
 class ExactHumanApprovalWorkflowError(RuntimeError):
@@ -150,7 +153,12 @@ def _content_free_cause_code(cause: BaseException | None) -> str | None:
     if (
         cause is None
         or type(cause).__name__
-        not in {"ArchiveServiceError", "ProjectUpdateTransactionError"}
+        not in {
+            "ArchiveServiceError",
+            "ProjectUpdateTransactionError",
+            "ProjectRuntimeError",
+            "ExactHumanApprovalError",
+        }
         or len(cause.args) != 1
         or type(cause.args[0]) is not str
         or _CAUSE_CODE_RE.fullmatch(cause.args[0]) is None
@@ -283,12 +291,18 @@ def _run_started_claim_writer(
         reference = claim.assert_ready_for_context(context)
         try:
             raw_result = writer(claim)
-        except BaseException:
+        except BaseException as failure:
             # The writer is the mutation boundary.  Once it has been entered,
             # an exception cannot prove whether zero, some, or all durable
             # writes happened.  Preserve the authenticated claim in
-            # ``started`` for reconciliation.
-            raise _fail("exact_human_approval_state_unknown") from None
+            # ``started`` for reconciliation.  v0.4.22: the writer's own
+            # fixed reason code (never its text) travels as ``cause_code``
+            # so the operator can see which gate stopped the write.
+            raise _fail(
+                "exact_human_approval_state_unknown",
+                cause=failure,
+                cause_stage="domain_writer",
+            ) from None
         if not isinstance(raw_result, Mapping) or type(raw_result.get("ok")) is not bool:
             # A malformed return has the same ambiguity as an exception: the
             # writer may already have committed its mutation.
@@ -519,8 +533,12 @@ def _execute_exact_human_approved_write_with_review_kind_core(
             )
     except ExactHumanApprovalWorkflowError:
         raise
-    except BaseException:
-        raise _fail("exact_human_approval_key_unavailable") from None
+    except BaseException as failure:
+        raise _fail(
+            "exact_human_approval_key_unavailable",
+            cause=failure,
+            cause_stage="key_or_claim",
+        ) from None
 
 
 def _execute_exact_human_approved_write(
@@ -983,8 +1001,28 @@ def _authenticated_resume_candidates_with_key_core(
                 ):
                     # An authenticated claim for another exact context is
                     # not a candidate.  A failed or otherwise invalid claim
-                    # for this context must never be treated as absence.
+                    # for this context must never be treated as absence,
+                    # except one the operator abandoned after review
+                    # (v0.4.22): that claim carries the fixed abandon code
+                    # and is absence for the claimless cancellation.
                     continue
+                if _routed_status == "failed":
+                    try:
+                        _ctx, _status, failure_code = (
+                            _authenticated_claim_failure_code_core(
+                                archive_root,
+                                approval_id,
+                                key,
+                                bound_archive_root=bound_archive_root,
+                                claim_parent_binding=claim_parent_binding,
+                            )
+                        )
+                    except ExactHumanApprovalError:
+                        raise _fail(
+                            "exact_human_approval_resume_claim_invalid"
+                        ) from None
+                    if failure_code == ABANDONED_STARTED_CLAIM_FAILURE_CODE:
+                        continue
             raise _fail(
                 "exact_human_approval_resume_claim_invalid"
             ) from None
@@ -1306,6 +1344,142 @@ def _resume_exact_human_approved_transaction_auto_core(
         ),
         "native_approval_redisplayed": False,
     }
+
+
+ABANDONED_STARTED_CLAIM_FAILURE_CODE = "operator_abandoned_before_domain_write"
+
+
+def _abandon_started_exact_human_approved_claims_core(
+    archive_root: Path | str,
+    context: ExactHumanApprovalContext,
+    started_checkpoint_guard: Callable[[_ClaimedExactHumanApproval], bool],
+    *,
+    key_provider: _ArchiveAuthenticationKeyProvider | None = None,
+    resume_boundary: Callable[[], AbstractContextManager[Any]],
+    failure_code: str = ABANDONED_STARTED_CLAIM_FAILURE_CODE,
+) -> dict[str, Any]:
+    """Mark every checkpoint-valid ``started`` claim of one context ``failed``.
+
+    v0.4.22 (beta letters 161/162): a domain writer that raised after the
+    claim was published leaves the claim ``started`` on purpose so that
+    ``--resume`` can re-enter the same writer.  When the operator has reviewed
+    the state and decided not to continue, this authenticated step closes
+    those claims through the same compare-and-swap finalizer as success, so
+    the ordinary resume discovery then finds zero candidates and the existing
+    claimless pre-approval cancellation can release the reservation.  It
+    opens no dialog, creates no claim, and touches no domain file.  A
+    ``succeeded`` claim for the same context is never abandoned.
+    """
+
+    if (
+        type(context) is not ExactHumanApprovalContext
+        or not callable(started_checkpoint_guard)
+        or not callable(resume_boundary)
+        or type(failure_code) is not str
+        or _CAUSE_CODE_RE.fullmatch(failure_code) is None
+    ):
+        raise _fail("exact_human_approval_writer_result_invalid")
+
+    def _with_key(
+        key: memoryview,
+        filesystem_boundary: tuple[Path, dict[str, Any]] | None,
+    ) -> dict[str, Any]:
+        if filesystem_boundary is None:
+            raise _fail("exact_human_approval_resume_claim_invalid")
+        bound_archive_root, claim_parent_binding = filesystem_boundary
+        claims_root = Path(bound_archive_root).joinpath(
+            *Path(CLAIMS_RELATIVE_ROOT).parts
+        )
+        if claim_parent_binding.get("path") != claims_root:
+            raise _fail("exact_human_approval_resume_claim_invalid")
+        directory_target = claim_parent_binding.get("descriptor")
+        if type(directory_target) is not int:
+            directory_target = claim_parent_binding.get("path")
+        try:
+            names = os.listdir(directory_target)
+        except (OSError, TypeError, ValueError):
+            raise _fail("exact_human_approval_resume_claim_invalid") from None
+        if (
+            len(names) > _MAX_RESUME_CLAIM_DIRECTORY_ENTRIES
+            or any(type(name) is not str for name in names)
+        ):
+            raise _fail("exact_human_approval_resume_claim_invalid")
+        abandoned: list[str] = []
+        for name in sorted(names):
+            match = _APPROVAL_CLAIM_FILENAME_RE.fullmatch(name)
+            if match is None:
+                continue
+            approval_id = match.group(1)
+            try:
+                claim = _rehydrate_existing_exact_human_approval_core(
+                    archive_root,
+                    context,
+                    approval_id,
+                    key,
+                    bound_archive_root=bound_archive_root,
+                    claim_parent_binding=claim_parent_binding,
+                )
+            except ExactHumanApprovalError as error:
+                if error.code == "exact_human_approval_claim_state_invalid":
+                    # Another context, or already failed: not ours to touch.
+                    continue
+                raise _fail(
+                    "exact_human_approval_resume_claim_invalid"
+                ) from None
+            try:
+                if claim.status == "succeeded":
+                    raise _fail("exact_human_approval_resume_claim_invalid")
+                if claim.status != "started":
+                    continue
+                try:
+                    checkpoint_matches = started_checkpoint_guard(claim)
+                except BaseException:
+                    raise _fail(
+                        "exact_human_approval_resume_checkpoint_invalid"
+                    ) from None
+                if checkpoint_matches is not True:
+                    continue
+                try:
+                    claim.finalize_failed(failure_code)
+                except ExactHumanApprovalError as error:
+                    raise _fail(
+                        "exact_human_approval_state_unknown",
+                        cause=error,
+                        cause_stage="key_or_claim",
+                    ) from None
+                abandoned.append(approval_id)
+            finally:
+                claim.close()
+        return {
+            "schema_version": "wom-kit/exact-human-approval-abandon/v0.1",
+            "abandoned_started_claim_count": len(abandoned),
+            "failure_code": failure_code,
+            "native_approval_redisplayed": False,
+            "claims_created": 0,
+            "private_values_echoed": False,
+            "paths_echoed": False,
+        }
+
+    try:
+        with resume_boundary() as filesystem_boundary:
+            selected = (
+                key_provider
+                if key_provider is not None
+                else _production_key_provider()
+            )
+            return selected.use_key(
+                archive_root,
+                lambda key: _with_key(key, filesystem_boundary),
+                create_if_missing=False,
+            )
+    except ExactHumanApprovalWorkflowError:
+        raise
+    except BaseException as failure:
+        raise _fail(
+            "exact_human_approval_key_unavailable",
+            cause=failure,
+            cause_stage="key_or_claim",
+        ) from None
 
 
 __all__ = [

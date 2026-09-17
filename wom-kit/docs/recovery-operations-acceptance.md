@@ -36,6 +36,7 @@ in their original private custody. The developer does not update their lifecycle
 | LR-05 | v0.4.21 | Already captured objects become linked, awaiting a human target, or no existing target without recapture | classification/application pending |
 | LR-06 | v0.4.21 | Source properties/title/locator/object links/edges each apply, resume and revert; unrelated later field changes survive | common-writer integration pending |
 | LR-07 | v0.4.21 | Filename/metadata finds the actual object and linked zet; paired original/derived intake preserves original bytes; display projection never edits canonical content | preserve and reverify existing paths |
+| UF-01 | v0.4.22 | A reviewed project update that fails after the native approval names the refusing fixed gate and the journal stage; a claim left `started` with nothing written can be closed after human review and the reservation released by the ordinary claimless cancellation; a skipped `version` Git probe is never reported as a misconfigured origin; `operation-control` finds the owning project's journal from the archive root; `upgrade-check` announces its scope | development verified on synthetic two-step fixtures (stuck state reproduced with the released v0.4.21 wheel; cause, stage names, abandon, claimless cancellation and a fresh approve verified with the hotfix wheel; 10 new tests); the refusing gate of the client run is unknown until the client's next run reports it; installed/client acceptance pending |
 | NP-01 | v0.4.22 | Existing native credential components feed one scoped broker; one safe entry supports fresh-process reuse without secret export | partial components; end-to-end pending |
 | NP-02 | v0.4.22 | Evidence-built missing-page cohort, workspace separation, five-page canary, raw/body/property/media/parent recovery and ledger | planned integration |
 | NP-03 | v0.4.22 | Historical locator recovery cohort, nested pages/media, and markup blockers have separate complete accounting | planned integration |
@@ -281,6 +282,54 @@ nothing was written, and the packaged Runtime Skill operator contract plus
 the revision/discard/batch guides, matrix rows and READMEs no longer describe
 the reopened writers as fixed closed. Development evidence: 5 new tests,
 full cohort 2,185 OK. Still no client outcome is claimed.
+
+### 2026-09-17 letters 161/162: the v0.4.21 update failure (plan addition)
+
+Beta letters 161 and 162 report that the client's reviewed
+`project-version-update` to v0.4.21 reached the native dialog, published
+its claim and failed about nineteen seconds later with only
+`ExactHumanApprovalWorkflowError` / `project_version_update_command_failed`
+and no cause, left the claim `started` with the lock and reservation in
+place, and that `--resume` failed in preflight, `version` reported a
+misconfigured origin under disk contention, `operation-control` from the
+archive root returned `operation_not_found`, and `upgrade-check --dry-run`
+printed nothing for twenty-three minutes. Row UF-01 is added ahead of the
+carried LR rows because no v0.4.21 repair reaches the client until the
+update itself works. Diagnosis (Claude Fable 5.1, one bounded read-only
+diagnostic workflow of 8 readers, then solo): the failure is raised inside
+the approved writer between claim publication and the `approval_bound`
+checkpoint, every boundary re-raises `from None`, the claim stays `started`
+by the one-use contract, and no supported path could close it. The exact
+stuck state was reproduced on a synthetic two-step fixture (an existing
+v0.4.20 runtime updating to v0.4.21 from a local bare remote) with the
+released wheel; the faithful fixture itself updates cleanly, so the client's
+refusing gate is load- or state-specific and is not known from the v0.4.21
+diagnostics. Recorded in the
+[v0.4.22 hotfix record](../../meeting-minutes/2026-09-17-v0422-update-failure-hotfix.md).
+
+### 2026-09-17 v0.4.22 UF-01 development verified
+
+Hotfix (Claude Fable 5.1, solo): failures after the claim carry a fixed
+`cause_code`, `cause_stage` and `cause_code_source: fixed_literal_allowlist`
+with chaining still `from None`; the journal names
+`materialize-runtime-candidate`, `native-approval`, `post-claim-revalidate`,
+`approval-bound` and `durable-write`; `--resume --abandon-started-approval`
+finalizes the started claim as `failed` /
+`operator_abandoned_before_domain_write` only under journal state `exact`,
+phases `lock_backlinked` only and classification `prewrite_exact`, and
+discovery treats exactly that code as absence; the `version` Git probe
+budget is 45 seconds and exhaustion reports
+`project_git_probe_budget_exhausted`; `operation-control` retries once with
+the owning project root; `upgrade-check` announces its scope. Evidence: 10
+new tests in `test_v0422_update_failure_hotfix.py` plus the approval,
+project-update, operation-control and dispatch cohorts; end to end on the
+hotfix wheel against the reproduced stuck fixture, a forced writer failure
+produced the cause and named stages, the abandon closed the claim, the
+following resume returned `preapproval_scaffold_cancelled` (lock and
+transaction removed, pin unchanged) and a fresh approve reached
+`updated_restart_required` with the pin at the target. Not in scope: the
+session-scope pre-approval of letter 161 (awaits the maintainer), the
+journal schema, and the carried LR rows.
 
 ### 2026-09-17 v0.4.21 released
 
