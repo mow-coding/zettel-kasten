@@ -187,6 +187,7 @@ class SourceIntakeRecordExactError(RuntimeError):
     _CODES = {
         "source_intake_record_archive_invalid",
         "source_intake_record_plan_invalid",
+        "source_intake_record_plan_encoding_invalid",
         "source_intake_record_request_invalid",
         "source_intake_record_plan_unsafe",
         "source_intake_record_target_unsafe",
@@ -259,6 +260,12 @@ def _strict_json_object(raw: bytes) -> dict[str, Any]:
             result[key] = value
         return result
 
+    # v0.4.27: PowerShell writes UTF-8 with a byte-order mark by default; the
+    # mark is not content.  UTF-16/32 marks are named instead of "invalid".
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff", b"\x00\x00\xfe\xff")):
+        raise _fail("source_intake_record_plan_encoding_invalid")
+    if raw.startswith(b"\xef\xbb\xbf"):
+        raw = raw[3:]
     try:
         loaded = json.loads(
             raw.decode("utf-8"),

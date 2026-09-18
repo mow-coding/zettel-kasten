@@ -10429,6 +10429,13 @@ def _project_version_update_direct_cause_code(
         ),
     ):
         token = error.args[0] if len(error.args) == 1 else None
+    elif type(error) is ValueError:
+        # v0.4.27: the command's own usage refusals (a missing --target,
+        # --reviewed-by or --affirm-external-writers-quiescent) are raised as
+        # a bare ValueError carrying a fixed project_version_update_ token.
+        token = error.args[0] if len(error.args) == 1 else None
+        if type(token) is not str or not token.startswith("project_version_update_"):
+            return None
     else:
         return None
     if (

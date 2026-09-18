@@ -56,9 +56,12 @@ _ERRORS = frozenset({
 
 
 class WorkSessionPermissionError(ValueError):
-    def __init__(self, code: str = "work_session_permission_invalid") -> None:
+    def __init__(self, code: str = "work_session_permission_invalid", *, detail: dict[str, Any] | None = None) -> None:
         super().__init__(code)
         self.code = code if code in _ERRORS else "work_session_permission_invalid"
+        # v0.4.27: content-free detail (positions and fixed operation names
+        # only); the refused request value itself is never echoed.
+        self.detail = dict(detail) if type(detail) is dict else None
 
 
 def _fail(code: str = "work_session_permission_invalid") -> WorkSessionPermissionError:
@@ -85,9 +88,14 @@ def normalize_grant(permission_mode: Any, operations: Any) -> dict[str, Any] | N
     if not operations:
         raise _fail()
     values = {member.value for member in GRANTABLE_OPERATIONS}
-    for item in operations:
+    for index, item in enumerate(operations):
         if item not in values:
-            raise _fail("work_session_permission_operation_not_grantable")
+            raise WorkSessionPermissionError(
+                "work_session_permission_operation_not_grantable",
+                detail={"rejected_operation_index": index,
+                        "grantable_operations": sorted(values),
+                        "always_dialog_operations": sorted(member.value for member in ALWAYS_DIALOG_OPERATIONS)},
+            )
     return {"mode": MODE_LIMITED, "operations": sorted(set(operations))}
 
 

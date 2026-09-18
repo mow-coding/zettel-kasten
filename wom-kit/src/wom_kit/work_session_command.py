@@ -47,10 +47,14 @@ def read_private_request(stream):
     raise WorkSessionRequestError()
 
 
-def management_failure(reason_code, *, original_commit_verified=False):
-    return {"schema": SCHEMA, "ok": False, "reason_code": reason_code,
-            "original_commit_verified": original_commit_verified is True,
-            "private_values_echoed": False}
+def management_failure(reason_code, *, original_commit_verified=False, detail=None):
+    failure = {"schema": SCHEMA, "ok": False, "reason_code": reason_code,
+               "original_commit_verified": original_commit_verified is True,
+               "private_values_echoed": False}
+    if type(detail) is dict and detail:
+        # v0.4.27: fixed operation names and positions only.
+        failure["reason_detail"] = detail
+    return failure
 
 
 def dispatch_work_session_management(root, *, action, dry_run=False, approve=False,
@@ -153,7 +157,8 @@ def dispatch_work_session_management(root, *, action, dry_run=False, approve=Fal
                                                         work_session_ref=work_session_ref, **wait)
     except service.WorkSessionServiceError as error:
         return management_failure(error.code,
-                                  original_commit_verified=getattr(error, "original_commit_verified", False))
+                                  original_commit_verified=getattr(error, "original_commit_verified", False),
+                                  detail=getattr(error, "detail", None))
     succeeded = (type(result) is dict and (
         result.get("ok") is True or (mode == "registration_preview" and
         result.get("schema") == "wom-kit/work-session-registration-selection/v1")))
