@@ -1674,6 +1674,18 @@ class OperationRunJournal:
             "resume_supported": False,
         }
 
+    @property
+    def current_stage(self) -> str:
+        """The last public stage this run reported (``unknown`` until one).
+
+        v0.4.25: a failure raised before any result lets the CLI name the
+        stage in its content-free cause; the value is always one of the
+        command's fixed stage names.
+        """
+
+        with self._lock:
+            return self._stage
+
     def _safe_stage(self, stage: object) -> str:
         value = str(stage or "").strip().lower()
         if (

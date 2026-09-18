@@ -317,6 +317,11 @@ still blocks discovery. Since v0.4.22 a failure raised by the approved writer
 or the claim broker also carries a content-free `cause_code` and `cause_stage`
 (`domain_writer` or `key_or_claim`), restricted to fixed codes of the
 project-update and approval families; exception chaining stays `from None`.
+Since v0.4.25 a failure the service raises directly before any result —
+resume preflight, reopen, cleanup classification — carries its own fixed
+code as `cause_code` and the operation journal's stage as `cause_stage`
+(`project-preflight`, `verify-release`, ... or `unknown`), under the same
+allowlist plus the `operation_` family.
 There is no claim expiry: one workflow invocation consumes the one-use
 authority. A later attempt normally requires a new live review. The narrow
 v0.4.8 exception is `duplicate-object-reconcile --revert --resume`: when one

@@ -105815,6 +105815,43 @@ def wom_kit_project_source_mirror_location(root_label: str) -> str:
     return f"{root_label}/{location}"
 
 
+WOM_KIT_PROJECT_UPDATE_PARENT_OF_ARCHIVE_LABEL = "parent_of_archive"
+
+
+def wom_kit_project_update_logical_relative_to_project_root(
+    logical: Any,
+) -> PurePosixPath | None:
+    """Map one recorded update location onto the project root.
+
+    Preflight records the source mirror, every version pin and the update
+    receipt relative to the inspection root: ``.zettel-kasten/...`` when the
+    project root was given, ``parent_of_archive/.zettel-kasten/...`` when the
+    archive root was given (its parent is the project root).  Those strings
+    are bound into the private plan and the transaction intent, so a consumer
+    that joins them onto ``project_root`` must strip the label first.
+    v0.4.18 through v0.4.24 joined the label literally: an update started
+    from the archive root failed the post-approval snapshot guard, and its
+    transaction could not be reopened by ``--resume`` (beta letters 161 and
+    163).  ``None`` means the location is absolute, empty or traversing.
+    """
+
+    if type(logical) is not str:
+        return None
+    candidate = PurePosixPath(logical)
+    if (
+        candidate.is_absolute()
+        or not candidate.parts
+        or any(part in {"", ".", ".."} for part in candidate.parts)
+    ):
+        return None
+    parts = candidate.parts
+    if parts[0] == WOM_KIT_PROJECT_UPDATE_PARENT_OF_ARCHIVE_LABEL:
+        parts = parts[1:]
+        if not parts:
+            return None
+    return PurePosixPath(*parts)
+
+
 def git_output_lines(cwd: Path, args: list[str]) -> list[str]:
     return list(git_output_lines_observation(cwd, args)["lines"])
 
@@ -122944,8 +122981,10 @@ def _project_update_terminal_postimage_matches(
     )
     if os.path.lexists(lock_path):
         return False
-    mirror_logical = PurePosixPath(str(basis.get("mirror_logical") or ""))
-    if mirror_logical.is_absolute() or ".." in mirror_logical.parts:
+    mirror_logical = wom_kit_project_update_logical_relative_to_project_root(
+        basis.get("mirror_logical")
+    )
+    if mirror_logical is None:
         return False
     mirror_path = project_root.joinpath(*mirror_logical.parts)
     runner: project_update_git_runner.TrustedProjectUpdateGitRunner | None = None
@@ -123024,8 +123063,10 @@ def _project_update_terminal_postimage_matches(
         if not source_exact or not runtime_exact:
             return False
         for component in regular_components:
-            logical = PurePosixPath(component["logical_target"])
-            if logical.is_absolute() or ".." in logical.parts:
+            logical = wom_kit_project_update_logical_relative_to_project_root(
+                component.get("logical_target")
+            )
+            if logical is None:
                 return False
             path = project_root.joinpath(*logical.parts)
             maximum = (
@@ -123972,9 +124013,12 @@ def _project_update_terminal_original_postimage_superseded_read_only(
         )
         if pin is None:
             return False
-        target = project_root.joinpath(
-            *PurePosixPath(pin.logical_target).parts
+        pin_logical = wom_kit_project_update_logical_relative_to_project_root(
+            pin.logical_target
         )
+        if pin_logical is None:
+            return False
+        target = project_root.joinpath(*pin_logical.parts)
         value = _project_update_safe_read_component(
             project_root,
             target,
@@ -132341,15 +132385,10 @@ def _project_update_assert_approved_snapshot_unchanged(
         for private_spec in expected_pin_specs:
             if type(private_spec) is not dict:
                 raise ArchiveServiceError(changed_code)
-            logical_value = private_spec.get("logical")
-            if type(logical_value) is not str:
-                raise ArchiveServiceError(changed_code)
-            logical = PurePosixPath(logical_value)
-            if (
-                logical.is_absolute()
-                or not logical.parts
-                or any(part in {"", ".", ".."} for part in logical.parts)
-            ):
+            logical = wom_kit_project_update_logical_relative_to_project_root(
+                private_spec.get("logical")
+            )
+            if logical is None:
                 raise ArchiveServiceError(changed_code)
             path = state.project_root.joinpath(*logical.parts)
             if not is_path_within_root(path, state.project_root):
@@ -136162,9 +136201,16 @@ def _project_update_reopen_durable_state(
             )
         directory_guard = _WomKitProjectUpdateDirectoryGuard(project_root)
         metadata_root = project_root / ".zettel-kasten"
-        mirror_path = project_root.joinpath(
-            *PurePosixPath(str(private_plan["mirror_logical"])).parts
+        mirror_logical = (
+            wom_kit_project_update_logical_relative_to_project_root(
+                private_plan.get("mirror_logical")
+            )
         )
+        if mirror_logical is None:
+            raise ArchiveServiceError(
+                "project_version_update_resume_binding_mismatch"
+            )
+        mirror_path = project_root.joinpath(*mirror_logical.parts)
         if not (
             directory_guard.hold(project_root)
             and directory_guard.hold(metadata_root)
@@ -136177,8 +136223,10 @@ def _project_update_reopen_durable_state(
         for component in transaction.intent.components:
             if component.role in {"source", "runtime"}:
                 continue
-            logical = PurePosixPath(component.logical_target)
-            if logical.is_absolute() or ".." in logical.parts:
+            logical = wom_kit_project_update_logical_relative_to_project_root(
+                component.logical_target
+            )
+            if logical is None:
                 raise ArchiveServiceError(
                     "project_version_update_resume_binding_mismatch"
                 )

@@ -24,6 +24,45 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.4.25 Archive-Root Project Updates And Resume Failure Causes
+
+Install the exact public wheel only after the matching release and asset exist.
+Use a new external CPython 3.12 environment so the real `python.exe -m pip`
+records the wheel hash in installed PEP 610 metadata.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0425-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.25/wom_kit-0.4.25-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+Require exactly `archive 0.4.25` from a new process. Publishing or installing
+the wheel changes no client archive, project runtime, or version pin. A client
+separately chooses and approves any project update.
+
+If a project update started from the archive root failed after the native
+approval (letter 161) and `--resume` keeps failing in `project-preflight`,
+run, from the same archive root with this bootstrap:
+`project-version-update <archive-root> --resume --abandon-started-approval
+--affirm-external-writers-quiescent --format json` (expected
+`preapproval_scaffold_cancelled`: the started claim is closed, the lock and
+reservation released, the pin unchanged), then
+`project-version-update <archive-root> --target v0.4.25 --dry-run --format json`
+and the same with `--approve --reviewed-by <id>
+--affirm-external-writers-quiescent`. A failure before any result now prints
+`Project version update inner reason (fixed code): <code> at <stage>.` on
+stderr and stores `cause_code` / `cause_stage` in the diagnostics artifact.
+
+After one reviewed project update, start the project launcher in a new process
+and verify its pin, source, launcher, and runtime evidence. Only that client-run
+result can show that the project was repaired.
+
 ## v0.4.24 Session Permission Modes
 
 Install the exact public wheel only after the matching release and asset exist.

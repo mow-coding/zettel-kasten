@@ -2,6 +2,44 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.4.25 archive root에서 시작한 project update 수정과 resume 실패 원인
+
+일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.
+새 외부 CPython 3.12 환경의 실제 `python.exe -m pip`를 사용해 설치된 PEP 610
+metadata에 wheel hash가 남게 합니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0425-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.25/wom_kit-0.4.25-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+새 process에서 정확히 `archive 0.4.25`가 나와야 합니다. wheel을 공개하거나 설치하는
+것만으로 client archive, project runtime, version pin은 바뀌지 않습니다. project
+update는 client가 따로 선택하고 승인합니다.
+
+archive root에서 시작한 project update가 승인 창 뒤에 실패했고(편지 161)
+`--resume`이 계속 `project-preflight`에서 실패한다면, 같은 archive root에서 이
+bootstrap으로 `project-version-update <archive-root> --resume
+--abandon-started-approval --affirm-external-writers-quiescent --format json`을
+실행하세요(기대 결과 `preapproval_scaffold_cancelled`: started claim이 닫히고 잠금과
+예약이 풀리며 pin은 그대로). 그다음
+`project-version-update <archive-root> --target v0.4.25 --dry-run --format json`,
+이어서 같은 인자에 `--approve --reviewed-by <id> --affirm-external-writers-quiescent`를
+실행합니다. 결과가 나오기 전의 실패는 이제
+stderr에 `Project version update inner reason (fixed code): <code> at <stage>.`를
+찍고 diagnostics 파일에 `cause_code`·`cause_stage`를 남깁니다.
+
+검토한 project update 한 번 뒤에는 새 process에서 project launcher를 시작해 pin,
+source, launcher, runtime 근거를 확인하세요. 그 client 실행 결과만이 project가
+고쳐졌음을 보여 줍니다.
+
 ## v0.4.24 세션 승인 모드
 
 일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.
