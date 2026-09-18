@@ -588,3 +588,15 @@ before any change). Every addition is content-free: positions and fixed
 names, never the refused request value; the usage token is the command's
 own literal. Record:
 [v0.4.27 minutes](../../meeting-minutes/2026-09-18-v0427-client-followups.md).
+
+### 2026-09-19 v0.4.27 released
+
+v0.4.27 is public: tag `v0.4.27` on main `d39df7b0`, one wheel
+`wom_kit-0.4.27-py3-none-any.whl` (SHA-256
+`8abc91c8d3d5ca50a787b2e476b82206a908fa2eda7fb9aa407fc18328a25096`),
+candidate CI 14/14 on the first run, exact-merge installed verification,
+anonymous download and two fresh-venv installations recorded in the
+[release evidence](../../meeting-minutes/2026-09-19-v0427-release-evidence.md).
+CF-01 stays open for client closure; the reply draft now points the client
+at v0.4.27 with the corrected approve command and answers each item of the
+v0.4.25 report, and asks back for the index-rebuild sequence.
