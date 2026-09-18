@@ -1,10 +1,12 @@
 ﻿# WOM-kit Capability Matrix
 
-Status: v0.4.25 archive-root update hotfix, session permission modes, and session-owned writes truth
+Status: v0.4.26 target-details dialog hotfix, archive-root update hotfix, and session-owned writes truth
 Date: 2026-09-04
-Version: v0.4.25 implementation and release scope
+Version: v0.4.26 implementation and release scope
 
-The current v0.4.25 working tree fixes the project update started from the
+The current v0.4.26 working tree fixes the native approval dialog's
+"대상 자세히 보기" page on Windows 11 (a late navigation confirmation no
+longer cancels the dialog as a native failure). The v0.4.25 tree fixes the project update started from the
 archive root (recorded `parent_of_archive/...` locations are now resolved
 onto the project root by every consumer, so the post-approval guard and
 `--resume` reopen succeed) and names a pre-result service failure by its

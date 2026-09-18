@@ -12,8 +12,7 @@ from wom_kit import __version__
 ROOT = Path(__file__).resolve().parents[2]
 KIT = ROOT / "wom-kit"
 RESOURCE_ROOT = KIT / "src" / "wom_kit" / "_resources"
-RELEASE = KIT / "docs" / "releases" / "v0.4.25.md"
-CURRENT_RELEASE = KIT / "docs" / "releases" / "v0.4.26.md"
+RELEASE = KIT / "docs" / "releases" / "v0.4.26.md"
 PACKAGED_RELEASE = RESOURCE_ROOT / "release-notes" / "v0.4.26.md"
 LOCK = KIT / "project-runtime-supply-lock-v0.4.26.json"
 BOOTSTRAP_DOCUMENTS = (
@@ -47,7 +46,7 @@ CURRENT_PUBLIC_DOCUMENTS = (
 )
 
 
-class V0425ReleaseDocsTests(unittest.TestCase):
+class V0426ReleaseDocsTests(unittest.TestCase):
     def test_current_version_surfaces_are_exact(self) -> None:
         self.assertEqual(__version__, "0.4.26")
         self.assertIn('version = "0.4.26"', (KIT / "pyproject.toml").read_text(encoding="utf-8"))
@@ -71,7 +70,7 @@ class V0425ReleaseDocsTests(unittest.TestCase):
         self.assertEqual(policy["supply_lock_sha256"], "sha256:" + hashlib.sha256(current).hexdigest())
 
     def test_current_release_is_the_only_packaged_note(self) -> None:
-        self.assertEqual(CURRENT_RELEASE.read_bytes(), PACKAGED_RELEASE.read_bytes())
+        self.assertEqual(RELEASE.read_bytes(), PACKAGED_RELEASE.read_bytes())
         self.assertEqual(sorted(path.name for path in PACKAGED_RELEASE.parent.iterdir()), ["v0.4.26.md"])
         manifest = json.loads((RESOURCE_ROOT / "resource-manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["version"], "0.4.26")
@@ -92,20 +91,14 @@ class V0425ReleaseDocsTests(unittest.TestCase):
                     continue  # upgrade guides keep every historical section
                 self.assertNotIn("bootstrap-v0425-", document)
 
-    def test_release_describes_v0425_contract(self) -> None:
+    def test_release_describes_v0426_contract(self) -> None:
         flat = " ".join(RELEASE.read_text(encoding="utf-8").split()).casefold()
         for required in (
-            "beta letter 161",
-            "2026-09-18 v0.4.24 resume report",
-            "parent_of_archive/.zettel-kasten/...",
-            "approved_snapshot_changed",
-            "directory_stability_unavailable",
-            "wom_kit_project_update_logical_relative_to_project_root",
-            "cause_code",
-            "cause_stage",
-            "--resume --abandon-started-approval",
-            "preapproval_scaffold_cancelled",
-            "marker.json` `state: reserved` is a constant",
+            "대상 자세히 보기",
+            "tdn_navigated",
+            "exact_human_approval_native_call_failed",
+            "inert",
+            "windows 11",
             "publishing or installing this release does not read or modify a client archive",
             "client-run result and a new-process verification",
         ):
@@ -133,24 +126,21 @@ class V0425ReleaseDocsTests(unittest.TestCase):
 
     def test_release_surfaces_are_documented(self) -> None:
         contract = (KIT / "docs" / "exact-human-approval-contract.md").read_text(encoding="utf-8")
-        self.assertIn("Since v0.4.25 a failure the service raises directly", contract)
-        update_doc = (KIT / "docs" / "project-version-update.md").read_text(encoding="utf-8")
-        self.assertIn("parent_of_archive/.zettel-kasten/...", update_doc)
+        self.assertIn("Since v0.4.26 the count-first paged target preview", contract)
         register = (KIT / "docs" / "recovery-operations-acceptance.md").read_text(encoding="utf-8")
-        self.assertIn("| UF-02 | v0.4.25 |", register)
-        self.assertTrue((KIT / "docs" / "archive-infra-decision-log-2026-09-18-v0425-archive-root-update-hotfix.md").is_file())
+        self.assertIn("| UF-03 | v0.4.26 |", register)
+        self.assertTrue((KIT / "docs" / "archive-infra-decision-log-2026-09-18-v0426-target-details-navigation.md").is_file())
         for guide in (ROOT / "UPGRADE.md", ROOT / "UPGRADE.ko.md"):
             document = guide.read_text(encoding="utf-8")
             with self.subTest(guide=guide):
-                self.assertIn("--resume --abandon-started-approval", document)
-                self.assertIn("preapproval_scaffold_cancelled", document)
-                self.assertIn("--target v0.4.25 --dry-run", document)
+                self.assertIn("대상 자세히 보기", document)
+                self.assertIn("--target v0.4.26 --dry-run", document)
 
     def test_coverage_manifest_matches_release_claim(self) -> None:
         manifest = json.loads((KIT / "docs" / "writer-session-coverage.json").read_text(encoding="utf-8"))
         statuses = [row["status"] for row in manifest["paths"].values()]
         routed = sum(1 for row in manifest["paths"].values() if row.get("route"))
-        # v0.4.23 integrated create-draft (LR-06a); v0.4.24 and v0.4.25 change no writer.
+        # v0.4.23 integrated create-draft (LR-06a); v0.4.24 through v0.4.26 change no writer.
         self.assertEqual(len(statuses), 56)
         self.assertEqual(statuses.count("session_integrated") - routed, 6)
         self.assertEqual(routed, 1)

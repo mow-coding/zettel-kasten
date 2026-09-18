@@ -6,6 +6,19 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.26 - 2026-09-18
+
+- Fixed the native approval dialog's "대상 자세히 보기" button on Windows
+  11. The paged target preview (v0.4.20) required the dialog's navigation
+  confirmation to arrive inside the synchronous page-change call; Windows
+  11 posts it afterwards, so every click cancelled the dialog as
+  `exact_human_approval_native_call_failed`. A pending navigation now keeps
+  the page inert (every button except cancel is refused) until the
+  confirmation arrives; a dialog destroyed while a navigation is pending is
+  still a failure. Verified on a real dialog; three new fake-dialog tests
+  fail against v0.4.25 with the reported code. No contract, digest, receipt
+  or journal schema changes.
+
 ## v0.4.25 - 2026-09-18
 
 - Fixed the project update started from the archive root (beta letter 161

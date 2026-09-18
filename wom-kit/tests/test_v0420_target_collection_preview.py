@@ -37,6 +37,9 @@ def context() -> approval.ExactHumanApprovalContext:
     )
 
 
+TDN_DIALOG_CONSTRUCTED = 7
+
+
 class NativeFunction:
     def __init__(self, implementation):
         self.implementation = implementation
@@ -49,8 +52,12 @@ class NativeDialogHarness:
     """Exercise the production ctypes callback/config path without a window."""
 
     def __init__(self, actions, *, navigation_notified=True, reentrant_approval=False):
+        # navigation_notified: True = TDN_NAVIGATED inside TDM_NAVIGATE_PAGE (older
+        # builds), "deferred" = posted through the message loop after the call
+        # returns (Windows 11), False = never delivered.
         self.actions = actions
         self.navigation_notified = navigation_notified
+        self.navigated_pending = False
         self.reentrant_approval = reentrant_approval
         self.reentrant_results = []
         self.pages = []
@@ -103,7 +110,10 @@ class NativeDialogHarness:
                 if callback_result == 0:
                     self.result = approval.APPROVE_BUTTON_ID
                     self.finished = True
-            if self.navigation_notified:
+            if self.navigation_notified == "deferred":
+                self._notify(TDN_DIALOG_CONSTRUCTED)
+                self.navigated_pending = True
+            elif self.navigation_notified:
                 self._notify(approval.TDN_NAVIGATED)
         elif message == approval.TDM_CLICK_BUTTON:
             if self._notify(approval.TDN_BUTTON_CLICKED, wparam) == 0:
@@ -118,8 +128,15 @@ class NativeDialogHarness:
             if self.finished:
                 break
             if callable(action):
+                # Callables run before the deferred confirmation is delivered:
+                # they model input that lands while navigation is pending.
                 action()
                 continue
+            if self.navigated_pending:
+                # The message loop delivers the deferred confirmation before
+                # the next human click.
+                self.navigated_pending = False
+                self._notify(approval.TDN_NAVIGATED)
             callback_result = self._notify(approval.TDN_BUTTON_CLICKED, action)
             self.button_results.append((action, callback_result))
             if callback_result == 0:
@@ -320,13 +337,50 @@ class TargetCollectionPreviewTests(unittest.TestCase):
         self.assertNotIn("private-sentinel", repr(raised.exception))
         self.assertIsNone(raised.exception.__context__)
 
-    def test_unconfirmed_navigation_fails_closed(self):
+    def test_unconfirmed_navigation_stays_inert_except_cancel(self):
+        # v0.4.26: a navigation whose TDN_NAVIGATED never arrives no longer
+        # cancels the dialog as a native failure; every button except cancel is
+        # refused, so nothing can be approved on an unconfirmed page.
         collection = TargetCollectionPreview(items=(item(0),))
-        harness = NativeDialogHarness([approval.TARGET_DETAILS_BUTTON_ID, approval.APPROVE_BUTTON_ID],
-                                      navigation_notified=False)
-        with self.assertRaisesRegex(approval.ExactHumanApprovalWindowsError,
-                                    "exact_human_approval_native_call_failed"):
-            harness.request(collection)
+        harness = NativeDialogHarness([
+            approval.TARGET_DETAILS_BUTTON_ID, approval.APPROVE_BUTTON_ID,
+            approval.TARGET_RETURN_BUTTON_ID, approval.APPROVE_BUTTON_ID,
+        ], navigation_notified=False)
+        result = harness.request(collection)
+        self.assertFalse(result.approved)
+        self.assertEqual(harness.result, approval.IDCANCEL)
+        self.assertEqual([code for _, code in harness.button_results], [1, 1, 1, 1])
+        self.assertEqual(len(harness.pages), 2)  # the details page was built once
+
+    def test_windows11_deferred_navigated_lets_the_details_page_open_and_return(self):
+        # The real Windows 11 ordering: TDN_DIALOG_CONSTRUCTED inside
+        # TDM_NAVIGATE_PAGE, TDN_NAVIGATED afterwards.  v0.4.20 through v0.4.25
+        # raised exact_human_approval_native_call_failed here and closed the
+        # dialog, which is what the client saw as "the button does nothing".
+        collection = TargetCollectionPreview(items=tuple(item(i) for i in range(3)))
+        harness = NativeDialogHarness([
+            approval.TARGET_DETAILS_BUTTON_ID, approval.TARGET_RETURN_BUTTON_ID,
+            approval.TARGET_DETAILS_BUTTON_ID, approval.TARGET_RETURN_BUTTON_ID,
+            approval.APPROVE_BUTTON_ID,
+        ], navigation_notified="deferred")
+        self.assertTrue(harness.request(collection).approved)
+        self.assertEqual([page["instruction"] for page in harness.pages][1], "대상 자세히 보기 · 1/1")
+        self.assertEqual(len(harness.pages), 5)
+        self.assertEqual([code for _, code in harness.button_results], [1, 1, 1, 1, 0])
+
+    def test_click_before_deferred_navigated_is_refused_then_accepted(self):
+        collection = TargetCollectionPreview(items=tuple(item(i) for i in range(3)))
+        harness = NativeDialogHarness([
+            approval.TARGET_DETAILS_BUTTON_ID,
+            # a click that lands between TDM_NAVIGATE_PAGE returning and
+            # TDN_NAVIGATED arriving is inert, the same click afterwards works
+            lambda: harness_clicks.append((harness._notify(approval.TDN_BUTTON_CLICKED, approval.TARGET_RETURN_BUTTON_ID), len(harness.pages))),
+            approval.TARGET_RETURN_BUTTON_ID, approval.APPROVE_BUTTON_ID,
+        ], navigation_notified="deferred")
+        harness_clicks = []
+        self.assertTrue(harness.request(collection).approved)
+        self.assertEqual(harness_clicks, [(1, 2)])  # refused, and no page was built by it
+        self.assertEqual(len(harness.pages), 3)
 
     def test_reentrant_approval_during_navigation_cannot_replace_main_human_click(self):
         collection = TargetCollectionPreview(items=(item(0),))
