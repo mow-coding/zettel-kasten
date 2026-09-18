@@ -1,8 +1,8 @@
 ﻿# WOM-kit Capability Matrix
 
-Status: v0.4.26 target-details dialog hotfix, archive-root update hotfix, and session-owned writes truth
+Status: v0.4.27 client follow-ups, target-details dialog hotfix, and session-owned writes truth
 Date: 2026-09-04
-Version: v0.4.26 implementation and release scope
+Version: v0.4.27 implementation and release scope
 
 The current v0.4.27 working tree answers the client's v0.4.25 report:
 usage refusals of `project-version-update` carry a fixed cause, a

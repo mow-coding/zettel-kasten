@@ -34,10 +34,10 @@ not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.4.26
+v0.4.27
 ```
 
-Previous public baseline: v0.4.25.
+Previous public baseline: v0.4.26.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -58,13 +58,13 @@ not proof that the asset is available.
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0426-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0427-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.26/wom_kit-0.4.26-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.27/wom_kit-0.4.27-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
@@ -115,6 +115,7 @@ approval-gated write, or docs-only), see the
 - v0.4.16 preserves an authenticated project-update result before cleanup and reports cleanup, owned-resource close, Git-runner close, durable output handoff, and attention truth independently. Its immutable journal and `active` -> `display-pending` -> `consumed` handoff reuse the exact bound output for identical at-least-once display without rerunning the writer; consumed state is history, and acknowledgement does not prove a person or model saw stdout. A complete legacy cleanup tombstone is recoverable only after exact validation, proof-only state attributes no past success, and partial or malformed residue stays fail-closed. Canonical `python -m wom_kit.archive_cli` runtime binding verifies all three core modules against receipt bytes with content-free diagnostics. The narrow create-only feedback lane also covers runtime mismatch, product vocabulary no longer trips value-shaped secret checks by wording alone, and caller-input/body safety reads are reported truthfully. Publishing or installing the release changes no client archive; the client separately chooses a reviewed project update. See the [v0.4.16 release notes](wom-kit/docs/releases/v0.4.16.md),
 - v0.4.17 gives fresh project-update preview and approval the same read-only terminal-cleanup preflight. Exact WOM-produced preapproval-abort history routes to identifier-free `--resume`, which compacts only plan-bound private control evidence into canonical proof history without running the project-domain writer, changing source/runtime/pin/archive content, or asking a person to count artifacts. Known cleanup gates return fixed privacy-safe reason codes and useful next actions; partial, changed, ambiguous, mixed, or unsafe residue remains fail-closed and must not be edited manually. Publishing or installing the release changes no client archive; the client separately chooses recovery and one reviewed project update. See the [v0.4.17 release notes](wom-kit/docs/releases/v0.4.17.md),
 - v0.4.18 finishes one completed project-update original that outlived its own cleanup after the project moved to another version. Dry-run, approval, and identifier-free `--resume` classify that directory the same way; resume re-authenticates the original approval claim from the archive, cleans only that private control directory into one canonical proof, attributes no past success, and grants no fresh approval authority. When the live pin still matches, the v0.4.16 replay contract stays in force with the same cleanup as fallback. The redacted failure artifact may now carry one fixed inner reason code, and `marker.json` is documented as an identity anchor rather than a lifecycle record. Publishing or installing the release changes no client archive. See the [v0.4.18 release notes](wom-kit/docs/releases/v0.4.18.md),
+- v0.4.27 answers the client's v0.4.25 follow-ups: `project-version-update` usage refusals carry a fixed `cause_code`, a file-installed bootstrap is told to reinstall from the public URL, a refused permission grant reports the refused position and the grantable names, intake plans accept a UTF-8 byte-order mark, and the discard previews expose `plan_sha256` at the top level. No contract, digest or schema changes.
 - v0.4.26 fixes the native approval dialog's "대상 자세히 보기" button on Windows 11: a late navigation confirmation no longer cancels the dialog as `exact_human_approval_native_call_failed`; the read-only paged target list opens, and an unconfirmed page stays inert except cancel. No contract, digest or schema changes.
 - v0.4.25 fixes the project update started from the archive root (beta letter 161): recorded `parent_of_archive/...` mirror, pin and receipt locations are now resolved onto the project root by every consumer, so the post-approval snapshot guard passes and `--resume` can reopen and release the stuck transaction; a failure raised before any result names its fixed `cause_code` and journal `cause_stage`. Recorded plans, intents and receipts keep their bytes.
 - v0.4.24 adds per-work-session permission modes (`manual`, `limited`, `allow_all`) granted by one exact human decision on the claimed session (`work-session --action set-permission-mode`), the way the Codex and Claude desktop apps offer a per-session permission level: a write the mode permits opens no dialog but still publishes its own one-use claim, which records `work_session_permission_mode` as its mechanism, while project updates, remote providers, the session lifecycle, repairs, overrides and credential writes always ask; pause, complete and handoff return the session to manual (beta letters 160 and 161). No plan digest, receipt schema or resume path changes.
@@ -544,7 +545,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
-v0.4.26 (current checkpoint)
+v0.4.27 (current checkpoint)
 ```
 
 Public releases from `v0.2.5` onward are tagged as compatibility checkpoints.

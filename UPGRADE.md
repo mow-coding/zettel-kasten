@@ -24,6 +24,44 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.4.27 Client Follow-Ups From The v0.4.25 Run
+
+Install the exact public wheel only after the matching release and asset exist.
+Use a new external CPython 3.12 environment so the real `python.exe -m pip`
+records the wheel hash in installed PEP 610 metadata.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0427-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.27/wom_kit-0.4.27-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+Require exactly `archive 0.4.27` from a new process. Publishing or installing
+the wheel changes no client archive, project runtime, or version pin. A client
+separately chooses and approves any project update.
+
+`project-version-update --approve` needs `--target`, `--reviewed-by` and
+`--affirm-external-writers-quiescent`; a missing one now stops with its fixed
+code in `cause_code` (`project_version_update_quiescence_required`, ...) at
+stage `starting`. Install the bootstrap from the public URL above, not from a
+downloaded wheel file: a file-installed bootstrap is refused with
+`project_runtime_exact_public_wheel_required`, and the result now says to
+reinstall from the URL. A refused `set-permission-mode` operation name comes
+back with `reason_detail` (the refused position and the grantable names, for
+example `draft_discard`); plan files written by PowerShell with a UTF-8
+byte-order mark are accepted; the discard previews expose `plan_sha256` at
+the top level.
+
+After one reviewed project update, start the project launcher in a new process
+and verify its pin, source, launcher, and runtime evidence. Only that client-run
+result can show that the project was repaired.
+
 ## v0.4.26 Target Details Page Navigation
 
 Install the exact public wheel only after the matching release and asset exist.
