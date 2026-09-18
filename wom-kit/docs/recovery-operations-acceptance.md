@@ -509,3 +509,20 @@ v0.4.25 with the consumer-side resolver (recorded bytes unchanged) and the
 direct-cause projection; the labelled public `files_written` form and the
 pre-dialog `failed_rollback_incomplete` text blocker are deferred. Record:
 [v0.4.25 hotfix minutes](../../meeting-minutes/2026-09-18-v0425-archive-root-update-hotfix.md).
+
+### 2026-09-18 v0.4.25 released
+
+v0.4.25 is public: tag `v0.4.25` on main `815819d7`, one wheel
+`wom_kit-0.4.25-py3-none-any.whl` (SHA-256
+`3fb76fb590b94a891136e126e6ac536300cab9370dba9eb95794a40bd8d82256`),
+candidate CI 14/14 after one unrelated Windows-shard rerun, exact-merge
+installed verification, anonymous download, two fresh-venv installations,
+and the public wheel's own run of the letter-161 recovery sequence on the
+synthetic fixture (`preapproval_scaffold_cancelled`, then
+`updated_restart_required` from the archive root), recorded in the
+[release evidence](../../meeting-minutes/2026-09-18-v0425-release-evidence.md).
+This is release acceptance of the artifact and the synthetic journeys only:
+UF-02 and letter 161 ③/⑤ close only when the client's own run from its
+archive root reaches `preapproval_scaffold_cancelled` and then
+`updated_restart_required`; no feedback letter's `resolved_in` is set by
+this release.
