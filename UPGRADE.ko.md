@@ -29,9 +29,10 @@ archive root에서 시작한 project update가 승인 창 뒤에 실패했고(�
 bootstrap으로 `project-version-update <archive-root> --resume
 --abandon-started-approval --affirm-external-writers-quiescent --format json`을
 실행하세요(기대 결과 `preapproval_scaffold_cancelled`: started claim이 닫히고 잠금과
-예약이 풀리며 pin은 그대로). 그다음 `project-version-update <archive-root> --target
-v0.4.25 --dry-run --format json`, 이어서 같은 인자에 `--approve --reviewed-by <id>
---affirm-external-writers-quiescent`를 실행합니다. 결과가 나오기 전의 실패는 이제
+예약이 풀리며 pin은 그대로). 그다음
+`project-version-update <archive-root> --target v0.4.25 --dry-run --format json`,
+이어서 같은 인자에 `--approve --reviewed-by <id> --affirm-external-writers-quiescent`를
+실행합니다. 결과가 나오기 전의 실패는 이제
 stderr에 `Project version update inner reason (fixed code): <code> at <stage>.`를
 찍고 diagnostics 파일에 `cause_code`·`cause_stage`를 남깁니다.
 
