@@ -24,6 +24,42 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.4.26 Target Details Page Navigation
+
+Install the exact public wheel only after the matching release and asset exist.
+Use a new external CPython 3.12 environment so the real `python.exe -m pip`
+records the wheel hash in installed PEP 610 metadata.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0426-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.26/wom_kit-0.4.26-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+Require exactly `archive 0.4.26` from a new process. Publishing or installing
+the wheel changes no client archive, project runtime, or version pin. A client
+separately chooses and approves any project update.
+
+The approval dialog's "대상 자세히 보기" button now opens the read-only target
+list on Windows 11 (`대상 자세히 보기 · 1/N`, `이전`, `다음`, `승인 화면으로
+돌아가기`) instead of closing the dialog with
+`exact_human_approval_native_call_failed`. A click that lands before the
+dialog confirms the new page is refused, not lost as an error; click again.
+The v0.4.25 recovery of a stuck archive-root update is unchanged and applies
+with this bootstrap: `--resume --abandon-started-approval
+--affirm-external-writers-quiescent`, then `--target v0.4.26 --dry-run` and
+`--approve`.
+
+After one reviewed project update, start the project launcher in a new process
+and verify its pin, source, launcher, and runtime evidence. Only that client-run
+result can show that the project was repaired.
+
 ## v0.4.25 Archive-Root Project Updates And Resume Failure Causes
 
 Install the exact public wheel only after the matching release and asset exist.

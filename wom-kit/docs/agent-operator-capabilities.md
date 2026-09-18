@@ -1,6 +1,6 @@
 # Agent Operator Capabilities Manifest
 
-Status: v0.4.25 archive-root update hotfix, session permission modes, and writer-session coverage gate
+Status: v0.4.26 target-details dialog hotfix, archive-root update hotfix, and writer-session coverage gate
 
 v0.4.26 adds no command path: the native approval dialog's target-details
 page opens on Windows 11 instead of cancelling the dialog. v0.4.25 adds no command path: an update started from the archive root
@@ -147,7 +147,7 @@ field remain `history_not_audited`. Inventory, shared capability availability,
 and command help consume the same content-free history. Current availability
 continues to be parser-derived; history does not grant execution authority.
 
-For the current v0.4.25 working-tree parser, the inventory snapshot is:
+For the current v0.4.26 working-tree parser, the inventory snapshot is:
 
 ```text
 canonical executable command paths: 317

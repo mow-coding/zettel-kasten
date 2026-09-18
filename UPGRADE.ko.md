@@ -2,6 +2,39 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.4.26 대상 자세히 보기 페이지 이동
+
+일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.
+새 외부 CPython 3.12 환경의 실제 `python.exe -m pip`를 사용해 설치된 PEP 610
+metadata에 wheel hash가 남게 합니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0426-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.26/wom_kit-0.4.26-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+새 process에서 정확히 `archive 0.4.26`이 나와야 합니다. wheel을 공개하거나 설치하는
+것만으로 client archive, project runtime, version pin은 바뀌지 않습니다. project
+update는 client가 따로 선택하고 승인합니다.
+
+승인 창의 "대상 자세히 보기" 버튼이 이제 Windows 11에서 창을 닫아 버리는 대신 읽기
+전용 대상 목록(`대상 자세히 보기 · 1/N`, `이전`, `다음`, `승인 화면으로 돌아가기`)을
+엽니다. 새 페이지가 확인되기 전에 들어온 클릭은 오류가 아니라 무시되니 한 번 더
+누르면 됩니다. 멈춘 archive root update의 v0.4.25 복구 절차는 그대로이며 이
+bootstrap으로 실행합니다: `--resume --abandon-started-approval
+--affirm-external-writers-quiescent`, 그다음 `--target v0.4.26 --dry-run`과 `--approve`.
+
+검토한 project update 한 번 뒤에는 새 process에서 project launcher를 시작해 pin,
+source, launcher, runtime 근거를 확인하세요. 그 client 실행 결과만이 project가
+고쳐졌음을 보여 줍니다.
+
 ## v0.4.25 archive root에서 시작한 project update 수정과 resume 실패 원인
 
 일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.
