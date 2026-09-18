@@ -987,6 +987,15 @@ class _TaskDialogCollectionNavigation:
     TDM_NAVIGATE_PAGE replaces controls and loses control state. Authority is
     therefore tracked outside those controls, never in a checkbox or navigation
     return value. Navigation must report TDN_NAVIGATED before it is trusted.
+
+    v0.4.26: on Windows 11 the dialog delivers TDN_DIALOG_CONSTRUCTED for the
+    new page inside the synchronous TDM_NAVIGATE_PAGE call but posts
+    TDN_NAVIGATED through the message loop afterwards.  v0.4.20 through
+    v0.4.25 required TDN_NAVIGATED before SendMessage returned, so every
+    "대상 자세히 보기" click cancelled the dialog as
+    ``exact_human_approval_native_call_failed``.  The page stays inert for
+    every button except cancel until TDN_NAVIGATED arrives; it is never
+    treated as a failure merely because the confirmation is late.
     """
 
     def __init__(
@@ -1077,7 +1086,10 @@ class _TaskDialogCollectionNavigation:
                 config = self._page_config()
                 self.navigation_pending = True
                 self._send(hwnd, TDM_NAVIGATE_PAGE, 0, ctypes.addressof(config))
-                if self.navigation_pending or self.destroyed:
+                # TDN_NAVIGATED may arrive only after this call returns (Windows
+                # 11); a still-pending navigation keeps the page inert rather
+                # than failing.  A dialog destroyed mid-navigation is a failure.
+                if self.destroyed:
                     raise _fail("exact_human_approval_native_call_failed")
             return 1  # S_FALSE: navigation/unknown buttons cannot close/approve.
         except BaseException as error:

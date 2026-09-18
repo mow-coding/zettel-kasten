@@ -317,6 +317,12 @@ still blocks discovery. Since v0.4.22 a failure raised by the approved writer
 or the claim broker also carries a content-free `cause_code` and `cause_stage`
 (`domain_writer` or `key_or_claim`), restricted to fixed codes of the
 project-update and approval families; exception chaining stays `from None`.
+Since v0.4.26 the count-first paged target preview (v0.4.20) treats a
+page whose native confirmation has not arrived yet as inert rather than
+as a failed navigation: every button except cancel is refused until
+`TDN_NAVIGATED` is delivered, which Windows 11 posts after the navigation
+call returns; a dialog destroyed while a navigation is pending is still
+`exact_human_approval_native_call_failed`.
 Since v0.4.25 a failure the service raises directly before any result —
 resume preflight, reopen, cleanup classification — carries its own fixed
 code as `cause_code` and the operation journal's stage as `cause_stage`
