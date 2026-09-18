@@ -2,7 +2,8 @@
 
 Status: v0.4.25 archive-root update hotfix, session permission modes, and writer-session coverage gate
 
-v0.4.25 adds no command path: an update started from the archive root
+v0.4.26 adds no command path: the native approval dialog's target-details
+page opens on Windows 11 instead of cancelling the dialog. v0.4.25 adds no command path: an update started from the archive root
 passes its post-approval guard and can be reopened by `--resume`, and a
 failure raised before any result names its fixed `cause_code` and journal
 `cause_stage` in diagnostics and on stderr. v0.4.24 adds no command path: `work-session` gains the human action

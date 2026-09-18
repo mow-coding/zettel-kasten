@@ -37,6 +37,7 @@ in their original private custody. The developer does not update their lifecycle
 | LR-06 | v0.4.21 | Source properties/title/locator/object links/edges each apply, resume and revert; unrelated later field changes survive | common-writer integration pending |
 | LR-07 | v0.4.23 | Filename/metadata finds the actual object and linked zet; paired original/derived intake preserves original bytes; display projection never edits canonical content | existing paired original/derived intake revalidated at v0.4.23 (`test_v03315_objet_capture_batch_derived_text` and the CLI derived/paired group); client reverification pending |
 | SP-01 | v0.4.24 | A claimed work session carries one human-granted permission mode (manual / limited / allow_all); a permitted write skips the dialog but still publishes its own one-use claim that records the permission mechanism; always-dialog operations (project update, providers, session lifecycle, repairs, overrides) can never be granted; pause, handoff, complete, accept and recover clear the grant; a grant revoked before the claim fails closed | development verified on the synthetic session fixture (8 tests: one dialog per grant, dialogless permitted write with the mechanism in the claim, environment-context grant, stale route and manual still ask, pause clears, revoke fails closed, always-dialog exclusion, modes/MCP/registry); installed/client acceptance pending |
+| UF-03 | v0.4.26 | The native approval dialog's "대상 자세히 보기" button opens the read-only paged target list on Windows 11 instead of cancelling the dialog with `exact_human_approval_native_call_failed`; an unconfirmed page stays inert except cancel | development verified on a real Windows 11 task dialog (details, return, approve and cancel; the unfixed handler reproduced the report on the same dialog) and with 3 new fake-dialog tests that fail against v0.4.25; installed/client acceptance pending |
 | UF-02 | v0.4.25 | A project update started from the archive root resolves its recorded `parent_of_archive/...` mirror, pin and receipt locations onto the project root in every consumer, so the post-approval snapshot guard passes and `--resume` reopens the transaction; a failure the service raises before any result carries its fixed code and journal stage as `cause_code` / `cause_stage` | development verified: letter 161 ③ and ⑤ reproduced on synthetic fixtures with the released v0.4.18 and v0.4.21 wheels from the archive root (`approved_snapshot_changed` after the dialog; `directory_stability_unavailable` on v0.4.24 resume, 39 s); with the hotfix build the stuck transaction closes with `--resume --abandon-started-approval` (`preapproval_scaffold_cancelled`) and a fresh archive-root approve reaches `updated_restart_required`; 12 new tests; installed/client acceptance pending |
 | UF-01 | v0.4.22 | A reviewed project update that fails after the native approval names the refusing fixed gate and the journal stage; a claim left `started` with nothing written can be closed after human review and the reservation released by the ordinary claimless cancellation; a skipped `version` Git probe is never reported as a misconfigured origin; `operation-control` finds the owning project's journal from the archive root; `upgrade-check` announces its scope | development verified on synthetic two-step fixtures (stuck state reproduced with the released v0.4.21 wheel; cause, stage names, abandon, claimless cancellation and a fresh approve verified with the hotfix wheel; 10 new tests); the refusing gate of the client run is unknown until the client's next run reports it; installed/client acceptance pending |
 | NP-01 | v0.4.22 | Existing native credential components feed one scoped broker; one safe entry supports fresh-process reuse without secret export | partial components; end-to-end pending |
@@ -526,3 +527,20 @@ UF-02 and letter 161 ③/⑤ close only when the client's own run from its
 archive root reaches `preapproval_scaffold_cancelled` and then
 `updated_restart_required`; no feedback letter's `resolved_in` is set by
 this release.
+
+### 2026-09-18 v0.4.26 UF-03: target-details page navigation reproduced and fixed
+
+The user reported that the approval dialog's "대상 자세히 보기" button did
+nothing for the client's operator and confused the AI client. Reproduced
+solo on a real Windows 11 (26200) task dialog with synthetic labels and a
+traced callback: the click built the details page and sent the navigation
+call, the dialog delivered the page's construction notice inside that call
+but posted `TDN_NAVIGATED` afterwards, and the v0.4.20 handler raised
+`exact_human_approval_native_call_failed` and cancelled the dialog before
+the confirmation could arrive. With the fix the same dialog opened the page,
+returned, and approved or cancelled as before. Decision: the confirmation
+is still required before any page is trusted, but its lateness is not a
+failure; only destruction during a pending navigation is. Observed and
+deferred: the dialog is owned by the foreground window at start time and
+hides with it. Record:
+[v0.4.26 hotfix minutes](../../meeting-minutes/2026-09-18-v0426-target-details-hotfix.md).
