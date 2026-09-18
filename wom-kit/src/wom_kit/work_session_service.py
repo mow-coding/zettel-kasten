@@ -43,24 +43,27 @@ _ERRORS = (frozenset({"work_session_service_invalid", "work_session_service_unav
 class WorkSessionServiceError(ValueError):
     """A fixed code only; original commit and current ownership stay separate."""
 
-    def __init__(self, code="work_session_service_invalid", *, original_commit_verified=False):
+    def __init__(self, code="work_session_service_invalid", *, original_commit_verified=False, detail=None):
         self.code = code if type(code) is str and code in _ERRORS else "work_session_service_invalid"
         self.original_commit_verified = original_commit_verified is True
+        # v0.4.27: optional content-free detail carried from a permission refusal.
+        self.detail = dict(detail) if type(detail) is dict else None
         super().__init__(self.code)
 
 
 def _safe_call(call):
-    code, committed = "work_session_service_unavailable", False
+    code, committed, detail = "work_session_service_unavailable", False, None
     try:
         return call()
     except WorkSessionServiceError as error:
-        code, committed = error.code, error.original_commit_verified
+        code, committed, detail = error.code, error.original_commit_verified, error.detail
     except (registration.WorkSessionRegistrationError, lifecycle.WorkSessionLifecycleError,
             claim.WorkSessionClaimError, rereview.WorkSessionRereviewError,
             session_state.WorkSessionStateError, handoff.WorkSessionHandoffError,
             recovery.WorkSessionRecoveryError, permission_facade.WorkSessionPermissionModeError,
             permission_mode_module.WorkSessionPermissionError) as error:
         code = error.code if type(error.code) is str and error.code in _ERRORS else code
+        detail = getattr(error, "detail", None) if isinstance(error, permission_mode_module.WorkSessionPermissionError) else None
         committed = (isinstance(error, (claim.WorkSessionClaimError, session_state.WorkSessionStateError,
                                        handoff.WorkSessionHandoffError, recovery.WorkSessionRecoveryError,
                                        permission_facade.WorkSessionPermissionModeError))
@@ -74,7 +77,7 @@ def _safe_call(call):
         pass
     # Raise outside the handler: neither private arguments nor nested paths
     # survive in cause/context or an arbitrary dependency error string.
-    raise WorkSessionServiceError(code, original_commit_verified=committed)
+    raise WorkSessionServiceError(code, original_commit_verified=committed, detail=detail)
 
 
 def _root(root):

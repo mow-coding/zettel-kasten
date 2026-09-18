@@ -2,6 +2,42 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.4.27 v0.4.25 실행 보고의 후속 요청
+
+일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.
+새 외부 CPython 3.12 환경의 실제 `python.exe -m pip`를 사용해 설치된 PEP 610
+metadata에 wheel hash가 남게 합니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0427-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.27/wom_kit-0.4.27-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+새 process에서 정확히 `archive 0.4.27`이 나와야 합니다. wheel을 공개하거나 설치하는
+것만으로 client archive, project runtime, version pin은 바뀌지 않습니다. project
+update는 client가 따로 선택하고 승인합니다.
+
+`project-version-update --approve`에는 `--target`, `--reviewed-by`,
+`--affirm-external-writers-quiescent`가 모두 필요하며, 하나가 빠지면 이제 `starting`
+단계에서 고정 코드(`project_version_update_quiescence_required` 등)가 `cause_code`로
+남습니다. bootstrap은 내려받은 wheel 파일이 아니라 위 공개 URL로 설치하세요. 파일로
+설치한 bootstrap은 `project_runtime_exact_public_wheel_required`로 거절되며, 결과에
+"URL로 재설치" 안내가 붙습니다. `set-permission-mode`에서 거절된 작업 이름은
+`reason_detail`(거절된 위치와 허용 가능한 이름 목록, 예: `draft_discard`)과 함께
+돌아옵니다. PowerShell이 UTF-8 BOM을 붙여 쓴 plan 파일도 받아들이고, discard 미리보기는
+`plan_sha256`을 최상위에도 노출합니다.
+
+검토한 project update 한 번 뒤에는 새 process에서 project launcher를 시작해 pin,
+source, launcher, runtime 근거를 확인하세요. 그 client 실행 결과만이 project가
+고쳐졌음을 보여 줍니다.
+
 ## v0.4.26 대상 자세히 보기 페이지 이동
 
 일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.

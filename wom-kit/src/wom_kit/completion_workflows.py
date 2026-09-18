@@ -8006,6 +8006,9 @@ def _draft_discard_plan_core(
         "dry_run": True,
         "lifecycle_action": "discard_draft_plan",
         "archive_id": archive_id,
+        # v0.4.27: the same value as summary.plan_sha256, where every other
+        # reviewed writer's preview puts it.
+        "plan_sha256": plan_sha256 if validation_ready else None,
         "summary": {
             "zettel_id": safe_zettel_id,
             "draft_path": draft_relative,
@@ -8345,6 +8348,7 @@ def _draft_discard_restore_plan_core(
         "dry_run": True,
         "lifecycle_action": "discard_draft_restore_plan",
         "archive_id": archive_id,
+        "plan_sha256": plan_sha256 if not aggregate else None,
         "summary": {
             "zettel_id": safe_zettel_id,
             "restore_path": receipt_doc.get("draft_path") if receipt_doc else None,

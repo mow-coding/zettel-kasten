@@ -6,6 +6,20 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.27 - 2026-09-18
+
+- Answered the client's v0.4.25 follow-ups: `project-version-update` usage
+  refusals (a missing `--target`, `--reviewed-by` or
+  `--affirm-external-writers-quiescent`) carry their fixed token as
+  `cause_code` with `cause_stage: starting`; a bootstrap installed from a
+  local wheel file is told to reinstall from the exact public release URL;
+  `work_session_permission_operation_not_grantable` reports the refused
+  position and the fixed grantable / always-dialog name lists without
+  echoing the value; `source-intake-record`, `-batch` and `-chain` accept a
+  UTF-8 byte-order mark in plan and request files and name UTF-16/32 marks;
+  `discard-draft` and `discard-draft-restore` previews expose `plan_sha256`
+  at the top level. No contract, digest, receipt or journal schema changes.
+
 ## v0.4.26 - 2026-09-18
 
 - Fixed the native approval dialog's "대상 자세히 보기" button on Windows

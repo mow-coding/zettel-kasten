@@ -269,7 +269,9 @@ it does not delegate machine verification work to the person.
 Since v0.4.24 a claimed work session may carry a permission mode granted by
 one such dialog (`work-session --action set-permission-mode --approve`):
 `manual` (every write opens the dialog), `limited` (the operation kinds shown
-in that dialog run without one) or `allow_all`. A write the mode permits
+in that dialog run without one; since v0.4.27 a refused kind is reported by
+its position with the fixed grantable and always-dialog name lists, never
+by echoing the value) or `allow_all`. A write the mode permits
 produces its decision without a dialog, but nothing else changes: the same
 one-use claim is minted for the exact plan and target digests, the grant is
 re-resolved immediately before the claim is published and fails closed if
