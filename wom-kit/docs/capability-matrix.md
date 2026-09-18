@@ -1,10 +1,14 @@
 ﻿# WOM-kit Capability Matrix
 
-Status: v0.4.24 session permission modes, session-bound drafts, and session-owned writes truth
+Status: v0.4.25 archive-root update hotfix, session permission modes, and session-owned writes truth
 Date: 2026-09-04
-Version: v0.4.24 implementation and release scope
+Version: v0.4.25 implementation and release scope
 
-The current v0.4.24 working tree lets the person who claimed a work session
+The current v0.4.25 working tree fixes the project update started from the
+archive root (recorded `parent_of_archive/...` locations are now resolved
+onto the project root by every consumer, so the post-approval guard and
+`--resume` reopen succeed) and names a pre-result service failure by its
+fixed code and journal stage. The v0.4.24 tree lets the person who claimed a work session
 grant it one permission mode — `manual`, `limited` or `allow_all` — through
 one exact native decision (`work-session --action set-permission-mode`); a
 write the mode permits opens no dialog but still publishes its own one-use

@@ -6,6 +6,25 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.25 - 2026-09-18
+
+- Fixed the project update started from the archive root (beta letter 161
+  and the 2026-09-18 v0.4.24 resume report). Preflight records the source
+  mirror, every pin and the receipt relative to the inspection root
+  (`parent_of_archive/.zettel-kasten/...` from the archive root); six
+  consumers joined that label literally onto the project root, so the
+  post-approval snapshot guard failed right after the person approved
+  (`approved_snapshot_changed`) and every `--resume` died in reopen
+  (`directory_stability_unavailable`). One resolver now maps recorded
+  locations onto the project root in every consumer; recorded plans,
+  intents and receipts keep their bytes, so the stuck transaction reopens
+  as is and `--resume --abandon-started-approval` releases it.
+- A failure the service raises before any result (resume preflight, reopen,
+  cleanup classification) now carries its fixed code as `cause_code` and the
+  journal stage as `cause_stage` in the redacted diagnostics artifact and on
+  stderr, under the v0.4.22 allowlist plus the `operation_` family. No
+  schema, plan digest or approval contract changes.
+
 ## v0.4.24 - 2026-09-18
 
 - Added per-work-session permission modes — `manual`, `limited`, `allow_all`

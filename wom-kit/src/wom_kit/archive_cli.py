@@ -10375,6 +10375,9 @@ _PROJECT_VERSION_UPDATE_CONTENT_FREE_CAUSE_CODES = frozenset(
 )
 _PROJECT_VERSION_UPDATE_CONTENT_FREE_CAUSE_STAGES = frozenset(
     {"candidate_missing_handler", "domain_writer", "key_or_claim"}
+    # v0.4.25: a failure raised by the service itself (reopen, preflight,
+    # cleanup classification) names the journal stage it was in.
+    | operation_control.COMMAND_STAGES["project-version-update"]
 )
 # v0.4.22 (beta letters 161/162): fixed reason-code families that the domain
 # writer, the transaction, the runtime candidate and the approval broker
@@ -10387,15 +10390,81 @@ _PROJECT_VERSION_UPDATE_CONTENT_FREE_CAUSE_PREFIXES = (
     "exact_human_approval_",
 )
 _PROJECT_VERSION_UPDATE_CAUSE_TOKEN_RE = re.compile(r"[a-z][a-z0-9_]{0,95}")
+# v0.4.25 (2026-09-18 v0.4.24 resume report): error classes whose single
+# argument or ``code`` is a fixed literal token by construction.  Only those
+# families cross into the redacted failure artifact; any other message,
+# including an ``ArchiveServiceError`` carrying free text, does not.
+_PROJECT_VERSION_UPDATE_DIRECT_CAUSE_PREFIXES = (
+    _PROJECT_VERSION_UPDATE_CONTENT_FREE_CAUSE_PREFIXES + ("operation_",)
+)
+
+
+def _project_version_update_direct_cause_code(
+    error: BaseException,
+) -> str | None:
+    """The fixed code of a service failure, or None when it is not a literal.
+
+    v0.4.25: ``--resume`` and the fresh preflight raise these directly; the
+    token is accepted only when it is code-shaped and belongs to one of the
+    fixed families, so a message that could carry a path never crosses.
+    """
+
+    if isinstance(error, ExactHumanApprovalWorkflowError):
+        return None
+    if isinstance(
+        error,
+        (
+            operation_control.OperationControlError,
+            archive_services.project_update_transaction.ProjectUpdateTransactionError,
+            archive_services.project_update_git_runner.ProjectUpdateGitRunnerError,
+        ),
+    ):
+        token = getattr(error, "code", None)
+    elif isinstance(
+        error,
+        (
+            archive_services.ArchiveServiceError,
+            archive_services.project_runtime.ProjectRuntimeError,
+            ExactHumanApprovalError,
+        ),
+    ):
+        token = error.args[0] if len(error.args) == 1 else None
+    else:
+        return None
+    if (
+        type(token) is not str
+        or _PROJECT_VERSION_UPDATE_CAUSE_TOKEN_RE.fullmatch(token) is None
+        or not token.startswith(_PROJECT_VERSION_UPDATE_DIRECT_CAUSE_PREFIXES)
+    ):
+        return None
+    return token
 
 
 def _project_version_update_content_free_cause(
     error: BaseException,
+    *,
+    journal_stage: str | None = None,
 ) -> dict[str, str] | None:
-    """Project one allowlisted wrapped reason code without any error text."""
+    """Project one allowlisted reason code without any error text.
+
+    A broker wrapper carries its own ``cause_code`` / ``cause_stage``
+    (v0.4.22).  A failure the service raised directly (v0.4.25) is named by
+    its fixed code and by the journal stage the command was in; ``unknown``
+    when no journal was open.
+    """
 
     if not isinstance(error, ExactHumanApprovalWorkflowError):
-        return None
+        direct_code = _project_version_update_direct_cause_code(error)
+        if direct_code is None:
+            return None
+        stage = (
+            journal_stage
+            if type(journal_stage) is str
+            and journal_stage
+            in operation_control.COMMAND_STAGES["project-version-update"]
+            else "unknown"
+        )
+        return {"cause_code": direct_code, "cause_stage": stage}
     cause_code = getattr(error, "cause_code", None)
     cause_stage = getattr(error, "cause_stage", None)
     if (
@@ -11269,7 +11338,12 @@ def _command_project_version_update_core(
         else:
             failure_result_written = False
             content_free_cause = _project_version_update_content_free_cause(
-                exc
+                exc,
+                journal_stage=(
+                    operation_journal.current_stage
+                    if operation_journal is not None
+                    else None
+                ),
             )
             if capture is not None:
                 try:
@@ -35764,7 +35838,8 @@ class _CommandRunResultCapture:
                     and type(cause_stage) is str
                     and re.fullmatch(r"[a-z][a-z0-9_]{0,95}", cause_code)
                     is not None
-                    and re.fullmatch(r"[a-z][a-z0-9_]{0,95}", cause_stage)
+                    # v0.4.25: a journal stage name carries hyphens.
+                    and re.fullmatch(r"[a-z][a-z0-9_-]{0,95}", cause_stage)
                     is not None
                 ):
                     error_payload["cause_code"] = cause_code
