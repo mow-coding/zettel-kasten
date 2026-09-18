@@ -86,7 +86,12 @@ carry one allowlisted inner `cause_code` and its fixed `cause_stage`; see
 [Exact Human Approval Contract](exact-human-approval-contract.md). Since
 v0.4.25 a failure the service raises directly before any result (resume
 preflight, reopen, cleanup classification) carries its fixed code and the
-journal stage the same way, on stderr and in the artifact.
+journal stage the same way, on stderr and in the artifact; since v0.4.27
+so does the command's own usage refusal (a missing `--target`,
+`--reviewed-by` or `--affirm-external-writers-quiescent`, stage
+`starting`), and a blocked result whose running distribution is not the
+verified public wheel tells the operator to reinstall the bootstrap from
+the exact public release URL.
 
 Preflight records the source mirror, every pin and the receipt relative to
 the inspection root: `.zettel-kasten/...` from the project root,

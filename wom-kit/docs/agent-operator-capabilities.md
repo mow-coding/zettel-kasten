@@ -2,7 +2,11 @@
 
 Status: v0.4.26 target-details dialog hotfix, archive-root update hotfix, and writer-session coverage gate
 
-v0.4.26 adds no command path: the native approval dialog's target-details
+v0.4.27 adds no command path: usage refusals of `project-version-update`
+carry a fixed `cause_code`, a file-installed bootstrap is told to reinstall
+from the public URL, a refused permission grant reports the refused position
+and the grantable names, intake plans may carry a UTF-8 byte-order mark, and
+the discard previews expose `plan_sha256` at the top level. v0.4.26 adds no command path: the native approval dialog's target-details
 page opens on Windows 11 instead of cancelling the dialog. v0.4.25 adds no command path: an update started from the archive root
 passes its post-approval guard and can be reopened by `--resume`, and a
 failure raised before any result names its fixed `cause_code` and journal

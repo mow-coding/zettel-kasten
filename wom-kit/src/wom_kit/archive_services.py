@@ -137616,6 +137616,12 @@ def _wom_kit_project_version_update_legacy_core_generator(
         if status == "blocked":
             next_actions = (
                 [
+                    "Reinstall the updater bootstrap from the exact public release URL (pip install https://github.com/mow-coding/zettel-kasten/releases/download/<tag>/<wheel>); a bootstrap installed from a local wheel file is not the verified public wheel.",
+                    "Rerun project-version-update in --dry-run mode from that bootstrap before approval.",
+                ]
+                if "project_runtime_exact_public_wheel_required" in blockers
+                else
+                [
                     "Keep the newly changed source bytes in place and do not reuse the prior approval.",
                     "Pause editors and sync, backup, and other Git processes, then rerun project-version-update in --dry-run mode before a separate approval.",
                 ]

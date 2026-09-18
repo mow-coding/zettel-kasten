@@ -155,7 +155,8 @@ class DirectCauseProjectionTests(unittest.TestCase):
             archive_services.ArchiveServiceError("C:\\Users\\<user>\\private path"),
             archive_services.ArchiveServiceError("project_version_update_", "two", "args"),
             archive_services.ArchiveServiceError("credential_registry_local_profile_not_ignored"),
-            ValueError("project_version_update_target_required"),
+            ValueError("project version update target required"),  # free text, not a token
+            ValueError("credential_registry_local_profile_not_ignored"),  # foreign family
             OSError("project_version_update_x"),
             RuntimeError("project_update_transaction_invalid"),
         ):
