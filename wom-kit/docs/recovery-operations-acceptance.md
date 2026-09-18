@@ -37,6 +37,7 @@ in their original private custody. The developer does not update their lifecycle
 | LR-06 | v0.4.21 | Source properties/title/locator/object links/edges each apply, resume and revert; unrelated later field changes survive | common-writer integration pending |
 | LR-07 | v0.4.23 | Filename/metadata finds the actual object and linked zet; paired original/derived intake preserves original bytes; display projection never edits canonical content | existing paired original/derived intake revalidated at v0.4.23 (`test_v03315_objet_capture_batch_derived_text` and the CLI derived/paired group); client reverification pending |
 | SP-01 | v0.4.24 | A claimed work session carries one human-granted permission mode (manual / limited / allow_all); a permitted write skips the dialog but still publishes its own one-use claim that records the permission mechanism; always-dialog operations (project update, providers, session lifecycle, repairs, overrides) can never be granted; pause, handoff, complete, accept and recover clear the grant; a grant revoked before the claim fails closed | development verified on the synthetic session fixture (8 tests: one dialog per grant, dialogless permitted write with the mechanism in the claim, environment-context grant, stale route and manual still ask, pause clears, revoke fails closed, always-dialog exclusion, modes/MCP/registry); installed/client acceptance pending |
+| UF-02 | v0.4.25 | A project update started from the archive root resolves its recorded `parent_of_archive/...` mirror, pin and receipt locations onto the project root in every consumer, so the post-approval snapshot guard passes and `--resume` reopens the transaction; a failure the service raises before any result carries its fixed code and journal stage as `cause_code` / `cause_stage` | development verified: letter 161 ③ and ⑤ reproduced on synthetic fixtures with the released v0.4.18 and v0.4.21 wheels from the archive root (`approved_snapshot_changed` after the dialog; `directory_stability_unavailable` on v0.4.24 resume, 39 s); with the hotfix build the stuck transaction closes with `--resume --abandon-started-approval` (`preapproval_scaffold_cancelled`) and a fresh archive-root approve reaches `updated_restart_required`; 12 new tests; installed/client acceptance pending |
 | UF-01 | v0.4.22 | A reviewed project update that fails after the native approval names the refusing fixed gate and the journal stage; a claim left `started` with nothing written can be closed after human review and the reservation released by the ordinary claimless cancellation; a skipped `version` Git probe is never reported as a misconfigured origin; `operation-control` finds the owning project's journal from the archive root; `upgrade-check` announces its scope | development verified on synthetic two-step fixtures (stuck state reproduced with the released v0.4.21 wheel; cause, stage names, abandon, claimless cancellation and a fresh approve verified with the hotfix wheel; 10 new tests); the refusing gate of the client run is unknown until the client's next run reports it; installed/client acceptance pending |
 | NP-01 | v0.4.22 | Existing native credential components feed one scoped broker; one safe entry supports fresh-process reuse without secret export | partial components; end-to-end pending |
 | NP-02 | v0.4.22 | Evidence-built missing-page cohort, workspace separation, five-page canary, raw/body/property/media/parent recovery and ledger | planned integration |
@@ -482,3 +483,29 @@ journeys only: SP-01 (session permission modes) stays open for client
 closure — the client grants a mode on its own claimed session and observes
 a permitted write run without a dialog while its receipt still names a
 claim — and no feedback letter's `resolved_in` is set by this release.
+
+### 2026-09-18 v0.4.25 UF-02: archive-root update and resume failure reproduced and fixed
+
+The client's 2026-09-18 report (v0.4.24 bootstrap, three `--resume` runs
+dying in `project-preflight` with no cause; dry-run pointing back at
+`--resume`) was reproduced solo on synthetic fixtures after one bounded
+read-only workflow (8 agents) had localised the failure window to the
+transaction reopen. The decisive difference from the v0.4.22 reproduction
+was the positional root: the client runs every command from the archive
+root, so preflight recorded `parent_of_archive/.zettel-kasten/...` locations
+that six consumers joined literally onto the project root. Facts: the
+released v0.4.18 wheel from the archive root fails after the dialog with
+`project_version_update_approved_snapshot_changed` (pin specs re-resolved to
+a missing path); the released v0.4.21 wheel reproduces letter 161 ③ exactly
+(dry-run `ready_for_approval`, approve dies after the dialog, 154 s); the
+released v0.4.24 wheel's `--resume --abandon-started-approval` on that state
+raises `project_version_update_directory_stability_unavailable` in
+`_project_update_reopen_durable_state` (mirror path
+`<project>/parent_of_archive/.zettel-kasten/source`), 39 s, from either
+root. With the hotfix build: the same command returns
+`preapproval_scaffold_cancelled` in one run, and a fresh approve from the
+archive root reaches `updated_restart_required`. Decision: ship as hotfix
+v0.4.25 with the consumer-side resolver (recorded bytes unchanged) and the
+direct-cause projection; the labelled public `files_written` form and the
+pre-dialog `failed_rollback_incomplete` text blocker are deferred. Record:
+[v0.4.25 hotfix minutes](../../meeting-minutes/2026-09-18-v0425-archive-root-update-hotfix.md).

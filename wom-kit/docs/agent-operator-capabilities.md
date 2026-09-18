@@ -1,8 +1,11 @@
 # Agent Operator Capabilities Manifest
 
-Status: v0.4.24 session permission modes, binary fidelity sources, and writer-session coverage gate
+Status: v0.4.25 archive-root update hotfix, session permission modes, and writer-session coverage gate
 
-v0.4.24 adds no command path: `work-session` gains the human action
+v0.4.25 adds no command path: an update started from the archive root
+passes its post-approval guard and can be reopened by `--resume`, and a
+failure raised before any result names its fixed `cause_code` and journal
+`cause_stage` in diagnostics and on stderr. v0.4.24 adds no command path: `work-session` gains the human action
 `set-permission-mode` (approve, approve `--review-original`, resume), the
 AI client may export `WOM_CLIENT_APP_REF`, `WOM_TASK_ROUTE_REF` and
 `WOM_WORK_SESSION_REF` so the approval broker can find the session's grant,
@@ -143,7 +146,7 @@ field remain `history_not_audited`. Inventory, shared capability availability,
 and command help consume the same content-free history. Current availability
 continues to be parser-derived; history does not grant execution authority.
 
-For the current v0.4.24 working-tree parser, the inventory snapshot is:
+For the current v0.4.25 working-tree parser, the inventory snapshot is:
 
 ```text
 canonical executable command paths: 317

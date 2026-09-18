@@ -13,9 +13,9 @@ ROOT = Path(__file__).resolve().parents[2]
 KIT = ROOT / "wom-kit"
 RESOURCE_ROOT = KIT / "src" / "wom_kit" / "_resources"
 RELEASE = KIT / "docs" / "releases" / "v0.4.22.md"
-CURRENT_RELEASE = KIT / "docs" / "releases" / "v0.4.24.md"
-PACKAGED_RELEASE = RESOURCE_ROOT / "release-notes" / "v0.4.24.md"
-LOCK = KIT / "project-runtime-supply-lock-v0.4.24.json"
+CURRENT_RELEASE = KIT / "docs" / "releases" / "v0.4.25.md"
+PACKAGED_RELEASE = RESOURCE_ROOT / "release-notes" / "v0.4.25.md"
+LOCK = KIT / "project-runtime-supply-lock-v0.4.25.json"
 BOOTSTRAP_DOCUMENTS = (
     ROOT / "README.md",
     ROOT / "README.ko.md",
@@ -51,45 +51,45 @@ CURRENT_PUBLIC_DOCUMENTS = (
 
 class V0422ReleaseDocsTests(unittest.TestCase):
     def test_current_version_surfaces_are_exact(self) -> None:
-        self.assertEqual(__version__, "0.4.24")
-        self.assertIn('version = "0.4.24"', (KIT / "pyproject.toml").read_text(encoding="utf-8"))
+        self.assertEqual(__version__, "0.4.25")
+        self.assertIn('version = "0.4.25"', (KIT / "pyproject.toml").read_text(encoding="utf-8"))
         for shim in (KIT / "src" / "wom_kit" / "__init__.py", ROOT / "wom_kit" / "__init__.py"):
-            self.assertIn('__version__ = "0.4.24"', shim.read_text(encoding="utf-8"))
+            self.assertIn('__version__ = "0.4.25"', shim.read_text(encoding="utf-8"))
         citation = (ROOT / "CITATION.cff").read_text(encoding="utf-8")
-        self.assertIn('version: "0.4.24"', citation)
+        self.assertIn('version: "0.4.25"', citation)
         self.assertIn('date-released: "2026-09-18"', citation)
         versioning = (ROOT / "VERSIONING.md").read_text(encoding="utf-8")
-        self.assertIn("Current public baseline:\n\n```text\nv0.4.24", versioning)
-        self.assertIn("Previous public baseline:\n\n```text\nv0.4.23", versioning)
-        self.assertIn("Previous public baseline: v0.4.23.", (ROOT / "README.md").read_text(encoding="utf-8"))
-        self.assertIn("v0.4.24 (현재 checkpoint)", (ROOT / "README.ko.md").read_text(encoding="utf-8"))
+        self.assertIn("Current public baseline:\n\n```text\nv0.4.25", versioning)
+        self.assertIn("Previous public baseline:\n\n```text\nv0.4.24", versioning)
+        self.assertIn("Previous public baseline: v0.4.24.", (ROOT / "README.md").read_text(encoding="utf-8"))
+        self.assertIn("v0.4.25 (현재 checkpoint)", (ROOT / "README.ko.md").read_text(encoding="utf-8"))
 
     def test_supply_lock_and_policy_are_exact(self) -> None:
         current = LOCK.read_bytes()
         previous = (KIT / "project-runtime-supply-lock-v0.4.22.json").read_bytes()
-        self.assertEqual(previous.replace(b'"target_tag": "v0.4.22"', b'"target_tag": "v0.4.24"'), current)
+        self.assertEqual(previous.replace(b'"target_tag": "v0.4.22"', b'"target_tag": "v0.4.25"'), current)
         policy = json.loads((KIT / "project-runtime-policy.json").read_text(encoding="utf-8"))
-        self.assertEqual(policy["supply_lock"], "wom-kit/project-runtime-supply-lock-v0.4.24.json")
+        self.assertEqual(policy["supply_lock"], "wom-kit/project-runtime-supply-lock-v0.4.25.json")
         self.assertEqual(policy["supply_lock_sha256"], "sha256:" + hashlib.sha256(current).hexdigest())
 
     def test_current_release_is_the_only_packaged_note(self) -> None:
         self.assertEqual(CURRENT_RELEASE.read_bytes(), PACKAGED_RELEASE.read_bytes())
-        self.assertEqual(sorted(path.name for path in PACKAGED_RELEASE.parent.iterdir()), ["v0.4.24.md"])
+        self.assertEqual(sorted(path.name for path in PACKAGED_RELEASE.parent.iterdir()), ["v0.4.25.md"])
         manifest = json.loads((RESOURCE_ROOT / "resource-manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(manifest["version"], "0.4.24")
+        self.assertEqual(manifest["version"], "0.4.25")
         packaged_paths = {row["packaged"] for row in manifest["files"]}
-        self.assertIn("release-notes/v0.4.24.md", packaged_paths)
+        self.assertIn("release-notes/v0.4.25.md", packaged_paths)
         self.assertNotIn("release-notes/v0.4.22.md", packaged_paths)
         self.assertTrue((KIT / "docs" / "releases" / "v0.4.22.md").is_file())
 
-    def test_current_install_guides_use_exact_v0424_bootstrap(self) -> None:
+    def test_current_install_guides_use_exact_v0425_bootstrap(self) -> None:
         for path in BOOTSTRAP_DOCUMENTS:
             document = path.read_text(encoding="utf-8")
             with self.subTest(path=path):
                 self.assertIn('$womBootstrapNonce = [guid]::NewGuid().ToString("N")', document)
-                self.assertIn('$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\\bootstrap-v0424-$womBootstrapNonce"', document)
+                self.assertIn('$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\\bootstrap-v0425-$womBootstrapNonce"', document)
                 self.assertRegex(document, re.escape("& $womBootstrapPython") + r"\s+-m\s+pip\s+install\b")
-                self.assertIn("wom_kit-0.4.24-py3-none-any.whl", document)
+                self.assertIn("wom_kit-0.4.25-py3-none-any.whl", document)
                 if path.name.startswith("UPGRADE"):
                     continue  # upgrade guides keep every historical section
                 self.assertNotIn("bootstrap-v0422-", document)
@@ -121,21 +121,21 @@ class V0422ReleaseDocsTests(unittest.TestCase):
     def test_current_docs_use_v0423_status_without_erasing_v0422_history(self) -> None:
         expected = {
             KIT / "docs" / "agent-operator-capabilities.md":
-                "Status: v0.4.24 session permission modes, binary fidelity sources, and writer-session coverage gate",
+                "Status: v0.4.25 archive-root update hotfix, session permission modes, and writer-session coverage gate",
             KIT / "docs" / "capability-matrix.md":
-                "Version: v0.4.24 implementation and release scope",
+                "Version: v0.4.25 implementation and release scope",
             KIT / "docs" / "runtime-canonical-entrypoints.md":
-                "Status: v0.4.24 session permission modes, session-bound drafts, and session-owned writes truth",
+                "Status: v0.4.25 archive-root update hotfix, session permission modes, and session-owned writes truth",
             KIT / "docs" / "version-truth-source.md":
-                "Status: v0.4.24 session permission modes, session-bound drafts, and session-owned writes",
+                "Status: v0.4.25 archive-root update hotfix, session permission modes, and session-owned writes",
             KIT / "docs" / "python-tool-install.md":
-                "Status: v0.4.24 conditional GitHub wheel contract; session permission modes and session-bound drafts",
+                "Status: v0.4.25 conditional GitHub wheel contract; archive-root update hotfix and session permission modes",
         }
         for path, phrase in expected.items():
             document = path.read_text(encoding="utf-8")
             with self.subTest(path=path):
                 self.assertIn(phrase, document)
-                self.assertIn("v0.4.23", document)
+                self.assertIn("v0.4.24", document)
 
     def test_hotfix_surfaces_are_documented(self) -> None:
         contract = (KIT / "docs" / "exact-human-approval-contract.md").read_text(encoding="utf-8")

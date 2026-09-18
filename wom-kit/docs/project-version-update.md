@@ -83,7 +83,18 @@ describes the cleanup stage and never attributes success.
 When the exact-human workflow masks a service failure as
 `exact_human_approval_state_unknown`, the redacted `--output` artifact may
 carry one allowlisted inner `cause_code` and its fixed `cause_stage`; see
-[Exact Human Approval Contract](exact-human-approval-contract.md).
+[Exact Human Approval Contract](exact-human-approval-contract.md). Since
+v0.4.25 a failure the service raises directly before any result (resume
+preflight, reopen, cleanup classification) carries its fixed code and the
+journal stage the same way, on stderr and in the artifact.
+
+Preflight records the source mirror, every pin and the receipt relative to
+the inspection root: `.zettel-kasten/...` from the project root,
+`parent_of_archive/.zettel-kasten/...` from the archive root. Since v0.4.25
+every consumer maps such a location onto the project root through one
+resolver; v0.4.18 through v0.4.24 joined the label literally, so an update
+started from the archive root failed after the native approval and could
+not be reopened (beta letter 161). Recorded plans and intents are unchanged.
 
 ## v0.4.17 Terminal Cleanup Recovery Boundary
 
