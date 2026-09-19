@@ -676,3 +676,16 @@ with the client questions recorded. The client received one reply covering
 v0.4.28–v0.4.30 on 2026-09-19 (sent by the user). Record:
 [v0.4.31 minutes](../../meeting-minutes/2026-09-19-v0431-letter-163-remainder.md),
 [decision log](archive-infra-decision-log-2026-09-19-v0431-letter-163-remainder.md).
+
+### 2026-09-19 v0.4.31 released (letter 163 remainder public)
+
+v0.4.31 is public: tag `v0.4.31` on main `ff9fed87`, one wheel
+`wom_kit-0.4.31-py3-none-any.whl` (SHA-256
+`7a3e2e76ed03253e996dfa455f657a62f18651a31a403be054dc98c1f628decb`),
+candidate CI 14/14 on the first attempt after one correction commit,
+exact-merge installed verification, anonymous download and two fresh-venv
+installations recorded in the
+[release evidence](../../meeting-minutes/2026-09-19-v0431-release-evidence.md).
+L163-02 is now installable from the public artifact and stays open for the
+client's own runs; the client is told about it together with v0.4.32 in
+the next reply.
