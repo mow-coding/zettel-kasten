@@ -241,16 +241,39 @@ class FinalizePlanTests(_ClaimStoreCase):
         self.assertEqual([item["receipt_reference_count"] for item in plan["selected"]], [1, 0])
         self.assertTrue(any("approval-integrity-audit" in action for action in plan["next_safe_actions"]))
 
-    def test_unreadable_receipt_makes_the_scan_incomplete_and_blocks(self) -> None:
-        self.make_claim(ExactHumanApprovalOperation.mint_zet)
+    def test_receipts_are_scanned_as_byte_streams_and_only_real_failures_block(self) -> None:
+        # v0.4.32 (letter 164 ②): a malformed or oversized receipt is still
+        # searched for the id; only an I/O failure or a file above the
+        # ceiling makes the scan incomplete, and that file is named.
+        approval_id = self.make_claim(ExactHumanApprovalOperation.mint_zet)
         directory = self.root / "receipts" / "mint"
         directory.mkdir(parents=True, exist_ok=True)
         (directory / "broken.mint.json").write_bytes(b"{not json")
+        big = directory / "big.mint.json"
+        big.write_bytes(b"{" + b" " * (3 * 1024 * 1024) + b"}")
         plan = self.plan(all_started=True)
-        self.assertFalse(plan["ok"])
-        self.assertIn("exact_approval_claim_evidence_scan_incomplete", plan["blockers"])
-        self.assertFalse(plan["write_evidence"]["complete"])
-        self.assertEqual(plan["write_evidence"]["unreadable_file_count"], 1)
+        self.assertTrue(plan["ok"], plan)
+        self.assertEqual(plan["write_evidence"]["scan_method"], "byte_stream_search")
+        self.assertEqual(plan["write_evidence"]["unreadable_file_count"], 0)
+        self.assertEqual(plan["write_evidence"]["oversize_skipped_count"], 0)
+        # an id inside a malformed or oversized file still counts as a reference
+        big.write_bytes(b"{" + b" " * (3 * 1024 * 1024) + approval_id.encode() + b"}")
+        referenced = self.plan(all_started=True)
+        self.assertIn("exact_approval_claim_referenced_by_receipt", referenced["blockers"])
+        big.unlink()
+        with patch.object(claims, "_MAX_EVIDENCE_FILE_BYTES", 4):
+            skipped = self.plan(all_started=True)
+        self.assertFalse(skipped["ok"])
+        self.assertIn("exact_approval_claim_evidence_scan_incomplete", skipped["blockers"])
+        self.assertGreaterEqual(skipped["write_evidence"]["oversize_skipped_count"], 1)
+        self.assertIn("receipts/mint/broken.mint.json", skipped["write_evidence"]["oversize_skipped_receipt_paths"])
+        self.assertTrue(skipped["paths_echoed"])
+        self.assertTrue(any("incomplete" in action for action in skipped["next_safe_actions"]))
+        with patch.object(claims, "_scan_file_for_approval_ids", side_effect=OSError("PRIVATE-IO-CANARY")):
+            unreadable = self.plan(all_started=True)
+        self.assertGreaterEqual(unreadable["write_evidence"]["unreadable_file_count"], 1)
+        self.assertIn("receipts/mint/broken.mint.json", unreadable["write_evidence"]["unreadable_receipt_paths"])
+        self.assertNotIn("PRIVATE-IO-CANARY", json.dumps(unreadable))
 
     def test_nothing_selected_is_a_blocker(self) -> None:
         plan = self.plan(all_started=True)
