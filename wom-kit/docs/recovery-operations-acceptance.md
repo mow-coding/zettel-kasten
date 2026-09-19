@@ -600,3 +600,16 @@ anonymous download and two fresh-venv installations recorded in the
 CF-01 stays open for client closure; the reply draft now points the client
 at v0.4.27 with the corrected approve command and answers each item of the
 v0.4.25 report, and asks back for the index-rebuild sequence.
+
+### 2026-09-19 v0.4.28 released (OB-01, OB-03 public)
+
+v0.4.28 is public: tag `v0.4.28` on main `4a78cd7c`, one wheel
+`wom_kit-0.4.28-py3-none-any.whl` (SHA-256
+`50777719c2cdf9d81980de32aaad28a6c02ca6c0ebc945da2c9f82a51df4b8a6`),
+candidate CI 14/14 after one correction commit, exact-merge installed
+verification, anonymous download and two fresh-venv installations recorded
+in the [release evidence](../../meeting-minutes/2026-09-19-v0428-release-evidence.md).
+OB-01 and OB-03 are now installable from the public artifact; they stay
+open for installed/client acceptance, and OB-02 (offload) follows as
+v0.4.29 from the same decision log. The reply draft to the client is
+refreshed to v0.4.28 with the restore section and the letter-163 answers.
