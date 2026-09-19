@@ -246,7 +246,7 @@ Zettel edge writes:
 
 - approval-gated single-edge zettel edge writes for reviewed zet-to-zet or zet-to-objet links including safe `zet:notion:<id>` target resolution,
 - policy batch zettel-edge planning that classifies high-confidence candidates; since v0.4.21 `zettel-edge-batch --approve` writes every policy-writable edge under one count-first native dialog, each item write re-verifying the batch claim,
-- `revert-edge --exact-local` for one receipt-proven edge and, since v0.4.21, `revert-batch --approve` for every edge of one batch receipt under one dialog; unscoped `revert-edge` approval still returns `compound_exact_human_approval_binding_required`,
+- `revert-edge --approve` for one receipt-proven edge (until v0.4.29 only with `--exact-local`; an unscoped approval returned `compound_exact_human_approval_binding_required`, and since v0.4.30 the flag is accepted for compatibility only) and, since v0.4.21, `revert-batch --approve` for every edge of one batch receipt under one dialog,
 
 Object storage:
 

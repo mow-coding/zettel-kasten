@@ -37222,6 +37222,11 @@ def create_draft_zettel(
         or _source_fidelity_sensitive_assignment_contains_secret(body)
     ):
         blockers.append("Draft body appears to contain a secret-like value.")
+    # v0.4.30 (letter 163 ⑩): the mint checklist's object_id_only check runs
+    # here first, so a truncated objet id never reaches an approved draft.
+    truncated_reference_lines = zettel_truncated_objet_reference_body_lines(body)
+    if truncated_reference_lines:
+        blockers.append("draft_body_truncated_objet_reference")
 
     if creation_mode:
         if creation_mode not in DRAFT_CREATION_MODES:
@@ -48953,6 +48958,78 @@ def _restore_file_create_only_with_exact_bytes(path: Path, content: bytes) -> bo
         return False
 
 
+EDGE_TARGET_CHECK_MAX_TARGETS = 64
+# Mirrors completion_workflows.DRAFT_DISCARD_RECEIPTS_DIR (import would be circular).
+DRAFT_DISCARD_RECEIPTS_DIR = "receipts/discarded-drafts"
+
+
+def _promotion_edge_target_check(
+    root: Path,
+    frontmatter: dict[str, Any],
+    duplicate_check: dict[str, Any],
+) -> dict[str, Any]:
+    """v0.4.30 (letter 163 [G]): do this zet's edge targets still exist?
+
+    Informational only in v0.4.30: counts of targets that the current index
+    does not know and of targets that a discard receipt says were discarded.
+    Outside the approval binding basis; no target id is echoed.
+    """
+
+    targets = [
+        str(ref.get("id"))
+        for ref in collect_referenced_zets(frontmatter)
+        if isinstance(ref.get("id"), str)
+    ][:EDGE_TARGET_CHECK_MAX_TARGETS]
+    index_evidence = (
+        duplicate_check.get("index_evidence")
+        if isinstance(duplicate_check.get("index_evidence"), dict)
+        else {}
+    )
+    index_used = index_evidence.get("ok") is True
+    missing = 0
+    discarded = 0
+    checked = 0
+    if targets:
+        connection: sqlite3.Connection | None = None
+        if index_used:
+            try:
+                connection = connect_archive_index(root / INDEX_RELATIVE_PATH, row_factory=True)
+            except (sqlite3.Error, OSError, ArchiveServiceError):
+                connection = None
+                index_used = False
+        try:
+            for target in targets:
+                checked += 1
+                exists = True
+                if connection is not None:
+                    try:
+                        row = connection.execute(
+                            "SELECT 1 FROM zettels WHERE zettel_id = ? LIMIT 1",
+                            (target,),
+                        ).fetchone()
+                        exists = row is not None
+                    except sqlite3.Error:
+                        exists = True
+                        index_used = False
+                if not exists:
+                    missing += 1
+                receipts_dir = root / DRAFT_DISCARD_RECEIPTS_DIR
+                if receipts_dir.is_dir() and safe_archive_glob(
+                    receipts_dir, f"{target}.*.discard.json", root
+                ):
+                    discarded += 1
+        finally:
+            if connection is not None:
+                connection.close()
+    return {
+        "checked": checked,
+        "missing": missing,
+        "discarded": discarded,
+        "index_used": index_used,
+        "target_ids_echoed": False,
+    }
+
+
 def promote_zettel_dry_run(
     archive_root: Path | str,
     *,
@@ -49119,6 +49196,10 @@ def promote_zettel_dry_run(
         else:
             warnings.append(message)
 
+    edge_target_check = _promotion_edge_target_check(
+        root, frontmatter, duplicate_check
+    )
+
     zettel_id_value = str(frontmatter.get("id") or path.stem)
     proposed_receipt_path = f"{receipt_folder}promotion/{zettel_id_value}.promotion.json"
     _emit_mint_progress(progress_callback, "receipt_plan", "start", 0, 1)
@@ -49151,6 +49232,7 @@ def promote_zettel_dry_run(
         "warnings": warnings,
         "checklist": checklist,
         "duplicate_check": duplicate_check,
+        "edge_target_check": edge_target_check,
         "near_duplicates": near_duplicates,
         "first_read_check": first_read_check,
         "abstract_review_basis": abstract_review_basis,
@@ -49508,6 +49590,21 @@ def _mint_zettel_approval_handoff(
     )
 
 
+def _mint_zettel_edge_target_next_safe_actions(check: Any) -> list[str]:
+    if not isinstance(check, dict):
+        return []
+    missing = int(check.get("missing") or 0)
+    discarded = int(check.get("discarded") or 0)
+    if not missing and not discarded:
+        return []
+    return [
+        f"edge_target_check: {discarded} edge target(s) were discarded and {missing} "
+        "are unknown to the current index; review the draft's edges (related-zets) and "
+        "revert dangling ones with revert-edge after minting. v0.4.30 reports this; a "
+        "gating warning is planned."
+    ]
+
+
 def _mint_zettel_dry_run_next_safe_actions(
     *,
     blocked: bool,
@@ -49697,6 +49794,9 @@ def mint_zettel_dry_run(
             blocked=bool(blockers),
             has_warnings=bool(warnings),
             fidelity_plan_required=isinstance(current_plan_for_handoff, str),
+        )
+        + _mint_zettel_edge_target_next_safe_actions(
+            promotion_dry_run.get("edge_target_check")
         ),
         "draft_path": promotion_dry_run["draft_path"],
         "zettel_id": zettel_id_value,
@@ -49710,6 +49810,7 @@ def mint_zettel_dry_run(
         "checklist": promotion_dry_run["checklist"],
         "mint_checklist_guidance": mint_checklist_guidance(promotion_dry_run["checklist"]),
         "duplicate_check": promotion_dry_run.get("duplicate_check", {}),
+        "edge_target_check": promotion_dry_run.get("edge_target_check", {}),
         "near_duplicates": promotion_dry_run["near_duplicates"],
         "first_read_check": first_read_check,
         "abstract_review_basis": abstract_review_basis,
@@ -53561,6 +53662,20 @@ def mint_lifecycle_batch_result(
     }
 
 
+def _lifecycle_batch_item_failure_blockers(
+    error: BaseException, io_code: str
+) -> list[str]:
+    """v0.4.30: a failed batch item never echoes OS error text (absolute paths).
+
+    Service messages are the codebase's own fixed sentences and stay; an
+    OSError becomes the fixed token the caller names.
+    """
+
+    if isinstance(error, OSError):
+        return [io_code]
+    return [str(error)]
+
+
 def mint_zet_batch(
     archive_root: Path | str,
     *,
@@ -53628,6 +53743,9 @@ def mint_zet_batch(
     skipped_existing_items: list[dict[str, Any]] = []
     failed_items: list[dict[str, Any]] = []
     planned_rows: list[dict[str, Any]] = []
+    # v0.4.30 (letter 163 ⑤): the fidelity plan digest each item's dry-run
+    # bound, reused verbatim by the approve loop below.
+    fidelity_plan_by_key: dict[str, str | None] = {}
     if not blockers:
         for row in rows:
             key = mint_lifecycle_batch_item_key(row)
@@ -53642,8 +53760,13 @@ def mint_zet_batch(
                 if existing is not None:
                     skipped_existing_items.append(existing)
                 else:
-                    failed_items.append({**row, "write_status": "failed", "blockers": [str(exc)]})
+                    failed_items.append({**row, "write_status": "failed", "blockers": _lifecycle_batch_item_failure_blockers(exc, "mint_item_plan_io_failed")})
                 continue
+            fidelity_plan_by_key[key] = (
+                dry_result.get("current_source_fidelity_plan_sha256")
+                if isinstance(dry_result.get("current_source_fidelity_plan_sha256"), str)
+                else None
+            )
             if not dry_result.get("ok"):
                 existing = mint_batch_existing_artifacts(root, row) if skip_existing else None
                 if existing is not None:
@@ -53721,15 +53844,14 @@ def mint_zet_batch(
         for row in planned_rows:
             planned_item = planned_items_by_key[mint_lifecycle_batch_item_key(row)]
             try:
-                # v0.4.30 (letter 163 ⑤): a fidelity draft in a batch carries the
-                # plan digest the batch dry-run bound for it; the batch approval
-                # already covers the exact draft bytes that digest derives from.
-                item_dry_run = mint_zettel_dry_run(
-                    root,
-                    zettel_id=row.get("zettel_id"),
-                    relative_path=row.get("path"),
+                # v0.4.30 (letter 163 ⑤): a fidelity draft in a batch passes the
+                # plan digest its own dry-run bound above; mint_zettel re-derives
+                # it and refuses on mismatch, and the per-item mint binding (which
+                # hashes the source-fidelity projection) is part of the batch
+                # target the dialog approved.
+                item_fidelity_plan = fidelity_plan_by_key.get(
+                    mint_lifecycle_batch_item_key(row)
                 )
-                item_fidelity_plan = item_dry_run.get("current_source_fidelity_plan_sha256")
                 write_result = mint_zettel(
                     root,
                     zettel_id=row.get("zettel_id"),
@@ -53737,9 +53859,7 @@ def mint_zet_batch(
                     reviewed_by=str(reviewed_by or ""),
                     allow_warnings=bool(policy.get("allow_warnings")),
                     exact_human_approval_claim=exact_human_approval_claim,
-                    expected_source_fidelity_plan_sha256=(
-                        item_fidelity_plan if isinstance(item_fidelity_plan, str) else None
-                    ),
+                    expected_source_fidelity_plan_sha256=item_fidelity_plan,
                     batch_authority=batch_authority.for_item(
                         str(planned_item.get("approval_item_identity_sha256") or "")
                     ),
@@ -53749,7 +53869,7 @@ def mint_zet_batch(
                 if existing is not None:
                     skipped_existing_items.append(existing)
                 else:
-                    failed_items.append({**row, "write_status": "failed", "blockers": [str(exc)]})
+                    failed_items.append({**row, "write_status": "failed", "blockers": _lifecycle_batch_item_failure_blockers(exc, "mint_item_write_io_failed")})
                 continue
             item_results.append({
                 **mint_batch_item_summary(row, write_result, write_status="minted"),
@@ -53922,7 +54042,7 @@ def retire_draft_batch(
                 if existing is not None:
                     skipped_existing_items.append(existing)
                 else:
-                    failed_items.append({**row, "write_status": "failed", "blockers": [str(exc)]})
+                    failed_items.append({**row, "write_status": "failed", "blockers": _lifecycle_batch_item_failure_blockers(exc, "retire_item_plan_io_failed")})
                 continue
             if not dry_result.get("ok"):
                 existing = retire_batch_existing_artifacts(root, row) if skip_existing else None
@@ -54009,7 +54129,7 @@ def retire_draft_batch(
                 if existing is not None:
                     skipped_existing_items.append(existing)
                 else:
-                    failed_items.append({**row, "write_status": "failed", "blockers": [str(exc)]})
+                    failed_items.append({**row, "write_status": "failed", "blockers": _lifecycle_batch_item_failure_blockers(exc, "retire_item_write_io_failed")})
                 continue
             item_results.append({
                 **retire_batch_item_summary(row, write_result, write_status="retired"),
@@ -78383,10 +78503,21 @@ def zettel_edge_revert(
             except ArchivePathError:
                 blockers.append("edge receipt source_zettel_path is not a safe archive-relative path.")
                 normalized_source = ""
-            if normalized_source and not normalized_source.startswith("zettels/"):
-                blockers.append("edge receipt source_zettel_path must point under zettels/.")
+            if normalized_source and not normalized_source.startswith(VALID_ZETTEL_FOLDERS):
+                blockers.append("edge receipt source_zettel_path must point under zettels/ or inbox/.")
             if normalized_source:
                 source_path = archive_internal_path(root, normalized_source)
+                if not source_path.is_file() and source_zettel_id:
+                    # v0.4.30 (letter 163 [G]): an edge written on an inbox draft
+                    # that was minted since is reverted on its canonical file; the
+                    # id and edge-presence checks below still bind the target.
+                    try:
+                        relocated = resolve_zettel_path(root, zettel_id=source_zettel_id, relative_path=None)
+                    except ArchiveServiceError:
+                        relocated = None
+                    if relocated is not None and relocated.is_file():
+                        source_path = relocated
+                        normalized_source = archive_relative_path(relocated, root)
                 if not source_path.is_file():
                     blockers.append("edge receipt source zettel is missing.")
                 else:

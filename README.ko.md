@@ -222,7 +222,7 @@ Notion:
 Zettel edge write:
 
 - operation-specific exact-human 단일 `zettel-edge` write는 유지됩니다. `zettel-edge-batch`는 dry-run 계획만 가능하고 승인은 비공개 target read나 변경 전에 고정 차단됩니다. `sequence`와 `format_variant`는 계속 사람 단일 검토 대상이며, Principal 등록/해제 승인은 v0.4.0에서 닫히지만 기존 Principal은 단일 edge target으로 사용할 수 있습니다.
-- `revert-edge --exact-local`은 영수증으로 증명된 edge 하나를 되돌리고, v0.4.21부터 `revert-batch --approve`는 배치 영수증 하나의 모든 edge를 대화상자 한 번으로 되돌립니다. 범위가 지정되지 않은 `revert-edge` 승인은 여전히 `compound_exact_human_approval_binding_required`로 끝납니다.
+- `revert-edge --approve`는 영수증으로 증명된 edge 하나를 되돌리고(v0.4.29까지는 `--exact-local`이 있어야 했고, 없으면 `compound_exact_human_approval_binding_required`로 끝났습니다; v0.4.30부터 이 플래그는 호환용으로만 받습니다), v0.4.21부터 `revert-batch --approve`는 배치 영수증 하나의 모든 edge를 대화상자 한 번으로 되돌립니다.
 
 Object storage:
 

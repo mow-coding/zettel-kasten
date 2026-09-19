@@ -17395,12 +17395,10 @@ def command_zettel_edge_batch(args: argparse.Namespace) -> int:
 
 
 def command_revert_edge(args: argparse.Namespace) -> int:
-    if args.approve and not bool(getattr(args, "exact_local", False)):
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="zettel_edge_revert",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
+    # v0.4.30 (letter 163 ③c): every --approve takes the receipt-bound exact
+    # approval path below; --exact-local is accepted for compatibility only,
+    # so a session permission grant for zettel_edge_revert applies like it
+    # does for zettel-edge and revert-batch.
     try:
         archive_root = Path(args.archive_root)
         if args.approve:
@@ -29849,7 +29847,7 @@ def _mint_content_free_cause(error: BaseException) -> dict[str, str | None]:
             and error.args[0].startswith(_MINT_CONTENT_FREE_CAUSE_PREFIXES)
         ):
             cause_code = error.args[0]
-            cause_stage = "service"
+            cause_stage = "mint_preflight"
     if cause_code is not None and not cause_code.startswith(_MINT_CONTENT_FREE_CAUSE_PREFIXES):
         cause_code = None
         cause_stage = None
@@ -30091,7 +30089,9 @@ def command_mint_zettel(args: argparse.Namespace) -> int:
             next_safe_actions=(
                 [
                     "The claim for this attempt stays started for reconciliation; "
-                    "list it with 'archive exact-approval-claims <root> --status started --dry-run'."
+                    "list it with 'archive exact-approval-claims <root> --status started' and, "
+                    "after review, close it with 'archive exact-approval-claim-finalize <root> "
+                    "--approval-id <id> --dry-run'."
                 ]
                 if getattr(exc, "cause_stage", None) == "domain_writer"
                 else None
@@ -47652,19 +47652,14 @@ def build_parser() -> argparse.ArgumentParser:
     revert_edge.add_argument(
         "--exact-local",
         action="store_true",
-        help="Use the native receipt-bound approval path for this one edge revert.",
+        help=(
+            "Accepted for compatibility; since v0.4.30 every revert-edge "
+            "--approve uses the receipt-bound exact approval path."
+        ),
     )
     revert_edge.add_argument("--reviewed-by", help="Safe reviewer id required with --approve.")
     revert_edge.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
-    revert_edge.set_defaults(
-        func=command_revert_edge,
-        _wom_approval_scope={
-            "kind": "argument_flag_any_allowlist",
-            "allowed_flags": ["--exact-local"],
-            "outside_scope_status": "approval_fixed_closed",
-            "outside_scope_reason_code": command_status.COMPOUND_APPROVAL_REASON_CODE,
-        },
-    )
+    revert_edge.set_defaults(func=command_revert_edge)
 
     revert_batch = subcommands.add_parser(
         "revert-batch",

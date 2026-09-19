@@ -151,13 +151,52 @@ class Letter137EdgeRevertCliBoundaryTests(unittest.TestCase):
         self.assertNotIn(receipt, serialized)
         self.assertNotIn(PRIVATE_REVIEWER, serialized)
 
-    def test_edge_revert_approve_blocks_before_service(self) -> None:
-        self._assert_cli_blocks_before_service(
-            command="revert-edge",
-            receipt=PRIVATE_RECEIPT,
-            service_name="zettel_edge_revert",
-            lifecycle_action="zettel_edge_revert",
+    def test_edge_revert_approve_on_missing_archive_never_enters_the_writer(self) -> None:
+        # v0.4.30 (letter 163 ③c): revert-edge --approve no longer needs
+        # --exact-local; the preview runs, and on a missing archive the
+        # writer and the broker are never entered.
+        original = archive_cli.archive_services.zettel_edge_revert
+
+        def preflight_only(*args, **kwargs):
+            if kwargs.get("approve"):
+                raise AssertionError("approved writer entered")
+            return original(*args, **kwargs)
+
+        args = self.parser.parse_args(
+            [
+                "revert-edge",
+                "C:/private/archive",
+                "--receipt",
+                PRIVATE_RECEIPT,
+                "--approve",
+                "--reviewed-by",
+                PRIVATE_REVIEWER,
+                "--format",
+                "json",
+            ]
         )
+        self.assertFalse(args.exact_local)
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with (
+            mock.patch.object(
+                archive_cli.archive_services,
+                "zettel_edge_revert",
+                side_effect=preflight_only,
+            ) as service,
+            mock.patch.object(
+                archive_cli,
+                "_execute_exact_human_approved_write",
+            ) as broker,
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+        ):
+            code = args.func(args)
+        self.assertEqual(code, 1, stderr.getvalue())
+        self.assertEqual(service.call_count, 1)
+        broker.assert_not_called()
+        serialized = stdout.getvalue() + stderr.getvalue()
+        self.assertNotIn(PRIVATE_RECEIPT, serialized)
+        self.assertNotIn(PRIVATE_REVIEWER, serialized)
 
     def test_edge_batch_revert_approve_on_missing_archive_never_enters_the_writer(self) -> None:
         original = archive_cli.archive_services.zettel_edge_batch_revert
