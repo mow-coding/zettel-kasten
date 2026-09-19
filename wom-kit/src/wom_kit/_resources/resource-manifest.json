@@ -43,8 +43,8 @@
     {
       "source": "schemas/approval-handoff-v0.1.schema.json",
       "packaged": "schemas/approval-handoff-v0.1.schema.json",
-      "bytes": 2654,
-      "sha256": "0812a6d9ea2bafc34c0b107540b40e3f8264529e76ef1da81f723db0e7c95608"
+      "bytes": 2703,
+      "sha256": "edaba77cb3b2e01ef25ddb3b3d7f0f33e2183d75c768c3d12cd03d28caa6d817"
     },
     {
       "source": "schemas/approval-integrity-audit-result-v0.1.schema.json",

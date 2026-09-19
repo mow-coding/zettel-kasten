@@ -27729,6 +27729,23 @@ def command_create_draft(args: argparse.Namespace) -> int:
                 "--dry-run or --approve."
             ),
         )
+    if args.approve and any(
+        str(getattr(args, name, "") or "").strip() == "None"
+        for name in ("profile_id", "expected_archive_id", "expected_type", "draft_id")
+    ):
+        # v0.4.31 (letter 163 ⑦c): a null replay value was pasted literally.
+        return _create_draft_cli_error(
+            args,
+            reason_code="create_draft_replay_value_null_literal",
+            message=(
+                "A replay option was given the literal value None; omit options "
+                "whose approval_replay value is null."
+            ),
+            next_safe_actions=[
+                "Re-run the dry-run and copy only the non-null approval_replay values; "
+                "options marked omit_when_null in approval_handoff are left out when null."
+            ],
+        )
     if ai_creation_mode and args.approve:
         missing_approval_prerequisites = [
             option
@@ -44987,9 +45004,12 @@ def build_parser() -> argparse.ArgumentParser:
     create_draft.add_argument(
         "--expected-type",
         choices=sorted(archive_services.RUNTIME_CONTEXT_ARCHIVE_TYPES),
-        help="Expected archive type; mismatch blocks.",
+        help="Expected archive type from approval_replay; omit when the replay value is null; mismatch blocks.",
     )
-    create_draft.add_argument("--profile-id", help="Resolved WOM profile id for profile-bound draft replay.")
+    create_draft.add_argument(
+        "--profile-id",
+        help="Resolved WOM profile id from approval_replay; omit when the replay value is null.",
+    )
     create_draft.add_argument("--profile-operator-id", help="Actor operating under the resolved profile.")
     create_draft.add_argument("--profile-authority-mode", help="Authority mode from the resolved profile.")
     create_draft.add_argument(

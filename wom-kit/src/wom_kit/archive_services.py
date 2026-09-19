@@ -36086,6 +36086,7 @@ def _create_draft_approval_handoff(
                 value_source="json_pointer",
                 json_pointer="/approval_replay/expected_archive_id",
                 value=approval_replay.get("expected_archive_id"),
+                omit_when_null=True,
             ),
             approval_handoff_argument(
                 "--expected-type",
@@ -36093,6 +36094,15 @@ def _create_draft_approval_handoff(
                 value_source="json_pointer",
                 json_pointer="/approval_replay/expected_type",
                 value=approval_replay.get("expected_type"),
+                omit_when_null=True,
+            ),
+            approval_handoff_argument(
+                "--profile-id",
+                required=False,
+                value_source="json_pointer",
+                json_pointer="/approval_replay/profile_id",
+                value=approval_replay.get("profile_id"),
+                omit_when_null=True,
             ),
             approval_handoff_argument(
                 "--draft-approved-by",
@@ -37348,9 +37358,13 @@ def create_draft_zettel(
         if not expected_body_sha256:
             warnings.append("Profile-bound write replay will require expected_body_sha256.")
 
+    assisted_by_hint = False
     if is_ai_draft:
         if not assisted:
             blockers.append("AI-assisted or AI-generated drafts must identify the assisting AI runtime.")
+            # v0.4.31 (letter 163 ⑦a): the fixed code and, below, the option names.
+            blockers.append("ai_draft_assisted_by_required")
+            assisted_by_hint = True
         if normalized_abstract is None:
             blockers.append(
                 "AI-assisted or AI-generated drafts require an explicit abstract before creation."
@@ -37675,6 +37689,12 @@ def create_draft_zettel(
         "reason_code": "draft_write_not_requested",
     }
     write_next_safe_actions: list[str] = []
+    if assisted_by_hint:
+        write_next_safe_actions.append(
+            "Identify the assisting AI runtime with --assisted-by ai_runtime:<name> "
+            "(repeatable); a supervising person is --supervised-by person:<id>; pair "
+            "them with --creation-mode ai_assisted or ai_generated."
+        )
     if is_ai_draft and not blockers and proposed_path in planned_writes:
         try:
             index_evidence = require_current_zettel_index(root)
@@ -37750,6 +37770,10 @@ def create_draft_zettel(
         # (letter 160 ③): automation that forwards them reaches --approve and
         # only then learns the preflight was blocked.
         approval_replay = {key: None for key in approval_replay}
+        write_next_safe_actions.append(
+            "approval_replay values are null while this dry-run is blocked; do not "
+            "forward them to --approve (a null value is never the literal None)."
+        )
     target_archive = {
         "archive_id": resolved_archive_id,
         "archive_type": archive_type,
