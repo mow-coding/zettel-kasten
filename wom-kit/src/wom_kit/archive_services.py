@@ -141877,61 +141877,6 @@ def attach_inbox_attention(
     return attached
 
 
-INBOX_ATTENTION_UNAVAILABLE_SUMMARY = (
-    "Inbox draft attention could not be counted; run the detailed read-only audit now."
-)
-
-
-def write_result_inbox_attention(archive_root: Path | str) -> dict[str, Any]:
-    """v0.4.30 (letter 163 ⑫): the same privacy-safe inbox block that
-    ai-start-here shows, for the result of an approved write.
-
-    Never raises: a counting failure must not turn a succeeded write into a
-    failure envelope, so it degrades to ``status: unavailable`` with the same
-    key set. Callers attach it after the exact-approval broker has returned,
-    outside any claim window.
-    """
-
-    try:
-        return ai_start_here_inbox_attention(
-            require_existing_archive_root(Path(archive_root))
-        )
-    except (ArchiveServiceError, OSError, ValueError):
-        return {
-            "status": "unavailable",
-            "complete": False,
-            "unpublished_draft_count": None,
-            "possible_out_of_pipeline_draft_count": None,
-            "mint_readiness_gap_count": None,
-            "oldest_draft_age_days": None,
-            "review_recommended": True,
-            "human_summary": INBOX_ATTENTION_UNAVAILABLE_SUMMARY,
-            "next_command": (
-                "archive inbox-pipeline-audit <archive-root> --dry-run --format json"
-            ),
-            "audit_schema": None,
-            "audit_digest": None,
-            "body_text_read": False,
-            "paths_titles_or_body_echoed": False,
-        }
-
-
-def attach_inbox_attention(
-    result: dict[str, Any], archive_root: Path | str
-) -> dict[str, Any]:
-    """Return a copy of ``result`` carrying ``inbox_attention`` (v0.4.30).
-
-    Only approved write results call this; dry-run and preview key sets are
-    left untouched so approval bindings computed from them do not move.
-    """
-
-    attached = dict(result)
-    attached.setdefault(
-        "inbox_attention", write_result_inbox_attention(archive_root)
-    )
-    return attached
-
-
 def ai_start_here(
     archive_root: Path | str,
     *,
