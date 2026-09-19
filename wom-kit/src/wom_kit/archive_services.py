@@ -101823,10 +101823,15 @@ def backup_evidence_status(
         "evidence_scope": "local provider-confirmed execution receipts and linked wom_uploaded manifest locations at their recorded time",
     }
 
+    # v0.4.32 (letter 164 ⑥): the local repository is inspected for counts
+    # and ages only; the lane status is unchanged because a local commit or
+    # a cached remote-tracking ref is still not proof of the remote.
+    git_backup_attention = write_result_git_backup_attention(root)
     github_lane = {
         "role": "metadata_and_version_history_backup",
         "status": "unverified_no_generic_completion_receipt",
-        "local_commit_inspected": False,
+        "local_commit_inspected": bool(git_backup_attention["repository_inspected"]),
+        "local_repository_attention": git_backup_attention,
         "remote_ref_checked": False,
         "provider_api_called": False,
         "completion_claim_ready": False,
@@ -101844,6 +101849,11 @@ def backup_evidence_status(
     next_safe_actions = [
         "Do not claim complete backup: GitHub remote-ref and external-database completion evidence are not verified by this command.",
     ]
+    if git_backup_attention["review_recommended"]:
+        next_safe_actions.append(
+            "Local changes are not yet in Git or not yet pushed (see lanes.github.local_repository_attention); plan the backup with archive git-backup-plan <archive-root> --dry-run --format json."
+        )
+        warnings.append(git_backup_attention["human_summary"])
     if object_storage_status in {"no_remote_byte_evidence", "declared_only_no_wom_byte_proof"}:
         next_safe_actions.append(
             "Use the existing object-storage upload or verified-adopt workflow; declared_uploaded alone never proves remote bytes."
@@ -101896,7 +101906,7 @@ def backup_evidence_status(
             "execution_receipt_metadata_read": bool(receipt_cache),
             "objet_bytes_read": False,
             "zet_bodies_read": False,
-            "git_repository_inspected": False,
+            "git_repository_inspected": bool(git_backup_attention["repository_inspected"]),
             "provider_api_called": False,
             "network_checked": False,
             "database_called": False,
@@ -101909,6 +101919,7 @@ def backup_evidence_status(
             "provider_or_store_labels_echoed": False,
             "local_absolute_paths_echoed": False,
             "source_body_text_echoed": False,
+            "git_paths_branches_or_messages_echoed": False,
         },
         "would_change": [],
         "blockers": unique_preserve_order(blockers),
@@ -142156,6 +142167,47 @@ def write_result_inbox_attention(archive_root: Path | str) -> dict[str, Any]:
         }
 
 
+def write_result_git_backup_attention(archive_root: Path | str) -> dict[str, Any]:
+    """v0.4.32 (letter 164 ⑥): the content-free Git backup gap block.
+
+    Never raises: the block itself degrades to ``state: unavailable`` and an
+    import or unexpected failure here degrades the same way, so a session
+    start or an evidence read is never turned into a failure by it.
+    """
+
+    from . import git_backup_attention as attention_module
+
+    try:
+        return attention_module.git_backup_attention(archive_root)
+    except Exception:  # noqa: BLE001 - attention must never fail the host
+        return {
+            "schema": attention_module.GIT_BACKUP_ATTENTION_SCHEMA,
+            "state": "unavailable",
+            "reason_code": "git_backup_attention_unavailable",
+            "repository_inspected": False,
+            "repository_scope": None,
+            "head_state": None,
+            "uncommitted_change_count": None,
+            "uncommitted_change_count_state": "unavailable",
+            "untracked_count": None,
+            "tracked_change_count": None,
+            "last_commit_age_days": None,
+            "upstream_state": None,
+            "ahead_count": None,
+            "behind_count": None,
+            "remote_tip_age_days": None,
+            "attention": [],
+            "review_recommended": True,
+            "human_summary": attention_module.GIT_BACKUP_ATTENTION_UNAVAILABLE_SUMMARY,
+            "next_command": attention_module.GIT_BACKUP_ATTENTION_NEXT_COMMAND,
+            "probes": [],
+            "probe_budget_seconds": attention_module.GIT_BACKUP_ATTENTION_BUDGET_SECONDS,
+            "network_checked": False,
+            "remote_state_is_proof": False,
+            "paths_branches_or_messages_echoed": False,
+        }
+
+
 def attach_inbox_attention(
     result: dict[str, Any], archive_root: Path | str
 ) -> dict[str, Any]:
@@ -142270,6 +142322,10 @@ def ai_start_here(
     inbox_attention = ai_start_here_inbox_attention(
         require_existing_archive_root(archive_root)
     )
+    # v0.4.32 (letter 164 ⑥): the local Git backup gap, counts and ages only.
+    git_backup_attention = write_result_git_backup_attention(
+        require_existing_archive_root(archive_root)
+    )
 
     next_lines: list[str] = []
     if session_start_summary and isinstance(session_start_summary.get("next"), list):
@@ -142314,6 +142370,10 @@ def ai_start_here(
                 "unpublished_draft_count"
             ],
             "inbox_attention_status": inbox_attention["status"],
+            "git_backup_attention_state": git_backup_attention["state"],
+            "uncommitted_change_count": git_backup_attention[
+                "uncommitted_change_count"
+            ],
         },
         "inspection": {
             "mode": mode,
@@ -142364,6 +142424,7 @@ def ai_start_here(
             else source_fidelity_policy()
         ),
         "inbox_attention": inbox_attention,
+        "git_backup_attention": git_backup_attention,
         "runtime_guidance_readiness": context.get("runtime_guidance_readiness"),
         "agent_instruction_policy": context.get("agent_instruction_policy"),
         "operational_context": {
@@ -142415,6 +142476,13 @@ def ai_start_here(
                     if inbox_attention["review_recommended"]
                     else []
                 ),
+                *(
+                    [
+                        "Local changes are not yet in Git or not yet pushed; review the Git backup attention block and plan the backup with archive git-backup-plan <archive-root> --dry-run --format json before broad work."
+                    ]
+                    if git_backup_attention["review_recommended"]
+                    else []
+                ),
                 "Run first-read-readiness before the exhaustive catalog pass; treat a non-ready result as an explicit abstract or unique-id repair queue, not as permission to invent or auto-write missing memory.",
                 "Run abstract-freshness after first-read-readiness; treat stale or unverified rows as a human review queue and never auto-rewrite an abstract or body.",
                 "Run zet-catalog with projection=reading and coverage_mode=strict, keep the first response_profile full, inspect item and compact response-envelope estimates, set a host-appropriate max_estimated_tokens plus an explicit response_envelope_reserve_tokens when needed, then optionally use response_profile=continuation on later pages while following every continuation token before claiming archive-wide zet coverage.",
@@ -142447,6 +142515,11 @@ def ai_start_here(
                     [inbox_attention["human_summary"]]
                     if inbox_attention["review_recommended"]
                     or not inbox_attention["complete"]
+                    else []
+                ),
+                *(
+                    [git_backup_attention["human_summary"]]
+                    if git_backup_attention["review_recommended"]
                     else []
                 ),
             ]

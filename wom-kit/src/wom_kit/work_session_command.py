@@ -178,4 +178,6 @@ def dispatch_work_session_management(root, *, action, dry_run=False, approve=Fal
         from . import archive_services
 
         envelope["inbox_attention"] = archive_services.write_result_inbox_attention(root)
+        # v0.4.32 (letter 164 ⑥): and the local Git backup gap, counts only.
+        envelope["git_backup_attention"] = archive_services.write_result_git_backup_attention(root)
     return envelope

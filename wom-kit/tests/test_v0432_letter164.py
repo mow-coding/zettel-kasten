@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -13,6 +14,9 @@ from unittest import mock
 
 from wom_kit import archive_services
 from wom_kit import exact_approval_claims as claims
+from wom_kit import git_backup_attention as attention_module
+from wom_kit import git_backup_plan
+from wom_kit import work_session_command
 from wom_kit import work_session_service
 from wom_kit import work_session_command_modes
 
@@ -243,6 +247,171 @@ class V0432ClaimScanTests(unittest.TestCase):
         self.assertGreaterEqual(claims._MAX_EVIDENCE_FILE_BYTES, 64 * 1024 * 1024)
         self.assertGreaterEqual(claims._MAX_EVIDENCE_FILES, 100_000)
         self.assertGreaterEqual(claims._EVIDENCE_OVERLAP_BYTES, len("approval_") + 32)
+
+
+class V0432GitBackupAttentionTests(unittest.TestCase):
+    """Letter 164 ⑥: session start, backup evidence and work-session create say what Git does not hold."""
+
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.tmp = Path(temporary.name)
+        self.root = self.tmp / "archive"
+        shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", self.root)
+
+    def git(self, *arguments: str) -> None:
+        subprocess.run(
+            ["git", "-C", str(self.root), *arguments],
+            check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+
+    def init_repository(self) -> None:
+        self.git("init", "-q")
+        self.git("config", "user.email", "wom-test@example.invalid")
+        self.git("config", "user.name", "WOM Test")
+        self.git("config", "core.autocrlf", "false")
+
+    def assert_private_free(self, block: dict) -> None:
+        text = json.dumps(block)
+        for private in (str(self.tmp), "remote-mirror", "origin", "private-branch", "archive.yml", "inbox/"):
+            self.assertNotIn(private, text)
+        self.assertEqual(set(block), attention_module.GIT_BACKUP_ATTENTION_KEYS)
+        self.assertFalse(block["network_checked"])
+        self.assertFalse(block["remote_state_is_proof"])
+        self.assertFalse(block["paths_branches_or_messages_echoed"])
+
+    def test_status_records_are_counted_not_kept(self) -> None:
+        raw = b"?? inbox/new.md\0 M archive.yml\0R  new.md\0old.md\0A  zets/x.md\0"
+        self.assertEqual(attention_module._count_status_records(raw), (4, 1, 3))
+        self.assertEqual(attention_module._count_status_records(b""), (0, 0, 0))
+        self.assertIsNone(attention_module._count_status_records(b"R  only-new\0"))
+        self.assertIsNone(attention_module._count_status_records(b"garbage"))
+
+    def test_not_a_repository_is_calm_and_git_unavailable_is_quiet(self) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is required")
+        block = attention_module.git_backup_attention(self.root)
+        self.assertEqual(block["state"], "not_a_repository")
+        self.assertTrue(block["repository_inspected"])
+        self.assertFalse(block["review_recommended"])
+        self.assert_private_free(block)
+        with mock.patch.object(git_backup_plan, "_pin_git_executable", return_value=None):
+            missing = attention_module.git_backup_attention(self.root)
+        self.assertEqual(missing["state"], "git_unavailable")
+        self.assertFalse(missing["repository_inspected"])
+        self.assertFalse(missing["review_recommended"])
+        self.assert_private_free(missing)
+
+    def test_counts_ages_and_push_gap_without_any_private_value(self) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is required")
+        self.init_repository()
+        unborn = attention_module.git_backup_attention(self.root)
+        self.assertEqual(unborn["head_state"], "unborn")
+        self.assertIn("head_unborn", unborn["attention"])
+        self.assertIn("uncommitted_changes_present", unborn["attention"])
+        self.assertGreater(unborn["uncommitted_change_count"], 0)
+        self.git("checkout", "-q", "-b", "private-branch")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "first private subject")
+        no_upstream = attention_module.git_backup_attention(self.root)
+        self.assertEqual(no_upstream["uncommitted_change_count"], 0)
+        self.assertEqual(no_upstream["upstream_state"], "missing")
+        self.assertEqual(no_upstream["attention"], ["upstream_missing"])
+        self.assertEqual(no_upstream["last_commit_age_days"], 0)
+        remote = self.tmp / "remote-mirror.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
+        self.git("remote", "add", "origin", str(remote))
+        self.git("push", "-q", "-u", "origin", "HEAD")
+        (self.root / "inbox" / "new private note.md").write_text("x", encoding="utf-8")
+        (self.root / "archive.yml").write_text(
+            (self.root / "archive.yml").read_text(encoding="utf-8") + "\n# touched\n", encoding="utf-8"
+        )
+        dirty = attention_module.git_backup_attention(self.root)
+        self.assertEqual(dirty["state"], "observed")
+        self.assertEqual(dirty["repository_scope"], "archive_root")
+        self.assertEqual(dirty["uncommitted_change_count"], 2)
+        self.assertEqual(dirty["untracked_count"], 1)
+        self.assertEqual(dirty["tracked_change_count"], 1)
+        self.assertEqual(dirty["uncommitted_change_count_state"], "exact")
+        self.assertEqual(dirty["upstream_state"], "tracked")
+        self.assertEqual((dirty["ahead_count"], dirty["behind_count"]), (0, 0))
+        self.assertEqual(dirty["remote_tip_age_days"], 0)
+        self.assertEqual(dirty["attention"], ["uncommitted_changes_present"])
+        self.assertTrue(dirty["review_recommended"])
+        self.assertIn("2 uncommitted change(s)", dirty["human_summary"])
+        self.assertEqual([p["probe"] for p in dirty["probes"]],
+                         ["rev-parse", "log", "status", "rev-parse-upstream", "rev-list", "log-upstream"])
+        self.assertTrue(all(p["available"] and p["failure_kind"] is None for p in dirty["probes"]))
+        self.assert_private_free(dirty)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "second private subject")
+        ahead = attention_module.git_backup_attention(self.root)
+        self.assertEqual(ahead["ahead_count"], 1)
+        self.assertEqual(ahead["attention"], ["commits_not_pushed"])
+        self.assertIn("1 commit(s) not pushed", ahead["human_summary"])
+        self.assert_private_free(ahead)
+        # ages come from commit times, in whole days
+        with mock.patch.object(attention_module.time, "time", return_value=time.time() + 30 * 86400):
+            stale = attention_module.git_backup_attention(self.root)
+        self.assertEqual(stale["last_commit_age_days"], 30)
+        self.assertEqual(stale["remote_tip_age_days"], 30)
+        self.assertEqual(
+            stale["attention"],
+            ["commits_not_pushed", "last_commit_older_than_7_days", "remote_tip_older_than_7_days"],
+        )
+
+    def test_probe_budget_exhaustion_degrades_with_its_kind(self) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is required")
+        self.init_repository()
+        with mock.patch.object(attention_module, "GIT_BACKUP_ATTENTION_BUDGET_SECONDS", 0.0):
+            block = attention_module.git_backup_attention(self.root)
+        self.assertEqual(block["state"], "unavailable")
+        self.assertEqual(block["reason_code"], "git_repository_probe_unavailable")
+        self.assertEqual(block["probes"][0]["failure_kind"], "probe_budget_exhausted")
+        self.assertTrue(block["review_recommended"])
+        self.assert_private_free(block)
+        with mock.patch.object(attention_module, "git_backup_attention", side_effect=RuntimeError("PRIVATE-CANARY")):
+            quiet = archive_services.write_result_git_backup_attention(self.root)
+        self.assertEqual(quiet["state"], "unavailable")
+        self.assertEqual(set(quiet), attention_module.GIT_BACKUP_ATTENTION_KEYS)
+        self.assertNotIn("PRIVATE-CANARY", json.dumps(quiet))
+
+    def test_start_here_evidence_and_work_session_carry_the_block(self) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is required")
+        self.init_repository()
+        result = archive_services.ai_start_here(self.root)
+        block = result["git_backup_attention"]
+        self.assertEqual(block["state"], "observed")
+        self.assertEqual(result["summary"]["git_backup_attention_state"], "observed")
+        self.assertEqual(result["summary"]["uncommitted_change_count"], block["uncommitted_change_count"])
+        self.assertIn(block["human_summary"], result["warnings"])
+        self.assertTrue(any("git-backup-plan" in step for step in result["next_safe_steps"]))
+        self.assert_private_free(block)
+        evidence = archive_services.backup_evidence_status(self.root)
+        lane = evidence["lanes"]["github"]
+        self.assertEqual(lane["status"], "unverified_no_generic_completion_receipt")
+        self.assertTrue(lane["local_commit_inspected"])
+        self.assertEqual(lane["local_repository_attention"]["state"], "observed")
+        self.assertFalse(lane["remote_ref_checked"])
+        self.assertFalse(lane["completion_claim_ready"])
+        self.assertTrue(evidence["closed_actions"]["git_repository_inspected"])
+        self.assertFalse(evidence["closed_actions"]["network_checked"])
+        self.assertFalse(evidence["privacy_guards"]["git_paths_branches_or_messages_echoed"])
+        self.assertIn(lane["local_repository_attention"]["human_summary"], evidence["warnings"])
+        self.assertTrue(any("git-backup-plan" in action for action in evidence["next_safe_actions"]))
+        from wom_kit import work_session_service
+
+        with mock.patch.object(work_session_service, "create_task", return_value={"ok": True, "schema": "x"}):
+            envelope = work_session_command.dispatch_work_session_management(
+                self.root, action="create", approve=True, client_app_ref="app:x", task_route_ref="route:y",
+                request={"label": "synthetic", "reviewer_claim": "person:synthetic-reviewer"},
+            )
+        self.assertTrue(envelope["ok"], envelope)
+        self.assertEqual(set(envelope["git_backup_attention"]), attention_module.GIT_BACKUP_ATTENTION_KEYS)
+        self.assertEqual(envelope["git_backup_attention"]["state"], "observed")
 
 
 if __name__ == "__main__":
