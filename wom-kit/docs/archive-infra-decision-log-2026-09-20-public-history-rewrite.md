@@ -28,7 +28,19 @@ Executing model: Claude Opus 5, solo and sequential, on the user's explicit
 5. **GitHub-side residue is the user's request.** `refs/pull/*` and cached
    unreachable objects are GitHub's to purge; the user files the support
    request with the prepared text.
-6. **Guard rail going forward.** The public privacy gate already refuses the
+6. **Evidence chains verify through a committed map.** The v0.4.12 link-index
+   reference (`docs/evidence/v0.4.12-link-index-windows-reference.json`)
+   records the commit its measurement came from; that commit object no longer
+   exists after the rewrite (its source tree carried one private label in a
+   docstring), so the first CI run on the rewritten history failed the
+   ancestry check on every fresh Ubuntu clone. Rather than weaken the check,
+   `docs/evidence/history-rewrite-2026-09-20-commit-map.json` records, for
+   each pre-rewrite commit an evidence file names, the rewritten commit, its
+   object digest and the rewritten source-tree oid; the test takes that map
+   only when the recorded commit is not an ancestor of the tag, and still
+   requires the mapped commit to be an ancestor, its object digest to match,
+   and the measured script and reference blobs to be byte-identical.
+7. **Guard rail going forward.** The public privacy gate already refuses the
    strings in current files; the release-docs tests now also refuse the
    user's account folder name in the documents they cover. Client feedback
    letters are read from the client's folder and never copied into the
