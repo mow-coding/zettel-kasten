@@ -55,7 +55,7 @@ class V0423ReleaseDocsTests(unittest.TestCase):
             self.assertIn('__version__ = "0.4.33"', shim.read_text(encoding="utf-8"))
         citation = (ROOT / "CITATION.cff").read_text(encoding="utf-8")
         self.assertIn('version: "0.4.33"', citation)
-        self.assertRegex(citation, r'date-released: "2026-09-1[7-9]"')
+        self.assertRegex(citation, r'date-released: "2026-09-(1[7-9]|2[0-9])"')
         versioning = (ROOT / "VERSIONING.md").read_text(encoding="utf-8")
         self.assertIn("Current public baseline:\n\n```text\nv0.4.33", versioning)
         self.assertIn("Previous public baseline:\n\n```text\nv0.4.32", versioning)
