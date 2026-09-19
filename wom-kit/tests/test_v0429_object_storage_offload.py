@@ -365,7 +365,12 @@ class OffloadPlanTests(unittest.TestCase):
             document = plan.public_document()
             self.assertFalse(document["ok"])
             self.assertEqual(document["state"], "blocked")
-            self.assertEqual(document["reason_codes"], ["object_storage_offload_retention_evidence_unreadable"])
+            # POSIX runners also carry the platform gate; the retention blocker
+            # must be present and be the only other reason.
+            self.assertEqual(
+                [code for code in document["reason_codes"] if code != "object_storage_offload_platform_unsupported"],
+                ["object_storage_offload_retention_evidence_unreadable"],
+            )
             self.assertEqual(document["unreadable_fidelity_receipt_count"], 1)
             self.assertIsNone(plan.manifest)
 
