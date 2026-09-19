@@ -164,7 +164,7 @@ CURRENT_DATABASE_CANONICAL_SHA256 = (
     "d9a42f08ee12a6d42e40214cfb12441e4077bf50c38c25b2692ec1344328294a"
 )
 RESOURCE_ADDITIONS = {
-    "release-notes/v0.4.29.md",
+    "release-notes/v0.4.30.md",
     "schemas/agent-instruction-policy-v0.1.schema.json",
     "schemas/approval-handoff-v0.1.schema.json",
     "schemas/approval-integrity-audit-result-v0.1.schema.json",
@@ -231,7 +231,7 @@ RESOURCE_ADDITIONS = {
 RESOURCE_REMOVALS = {"release-notes/v0.3.297.md"}
 CURRENT_RESOURCE_COUNT = 173
 CURRENT_RESOURCE_CANONICAL_SHA256 = (
-    "cc6e101030d8e4260c7aa7929bd49b6681d27634115f6ee27b24f5f95d7359e3"
+    "75dbc882754a7e4c53b5042e244819e5b5670884b8ca09bbca8c6f0061b207e0"
 )
 
 
@@ -589,10 +589,10 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             actual,
             expected,
             "Current package-resource paths must be the full v0.3.297 set plus "
-            "the exact cumulative v0.3.298 through v0.4.29 delta. "
+            "the exact cumulative v0.3.298 through v0.4.30 delta. "
             f"missing={compact(missing)}; extra={compact(extra)}",
         )
-        self.assertEqual(manifest["version"], "0.4.29")
+        self.assertEqual(manifest["version"], "0.4.30")
         self.assertEqual(len(actual), CURRENT_RESOURCE_COUNT)
         self.assertEqual(
             canonical_sha256(actual),
@@ -612,13 +612,13 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         self.assertNotIn("C:\\Users\\", predecessor_text)
 
     def test_v0419_release_note_is_current_and_older_notes_remain_historical(self) -> None:
-        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.4.29.md"
+        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.4.30.md"
         current_packaged_release = (
             SRC_ROOT
             / "wom_kit"
             / "_resources"
             / "release-notes"
-            / "v0.4.29.md"
+            / "v0.4.30.md"
         )
         self.assertEqual(
             current_source_release.read_bytes(),
@@ -627,10 +627,10 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         current_text = current_source_release.read_text(encoding="utf-8")
         current_flat = " ".join(current_text.split())
         for token in (
-            "v0.4.29",
+            "v0.4.30",
             "project-version-update",
             "Publishing or installing this release does not read or modify a client archive",
-            "wom_kit-0.4.29-py3-none-any.whl",
+            "wom_kit-0.4.30-py3-none-any.whl",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, current_flat)

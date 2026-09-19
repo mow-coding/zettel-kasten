@@ -1,10 +1,17 @@
 ﻿# WOM-kit Capability Matrix
 
-Status: v0.4.29 object-storage offload, object-storage restore, and session-owned writes truth
+Status: v0.4.30 letter-163 mint gate and claim store, object-storage offload, and session-owned writes truth
 Date: 2026-09-04
-Version: v0.4.29 implementation and release scope
+Version: v0.4.30 implementation and release scope
 
-The current v0.4.29 working tree adds `object-storage-offload`: local objet
+The current v0.4.30 working tree answers beta letter 163: `mint-zet` refuses
+a missing or stale source-fidelity plan digest before any claim and names
+its cause on failure; `exact-approval-claims` lists the claim store and
+`exact-approval-claim-finalize` closes reviewed started claims after a
+receipt scan behind one always-dialog approval; the approval-integrity
+audit pages per receipt kind; approved draft writes carry
+`inbox_attention`; `revert-edge` works without `--exact-local` and on inbox
+drafts. The v0.4.29 tree adds `object-storage-offload`: local objet
 bytes are removed only after a same-run full-GET remote proof, two local
 re-hashes and every retention predicate, through the handle-bound delete;
 the manifest keeps the row marked `offloaded`, the remote object is never

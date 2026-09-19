@@ -1,6 +1,6 @@
 # Agent Operator Capabilities Manifest
 
-Status: v0.4.29 object-storage offload, object-storage restore, and writer-session coverage gate
+Status: v0.4.30 letter-163 mint gate and claim store, object-storage offload, and writer-session coverage gate
 
 v0.4.29 adds one command path, `object-storage-offload` (alias
 `objet-storage-offload`, approval-available, always-dialog): local objet
