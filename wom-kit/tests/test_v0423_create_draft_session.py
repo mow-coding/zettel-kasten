@@ -197,7 +197,7 @@ class CreateDraftSessionTests(unittest.TestCase):
         manifest = json.loads((KIT_ROOT / "docs" / "writer-session-coverage.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["paths"]["create-draft"]["status"], "session_integrated")
         self.assertIn("test_v0423_create_draft_session", manifest["paths"]["create-draft"]["evidence"])
-        self.assertEqual(counts["pending"], 29)
+        self.assertEqual(counts["pending"], 30)  # v0.4.28 object-storage-restore is pending (target v0.4.30)
 
 
 if __name__ == "__main__":

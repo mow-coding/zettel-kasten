@@ -32,6 +32,19 @@ object-storage bytes, or sync/query an external DB replica. Offline capability
 therefore depends on the required local records and bytes actually being
 present, not merely referenced.
 
+Since v0.4.28 the restore direction is a real command:
+`archive object-storage-restore` downloads WOM-verified remote objet bytes back
+into the local objet store only when a full authenticated GET reproduces the
+object id, never overwriting a local file and never deleting the remote object;
+`--verify-only` records the same proof without writing local bytes.
+`resolve-objet-ref` reports such an object as `remote_verified_local_absent`
+and names the restore workflow. The 2026-09-04 decision log (decision 6) allows
+one deliberate exception to "local is canonical": a local objet copy may be
+offloaded only after that complete remote proof and every retention and
+filesystem-safety predicate passes, and WOM never automatically deletes the
+remote object. The offload writer itself is the v0.4.29 scope; until then an
+`offloaded` local location is only read (and restored) by v0.4.28.
+
 ## Backup Evidence
 
 Backup claims require boundary-specific evidence:
@@ -73,7 +86,8 @@ privacy boundary, and honest interpretation rules.
 
 ```text
 1. Restore GitHub metadata and version history into local WOM.
-2. Restore sha256-verified objet bytes into a local objet store.
+2. Restore sha256-verified objet bytes into a local objet store
+   (`archive object-storage-restore`, v0.4.28).
 3. Validate local manifests, receipts, zets, and ties.
 4. Regenerate local indexes and external DB map replicas from local records.
 ```
