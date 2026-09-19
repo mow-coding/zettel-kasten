@@ -35,7 +35,13 @@ PREDECESSOR_FIXTURE_PATH = (
     / "v0.3.297-surface-baseline.json"
 )
 
-PREDECESSOR_COMMIT = "96a37f10907951039130ea0b1cc574e2b3f80ffa"
+# v0.4.33: the approved 2026-09-20 public-history rewrite replaced the v0.3.297
+# predecessor commit 96a37f10 with 616d027b (same measurement, private label
+# replaced by a placeholder; see docs/evidence/history-rewrite-2026-09-20-commit-map.json).
+# The sealed member therefore no longer exists in public history and is never
+# derived from it: the gate matches six-grams by SHA-256 instead.
+PRE_REWRITE_PREDECESSOR_COMMIT = "96a37f10907951039130ea0b1cc574e2b3f80ffa"
+PREDECESSOR_COMMIT = "616d027b35b42ead475b838357c21a73d9764283"
 PREDECESSOR_WHEEL_SHA256 = (
     "28ac3f6f25a0c352becdb274f3214ed34b375123c13ec1e7a5c108b13c1e4653"
 )
@@ -47,8 +53,12 @@ SEALED_MEMBER_SHA256 = (
     "4478d5c1032499345cc1516e7f26bb30ba1d0f781d57e618de5a54a418c5fc5d"
 )
 SEALED_DERIVED_FORM_COUNT = 8
-PREDECESSOR_GIT_RAW_COUNT = 203
-PREDECESSOR_GIT_FILE_COUNT = 38
+# pre-rewrite baseline (v0.3.297 tree): 203 raw occurrences in 38 files, 0 in
+# path names; the rewritten predecessor tree holds 0 by construction.
+PRE_REWRITE_PREDECESSOR_GIT_RAW_COUNT = 203
+PRE_REWRITE_PREDECESSOR_GIT_FILE_COUNT = 38
+PREDECESSOR_GIT_RAW_COUNT = 0
+PREDECESSOR_GIT_FILE_COUNT = 0
 PREDECESSOR_GIT_PATH_NAME_COUNT = 0
 PREDECESSOR_WHEEL_RAW_COUNT = 1
 PREDECESSOR_WHEEL_MEMBER_COUNT = 1
@@ -271,18 +281,74 @@ def _ascii_lower(value: bytes) -> bytes:
     return value.translate(ASCII_LOWER_TABLE)
 
 
-def _raw_occurrences(value: bytes, member: bytes) -> int:
-    if not member or len(value) < len(member):
+_SEALED_TARGET = bytes.fromhex(SEALED_MEMBER_SHA256)
+_SEALED_LOW_MASK = (1 << (8 * (SEALED_MEMBER_BYTE_COUNT - 1))) - 1
+_SEALED_RUN_RE = re.compile(rb"[a-z]{6,}")
+_PERCENT_RUN_RE = re.compile(rb"(?:%[0-9A-Fa-f]{2}){6,}")
+_UTF16LE_RUN_RE = re.compile(rb"(?:[A-Za-z]\x00){6,}")
+_UTF16BE_RUN_RE = re.compile(rb"(?:\x00[A-Za-z]){6,}")
+_SEALED_CODE_CACHE: dict[int, bool] = {}
+
+
+def _sealed_code_matches(code: int) -> bool:
+    """True when the six-byte gram behind ``code`` hashes to the sealed member."""
+
+    hit = _SEALED_CODE_CACHE.get(code)
+    if hit is None:
+        hit = hashlib.sha256(code.to_bytes(SEALED_MEMBER_BYTE_COUNT, "big")).digest() == _SEALED_TARGET
+        _SEALED_CODE_CACHE[code] = hit
+    return hit
+
+
+def _raw_occurrences(value: bytes) -> int:
+    """Case-insensitive occurrences of the sealed member, matched by hash only.
+
+    The member is an ASCII lowercase word, so every occurrence lies inside a
+    run of six or more lowercase letters of the lowered bytes; the rolling
+    integer code of each window is hashed once (cached) and never returned.
+    """
+
+    if len(value) < SEALED_MEMBER_BYTE_COUNT:
         return 0
     lowered = _ascii_lower(value)
     count = 0
-    start = 0
-    while True:
-        offset = lowered.find(member, start)
-        if offset < 0:
-            return count
-        count += 1
-        start = offset + 1
+    for matched in _SEALED_RUN_RE.finditer(lowered):
+        run = matched.group(0)
+        code = int.from_bytes(run[:SEALED_MEMBER_BYTE_COUNT], "big")
+        if _sealed_code_matches(code):
+            count += 1
+        for byte in run[SEALED_MEMBER_BYTE_COUNT:]:
+            code = ((code & _SEALED_LOW_MASK) << 8) | byte
+            if _sealed_code_matches(code):
+                count += 1
+    return count
+
+
+def _decoded_candidate_matches(candidate: bytes) -> bool:
+    lowered = _ascii_lower(candidate)
+    if len(lowered) != SEALED_MEMBER_BYTE_COUNT or not lowered.isascii():
+        return False
+    return hashlib.sha256(lowered).digest() == _SEALED_TARGET
+
+
+def _derived_occurrences(value: bytes) -> int:
+    """Occurrences of the eight derived forms (percent-encoded and UTF-16, both cases), by decoding."""
+
+    count = 0
+    for matched in _PERCENT_RUN_RE.finditer(value):
+        run = matched.group(0)
+        decoded = bytes(int(run[index + 1:index + 3], 16) for index in range(0, len(run), 3))
+        for offset in range(0, len(decoded) - SEALED_MEMBER_BYTE_COUNT + 1):
+            if _decoded_candidate_matches(decoded[offset:offset + SEALED_MEMBER_BYTE_COUNT]):
+                count += 1
+    for pattern, take in ((_UTF16LE_RUN_RE, 0), (_UTF16BE_RUN_RE, 1)):
+        for matched in pattern.finditer(value):
+            run = matched.group(0)
+            decoded = run[take::2]
+            for offset in range(0, len(decoded) - SEALED_MEMBER_BYTE_COUNT + 1):
+                if _decoded_candidate_matches(decoded[offset:offset + SEALED_MEMBER_BYTE_COUNT]):
+                    count += 1
+    return count
 
 
 def _exact_occurrences(value: bytes, needle: bytes) -> int:
@@ -298,86 +364,6 @@ def _exact_occurrences(value: bytes, needle: bytes) -> int:
         start = offset + 1
 
 
-@lru_cache(maxsize=1)
-def _sealed_member() -> bytes:
-    """Derive the fixed member without ever returning it through test output."""
-
-    target = bytes.fromhex(SEALED_MEMBER_SHA256)
-    candidates: set[bytes] = set()
-    entries = _git_object_entries(PREDECESSOR_COMMIT)
-
-    def matching_candidates(run_pattern: bytes) -> set[bytes]:
-        # Count rolling integer six-grams first.  Hash only grams having the
-        # directive's exact aggregate count; this avoids persisting a corpus
-        # inventory and avoids millions of short-lived private byte slices.
-        counts: Counter[int] = Counter()
-        low_mask = (1 << (8 * (SEALED_MEMBER_BYTE_COUNT - 1))) - 1
-        for data in entries.values():
-            lowered = _ascii_lower(data)
-            for matched in re.finditer(run_pattern, lowered):
-                run = matched.group(0)
-                if len(run) < SEALED_MEMBER_BYTE_COUNT:
-                    continue
-                code = int.from_bytes(
-                    run[:SEALED_MEMBER_BYTE_COUNT],
-                    "big",
-                )
-                counts[code] += 1
-                for byte in run[SEALED_MEMBER_BYTE_COUNT:]:
-                    code = ((code & low_mask) << 8) | byte
-                    counts[code] += 1
-        matches: set[bytes] = set()
-        for code, count in counts.items():
-            if count != PREDECESSOR_GIT_RAW_COUNT:
-                continue
-            candidate = code.to_bytes(SEALED_MEMBER_BYTE_COUNT, "big")
-            if hashlib.sha256(candidate).digest() == target:
-                matches.add(candidate)
-        return matches
-
-    # The expected member is an ASCII lowercase word.  The second pass is a
-    # complete ASCII fallback and runs only if the expected closed fact drifts.
-    candidates.update(matching_candidates(rb"[a-z]{6,}"))
-    if not candidates:
-        candidates.update(matching_candidates(rb"[\x00-\x7f]{6,}"))
-
-    if len(candidates) != 1:
-        raise AssertionError("sealed_member_derivation_not_unique")
-    member = next(iter(candidates))
-    if (
-        len(member) != SEALED_MEMBER_BYTE_COUNT
-        or not member.isascii()
-        or member != _ascii_lower(member)
-        or hashlib.sha256(member).hexdigest() != SEALED_MEMBER_SHA256
-    ):
-        raise AssertionError("sealed_member_verification_failed")
-    return member
-
-
-def _sealed_derived_forms(member: bytes) -> frozenset[bytes]:
-    upper = member.upper()
-
-    def percent(value: bytes, uppercase_hex: bool) -> bytes:
-        pattern = "%02X" if uppercase_hex else "%02x"
-        return "".join("%" + (pattern % byte) for byte in value).encode("ascii")
-
-    text = member.decode("ascii")
-    upper_text = upper.decode("ascii")
-    forms = {
-        percent(member, True),
-        percent(member, False),
-        percent(upper, True),
-        percent(upper, False),
-        text.encode("utf-16le"),
-        text.encode("utf-16be"),
-        upper_text.encode("utf-16le"),
-        upper_text.encode("utf-16be"),
-    }
-    if len(forms) != SEALED_DERIVED_FORM_COUNT:
-        raise AssertionError("sealed_derived_form_cardinality_invalid")
-    return frozenset(forms)
-
-
 @dataclass(frozen=True)
 class _SurfaceScan:
     raw_total: int
@@ -389,23 +375,18 @@ class _SurfaceScan:
     lower_line_multisets: Mapping[bytes, Counter[bytes]]
 
 
-def _scan_entries(
-    entries: Mapping[bytes, bytes],
-    member: bytes,
-    derived_forms: Iterable[bytes],
-) -> _SurfaceScan:
+def _scan_entries(entries: Mapping[bytes, bytes]) -> _SurfaceScan:
     path_counts: dict[bytes, int] = {}
     lower_lines: dict[bytes, Counter[bytes]] = {}
     path_name_raw_total = 0
     derived_total = 0
     matching_binary_count = 0
 
-    forms = tuple(derived_forms)
     for path, data in entries.items():
-        path_name_raw_total += _raw_occurrences(path, member)
-        derived_total += sum(_exact_occurrences(path, form) for form in forms)
-        derived_total += sum(_exact_occurrences(data, form) for form in forms)
-        count = _raw_occurrences(data, member)
+        path_name_raw_total += _raw_occurrences(path)
+        derived_total += _derived_occurrences(path)
+        derived_total += _derived_occurrences(data)
+        count = _raw_occurrences(data)
         if count == 0:
             continue
         path_counts[path] = count
@@ -419,7 +400,7 @@ def _scan_entries(
             continue
         lines: Counter[bytes] = Counter()
         for line in data.splitlines():
-            if _raw_occurrences(line, member):
+            if _raw_occurrences(line):
                 lines[_ascii_lower(line)] += 1
         lower_lines[path] = lines
 
@@ -915,27 +896,29 @@ def _installed_resource_entries(site_packages: Path) -> Mapping[bytes, bytes]:
 
 class PrivateObjetMetadataIndexPrivacyGateTests(unittest.TestCase):
     def test_00_sealed_member_and_derived_forms_are_exact_and_nonpublic(self) -> None:
-        member = _sealed_member()
-        derived = _sealed_derived_forms(member)
         self.assertEqual(SEALED_CORPUS_SCHEMA.rsplit("/", 1)[-1], "v0.1")
-        self.assertEqual(len(member), SEALED_MEMBER_BYTE_COUNT)
-        self.assertEqual(
-            hashlib.sha256(member).hexdigest(),
-            SEALED_MEMBER_SHA256,
-        )
-        self.assertEqual(len(derived), SEALED_DERIVED_FORM_COUNT)
+        self.assertEqual(SEALED_MEMBER_BYTE_COUNT, 6)
+        self.assertEqual(len(bytes.fromhex(SEALED_MEMBER_SHA256)), 32)
+        self.assertEqual(SEALED_DERIVED_FORM_COUNT, 8)
+        # the sealed member is never derived: a six-letter probe that is not it
+        # must not match, and the scan primitives must be exact on synthetic data
+        probe = b"abcdef"
+        self.assertNotEqual(hashlib.sha256(probe).hexdigest(), SEALED_MEMBER_SHA256)
+        self.assertEqual(_raw_occurrences(b"xx abcdef yy ABCDEF"), 0)
+        self.assertEqual(_derived_occurrences("abcdef".encode("utf-16le") + b"%61%62%63%64%65%66"), 0)
         for value in _runtime_canaries().values():
             encoded = value.encode("utf-8")
-            self.assertNotEqual(encoded, member, "runtime_sealed_collision")
-            self.assertNotIn(encoded, derived, "runtime_derived_collision")
+            self.assertEqual(_raw_occurrences(encoded), 0, "runtime_sealed_collision")
+            self.assertEqual(_derived_occurrences(encoded), 0, "runtime_derived_collision")
 
     def test_01_exact_predecessor_git_object_baseline(self) -> None:
-        member = _sealed_member()
-        scan = _scan_entries(
-            _git_object_entries(PREDECESSOR_COMMIT),
-            member,
-            _sealed_derived_forms(member),
+        # The rewritten predecessor commit carries the v0.3.297 measurement with
+        # the private label replaced; the pre-rewrite counts stay documented above.
+        self.assertEqual(
+            _git_bytes("rev-parse", "--verify", PREDECESSOR_COMMIT + "^{commit}").strip().decode("ascii"),
+            PREDECESSOR_COMMIT,
         )
+        scan = _scan_entries(_git_object_entries(PREDECESSOR_COMMIT))
         self.assertEqual(scan.raw_total, PREDECESSOR_GIT_RAW_COUNT)
         self.assertEqual(
             scan.occurrence_file_count,
@@ -951,19 +934,15 @@ class PrivateObjetMetadataIndexPrivacyGateTests(unittest.TestCase):
     def test_02_candidate_git_object_or_dirty_worktree_is_predecessor_subset(
         self,
     ) -> None:
-        member = _sealed_member()
-        derived = _sealed_derived_forms(member)
-        predecessor = _scan_entries(
-            _git_object_entries(PREDECESSOR_COMMIT),
-            member,
-            derived,
-        )
+        predecessor = _scan_entries(_git_object_entries(PREDECESSOR_COMMIT))
         candidate_entries, mode = _candidate_entries()
         self.assertIn(
             mode,
             {"git_object", "dirty_worktree_approximation"},
         )
-        candidate = _scan_entries(candidate_entries, member, derived)
+        candidate = _scan_entries(candidate_entries)
+        # since the rewrite the only admissible count is zero
+        self.assertEqual(candidate.raw_total, 0, "sealed_member_present_in_candidate")
         _assert_surface_subset(
             self,
             predecessor,
@@ -1345,12 +1324,10 @@ class PrivateObjetMetadataIndexReleaseArtifactGateTests(unittest.TestCase):
             PREDECESSOR_WHEEL_SHA256,
         )
 
-        member = _sealed_member()
-        derived = _sealed_derived_forms(member)
         predecessor_entries = _zip_entries(predecessor_path)
         candidate_entries = _zip_entries(candidate_path)
-        predecessor = _scan_entries(predecessor_entries, member, derived)
-        candidate = _scan_entries(candidate_entries, member, derived)
+        predecessor = _scan_entries(predecessor_entries)
+        candidate = _scan_entries(candidate_entries)
 
         self.assertEqual(
             predecessor.raw_total,
@@ -1392,10 +1369,8 @@ class PrivateObjetMetadataIndexReleaseArtifactGateTests(unittest.TestCase):
         predecessor_entries = _installed_resource_entries(predecessor_root)
         candidate_entries = _installed_resource_entries(candidate_root)
 
-        member = _sealed_member()
-        derived = _sealed_derived_forms(member)
-        predecessor = _scan_entries(predecessor_entries, member, derived)
-        candidate = _scan_entries(candidate_entries, member, derived)
+        predecessor = _scan_entries(predecessor_entries)
+        candidate = _scan_entries(candidate_entries)
         for scan in (predecessor, candidate):
             self.assertEqual(scan.raw_total, 0)
             self.assertEqual(scan.occurrence_file_count, 0)

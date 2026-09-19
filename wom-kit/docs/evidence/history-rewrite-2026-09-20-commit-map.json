@@ -12,6 +12,14 @@
       "recorded_source_tree_oid": "sha1:2ca081a80c7bd7b4680c3a18352d5faebb96d860",
       "rewritten_source_tree_oid": "sha1:dfe8ff24cc05d87a03c11f91a3174728a65c996e",
       "source_tree_change": "one docstring line in wom-kit/src/wom_kit/archive_services.py carried a private label and was replaced by the placeholder; the measured benchmark script and the reference document are byte-identical before and after the rewrite"
+    },
+    "sha1:96a37f10907951039130ea0b1cc574e2b3f80ffa": {
+      "evidence_file": "wom-kit/tests/test_private_objet_metadata_index.py",
+      "rewritten_commit_oid": "sha1:616d027b35b42ead475b838357c21a73d9764283",
+      "rewritten_commit_sha256": "sha256:39531cf0bc2816c4712425eb9c60c2a64a5b68f85d2954578f300c3d4b2b107c",
+      "recorded_source_tree_oid": "sha1:4e8809e08a7641744677558b60e8f80f158d0b14",
+      "rewritten_source_tree_oid": "sha1:c6fd292c03d41c35ceabdc7206d145d2c8ad7fb2",
+      "source_tree_change": "the v0.3.297 predecessor of the private-metadata privacy gate: the rewrite replaced the sealed private label everywhere (203 occurrences in 38 files before; 0 after), so the gate now matches six-grams by SHA-256 instead of deriving the member from this commit"
     }
   }
 }
