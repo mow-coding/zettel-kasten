@@ -706,3 +706,15 @@ installations recorded in the
 L163-02 is now installable from the public artifact and stays open for the
 client's own runs; the client is told about it together with v0.4.32 in
 the next reply.
+
+### 2026-09-20 v0.4.32 released (letter 164 first half public)
+
+v0.4.32 is public: tag `v0.4.32` on main `3ee73588`, one wheel
+`wom_kit-0.4.32-py3-none-any.whl` (SHA-256
+`272211f9ce1264fb711bbf96cd0ba92d518534438d2f4224fd128f42c37a7503`),
+candidate CI 14/14 (first attempt, no reruns), exact-merge installed verification,
+anonymous download and two fresh-venv installations recorded in the
+[release evidence](../../meeting-minutes/2026-09-20-v0432-release-evidence.md).
+L164-01 is now installable from the public artifact and stays open for the
+client's own runs; the client receives one reply covering v0.4.31 and
+v0.4.32 (the letter-164 reply draft), sent by the user.
