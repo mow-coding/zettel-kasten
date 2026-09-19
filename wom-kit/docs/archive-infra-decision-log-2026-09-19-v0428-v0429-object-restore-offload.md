@@ -75,6 +75,30 @@ follow, so the slip is a recorded fact and not a silent one.
     and the operator's explicit size/age filters select it. Defaults stay
     conservative and every exclusion is counted in the plan.
 
+## Amendment 2026-09-19 (after the v0.4.29 implementation review)
+
+- Decision 3 said v0.4.29 needs no further approval-kind change; that was
+  wrong: a deletion must not show the restore dialog copy. v0.4.29 adds the
+  always-dialog kind `object_storage_bytes_offload` ("오브제 로컬 바이트 비우기").
+- Offload sources are WOM-verified `wom_uploaded` manifest locations only;
+  a v0.4.13 preservation receipt alone stays restorable but never offloadable,
+  because the row must carry the remote proof every reader keys on after the
+  local bytes are gone. Only capture-provenance objects
+  (`b4_local_objet_capture`, `tiro_lossless_recovery_bundle_capture`) are
+  candidates; snapshot and provider-recovery objects stay local.
+- The offload proof is the existing remote-query adapter (HEAD then the full
+  GET re-hash), not a sink download: no local copy is written, no disk is
+  doubled. The proof marker is bound to the approved execution
+  (`<manifest16>/<execution16>/`), written atomically, honoured only for a
+  byte-identical file identity, and discarded when torn or foreign.
+- Removal uses the handle-bound compare-and-delete primitive, which the
+  codebase keeps Windows-only by design (POSIX never mutates); a plan is
+  inspectable everywhere and approval is refused elsewhere with
+  `object_storage_offload_platform_unsupported`.
+- Bytes a capture re-materialises before the projection keep their row
+  `available` and are counted; the window between a per-object removal and
+  the final projection is reported truthfully by Doctor and closed by resume.
+
 ## Consequences
 
 - The client can bring deleted or offloaded originals back with one dialog

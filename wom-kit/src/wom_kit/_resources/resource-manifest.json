@@ -2,7 +2,7 @@
   "schema": "wom-kit/package-resource-manifest/v0.1",
   "version": "0.4.28",
   "source_of_truth": "wom-kit source resource directories",
-  "file_count": 170,
+  "file_count": 171,
   "files": [
     {
       "source": "schemas/activity-group-membership-receipt.schema.json",
@@ -297,6 +297,12 @@
       "packaged": "schemas/object-storage-manifest-reconcile-receipt.schema.json",
       "bytes": 1656,
       "sha256": "78a676edb3a370575c85cadaacbe0310a2d4ef4d5ee3d4205ee273f264f297ed"
+    },
+    {
+      "source": "schemas/object-storage-offload-receipt-v0.1.schema.json",
+      "packaged": "schemas/object-storage-offload-receipt-v0.1.schema.json",
+      "bytes": 3571,
+      "sha256": "eb316f557d1cb54821624117d4542c79c33389399929b77f05c619b4a41aada8"
     },
     {
       "source": "schemas/object-storage-preservation-terminal-receipt-v0.2.schema.json",

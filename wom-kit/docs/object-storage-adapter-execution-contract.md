@@ -245,6 +245,74 @@ The live sender now applies a per-operation idle timeout
 call so a silent socket becomes a retryable transport error instead of a hang;
 a slow but progressing transfer is never cut.
 
+## v0.4.29 Offload Execution (OB-02)
+
+`archive object-storage-offload <archive_root> --store-ref <store> ...` (alias
+`objet-storage-offload`) is the way out that v0.4.28 made safe: it frees local
+disk by removing the canonical `objects/sha256/<2>/<64>` file of an objet only
+after, in the same approved execution, a full authenticated GET streamed the
+remote copy and reproduced the object id (size and sha256), the local bytes
+re-hashed to the object id, and every retention predicate passed. The manifest
+row keeps its local location, flipped to `availability: offloaded` with
+`offload_receipt_ref` and `offloaded_at` (the tombstone lives in the manifest,
+so every reader sees a named recovery dependency, never a missing file). The
+remote object is never deleted; `object-storage-restore` brings the bytes back.
+
+- Eligibility (plan, no provider call, no credential read): a WOM-verified
+  `wom_uploaded` location for the requested provider and store (a v0.4.13
+  preservation receipt alone can be restored from but never offloaded from:
+  the row itself must carry the remote proof every reader keys on); provenance
+  source `b4_local_objet_capture` or `tiro_lossless_recovery_bundle_capture`
+  (snapshot and provider-recovery objects stay local because their writers
+  append a new record when no available location exists); an `available`
+  local location whose file is present, hashes to the object id, sits on a
+  reparse-free path chain and carries a usable identity (inode ≥ 1, one link);
+  not referenced by any inbox draft (body or frontmatter objet tokens) and not
+  the fidelity source of any inbox draft's private receipt; captured at least
+  `--min-age-days` (default 30) ago and at least `--min-size-bytes` (default 0)
+  large — `--only` bypasses the two filters, never the safety predicates.
+  Every exclusion is counted; an unreadable draft or fidelity receipt blocks
+  the whole plan (`object_storage_offload_retention_evidence_unreadable`).
+- Platform: the removal uses the handle-bound compare-and-delete primitive
+  (device, inode, size, mtime and a re-hash through the open handle before the
+  delete disposition), which is Windows-only by design; a plan is inspectable
+  everywhere but `object_storage_offload_platform_unsupported` blocks approval
+  elsewhere.
+- Approve: one native dialog (`오브제 로컬 바이트 비우기`, always-dialog, never
+  grantable to a session permission mode). Per object, in order: local
+  re-hash; `HeadObject` then the full `GetObject` re-hash through the existing
+  remote-query adapter (no sink, no local write); a second local re-hash and
+  identity capture; a create-only proof marker under
+  `profiles/local/exact-operations/offload-proofs/<manifest16>/<execution16>/`
+  bound to this approved execution; the bound delete; one immutable receipt
+  under `receipts/providers/object-storage-offload/` (schema
+  `wom-kit/object-storage-offload-receipt/v0.1`: `bytes_offloaded` or
+  `review_required` with `remote_absent` / `remote_size_mismatch` /
+  `remote_checksum_mismatch`, in which case the local file is kept); the
+  marker is discarded after the receipt. One final manifest projection flips
+  each removed object's local location to `offloaded`; bytes a capture
+  re-materialised before the projection keep their row `available` and are
+  counted as `local_bytes_reappeared_count`.
+- Interruption: a crash after the delete but before the receipt is recovered
+  from the marker on resume without a second download; a marker of another
+  execution or a torn marker never authorises a removal; a file that is
+  absent without a marker of this execution refuses (`local_conflict`) rather
+  than receipting a deletion WOM did not perform; a resumed plan re-checks
+  the draft predicates and refuses (`plan_changed`) if a new draft references
+  an object not yet removed. Between a per-object removal and the final
+  projection, Doctor truthfully reports `local_object_missing` for that
+  object; the resume closes the window.
+- Readers after an offload: Doctor reports `local_object_offloaded` as INFO
+  (a strict run stays green) and warns `local_object_offloaded_but_present`
+  when bytes exist under an offloaded location; `backup-evidence` counts
+  `offloaded_local_location_object_count` and `remote_only_object_count`;
+  `staged-cleanup-check` defers the staged copy
+  (`objet_bytes_offloaded_remote_only_restore_before_cleanup`);
+  `resolve-objet-ref` sets `local_offloaded`, `restore_workflow` and prints
+  `offloaded; run object-storage-restore`; the upload planner reports
+  `offloaded_object_skipped_restore_before_upload` instead of blocking the
+  store.
+
 ## Integrity Rules
 
 The object id is the WOM content identity. A future live adapter must verify the

@@ -58,9 +58,9 @@ EMPTY_ALLOWLIST_SHA256 = (
     "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
 )
 
-CLI_COUNT = 579
+CLI_COUNT = 581
 CLI_CANONICAL_SHA256 = (
-    "2d9df57dfefb40c81d356d77a412501fe20290124e3cd12a344ff9416a9cb860"
+    "6993927a05e003808001478e7382386fdffd45f89fc7783996e94afed267dda5"
 )
 MCP_COUNT = 137
 MCP_CANONICAL_SHA256 = (
@@ -105,6 +105,7 @@ RESOURCE_ADDITIONS = frozenset(
         "schemas/object-storage-preservation-terminal-receipt-v0.3.schema.json",
         "schemas/object-storage-formal-adoption-receipt-v0.1.schema.json",
         "schemas/object-storage-restore-receipt-v0.1.schema.json",
+        "schemas/object-storage-offload-receipt-v0.1.schema.json",
         "schemas/objet-capture-batch-receipt.schema.json",
         "schemas/objet-capture-batch-request.schema.json",
         "schemas/principal-record.schema.json",

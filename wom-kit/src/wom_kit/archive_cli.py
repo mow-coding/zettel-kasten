@@ -156,6 +156,8 @@ Commands:
           Run an approval-gated live S3-compatible upload when all provider and credential gates resolve.
   object-storage-restore
           Download WOM-verified remote objet bytes back into the local objet store, or prove them with a full GET (v0.4.28).
+  object-storage-offload
+          Remove local objet bytes only after a same-run full-GET remote proof and every retention predicate; the manifest keeps an offloaded tombstone (v0.4.29).
   connection-edge-intelligence-plan
           Classify sanitized connection fixture candidates into meaning/mechanism review signals.
   notion-nested-tree-plan
@@ -429,6 +431,7 @@ from . import (
     operation_control,
     operation_approval_binding,
     object_storage_adoption,
+    object_storage_offload,
     object_storage_preservation,
     object_storage_restore,
     object_storage_setup_registration,
@@ -2199,6 +2202,7 @@ class Doctor:
         self._edge_source_cache_hits = 0
         self._object_byte_reference_count = 0
         self._object_byte_unresolved_reference_count = 0
+        self._object_byte_offloaded_reference_count = 0
         self._object_byte_states_by_path: dict[str, str] = {}
         self._object_byte_observations_by_path: dict[
             str, tuple[Path, int | None, str]
@@ -5598,6 +5602,9 @@ class Doctor:
             completion_revalidated_unique_local_file_count=(
                 self._object_byte_completion_revalidated_count
             ),
+            offloaded_local_reference_count=(
+                self._object_byte_offloaded_reference_count
+            ),
         )
 
     def _record_object_byte_state(self, path: Path, state: str) -> None:
@@ -5696,6 +5703,49 @@ class Doctor:
                 continue
             if location.get("provider") != "local":
                 continue
+            offloaded = location.get("availability") == "offloaded"
+            if offloaded:
+                # v0.4.29 (OB-02): the bytes were removed on purpose after a
+                # full-GET remote proof and an exact approval; the location
+                # stays so the object remains a named recovery dependency.
+                # Present bytes under an offloaded location are reported so
+                # the row can be reactivated by object-storage-restore --only.
+                relative_path = location.get("path")
+                if not isinstance(relative_path, str):
+                    self._object_byte_reference_count += 1
+                    self._object_byte_unresolved_reference_count += 1
+                    self.warn("local_object_path_missing", f"Local objet location missing path: {object_id}", manifest_path)
+                    continue
+                # An offloaded entry is expected to be absent; its shard
+                # directory may be absent too, so the path is checked
+                # lexically and by one lstat rather than through the
+                # boundary inventory (which only knows present entries).
+                try:
+                    normalized = normalize_archive_relative_path(relative_path)
+                except ArchivePathError as exc:
+                    self._object_byte_reference_count += 1
+                    self._object_byte_unresolved_reference_count += 1
+                    self.error("local_object_path_unsafe", f"Local objet location has an unsafe path: {relative_path} ({exc})", manifest_path)
+                    continue
+                local_path = self.archive_root.joinpath(*PurePosixPath(normalized).parts)
+                try:
+                    offloaded_stat = os.lstat(local_path)
+                except OSError:
+                    offloaded_stat = None
+                if offloaded_stat is None:
+                    self._object_byte_offloaded_reference_count += 1
+                    self.info(
+                        "local_object_offloaded",
+                        "Local objet bytes are offloaded to verified object storage (a recovery dependency, not a missing file); bring them back with object-storage-restore.",
+                        manifest_path,
+                    )
+                    continue
+                self.warn(
+                    "local_object_offloaded_but_present",
+                    "Local objet bytes exist under a location recorded as offloaded; run object-storage-restore --only <object_id> to reactivate the row.",
+                    local_path,
+                )
+                # fall through: verify the present bytes like any local file
             self._object_byte_reference_count += 1
             relative_path = location.get("path")
             if not isinstance(relative_path, str):
@@ -18104,6 +18154,157 @@ def print_object_storage_restore_result(result: dict[str, Any], output_format: s
         print(f"Next: {action}")
 
 
+def _object_storage_offload_cli_error(args: argparse.Namespace, reason_code: str) -> int:
+    return _exact_human_approval_cli_error(
+        args,
+        lifecycle_action="object_storage_bytes_offload",
+        reason_code=reason_code,
+    )
+
+
+def command_object_storage_offload(args: argparse.Namespace) -> int:
+    """v0.4.29 (OB-02): free local disk only after the way back is proven.
+
+    Dry-run scans the manifest and every inbox draft, hashes local candidates
+    and echoes counts only. Approve opens one native dialog for the whole
+    plan, then per object downloads and re-hashes the remote copy, re-hashes
+    the local file, writes a proof marker, removes the local file, and
+    records one receipt; one manifest projection flips each removed object's
+    local location to ``offloaded``. The remote object is never deleted and
+    ``object-storage-restore`` brings the bytes back.
+    """
+
+    if bool(args.dry_run) == bool(args.approve):
+        return _object_storage_offload_cli_error(args, "object_storage_offload_plan_invalid")
+    reviewer = str(getattr(args, "reviewed_by", None) or "").strip()
+    expected_manifest_sha256 = str(getattr(args, "expected_manifest_sha256", None) or "").strip().lower()
+    resume_approval_id = str(getattr(args, "resume_approval_id", None) or "").strip()
+    resume_execution_sha256 = str(getattr(args, "resume_execution_sha256", None) or "").strip().lower()
+    resume_requested = bool(resume_approval_id or resume_execution_sha256)
+    if resume_requested and not (resume_approval_id and resume_execution_sha256):
+        return _object_storage_offload_cli_error(args, "object_storage_offload_resume_invalid")
+    if resume_requested and (
+        not args.approve
+        or getattr(args, "only", None)
+        or getattr(args, "max_objects", None) is not None
+    ):
+        return _object_storage_offload_cli_error(args, "object_storage_offload_resume_invalid")
+    if args.approve and (
+        not reviewer or re.fullmatch(r"sha256:[0-9a-f]{64}", expected_manifest_sha256) is None
+    ):
+        return _object_storage_offload_cli_error(args, "object_storage_offload_approval_required")
+    min_age_days = getattr(args, "min_age_days", None)
+    min_size_bytes = getattr(args, "min_size_bytes", None)
+    if min_age_days is None:
+        min_age_days = object_storage_offload.DEFAULT_MIN_AGE_DAYS
+    if min_size_bytes is None:
+        min_size_bytes = object_storage_offload.DEFAULT_MIN_SIZE_BYTES
+    plan_progress, exact_progress = _object_storage_restore_progress_hooks(args)
+    try:
+        if resume_requested:
+            plan = object_storage_offload.load_object_storage_offload_plan(
+                Path(args.archive_root), manifest_sha256=expected_manifest_sha256
+            )
+        else:
+            plan = object_storage_offload.plan_object_storage_offload(
+                Path(args.archive_root),
+                provider_kind=args.provider_kind,
+                store_ref=args.store_ref,
+                only=args.only,
+                max_objects=args.max_objects,
+                min_age_days=int(min_age_days),
+                min_size_bytes=int(min_size_bytes),
+                progress=plan_progress,
+            )
+        if args.dry_run:
+            result = plan.public_document()
+        else:
+            if plan.manifest is None or not secrets.compare_digest(
+                plan.manifest.manifest_sha256, expected_manifest_sha256
+            ):
+                return _object_storage_offload_cli_error(args, "object_storage_offload_plan_changed")
+            transport_factory = _object_storage_live_transport_factory(
+                args,
+                invalid=lambda: object_storage_offload.ObjectStorageOffloadError(
+                    "object_storage_offload_plan_invalid"
+                ),
+                unavailable=lambda: object_storage_offload.ObjectStorageOffloadError(
+                    "object_storage_offload_remote_unavailable"
+                ),
+            )
+            if resume_requested:
+                result = object_storage_offload.resume_object_storage_offload(
+                    plan,
+                    reviewer_claim=reviewer,
+                    approval_id=resume_approval_id,
+                    execution_sha256=resume_execution_sha256,
+                    transport_factory=transport_factory,
+                    progress_hook=exact_progress,
+                )
+            else:
+                result = object_storage_offload.execute_object_storage_offload(
+                    plan,
+                    reviewer_claim=reviewer,
+                    transport_factory=transport_factory,
+                    progress_hook=exact_progress,
+                )
+    except object_storage_offload.ObjectStorageOffloadError as exc:
+        return _object_storage_offload_cli_error(args, exc.code)
+    except object_storage_restore.ObjectStorageRestoreError as exc:
+        return _object_storage_offload_cli_error(
+            args, exc.code.replace("object_storage_restore_", "object_storage_offload_")
+        )
+    except object_storage_preservation.ObjectStoragePreservationError as exc:
+        code = (
+            "object_storage_offload_remote_unavailable"
+            if "remote" in exc.code
+            else "object_storage_offload_plan_invalid"
+        )
+        return _object_storage_offload_cli_error(args, code)
+    except (
+        ExactHumanApprovalError,
+        ExactHumanApprovalWindowsError,
+        ExactHumanApprovalWorkflowError,
+        ExactOperationManifestError,
+    ) as exc:
+        return _object_storage_offload_cli_error(
+            args, str(getattr(exc, "code", "object_storage_offload_remote_unavailable"))
+        )
+    print_object_storage_offload_result(result, args.format)
+    return 0 if result.get("ok", False) else 1
+
+
+def print_object_storage_offload_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    print(f"Object-storage offload {result.get('state') or 'blocked'}.")
+    print(f"Plan SHA-256: {result.get('plan_sha256') or result.get('manifest_sha256') or '-'}")
+    if "planned_object_count" in result:
+        print(f"Planned objects: {result.get('planned_object_count', 0)}")
+    if "planned_local_bytes_freed" in result:
+        print(f"Planned local bytes freed: {result.get('planned_local_bytes_freed', 0)}")
+    counts = result.get("status_counts")
+    if isinstance(counts, dict):
+        print("Outcomes: " + ", ".join(f"{key}={value}" for key, value in sorted(counts.items())))
+    for key in (
+        "offload_target_count",
+        "referenced_by_unminted_draft_count",
+        "fidelity_source_of_unminted_draft_count",
+        "below_min_age_count",
+        "below_min_size_count",
+        "local_bytes_absent_count",
+        "local_bytes_conflict_count",
+        "remote_evidence_missing_count",
+        "local_bytes_freed",
+        "manifest_location_updates",
+    ):
+        if key in result:
+            print(f"{key}: {result[key]}")
+    for action in result.get("next_safe_actions") or []:
+        print(f"Next: {action}")
+
+
 def command_object_storage_adopt_existing(args: argparse.Namespace) -> int:
     if bool(getattr(args, "formal_adoption", False)):
         return _command_object_storage_formal_adoption(args)
@@ -20169,7 +20370,12 @@ def print_resolve_objet_ref_result(result: dict[str, Any], output_format: str) -
         for candidate in local_candidates:
             if not isinstance(candidate, dict):
                 continue
-            state_label = "exists" if candidate.get("exists") else "missing"
+            if candidate.get("exists"):
+                state_label = "exists"
+            elif candidate.get("availability") == "offloaded":
+                state_label = "offloaded; run object-storage-restore"
+            else:
+                state_label = "missing"
             print(f"- {candidate.get('archive_relative_path') or '-'} ({state_label})")
     external_candidates = result.get("external_candidates") if isinstance(result.get("external_candidates"), list) else []
     if external_candidates:
@@ -39887,6 +40093,66 @@ def build_parser() -> argparse.ArgumentParser:
     )
     object_storage_restore_parser.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     object_storage_restore_parser.set_defaults(func=command_object_storage_restore)
+
+    object_storage_offload_parser = subcommands.add_parser(
+        "object-storage-offload",
+        aliases=["objet-storage-offload"],
+        help=(
+            "Free local disk: remove local objet bytes only after a same-run full-GET remote proof, "
+            "a local re-hash and every retention predicate; the manifest keeps an offloaded tombstone, "
+            "the remote object is never deleted, and object-storage-restore brings the bytes back (v0.4.29)."
+        ),
+    )
+    object_storage_offload_parser.add_argument("archive_root", help="Archive root to offload from.")
+    object_storage_offload_parser.add_argument(
+        "--provider-kind",
+        choices=sorted(archive_services.OBJECT_STORAGE_ALLOWED_PROVIDERS),
+        default="cloudflare-r2",
+        help="Object-storage provider kind label.",
+    )
+    object_storage_offload_parser.add_argument(
+        "--store-ref",
+        help="Safe store label/ref the wom_uploaded locations were recorded under. Required. No URLs, bucket names, paths, tokens or secrets.",
+    )
+    object_storage_offload_parser.add_argument("--access-key-id-ref", help="Access key id ref (env:/keyring:/credential-manager:); read only inside the approved write.")
+    object_storage_offload_parser.add_argument("--secret-access-key-ref", help="Secret access key ref; read only inside the approved write.")
+    object_storage_offload_parser.add_argument("--endpoint-host", help="Non-secret S3 endpoint host. Required for --approve.")
+    object_storage_offload_parser.add_argument("--bucket", help="Non-secret bucket name. Required for --approve.")
+    object_storage_offload_parser.add_argument("--region", help="S3 region. Defaults to 'auto' for cloudflare-r2.")
+    object_storage_offload_parser.add_argument("--only", help="Offload only this object id (sha256:<hex> or bare 64 hex); the age and size filters do not apply to an explicitly named object, the safety predicates always do.")
+    object_storage_offload_parser.add_argument("--max-objects", type=int, help="REFUSE if the resolved plan exceeds this count.")
+    object_storage_offload_parser.add_argument(
+        "--min-age-days",
+        type=int,
+        dest="min_age_days",
+        help=f"Only objects captured at least this many days ago (default {object_storage_offload.DEFAULT_MIN_AGE_DAYS}).",
+    )
+    object_storage_offload_parser.add_argument(
+        "--min-size-bytes",
+        type=int,
+        dest="min_size_bytes",
+        help=f"Only objects at least this large (default {object_storage_offload.DEFAULT_MIN_SIZE_BYTES}).",
+    )
+    object_storage_offload_parser.add_argument(
+        "--expected-manifest-sha256",
+        help="Exact plan_sha256 from the preceding --dry-run; required for --approve and resume.",
+    )
+    object_storage_offload_parser.add_argument("--resume-approval-id", help="Resume an interrupted exact offload using its one-use approval id.")
+    object_storage_offload_parser.add_argument("--resume-execution-sha256", help="Resume the exact checkpoint execution bound to --resume-approval-id.")
+    object_storage_offload_parser.add_argument("--reviewed-by", help="Safe reviewer id required when --approve is used.")
+    object_storage_offload_parser.add_argument("--progress", action="store_true", help="Stream planning and per-object progress to stderr; stdout keeps the final result.")
+    object_storage_offload_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Plan only: scan the manifest and inbox drafts, hash local candidates; no provider call, no credential read, no write.",
+    )
+    object_storage_offload_parser.add_argument(
+        "--approve",
+        action="store_true",
+        help="Run the exact native-approval offload (one dialog for the whole plan). Requires --reviewed-by and --expected-manifest-sha256.",
+    )
+    object_storage_offload_parser.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    object_storage_offload_parser.set_defaults(func=command_object_storage_offload)
 
     object_storage_wom_location_reconcile = subcommands.add_parser(
         "object-storage-wom-location-reconcile",

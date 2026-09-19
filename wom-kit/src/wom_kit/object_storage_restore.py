@@ -1087,10 +1087,12 @@ def _projection_marker_relative(plan: ObjectStorageRestorePlan) -> str:
     return f"{CONTROL_ROOT}/{digest}.object-storage-restore.projection.json"
 
 
+def _projection_marker_absent_for(root: Path, relative: str) -> bool:
+    return not archive_services.archive_internal_path(root, relative).exists()
+
+
 def _projection_marker_absent(plan: ObjectStorageRestorePlan) -> bool:
-    return not archive_services.archive_internal_path(
-        plan.archive_root, _projection_marker_relative(plan)
-    ).exists()
+    return _projection_marker_absent_for(plan.archive_root, _projection_marker_relative(plan))
 
 
 def _write_projection_marker(plan: ObjectStorageRestorePlan, *, changed: int) -> None:
@@ -1115,30 +1117,37 @@ class _ManifestIndexLifecycle:
     lease_token: archive_services.ArchiveIndexMutationLeaseToken | None = None
     updated: bool = False
     resumed: bool = False
+    reappeared: int = 0  # v0.4.29 offload: rows left available because bytes came back
 
 
-def _require_manifest_index_authority(plan: ObjectStorageRestorePlan) -> None:
-    if not plan.batch_specs or plan.manifest is None:
-        return
-    manifest_path = archive_services.archive_internal_path(plan.archive_root, "objects/manifests/files.jsonl")
+def _require_manifest_index_authority_for(root: Path, manifest_sha256: str, *, operation: str) -> None:
+    manifest_path = archive_services.archive_internal_path(root, "objects/manifests/files.jsonl")
     try:
         owner = archive_services.archive_manifest_mutation_owner_sha256(
-            operation="object_storage_bytes_restore",
-            operation_binding_sha256=plan.manifest.manifest_sha256,
+            operation=operation,
+            operation_binding_sha256=manifest_sha256,
         )
         snapshot = archive_services.archive_index_stable_file_snapshot(
-            plan.archive_root,
+            root,
             manifest_path,
             max_bytes=archive_services.ZETTEL_OBJET_LINK_MANIFEST_MAX_BYTES,
         )
         archive_services.require_archive_manifest_index_mutation_authority(
-            plan.archive_root,
+            root,
             operation_owner_sha256=owner,
             expected_pre_manifest_sha256=snapshot["file_sha256"],
             expected_post_manifest_sha256=snapshot["file_sha256"],
         )
     except (archive_services.ArchiveServiceError, OSError):
         raise _fail("archive_index_rebuild_required") from None
+
+
+def _require_manifest_index_authority(plan: ObjectStorageRestorePlan) -> None:
+    if not plan.batch_specs or plan.manifest is None:
+        return
+    _require_manifest_index_authority_for(
+        plan.archive_root, plan.manifest.manifest_sha256, operation="object_storage_bytes_restore"
+    )
 
 
 def _apply_manifest_batch(plan: ObjectStorageRestorePlan, *, lifecycle: _ManifestIndexLifecycle) -> int:
@@ -1287,24 +1296,25 @@ def _apply_manifest_batch(plan: ObjectStorageRestorePlan, *, lifecycle: _Manifes
         return changed
 
 
-def _reseal_dirty_projection(plan: ObjectStorageRestorePlan, lifecycle: _ManifestIndexLifecycle) -> None:
+def _reseal_dirty_projection_for(
+    root: Path, manifest_sha256: str, lifecycle: _ManifestIndexLifecycle, *, operation: str
+) -> None:
     """Resume the one honest partial state: the manifest already holds its post
     state while the generated index stayed same-generation dirty (a crash
-    between the compare-and-swap and the projection)."""
+    between the compare-and-swap and the projection). Shared with the v0.4.29
+    offload writer."""
 
-    if plan.manifest is None:
-        raise _fail("object_storage_restore_no_writes")
-    manifest_path = archive_services.archive_internal_path(plan.archive_root, "objects/manifests/files.jsonl")
+    manifest_path = archive_services.archive_internal_path(root, "objects/manifests/files.jsonl")
     owner = archive_services.archive_manifest_mutation_owner_sha256(
-        operation="object_storage_bytes_restore",
-        operation_binding_sha256=plan.manifest.manifest_sha256,
+        operation=operation,
+        operation_binding_sha256=manifest_sha256,
     )
     try:
         snapshot = archive_services.archive_index_stable_file_snapshot(
-            plan.archive_root, manifest_path, max_bytes=archive_services.ZETTEL_OBJET_LINK_MANIFEST_MAX_BYTES
+            root, manifest_path, max_bytes=archive_services.ZETTEL_OBJET_LINK_MANIFEST_MAX_BYTES
         )
         generation, began, lease_token = archive_services.prepare_archive_manifest_index_mutation(
-            plan.archive_root,
+            root,
             operation_owner_sha256=owner,
             expected_pre_manifest_sha256=snapshot["file_sha256"],
             expected_post_manifest_sha256=snapshot["file_sha256"],
@@ -1312,14 +1322,14 @@ def _reseal_dirty_projection(plan: ObjectStorageRestorePlan, lifecycle: _Manifes
     except (archive_services.ArchiveServiceError, OSError):
         raise _fail("archive_index_rebuild_required") from None
     if began or not archive_services.replace_archive_index_manifest_projection(
-        plan.archive_root,
+        root,
         expected_generation=generation,
         expected_manifest_sha256=snapshot["file_sha256"],
         expected_mutation_owner_sha256=owner,
         lease_token=lease_token,
     ):
         archive_services.mark_archive_index_dirty(
-            plan.archive_root,
+            root,
             expected_generation=generation,
             expected_mutation_owner_sha256=owner,
             lease_token=lease_token,
@@ -1329,6 +1339,14 @@ def _reseal_dirty_projection(plan: ObjectStorageRestorePlan, lifecycle: _Manifes
     lifecycle.lease_token = lease_token
     lifecycle.updated = True
     lifecycle.resumed = True
+
+
+def _reseal_dirty_projection(plan: ObjectStorageRestorePlan, lifecycle: _ManifestIndexLifecycle) -> None:
+    if plan.manifest is None:
+        raise _fail("object_storage_restore_no_writes")
+    _reseal_dirty_projection_for(
+        plan.archive_root, plan.manifest.manifest_sha256, lifecycle, operation="object_storage_bytes_restore"
+    )
 
 
 # --- exact operation adapters -------------------------------------------------
