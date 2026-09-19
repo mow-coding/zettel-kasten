@@ -1,10 +1,15 @@
 ﻿# WOM-kit Capability Matrix
 
-Status: v0.4.28 object-storage restore, client follow-ups, and session-owned writes truth
+Status: v0.4.29 object-storage offload, object-storage restore, and session-owned writes truth
 Date: 2026-09-04
-Version: v0.4.28 implementation and release scope
+Version: v0.4.29 implementation and release scope
 
-The current v0.4.28 working tree adds `object-storage-restore`: WOM-verified
+The current v0.4.29 working tree adds `object-storage-offload`: local objet
+bytes are removed only after a same-run full-GET remote proof, two local
+re-hashes and every retention predicate, through the handle-bound delete;
+the manifest keeps the row marked `offloaded`, the remote object is never
+deleted and `object-storage-restore` reverses it (OB-02; Windows-only
+apply). The v0.4.28 tree adds `object-storage-restore`: WOM-verified
 remote objet bytes are downloaded once under one always-dialog approval,
 kept only when size and sha256 reproduce the object id, placed create-only
 into the local objet store and receipted; `--verify-only` records the

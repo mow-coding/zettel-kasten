@@ -6,6 +6,28 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.29 - 2026-09-19
+
+- Object-storage offload (acceptance row OB-02, planned for v0.4.23 by the
+  2026-09-04 decision log): `archive object-storage-offload` (alias
+  `objet-storage-offload`) plans only WOM-uploaded, capture-provenance
+  objects with verified local bytes that no inbox draft references or was
+  created from, past the operator's `--min-age-days` / `--min-size-bytes`
+  filters (every exclusion counted; an unreadable draft or fidelity receipt
+  blocks the plan). Under one always-dialog exact approval, per object: a
+  local re-hash, the full remote GET re-hash, a second local re-hash with
+  identity capture, an execution-bound atomic proof marker, the handle-bound
+  compare-and-delete and one receipt (`wom-kit/object-storage-offload-receipt/v0.1`);
+  one manifest projection flips the local location to `offloaded` (the
+  tombstone stays in the manifest). A mismatching or absent remote copy is
+  `review_required` with the file kept; a crash after the delete resumes from
+  the marker without a second download; a foreign or torn marker never
+  authorises a removal; the remote object is never deleted; apply is
+  Windows-only by design. Doctor reports `local_object_offloaded` as INFO
+  (strict stays green), backup-evidence counts remote-only objects, staged
+  cleanup defers, `resolve-objet-ref` and the upload planner name the
+  restore. New approval kind `object_storage_bytes_offload`.
+
 ## v0.4.28 - 2026-09-19
 
 - Object-storage restore (acceptance rows OB-01 / OB-03, planned for
