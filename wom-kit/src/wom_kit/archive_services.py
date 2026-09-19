@@ -56314,6 +56314,156 @@ def archive_index_metadata_stale_reasons(
     return reasons
 
 
+_INDEX_PRECHECK_CODE_RE = re.compile(r"^[a-z][a-z0-9_]{0,95}$")
+_INDEX_PRECHECK_UNAVAILABLE_CODES = frozenset(
+    {
+        "archive_index_mutation_in_progress",
+        "archive_index_live_authority_watcher_unavailable",
+    }
+)
+
+
+def archive_index_precheck(root: Path) -> dict[str, Any]:
+    """v0.4.31 (letter 163 ⑧): the index fact a dry-run announces up front.
+
+    The same evidence the writers require (``require_current_zettel_index``),
+    projected as counts and fixed codes only, so an operator learns before
+    approving that the index must be rebuilt (``stale``) or is being written
+    by another process (``unavailable``). Never raises.
+    """
+
+    try:
+        evidence = require_current_zettel_index(root)
+    except (ArchiveServiceError, OSError, ValueError) as exc:
+        token = str(exc.args[0]) if exc.args and isinstance(exc.args[0], str) else ""
+        evidence = archive_index_rebuild_evidence(
+            token if _INDEX_PRECHECK_CODE_RE.fullmatch(token) else INDEX_REBUILD_REQUIRED
+        )
+    reason_codes = [
+        code
+        for code in (evidence.get("reason_codes") or [])
+        if type(code) is str and _INDEX_PRECHECK_CODE_RE.fullmatch(code)
+    ]
+    ok = evidence.get("ok") is True
+    state = (
+        "current"
+        if ok
+        else "unavailable"
+        if any(code in _INDEX_PRECHECK_UNAVAILABLE_CODES for code in reason_codes)
+        else "stale"
+    )
+    return {
+        "state": state,
+        "reason_codes": reason_codes,
+        "staleness_check": evidence.get("staleness_check"),
+        "live_zettel_count": int(evidence.get("live_zettel_count") or 0),
+        "indexed_zettel_count": int(evidence.get("indexed_zettel_count") or 0),
+        "generation_present": evidence.get("generation") is not None,
+        "next_safe_actions": [] if ok else list(INDEX_REBUILD_NEXT_SAFE_ACTIONS),
+        "paths_echoed": False,
+    }
+
+
+_INDEX_PRECHECK_CODE_RE = re.compile(r"^[a-z][a-z0-9_]{0,95}$")
+_INDEX_PRECHECK_UNAVAILABLE_CODES = frozenset(
+    {
+        "archive_index_mutation_in_progress",
+        "archive_index_live_authority_watcher_unavailable",
+    }
+)
+
+
+def archive_index_precheck(root: Path) -> dict[str, Any]:
+    """v0.4.31 (letter 163 ⑧): the index fact a dry-run announces up front.
+
+    The same evidence the writers require (``require_current_zettel_index``),
+    projected as counts and fixed codes only, so an operator learns before
+    approving that the index must be rebuilt (``stale``) or is being written
+    by another process (``unavailable``). Never raises.
+    """
+
+    try:
+        evidence = require_current_zettel_index(root)
+    except (ArchiveServiceError, OSError, ValueError) as exc:
+        token = str(exc.args[0]) if exc.args and isinstance(exc.args[0], str) else ""
+        evidence = archive_index_rebuild_evidence(
+            token if _INDEX_PRECHECK_CODE_RE.fullmatch(token) else INDEX_REBUILD_REQUIRED
+        )
+    reason_codes = [
+        code
+        for code in (evidence.get("reason_codes") or [])
+        if type(code) is str and _INDEX_PRECHECK_CODE_RE.fullmatch(code)
+    ]
+    ok = evidence.get("ok") is True
+    state = (
+        "current"
+        if ok
+        else "unavailable"
+        if any(code in _INDEX_PRECHECK_UNAVAILABLE_CODES for code in reason_codes)
+        else "stale"
+    )
+    return {
+        "state": state,
+        "reason_codes": reason_codes,
+        "staleness_check": evidence.get("staleness_check"),
+        "live_zettel_count": int(evidence.get("live_zettel_count") or 0),
+        "indexed_zettel_count": int(evidence.get("indexed_zettel_count") or 0),
+        "generation_present": evidence.get("generation") is not None,
+        "next_safe_actions": [] if ok else list(INDEX_REBUILD_NEXT_SAFE_ACTIONS),
+        "paths_echoed": False,
+    }
+
+
+_INDEX_PRECHECK_CODE_RE = re.compile(r"^[a-z][a-z0-9_]{0,95}$")
+_INDEX_PRECHECK_UNAVAILABLE_CODES = frozenset(
+    {
+        "archive_index_mutation_in_progress",
+        "archive_index_live_authority_watcher_unavailable",
+    }
+)
+
+
+def archive_index_precheck(root: Path) -> dict[str, Any]:
+    """v0.4.31 (letter 163 ⑧): the index fact a dry-run announces up front.
+
+    The same evidence the writers require (``require_current_zettel_index``),
+    projected as counts and fixed codes only, so an operator learns before
+    approving that the index must be rebuilt (``stale``) or is being written
+    by another process (``unavailable``). Never raises.
+    """
+
+    try:
+        evidence = require_current_zettel_index(root)
+    except (ArchiveServiceError, OSError, ValueError) as exc:
+        token = str(exc.args[0]) if exc.args and isinstance(exc.args[0], str) else ""
+        evidence = archive_index_rebuild_evidence(
+            token if _INDEX_PRECHECK_CODE_RE.fullmatch(token) else INDEX_REBUILD_REQUIRED
+        )
+    reason_codes = [
+        code
+        for code in (evidence.get("reason_codes") or [])
+        if type(code) is str and _INDEX_PRECHECK_CODE_RE.fullmatch(code)
+    ]
+    ok = evidence.get("ok") is True
+    state = (
+        "current"
+        if ok
+        else "unavailable"
+        if any(code in _INDEX_PRECHECK_UNAVAILABLE_CODES for code in reason_codes)
+        else "stale"
+    )
+    return {
+        "state": state,
+        "reason_codes": reason_codes,
+        "staleness_check": evidence.get("staleness_check"),
+        "live_zettel_count": int(evidence.get("live_zettel_count") or 0),
+        "indexed_zettel_count": int(evidence.get("indexed_zettel_count") or 0),
+        "generation_present": evidence.get("generation") is not None,
+        "next_safe_actions": [] if ok else list(INDEX_REBUILD_NEXT_SAFE_ACTIONS),
+        "paths_echoed": False,
+    }
+
+
 def archive_index_rebuild_evidence(reason_code: str) -> dict[str, Any]:
     return {
         "ok": False,
@@ -76756,11 +76906,13 @@ def zettel_edge_result(
     files_written: list[str],
     blockers: list[str],
     warnings: list[str],
+    index_precheck: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "ok": not blockers,
         "dry_run": dry_run,
         "lifecycle_action": "zettel_edge_plan" if dry_run else "zettel_edge_write",
+        "index_precheck": index_precheck,
         "archive_id": archive_id,
         "write_status": "blocked" if blockers else "would_write" if dry_run else "written",
         "source": source_summary or {},
@@ -76804,7 +76956,12 @@ def zettel_edge_result(
         },
         "would_change": would_change,
         "files_written": files_written,
-        "next_safe_actions": [
+        "next_safe_actions": (
+            list(INDEX_REBUILD_NEXT_SAFE_ACTIONS)
+            if INDEX_REBUILD_REQUIRED in blockers
+            else []
+        )
+        + [
             "Run archive index before relying on related-zets backlinks." if not blockers else "Fix blockers before writing an edge.",
             "Keep bulk candidate import separate until reviewed candidate records exist.",
         ],
@@ -77092,12 +77249,10 @@ def zettel_edge_write(
     # A single edge changes canonical Zet bytes and must update the generated
     # index in the same generation.  Put that mechanical fact in the dry-run
     # itself so the CLI never asks a person to approve an effect that cannot
-    # start safely.
-    try:
-        index_evidence = require_current_zettel_index(root)
-    except (ArchiveServiceError, OSError, ValueError):
-        index_evidence = {"ok": False}
-    if index_evidence.get("ok") is not True:
+    # start safely. v0.4.31: the same fact is projected as index_precheck so
+    # the operator sees the reason and the rebuild command up front.
+    index_precheck = archive_index_precheck(root)
+    if index_precheck["state"] != "current":
         blockers.append(INDEX_REBUILD_REQUIRED)
 
     if dry_run and approve:
@@ -77235,6 +77390,7 @@ def zettel_edge_write(
 
     if blockers:
         return zettel_edge_result(
+            index_precheck=index_precheck,
             archive_id=archive_id,
             dry_run=bool(dry_run),
             source_summary=source_summary,
@@ -77253,6 +77409,7 @@ def zettel_edge_write(
         )
 
     planned_result = zettel_edge_result(
+            index_precheck=index_precheck,
             archive_id=archive_id,
             dry_run=True,
             source_summary=source_summary,
@@ -77480,6 +77637,7 @@ def zettel_edge_write(
             lease_token=index_lease_token,
         )
         result = zettel_edge_result(
+            index_precheck=index_precheck,
             archive_id=archive_id,
             dry_run=False,
             source_summary=source_summary,
@@ -77512,6 +77670,7 @@ def zettel_edge_write(
         return result
 
     result = zettel_edge_result(
+        index_precheck=index_precheck,
         archive_id=archive_id,
         dry_run=False,
         source_summary=source_summary,
@@ -78363,6 +78522,7 @@ def zettel_edge_revert_result(
     files_written: list[str],
     blockers: list[str],
     warnings: list[str],
+    index_precheck: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if blockers:
         write_status = "blocked"
@@ -78420,7 +78580,13 @@ def zettel_edge_revert_result(
         },
         "would_change": would_change,
         "files_written": files_written,
-        "next_safe_actions": [
+        "index_precheck": index_precheck,
+        "next_safe_actions": (
+            list(INDEX_REBUILD_NEXT_SAFE_ACTIONS)
+            if INDEX_REBUILD_REQUIRED in blockers
+            else []
+        )
+        + [
             "Run archive index before relying on related-zets backlinks." if not blockers else "Fix blockers before reverting the edge.",
             "Keep the original write receipt and the revert receipt together as the audit trail.",
         ],
@@ -78494,12 +78660,10 @@ def zettel_edge_revert(
     warnings: list[str] = []
 
     # Revert is also an indexed Zet mutation.  Its reviewed preview must carry
-    # the same fail-closed precondition as the forward edge writer.
-    try:
-        index_evidence = require_current_zettel_index(root)
-    except (ArchiveServiceError, OSError, ValueError):
-        index_evidence = {"ok": False}
-    if index_evidence.get("ok") is not True:
+    # the same fail-closed precondition as the forward edge writer (v0.4.31:
+    # announced as index_precheck).
+    index_precheck = archive_index_precheck(root)
+    if index_precheck["state"] != "current":
         blockers.append(INDEX_REBUILD_REQUIRED)
 
     if dry_run and approve:
@@ -78612,6 +78776,7 @@ def zettel_edge_revert(
         ]
 
     planned_result = zettel_edge_revert_result(
+            index_precheck=index_precheck,
             archive_id=archive_id,
             dry_run=True,
             approve=False,
@@ -78831,6 +78996,7 @@ def zettel_edge_revert(
             lease_token=index_lease_token,
         )
         result = zettel_edge_revert_result(
+            index_precheck=index_precheck,
             archive_id=archive_id,
             dry_run=False,
             approve=True,
@@ -78860,6 +79026,7 @@ def zettel_edge_revert(
         return result
 
     result = zettel_edge_revert_result(
+        index_precheck=index_precheck,
         archive_id=archive_id,
         dry_run=False,
         approve=True,
@@ -122124,6 +122291,106 @@ def _project_update_terminal_cleanup_artifact_classification_read_only(
     if classification is None:
         return "unresolved", 0
     return classification
+
+
+PROJECT_UPDATE_EXISTING_TRANSACTION_SCHEMA = (
+    "wom-kit/project-update-existing-transaction/v0.1"
+)
+
+
+def project_update_existing_transaction_read_only(
+    inspection_root: Path | str,
+) -> dict[str, Any]:
+    """v0.4.31 (letter 163 ②): the shape of the transaction that blocks a
+    fresh update, and which recovery flag applies to that shape.
+
+    Journal shape only: no key is opened, no live component is hashed, so
+    ``abandon_applicable`` says "the journal is exactly ``lock_backlinked``",
+    not "a started claim exists". Any failure degrades to ``journal_state:
+    unobserved`` rather than raising; every value is a fixed literal.
+    """
+
+    unobserved: dict[str, Any] = {
+        "schema": PROJECT_UPDATE_EXISTING_TRANSACTION_SCHEMA,
+        "present": None,
+        "status": "unknown",
+        "journal_state": "unobserved",
+        "verified_phase_count": None,
+        "last_verified_phase": None,
+        "lock_backlinked": None,
+        "prelock_classification": None,
+        "started_claim_present": None,
+        "abandon_applicable": None,
+        "abandon_applicability_basis": "journal_shape_only_live_components_unchecked",
+        "applicable_recovery": "--resume --affirm-external-writers-quiescent",
+        "private_identifiers_echoed": False,
+    }
+    try:
+        project_root = _project_update_resume_project_root_read_only(inspection_root)
+        try:
+            active_ref = (
+                project_update_transaction
+                .active_transaction_ref_for_resume_read_only(project_root)
+            )
+        except project_update_transaction.ProjectUpdateTransactionError as failure:
+            if failure.code != "project_update_transaction_not_found":
+                return unobserved
+            active_ref = None
+        prelock_classification: str | None = None
+        if active_ref is None:
+            orphans = project_update_transaction.inspect_prelock_orphans(project_root)
+            reserved = [
+                item.classification
+                for item in orphans
+                if str(item.classification).startswith("reserved_")
+            ]
+            if not reserved:
+                return {**unobserved, "present": False, "status": "absent", "journal_state": "absent"}
+            prelock_classification = sorted(reserved)[0]
+            return {
+                **unobserved,
+                "present": True,
+                "status": "reserved",
+                "journal_state": "absent",
+                "verified_phase_count": 0,
+                "prelock_classification": prelock_classification,
+                "abandon_applicable": False,
+            }
+        transaction = project_update_transaction.ProjectUpdateTransaction.open(
+            project_root, active_ref, verify_candidate_content=False
+        )
+        inspection = transaction.inspect(verify_candidate_content=False)
+        phases = [str(item.phase) for item in inspection.journal.verified_prefix]
+        journal_state = str(inspection.journal.state)
+        if inspection.terminal:
+            status = "terminal"
+        elif "approval_bound" in phases:
+            status = "started"
+        elif phases in ([], ["lock_backlinked"]):
+            status = "reserved"
+        else:
+            status = "in_progress"
+        abandon_applicable = journal_state == "exact" and phases == ["lock_backlinked"]
+        return {
+            **unobserved,
+            "present": True,
+            "status": status,
+            "journal_state": journal_state,
+            "verified_phase_count": len(phases),
+            "last_verified_phase": phases[-1] if phases else None,
+            "lock_backlinked": bool(inspection.lock_backlinked),
+            "abandon_applicable": abandon_applicable,
+            "applicable_recovery": (
+                "--resume --abandon-started-approval --affirm-external-writers-quiescent "
+                "(closes the started claim if one exists; otherwise plain --resume)"
+                if abandon_applicable
+                else "terminal_cleanup"
+                if status == "terminal"
+                else "--resume --affirm-external-writers-quiescent"
+            ),
+        }
+    except BaseException:
+        return unobserved
 
 
 def _project_update_fresh_update_cleanup_preflight_read_only(
