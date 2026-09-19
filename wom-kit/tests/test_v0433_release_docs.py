@@ -156,7 +156,7 @@ class V0433ReleaseDocsTests(unittest.TestCase):
         coverage = json.loads((KIT / "docs" / "writer-session-coverage.json").read_text(encoding="utf-8"))
         for row in ("object-storage-restore", "object-storage-offload", "exact-approval-claim-finalize", "object-storage-upload"):
             self.assertEqual(coverage["paths"][row]["status"], "pending")
-            self.assertEqual(coverage["paths"][row]["target"], "v0.4.34")
+            self.assertEqual(coverage["paths"][row]["target"], "v0.4.35")  # moved by v0.4.34
         for readme in (ROOT / "README.md", ROOT / "README.ko.md", KIT / "README.md"):
             document = readme.read_text(encoding="utf-8")
             with self.subTest(readme=readme):
@@ -177,8 +177,8 @@ class V0433ReleaseDocsTests(unittest.TestCase):
         self.assertEqual(len(statuses), 60)  # v0.4.33: object-storage-upload row
         self.assertEqual(statuses.count("session_integrated") - routed, 6)
         self.assertEqual(routed, 1)
-        self.assertEqual(statuses.count("pending"), 33)
-        self.assertEqual(statuses.count("legacy_exception"), 20)
+        self.assertEqual(statuses.count("pending"), 34)  # v0.4.34: operator-feedback-compose moved to pending
+        self.assertEqual(statuses.count("legacy_exception"), 19)
         self.assertEqual(manifest["paths"]["create-draft"]["status"], "session_integrated")
 
     def test_current_docs_are_private_safe(self) -> None:

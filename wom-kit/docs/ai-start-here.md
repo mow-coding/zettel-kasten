@@ -57,6 +57,20 @@ remote URL, commit subject or hash is returned. Markdown renders it under
 remote-tracking ref is not proof of the remote; plan the backup with
 `git-backup-plan --dry-run`.
 
+Since v0.4.34 (beta letter 165) the result's `session_permission_attention`
+gives the registry-only view of open session grants: how many claimed
+sessions run without a dialog, how many of those grants are expired or still
+in the pre-v0.4.34 shape, how many are presenter-bound, and the guidance line
+(the refs and the presenter token stay in the granting conversation; another
+conversation continues a task through handoff / accept). It reads the
+work-session registry only — no key, no claim — so presenter evidence is
+reached through `exact-approval-claims --status all`. Markdown renders it
+under `Session Permission Attention`; a warning line and a `next_safe_steps`
+entry appear when a grant is open. When the index holds migrated Notion zets,
+`next_safe_steps` also carries the legacy-identifier guidance: reference a
+migrated zet by its full WOM id or its title, never by the bare `ZET` number
+or a Notion page id.
+
 The map already includes runtime-context. Since v0.3.224, the compatibility
 `first_commands` list marks that command `already_included` with
 `run_required: false`. AI operators should continue through `next_commands` and

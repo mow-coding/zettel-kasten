@@ -260,6 +260,8 @@ Confirmed operator-language terms:
 | `approve` | 승인 실행 | Human approval that allows a real write. |
 | `promote` | 승격 | Move a record toward a more official state. |
 | `revise` | 수정 | Correct an existing canonical record. |
+| `presenter_token` | 제시 토큰 | The once-returned secret that binds a session grant to the conversation that received it; kept only in that conversation's process, never in memory files, and never carried to another conversation (handoff / accept is the route). |
+| `legacy_identifier` | 옛 식별자 | A pre-WOM Notion `ZET` number or page id; reference a migrated zet by its full WOM id or title instead. |
 | `supersede` | 대체 | Mark that a newer record replaces an older one. |
 | `retire` | 퇴역 | Close a processed draft or old record. |
 | `reconcile` | 대조정리 | Compare records and repair safe audit drift. |

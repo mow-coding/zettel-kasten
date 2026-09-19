@@ -292,6 +292,34 @@ lists, or the refusal code with its positional detail, reading no session
 state and echoing no value, so a valid grant request can be composed before
 the one dialog is opened.
 
+Since v0.4.34 (beta letter 165) a `limited` / `allow_all` grant is
+presenter-bound and time-boxed. The approve mints a random presenter secret
+before its dialog, so the reviewed plan binds `presenter_sha256`, `granted_at`
+and `expires_at` (`grant_hours` 1..24, default 8; one more dialog line names
+the box); the secret is returned exactly once in that approve result
+(`presenter_token`) and is never stored. A write that presents the three refs
+without the matching secret, after the expiry, or under a grant made before
+v0.4.34 gets the dialog and says why on its result
+(`session_permission_refused.reason_code`: `work_session_presenter_missing`,
+`work_session_presenter_mismatch`, `work_session_grant_expired`,
+`work_session_grant_legacy_shape`, `work_session_grant_unavailable`,
+`work_session_grant_warning_review_required`). The token is a secret of the
+granting conversation's process (`WOM_WORK_SESSION_PRESENTER`, or the MCP
+host's in-process holder, which never shows it to the model); it binds the
+grant to whoever received the approve result — with the CLI transport it is
+visible once in that conversation's transcript — and the claim's presenter
+fingerprint, the expiry and the operator's `recover` route are the guards
+against reuse elsewhere. Each grant claim carries the optional key
+`session_presenter` (the presenter hash, an HMAC'd fingerprint of the first
+non-launcher ancestor process or `unavailable`, and how many other
+presenters used the session before it); results carry
+`exact_human_approval.presenter` and warn
+`work_session_second_presenter_observed` when another presenter already used
+the grant. Claims written before v0.4.34 stay immutable and count as
+`presenter_unknown_count` in the listing. The refs and the token stay in the
+granting conversation; another conversation continues a task through
+handoff / accept, never by reusing them.
+
 ## One-use claim and durable linkage
 
 There is no separately issued, expiring approval token. After the live dialog

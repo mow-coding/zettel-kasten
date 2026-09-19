@@ -139,7 +139,7 @@ CURRENT_CLI_CANONICAL_SHA256 = (
 )
 CURRENT_MCP_COUNT = 137
 CURRENT_MCP_CANONICAL_SHA256 = (
-    "d6bb9f3a76648bf7b690a845bca0798ec65fedc86e496e7954cfca4e1c9f820f"
+    "74e53bf6d52f2f2d67f0e560d29b00c666ed1ffd886f199a9b66f34008462554"  # v0.4.34: work-session request grant_hours/permission keys
 )
 MCP_ADDITIONS = {
     "zet_title_remap_write",

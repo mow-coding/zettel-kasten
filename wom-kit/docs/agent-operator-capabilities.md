@@ -2,6 +2,16 @@
 
 Status: v0.4.33 upload reopened, letter-164 first half, and writer-session coverage gate
 
+v0.4.34 adds no command path and moves no count: `operator-feedback-compose
+--approve` (already approval-available) now runs under the exact approval
+contract (operation `operator_feedback_body_write`, grantable), a session
+grant is presenter-bound and time-boxed (`grant_hours`, `presenter_token`
+returned once, fixed refusal codes on the result), grant claims carry
+`session_presenter`, and the legacy-identifier warning appears on
+`create-draft` (with `--allow-warnings` and the refusal
+`create_draft_warning_override_required`), `mint-zet`, `zet-revision-plan`,
+`zettel-objet-link` and `source-intake` dry-runs; the inventory stays 60
+approval-available and 59 fixed-closed.
 v0.4.33 reopens one command path: `object-storage-upload --approve` is
 approval-available again (always a dialog; preservation PUT + adoption
 projection at the content-addressed key), so the inventory is 60
@@ -246,8 +256,11 @@ cleanup outcome reconstruction remain a v0.4.16 follow-up.
 The global project-update recovery guard remains the default for writers. Its
 only new exception is the existing `operator-feedback-compose` path when all of
 these facts hold: approval is requested, `--intent create` is selected, and no
-revision or supersession binding is supplied. That path may append only the new
-body, body receipt, and its bounded coordination artifact. It cannot revise or
+revision or supersession binding is supplied (since v0.4.34 that emergency lane
+keeps the text-flag path and a v0.1 receipt, while the ordinary path opens the
+exact approval dialog and writes a v0.2 receipt naming the claim). That path
+may append only the new body, body receipt, and its bounded coordination
+artifact. It cannot revise or
 supersede an existing body, change feedback metadata, mark feedback delivered
 or resolved, or change `version-update.lock` bytes, source, runtime, launcher,
 pin, or update receipt. Every other write remains
