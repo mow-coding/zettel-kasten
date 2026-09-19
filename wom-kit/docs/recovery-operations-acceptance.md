@@ -603,6 +603,31 @@ CF-01 stays open for client closure; the reply draft now points the client
 at v0.4.27 with the corrected approve command and answers each item of the
 v0.4.25 report, and asks back for the index-rebuild sequence.
 
+### 2026-09-19 v0.4.28 released (OB-01, OB-03 public)
+
+v0.4.28 is public: tag `v0.4.28` on main `4a78cd7c`, one wheel
+`wom_kit-0.4.28-py3-none-any.whl` (SHA-256
+`50777719c2cdf9d81980de32aaad28a6c02ca6c0ebc945da2c9f82a51df4b8a6`),
+candidate CI 14/14 after one correction commit, exact-merge installed
+verification, anonymous download and two fresh-venv installations recorded
+in the [release evidence](../../meeting-minutes/2026-09-19-v0428-release-evidence.md).
+OB-01 and OB-03 are now installable from the public artifact; they stay
+open for installed/client acceptance, and OB-02 (offload) follows as
+v0.4.29 from the same decision log. The reply draft to the client is
+refreshed to v0.4.28 with the restore section and the letter-163 answers.
+
+### 2026-09-19 v0.4.29 released (OB-02 public)
+
+v0.4.29 is public: tag `v0.4.29` on main `424bfd81`, one wheel
+`wom_kit-0.4.29-py3-none-any.whl` (SHA-256
+`679123d06ed671c6c04e3f7ec94da65351ad36a8cd75ad997a67c0f9e0d33bbe`),
+candidate CI 14/14 after one test-only correction commit, exact-merge installed
+verification, anonymous download and two fresh-venv installations recorded
+in the [release evidence](../../meeting-minutes/2026-09-19-v0429-release-evidence.md).
+OB-02 is now installable from the public artifact and stays open for
+installed/client acceptance; the client is asked to run one restore
+(`--verify-only`) before the first offload on the same archive.
+
 ### 2026-09-19 v0.4.30 letter 163 core implemented
 
 Scope decided by the user ("베타테스터 클라이언트들한테 새로이 편지 온거 부터 해서.
@@ -622,6 +647,19 @@ batch approve loop reuses the dry-run's fidelity digest. Record:
 [v0.4.30 minutes](../../meeting-minutes/2026-09-19-v0430-letter-163.md),
 [decision log](archive-infra-decision-log-2026-09-19-v0430-letter-163.md).
 
+### 2026-09-19 v0.4.30 released (letter 163 core public)
+
+v0.4.30 is public: tag `v0.4.30` on main `6ff9fb89`, one wheel
+`wom_kit-0.4.30-py3-none-any.whl` (SHA-256
+`2fe2d46fe62d8ae0cd46dd86b75bd4fb74ce8cd0ea0df3665e424f9d70c936e1`),
+candidate CI 14/14 after two test-only correction commits and one flake
+rerun, exact-merge installed verification, anonymous download and two
+fresh-venv installations recorded in the
+[release evidence](../../meeting-minutes/2026-09-19-v0430-release-evidence.md).
+L163-01 is now installable from the public artifact and stays open for the
+client's own runs; by the user's decision the client receives one reply
+covering v0.4.28 through v0.4.30 now that all three are public.
+
 ### 2026-09-19 v0.4.31 letter 163 remainder implemented
 
 Scope: the five letter-163 items carried from v0.4.30 that survive review —
@@ -638,3 +676,16 @@ with the client questions recorded. The client received one reply covering
 v0.4.28–v0.4.30 on 2026-09-19 (sent by the user). Record:
 [v0.4.31 minutes](../../meeting-minutes/2026-09-19-v0431-letter-163-remainder.md),
 [decision log](archive-infra-decision-log-2026-09-19-v0431-letter-163-remainder.md).
+
+### 2026-09-19 v0.4.31 released (letter 163 remainder public)
+
+v0.4.31 is public: tag `v0.4.31` on main `ff9fed87`, one wheel
+`wom_kit-0.4.31-py3-none-any.whl` (SHA-256
+`7a3e2e76ed03253e996dfa455f657a62f18651a31a403be054dc98c1f628decb`),
+candidate CI 14/14 on the first attempt after one correction commit,
+exact-merge installed verification, anonymous download and two fresh-venv
+installations recorded in the
+[release evidence](../../meeting-minutes/2026-09-19-v0431-release-evidence.md).
+L163-02 is now installable from the public artifact and stays open for the
+client's own runs; the client is told about it together with v0.4.32 in
+the next reply.
