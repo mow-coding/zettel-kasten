@@ -151,9 +151,15 @@ def _finish(store, routing, selected, bound, result, *, held, app, route, sessio
     except Exception:
         raise WorkSessionPermissionModeError("work_session_task_context_changed", original_commit_verified=True) from None
     mode = permission_rules.MODE_MANUAL if permission is None else permission["mode"]
+    shape = permission_rules.permission_shape(permission)
     return {**result, "schema": "wom-kit/work-session-permission-mode-result/v1",
             "state": "claimed", "permission_mode": mode,
             "permitted_operations": [] if permission is None else list(permission["operations"]),
+            # v0.4.34: the time box the reviewer approved; the secret itself
+            # is added once by the service layer, never here.
+            "presenter_bound": shape == "v2",
+            "granted_at": permission["granted_at"] if shape == "v2" else None,
+            "expires_at": permission["expires_at"] if shape == "v2" else None,
             "original_commit_verified": True, "current_state_verified": True,
             "current_claim_ownership_verified": True, "claim_tokens_echoed": False,
             "routing_is_write_authority": False, "dialog_skipped_for_this_decision": False,

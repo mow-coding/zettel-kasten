@@ -4954,6 +4954,12 @@ def _reprove_zettel_objet_link_dirty_projection(
         conn.close()
 
 
+def _label_legacy_identifier_review(safe_label: str | None) -> bool:
+    from .legacy_identifier import label_legacy_identifier_present
+
+    return label_legacy_identifier_present(safe_label)
+
+
 def _zettel_objet_link_plan_core(
     archive_root: Path | str,
     *,
@@ -5571,6 +5577,9 @@ def _zettel_objet_link_plan_core(
             "object_id": normalized_object_id,
             "role": normalized_role,
             "label_present": safe_label is not None,
+            # v0.4.34 (letter 165 [B]): a bare legacy identifier in the label
+            # is a bound warning; the label itself is never echoed.
+            "label_legacy_identifier_review": _label_legacy_identifier_review(safe_label),
             "link_id": link_id,
             "current_asset_count": len(existing_assets),
             "manifest_record_verified": manifest_record is not None,
@@ -5614,7 +5623,9 @@ def _zettel_objet_link_plan_core(
             "parent_directory_effects_implied_by_bound_artifact_paths": True,
         },
         "blockers": archive_services.unique_preserve_order(blockers),
-        "warnings": [],
+        "warnings": (
+            ["label_legacy_identifier_review"] if _label_legacy_identifier_review(safe_label) else []
+        ),
         "would_change": (
             [
                 f"{zettel_relative} frontmatter.assets +1",

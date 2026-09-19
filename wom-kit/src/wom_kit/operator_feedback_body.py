@@ -33,6 +33,15 @@ from .process_launch import noninteractive_creationflags
 REQUEST_SCHEMA = "wom-kit/operator-feedback-body-request/v0.1"
 PLAN_SCHEMA = "wom-kit/operator-feedback-body-plan/v0.1"
 RECEIPT_SCHEMA = "wom-kit/operator-feedback-body-receipt/v0.1"
+# v0.4.34 (letter 165 [C]): the same receipts plus the one-use claim's
+# reference; v0.1 receipts stay valid and are reported as claim-less.
+RECEIPT_SCHEMA_V2 = "wom-kit/operator-feedback-body-receipt/v0.2"
+REVISION_RECEIPT_SCHEMA_V2 = "wom-kit/operator-feedback-body-revision-receipt/v0.2"
+SUPERSESSION_RECEIPT_SCHEMA_V2 = "wom-kit/operator-feedback-body-supersession-receipt/v0.2"
+EXACT_APPROVAL_OPERATION = "operator_feedback_body_write"
+EXACT_APPROVAL_ENVELOPE_KEYS = {
+    "schema_version", "approval_id", "context_sha256", "approval_authority_sha256", "one_use", "operation",
+}
 REVISION_RECEIPT_SCHEMA = "wom-kit/operator-feedback-body-revision-receipt/v0.1"
 SUPERSESSION_RECEIPT_SCHEMA = (
     "wom-kit/operator-feedback-body-supersession-receipt/v0.1"
@@ -103,6 +112,20 @@ SUPERSESSION_RECEIPT_KEYS = {
     "approved_at",
 }
 COMPOSE_INTENTS = ("create", "revise", "supersede")
+# v0.4.34 (letter 165 [D]): the revise path, announced wherever it is needed.
+REVISE_PATH_NEXT_SAFE_ACTIONS = (
+    "1. archive operator-feedback-record <archive-root> --feedback-id <id> --status draft --intent create "
+    "--approve --reviewed-by <person:...>  (binds the body's feedback_ref; a compose --intent create "
+    "already creates this draft record when none exists)",
+    "2. archive operator-feedback-body-check <archive-root> --feedback-id <id> --dry-run --format json  "
+    "(confirms body, receipt and record binding; its feedback_ref carries the current body SHA-256)",
+    "3. archive operator-feedback-compose <archive-root> --request <same-request> --intent revise "
+    "--expected-body-sha256 <current body sha256> --dry-run  then --approve with --expected-plan-sha256 "
+    "and --reviewed-by (one dialog)",
+    "4. archive operator-feedback-record <archive-root> --feedback-id <id> --status draft --intent update "
+    "--approve --reviewed-by <person:...>  (moves the record to the revised feedback_ref)",
+    "5. archive operator-feedback-body-check <archive-root> --feedback-id <id> --dry-run --format json",
+)
 IMMUTABLE_FEEDBACK_STATUSES = frozenset(
     {"delivered", "acknowledged", "resolved", "archived"}
 )
@@ -194,6 +217,45 @@ class _PreparedPlan:
     prior_status: str | None = None
     supersedes_feedback_id: str | None = None
     revision_resume_pending: bool = False
+    # v0.4.34: the claim envelope every receipt of this approval carries.
+    approval_envelope: dict[str, Any] | None = field(default=None, repr=False)
+
+
+def _envelope_from_claim(claim: Any) -> dict[str, Any] | None:
+    """The content-free 5-key reference plus the operation name, or None."""
+
+    if claim is None:
+        return None
+    reference = claim.public_reference()
+    if not isinstance(reference, Mapping):
+        raise _fail("feedback_body_approval_claim_invalid")
+    envelope = {**dict(reference), "operation": EXACT_APPROVAL_OPERATION}
+    if set(envelope) != EXACT_APPROVAL_ENVELOPE_KEYS:
+        raise _fail("feedback_body_approval_claim_invalid")
+    return envelope
+
+
+def _valid_envelope(value: Any) -> bool:
+    return (
+        isinstance(value, Mapping) and set(value) == EXACT_APPROVAL_ENVELOPE_KEYS
+        and value.get("operation") == EXACT_APPROVAL_OPERATION and value.get("one_use") is True
+        and isinstance(value.get("approval_id"), str)
+        and re.fullmatch(r"approval_[0-9a-f]{32}", value["approval_id"]) is not None
+        and all(isinstance(value.get(name), str) and re.fullmatch(r"sha256:[0-9a-f]{64}", value[name]) is not None
+                for name in ("context_sha256", "approval_authority_sha256"))
+    )
+
+
+def _with_envelope(document: dict[str, Any], envelope: Any, *, v1: str, v2: str) -> dict[str, Any]:
+    if envelope is None:
+        return document
+    return {**document, "schema": v2, "exact_human_approval": dict(envelope)}
+
+
+def _document_envelope(document: Mapping[str, Any]) -> Any:
+    """The envelope an existing receipt carries (None for a v0.1 receipt)."""
+
+    return document.get("exact_human_approval") if "exact_human_approval" in document else None
 
 
 def _is_reparse(info: os.stat_result) -> bool:
@@ -1109,8 +1171,9 @@ def _receipt_document(
     prepared: _PreparedPlan,
     reviewer: str,
     approved_at: str,
+    envelope: Any = None,
 ) -> dict[str, Any]:
-    return {
+    return _with_envelope({
         "schema": RECEIPT_SCHEMA,
         "feedback_id": prepared.feedback_id,
         "feedback_ref": prepared.feedback_ref,
@@ -1120,7 +1183,7 @@ def _receipt_document(
         "request_sha256": prepared.request_sha256,
         "reviewed_by": reviewer,
         "approved_at": approved_at,
-    }
+    }, envelope, v1=RECEIPT_SCHEMA, v2=RECEIPT_SCHEMA_V2)
 
 
 def _valid_timestamp(value: Any) -> bool:
@@ -1152,8 +1215,12 @@ def _receipt_matches(
         document = _parse_json_mapping(raw, "feedback_body_receipt_invalid")
     except _BodyContractError:
         return False
-    expected = _receipt_document(prepared, reviewer, str(document.get("approved_at") or ""))
-    return set(document) == RECEIPT_KEYS and document == expected and _valid_timestamp(
+    envelope = _document_envelope(document)
+    if envelope is not None and not _valid_envelope(envelope):
+        return False
+    expected = _receipt_document(prepared, reviewer, str(document.get("approved_at") or ""), envelope)
+    keys = RECEIPT_KEYS if envelope is None else RECEIPT_KEYS | {"exact_human_approval"}
+    return set(document) == keys and document == expected and _valid_timestamp(
         document.get("approved_at")
     )
 
@@ -1266,10 +1333,11 @@ def _revision_receipt_document(
     prepared: _PreparedPlan,
     reviewer: str,
     approved_at: str,
+    envelope: Any = None,
 ) -> dict[str, Any]:
     assert prepared.expected_body_sha256 is not None
     assert prepared.prior_record_sha256 is not None
-    return {
+    return _with_envelope({
         "schema": REVISION_RECEIPT_SCHEMA,
         "feedback_id": prepared.feedback_id,
         "prior_feedback_ref": (
@@ -1286,7 +1354,7 @@ def _revision_receipt_document(
         "request_sha256": prepared.request_sha256,
         "reviewed_by": reviewer,
         "approved_at": approved_at,
-    }
+    }, envelope, v1=REVISION_RECEIPT_SCHEMA, v2=REVISION_RECEIPT_SCHEMA_V2)
 
 
 def _revision_receipt_matches(
@@ -1298,13 +1366,18 @@ def _revision_receipt_matches(
         document = _parse_json_mapping(raw, "feedback_body_revision_receipt_invalid")
     except _BodyContractError:
         return False
+    envelope = _document_envelope(document)
+    if envelope is not None and not _valid_envelope(envelope):
+        return False
     expected = _revision_receipt_document(
         prepared,
         reviewer,
         str(document.get("approved_at") or ""),
+        envelope,
     )
+    keys = REVISION_RECEIPT_KEYS if envelope is None else REVISION_RECEIPT_KEYS | {"exact_human_approval"}
     return (
-        set(document) == REVISION_RECEIPT_KEYS
+        set(document) == keys
         and document == expected
         and _valid_timestamp(document.get("approved_at"))
     )
@@ -1430,7 +1503,7 @@ def _approve_operator_feedback_revision(
         )
         if ordinary_receipt is None:
             receipt_bytes = _canonical_json_bytes(
-                _receipt_document(prepared, reviewer, _approved_at())
+                _receipt_document(prepared, reviewer, _approved_at(), prepared.approval_envelope)
             ) + b"\n"
             _write_create_if_absent(
                 prepared.root,
@@ -1475,6 +1548,7 @@ def _approve_operator_feedback_revision(
                     prepared,
                     reviewer,
                     _approved_at(),
+                    prepared.approval_envelope,
                 )
             ) + b"\n"
             try:
@@ -1583,12 +1657,13 @@ def _supersession_receipt_document(
     prepared: _PreparedPlan,
     reviewer: str,
     approved_at: str,
+    envelope: Any = None,
 ) -> dict[str, Any]:
     assert prepared.supersedes_feedback_id is not None
     assert prepared.expected_body_sha256 is not None
     assert prepared.prior_status is not None
     assert prepared.prior_record_sha256 is not None
-    return {
+    return _with_envelope({
         "schema": SUPERSESSION_RECEIPT_SCHEMA,
         "superseded_feedback_id": prepared.supersedes_feedback_id,
         "superseding_feedback_id": prepared.feedback_id,
@@ -1603,7 +1678,7 @@ def _supersession_receipt_document(
         "request_sha256": prepared.request_sha256,
         "reviewed_by": reviewer,
         "approved_at": approved_at,
-    }
+    }, envelope, v1=SUPERSESSION_RECEIPT_SCHEMA, v2=SUPERSESSION_RECEIPT_SCHEMA_V2)
 
 
 def _supersession_receipt_matches(
@@ -1618,13 +1693,18 @@ def _supersession_receipt_matches(
         )
     except _BodyContractError:
         return False
+    envelope = _document_envelope(document)
+    if envelope is not None and not _valid_envelope(envelope):
+        return False
     expected = _supersession_receipt_document(
         prepared,
         reviewer,
         str(document.get("approved_at") or ""),
+        envelope,
     )
+    keys = SUPERSESSION_RECEIPT_KEYS if envelope is None else SUPERSESSION_RECEIPT_KEYS | {"exact_human_approval"}
     return (
-        set(document) == SUPERSESSION_RECEIPT_KEYS
+        set(document) == keys
         and document == expected
         and _valid_timestamp(document.get("approved_at"))
     )
@@ -1640,8 +1720,15 @@ def approve_operator_feedback_body(
     expected_body_sha256: str | None = None,
     supersedes_feedback_id: str | None = None,
     require_archive_marker: bool = False,
+    exact_human_approval_claim: Any = None,
 ) -> dict[str, Any]:
-    """Write the exact reviewed body and receipt without touching metadata."""
+    """Write the exact reviewed body and receipt without touching metadata.
+
+    v0.4.34 (letter 165 [C]): when the CLI routes the approval through the
+    exact human approval broker, the started claim's reference is written
+    into every receipt of this approval (schema v0.2). The service itself
+    stays broker-free so the emergency lane keeps its text-flag path.
+    """
 
     result, prepared = _prepare_plan(
         archive_root,
@@ -1670,6 +1757,12 @@ def approve_operator_feedback_body(
     if reviewer is None:
         result.update({"ok": False, "state": "blocked", "blockers": ["feedback_body_reviewer_invalid"]})
         return result
+    try:
+        prepared.approval_envelope = _envelope_from_claim(exact_human_approval_claim)
+    except _BodyContractError as exc:
+        result.update({"ok": False, "state": "blocked", "blockers": [exc.code]})
+        return result
+    result["exact_human_approval_reference_present"] = prepared.approval_envelope is not None
 
     if prepared.intent == "revise":
         return _approve_operator_feedback_revision(prepared, result, reviewer)
@@ -1800,7 +1893,7 @@ def approve_operator_feedback_body(
 
         if not receipt_persisted:
             receipt_bytes = _canonical_json_bytes(
-                _receipt_document(prepared, reviewer, _approved_at())
+                _receipt_document(prepared, reviewer, _approved_at(), prepared.approval_envelope)
             ) + b"\n"
             try:
                 _write_create_if_absent(prepared.root, receipt_path, receipt_bytes)
@@ -1918,6 +2011,7 @@ def approve_operator_feedback_body(
                         prepared,
                         reviewer,
                         _approved_at(),
+                        prepared.approval_envelope,
                     )
                 ) + b"\n"
                 try:
@@ -2091,7 +2185,7 @@ def _check_receipt(
     feedback_ref: str,
     body_relative: str,
     body_bytes: int,
-) -> tuple[bool, str | None, str]:
+) -> tuple[bool, str | None, str, bool]:
     digest = feedback_ref.rsplit(":", 1)[-1]
     relative = f"{RECEIPT_PREFIX}/{feedback_id}.{digest[:16]}.json"
     path = _archive_path(root, relative)
@@ -2103,16 +2197,20 @@ def _check_receipt(
             invalid_code="feedback_body_receipt_invalid",
         )
     except _BodyContractError:
-        return False, "feedback_body_receipt_invalid", relative
+        return False, "feedback_body_receipt_invalid", relative, False
     if raw is None:
-        return False, "feedback_body_receipt_missing", relative
+        return False, "feedback_body_receipt_missing", relative, False
     try:
         document = _parse_json_mapping(raw, "feedback_body_receipt_invalid")
     except _BodyContractError:
-        return False, "feedback_body_receipt_invalid", relative
+        return False, "feedback_body_receipt_invalid", relative, False
+    envelope = _document_envelope(document)
+    expected_keys = RECEIPT_KEYS if envelope is None else RECEIPT_KEYS | {"exact_human_approval"}
+    expected_schema = RECEIPT_SCHEMA if envelope is None else RECEIPT_SCHEMA_V2
     if (
-        set(document) != RECEIPT_KEYS
-        or document.get("schema") != RECEIPT_SCHEMA
+        (envelope is not None and not _valid_envelope(envelope))
+        or set(document) != expected_keys
+        or document.get("schema") != expected_schema
         or document.get("feedback_id") != feedback_id
         or document.get("feedback_ref") != feedback_ref
         or document.get("body_path") != body_relative
@@ -2124,8 +2222,8 @@ def _check_receipt(
         or _safe_reviewer(document.get("reviewed_by")) is None
         or not _valid_timestamp(document.get("approved_at"))
     ):
-        return False, "feedback_body_receipt_invalid", relative
-    return True, None, relative
+        return False, "feedback_body_receipt_invalid", relative, False
+    return True, None, relative, envelope is not None
 
 
 def check_operator_feedback_body(
@@ -2179,7 +2277,7 @@ def check_operator_feedback_body(
     if not privacy_valid:
         blockers.append("feedback_body_private_or_secret_content_detected")
 
-    receipt_valid, receipt_blocker, receipt_relative = _check_receipt(
+    receipt_valid, receipt_blocker, receipt_relative, claim_referenced = _check_receipt(
         root,
         feedback_id,
         feedback_ref,
@@ -2187,6 +2285,9 @@ def check_operator_feedback_body(
         len(raw),
     )
     result["proposed_receipt_relative_path"] = receipt_relative
+    # v0.4.34 (letter 165 [C]): a v0.1 receipt (before the dialog) is valid
+    # but names no claim; the check says which it found.
+    result["exact_human_approval_reference_present"] = claim_referenced
     if receipt_blocker:
         blockers.append(receipt_blocker)
 
@@ -2211,7 +2312,7 @@ def check_operator_feedback_body(
             },
             "blockers": blockers,
             "next_safe_actions": (
-                ["bind this feedback_ref through the existing operator-feedback metadata review workflow"]
+                list(REVISE_PATH_NEXT_SAFE_ACTIONS)
                 if binding_blocker == "feedback_record_binding_missing"
                 else []
             ),

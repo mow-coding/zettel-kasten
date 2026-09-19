@@ -196,6 +196,9 @@ class ExactHumanApprovalOperation(Enum):
     object_storage_bytes_offload = "object_storage_bytes_offload"
     # v0.4.33 (letter 164 ①): upload reopened under the exact contract; always a dialog.
     object_storage_bytes_upload = "object_storage_bytes_upload"
+    # v0.4.34 (letter 165 [C]): the operator feedback body write asks the dialog
+    # (or a session grant that names the kind) instead of trusting --reviewed-by.
+    operator_feedback_body_write = "operator_feedback_body_write"
     # v0.4.30 (letter 163 ⑥): reviewed closing of started claims; always a dialog.
     exact_approval_claim_finalize = "exact_approval_claim_finalize"
     local_recovery = "local_recovery"
@@ -472,6 +475,9 @@ _OPERATION_LABELS = {
     ExactHumanApprovalOperation.object_storage_bytes_upload: (
         "오브제 로컬 바이트 올리기"
     ),
+    ExactHumanApprovalOperation.operator_feedback_body_write: (
+        "운영자 피드백 편지 본문 기록"
+    ),
     ExactHumanApprovalOperation.exact_approval_claim_finalize: (
         "검토 끝난 started 승인 클레임 닫기"
     ),
@@ -552,6 +558,9 @@ _OPERATION_QUESTIONS = {
     ),
     ExactHumanApprovalOperation.object_storage_bytes_upload: (
         "로컬 오브제 바이트를 등록된 저장소에 올리고, 같은 실행에서 원격 사본을 다시 내려받아 검증한 뒤 manifest에 wom_uploaded 위치를 기록할까요?"
+    ),
+    ExactHumanApprovalOperation.operator_feedback_body_write: (
+        "검토한 여섯 항목 피드백 본문을 ops/feedback/letters 아래에 기록하고 본문 영수증을 남길까요? (제목과 본문은 이 창에 표시하지 않습니다)"
     ),
     ExactHumanApprovalOperation.exact_approval_claim_finalize: (
         "영수증 어디에도 흔적이 없는, 검토가 끝난 started 승인 클레임들을 실패로 닫을까요?"
@@ -683,6 +692,10 @@ _OPERATION_SUMMARIES = {
         "통째로 내려받아 비교합니다. 없을 때만 새로 올리고 올린 뒤 다시 내려받아 검증합니다. 이미 있는 원격 "
         "사본은 덮어쓰지 않고, 바이트가 다르면 검토 상태로 남기며, 원격 오브제는 삭제하지 않습니다."
     ),
+    ExactHumanApprovalOperation.operator_feedback_body_write: (
+        "요청 파일과 본문의 해시만 묶어 승인합니다. 기존 편지는 덮어쓰지 않고, 메타데이터 레코드와 외부 전달은 "
+        "이 승인에 포함되지 않습니다. 수정(revise)·대체(supersede)일 때는 경고 코드로 표시됩니다."
+    ),
     ExactHumanApprovalOperation.exact_approval_claim_finalize: (
         "정본·초안·오브제·영수증은 건드리지 않고 클레임 파일의 상태만 failed로 바꿉니다. "
         "근거는 영수증 검색뿐이라, 영수증을 남기지 않은 쓰기까지 없었다고 증명하지는 않습니다. "
@@ -763,6 +776,7 @@ _OPERATION_APPROVE_BUTTONS = {
     ExactHumanApprovalOperation.object_storage_bytes_restore: "바이트 되찾기",
     ExactHumanApprovalOperation.object_storage_bytes_offload: "로컬 바이트 비우기",
     ExactHumanApprovalOperation.object_storage_bytes_upload: "바이트 올리기",
+    ExactHumanApprovalOperation.operator_feedback_body_write: "본문 기록",
     ExactHumanApprovalOperation.exact_approval_claim_finalize: "클레임 닫기",
     ExactHumanApprovalOperation.local_recovery: "복구 실행",
     ExactHumanApprovalOperation.local_recovery_revert: "복구 되돌리기",

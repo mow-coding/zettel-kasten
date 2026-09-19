@@ -95,10 +95,23 @@ class SessionPermissionModeTests(unittest.TestCase):
                 "--approve", "--draft-approved-by", REVIEWER)
 
     def set_mode(self, task, mode, operations=None, ok=True):
-        return self.call("work-session", "--action", "set-permission-mode", "--approve", "--request-stdin",
-                         *task["refs"], "--work-session-ref", task["session"],
-                         request={"reviewer_claim": REVIEWER, "permission_mode": mode, "operations": operations or []},
-                         ok=ok)
+        result = self.call("work-session", "--action", "set-permission-mode", "--approve", "--request-stdin",
+                           *task["refs"], "--work-session-ref", task["session"],
+                           request={"reviewer_claim": REVIEWER, "permission_mode": mode, "operations": operations or []},
+                           ok=ok)
+        # v0.4.34: the presenter secret is returned once; the test keeps it the
+        # way a conversation does (in its own environment).
+        token = result.get("result", {}).get("presenter_token") if isinstance(result.get("result"), dict) else None
+        task["presenter"] = token
+        return result
+
+    def presenter_env(self, task):
+        return {} if task.get("presenter") is None else {permission.PRESENTER_ENV: task["presenter"]}
+
+    def resolve(self, task, presenter=permission._UNSET_PRESENTER):
+        return permission.resolve_grant(self.root, client_app_ref=task["app"], task_route_ref=task["route"],
+                                        work_session_ref=task["session"],
+                                        presenter=task.get("presenter") if presenter is permission._UNSET_PRESENTER else presenter)
 
     def inspect(self, task):
         return self.call("work-session", "--action", "inspect", "--kind", "session", "--ref", task["session"])["item"]
@@ -113,7 +126,8 @@ class SessionPermissionModeTests(unittest.TestCase):
             self.assertEqual(cli.main(["index", str(self.root), "--format", "json"]), 0)
 
     def env(self, task):
-        return {"WOM_CLIENT_APP_REF": task["app"], "WOM_TASK_ROUTE_REF": task["route"], "WOM_WORK_SESSION_REF": task["session"]}
+        return {"WOM_CLIENT_APP_REF": task["app"], "WOM_TASK_ROUTE_REF": task["route"], "WOM_WORK_SESSION_REF": task["session"],
+                **self.presenter_env(task)}
 
     # ------------------------------------------------------------ grant lifecycle
     def test_set_permission_mode_is_one_human_decision_on_the_claimed_session(self) -> None:
@@ -126,6 +140,8 @@ class SessionPermissionModeTests(unittest.TestCase):
         self.assertEqual(result["result"]["permitted_operations"], ["create_draft", "mint_zet"])
         self.assertTrue(result["result"]["current_claim_ownership_verified"])
         self.assertNotIn("SYNTHETIC_PRIVATE", json.dumps(result))
+        self.assertTrue(result["result"]["presenter_token_returned_once"])
+        self.assertTrue(result["result"]["presenter_bound"])
         row = self.inspect(task)
         self.assertEqual(row["permission_mode"], "limited")
         self.assertEqual(row["permitted_operations"], ["create_draft", "mint_zet"])
@@ -166,7 +182,8 @@ class SessionPermissionModeTests(unittest.TestCase):
         flags = self.draft_flags(object_id, "Draft under a limited grant")
         preview = self.draft_call(*refs, *flags, "--dry-run")
         dialogs = self.native.calls
-        created = self.draft_call(*refs, *flags, *self.approve_flags(preview))
+        with patch.dict(os.environ, self.presenter_env(task)):
+            created = self.draft_call(*refs, *flags, *self.approve_flags(preview))
         self.assertEqual(self.native.calls, dialogs)  # no dialog for the permitted write
         summary = created["exact_human_approval"]
         self.assertEqual(summary["approval_mechanism"], PERMISSION_INTERACTIVE_INTENT_MECHANISM)
@@ -216,13 +233,11 @@ class SessionPermissionModeTests(unittest.TestCase):
         task = self.establish("pause")
         self.set_mode(task, "allow_all")
         self.assertEqual(self.inspect(task)["permission_mode"], "allow_all")
-        self.assertIsNotNone(permission.resolve_grant(self.root, client_app_ref=task["app"],
-                                                      task_route_ref=task["route"], work_session_ref=task["session"]))
+        self.assertIsNotNone(self.resolve(task))
         self.session_call("--action", "pause", "--apply", *task["refs"], "--work-session-ref", task["session"])
         self.assertEqual(self.inspect(task)["permission_mode"], "manual")
         self.assertEqual(self.inspect(task)["state"], "paused")
-        self.assertIsNone(permission.resolve_grant(self.root, client_app_ref=task["app"],
-                                                   task_route_ref=task["route"], work_session_ref=task["session"]))
+        self.assertIsNone(self.resolve(task))
         # resuming the session starts manual again; a new grant needs a new decision
         self.session_call("--action", "resume", "--apply", *task["refs"], "--work-session-ref", task["session"])
         self.assertEqual(self.inspect(task)["permission_mode"], "manual")
@@ -230,8 +245,7 @@ class SessionPermissionModeTests(unittest.TestCase):
     def test_a_grant_revoked_between_decision_and_claim_fails_closed(self) -> None:
         task = self.establish("revoke")
         self.set_mode(task, "allow_all")
-        grant = permission.resolve_grant(self.root, client_app_ref=task["app"],
-                                         task_route_ref=task["route"], work_session_ref=task["session"])
+        grant = self.resolve(task)
         self.assertIsNotNone(grant)
         context = ExactHumanApprovalContext(
             operation=ExactHumanApprovalOperation.create_draft,
@@ -241,7 +255,7 @@ class SessionPermissionModeTests(unittest.TestCase):
             reviewer_claim=REVIEWER, review_binding_codes=("body_digest_reviewed",), warning_codes=())
         native = _CountingNative()
         writes = []
-        with patch.object(permission, "grant_still_permits", return_value=False):
+        with patch.object(permission, "grant_still_permits", return_value=False), patch.dict(os.environ, self.presenter_env(task)):
             with self.assertRaises(broker.ExactHumanApprovalWorkflowError) as raised:
                 broker._execute_exact_human_approved_write_core(
                     self.root, context, lambda claim: writes.append(claim) or {"ok": True},
@@ -253,9 +267,10 @@ class SessionPermissionModeTests(unittest.TestCase):
         self.assertFalse(any(json.loads(p.read_text(encoding="utf-8"))["context_sha256"]
                              == approval.exact_human_approval_context_sha256(context) for p in claims))
         # with the grant intact and a permitted operation, no dialog and one claim
-        outcome = broker._execute_exact_human_approved_write_core(
-            self.root, context, lambda claim: {"ok": True, "files_written": []},
-            native=native, key_provider=self.key, session_permission=grant)
+        with patch.dict(os.environ, self.presenter_env(task)):
+            outcome = broker._execute_exact_human_approved_write_core(
+                self.root, context, lambda claim: {"ok": True, "files_written": []},
+                native=native, key_provider=self.key, session_permission=grant)
         self.assertEqual(native.calls, 0)
         self.assertEqual(outcome["exact_human_approval"]["approval_mechanism"], PERMISSION_INTERACTIVE_INTENT_MECHANISM)
         # an always-dialog operation ignores the grant even in allow_all

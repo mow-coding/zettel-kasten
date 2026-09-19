@@ -19541,6 +19541,18 @@ def zet_revision_plan(
         blockers.append(f"proposal_quality_blocker:{code}")
     if quality_warning_codes:
         warnings.append("proposal_quality_warnings_require_review")
+    # v0.4.34 (letter 165 [E]): say which field or table each quality warning
+    # means; (letter 165 [B]): a bare legacy identifier in the proposal is a
+    # top-level warning, so the write's dialog binds it.
+    quality_warning_explanations = zettel_quality_warning_explanations(
+        proposed_frontmatter, proposed_body, quality.get("issues", [])
+    )
+    revision_legacy_explanation = legacy_identifier_explanation_for(
+        root, proposed_body, title=proposed_frontmatter.get("title"), frontmatter=proposed_frontmatter,
+    )
+    if revision_legacy_explanation is not None:
+        quality_warning_explanations.append(revision_legacy_explanation)
+        warnings.append(str(revision_legacy_explanation["code"]))
 
     self_contained = zettel_self_contained_assessment(proposed_frontmatter, proposed_body)
     if self_contained.get("status") != "self_contained":
@@ -19633,6 +19645,7 @@ def zet_revision_plan(
             "warning_count": len(quality_warning_codes),
             "blocker_codes": quality_blocker_codes,
             "warning_codes": quality_warning_codes,
+            "warning_explanations": quality_warning_explanations,
             "issue_values_echoed": False,
         },
         "self_containment_review": {
@@ -21060,6 +21073,9 @@ def zet_revision_write(
     if not plan.get("ok"):
         blockers.extend(f"revision_plan:{item}" for item in plan.get("blockers", []))
         return result_payload("blocked")
+    # v0.4.34 (letter 165 [B]): the reviewed plan's warning codes are part of
+    # the write's warning set, so the dialog and its claim bind them.
+    warnings.extend(str(item) for item in plan.get("warnings", []) if isinstance(item, str))
     for actual, expected, code in (
         (actual_canonical, expected_canonical, "canonical_sha256_mismatch"),
         (actual_proposal, expected_proposal, "proposal_sha256_mismatch"),
@@ -37265,6 +37281,16 @@ def create_draft_zettel(
         ):
             warnings.append("unknown_facet_key_requires_human_review")
 
+    # v0.4.34 (letter 165 [B]): a bare Notion page name or page id in the new
+    # body or title is named here, with counts and lines, never the text.
+    draft_legacy_explanation = legacy_identifier_explanation_for(root, body, title=title)
+    draft_quality_check = {
+        "warning_explanations": [] if draft_legacy_explanation is None else [draft_legacy_explanation],
+        "privacy_guards": {"matched_text_echoed": False},
+    }
+    if draft_legacy_explanation is not None:
+        warnings.append(str(draft_legacy_explanation["code"]))
+
     supervised = clean_optional_string_list(supervised_by)
     explicit_derived = clean_optional_string_list(derived_from)
     source_intake = prepare_source_intake_plan_for_draft(source_intake_plan, blockers)
@@ -37811,6 +37837,7 @@ def create_draft_zettel(
         **_create_draft_work_session_projection(work_session_binding, work_session_scope_sha256),
         "first_read_check": first_read_check,
         "existing_draft_title_check": existing_draft_title_check,
+        "quality_check": draft_quality_check,
         "blockers": unique_preserve_order(blockers),
         "warnings": unique_preserve_order(warnings),
         "would_change": (
@@ -37971,6 +37998,7 @@ def create_draft_zettel(
         **_create_draft_work_session_projection(work_session_binding, work_session_scope_sha256),
         "first_read_check": first_read_check,
         "existing_draft_title_check": existing_draft_title_check,
+        "quality_check": draft_quality_check,
         "warnings": unique_preserve_order(warnings),
         "created_paths": created_paths,
         "idempotent_replay": not created_paths,
@@ -49786,9 +49814,12 @@ def mint_zettel_dry_run(
     # v0.4.31 (letter 163 ⑪): the explanation is computed once, before the
     # receipt preview, and stored inside quality_check so plan_sha256 and the
     # receipt carry it; the warning list itself is unchanged.
-    warning_explanations = mint_warning_explanations(body)
+    warning_explanations = mint_warning_explanations(
+        body, archive_root=root, title=source_frontmatter.get("title"), frontmatter=source_frontmatter,
+    )
     quality_check["warning_explanations"] = warning_explanations
     quality_check.setdefault("privacy_guards", {})["matched_status_markers_echoed"] = False
+    quality_check["privacy_guards"]["matched_text_echoed"] = False
     for explanation in warning_explanations:
         warnings.append(str(explanation["code"]))
 
@@ -142208,6 +142239,88 @@ def write_result_git_backup_attention(archive_root: Path | str) -> dict[str, Any
         }
 
 
+SESSION_PERMISSION_ATTENTION_SCHEMA = "wom-kit/session-permission-attention/v1"
+SESSION_PERMISSION_GUIDANCE = (
+    "The three work-session refs and the presenter token stay in the granting "
+    "conversation's process; never store them in cross-conversation memory or "
+    "files. Another conversation continues a task through work-session "
+    "handoff/accept (one human decision), never by reusing the refs."
+)
+SESSION_PERMISSION_ATTENTION_NEXT_COMMAND = (
+    "archive work-session <archive-root> --action list --kind session --format json"
+)
+
+
+def write_result_session_permission_attention(archive_root: Path | str) -> dict[str, Any]:
+    """v0.4.34 (letter 165 [A]): the registry-only view of open session grants.
+
+    Counts only: how many claimed sessions run without a dialog, how many of
+    those grants are expired or still in the pre-v0.4.34 shape. Presenter
+    evidence lives in the claims and needs the archive key, so it is reached
+    through ``exact-approval-claims`` instead. Never raises.
+    """
+
+    unavailable = {
+        "schema": SESSION_PERMISSION_ATTENTION_SCHEMA,
+        "state": "unavailable",
+        "registry_inspected": False,
+        "claimed_session_count": None,
+        "non_manual_session_count": None,
+        "expired_grant_count": None,
+        "legacy_grant_count": None,
+        "presenter_bound_count": None,
+        "review_recommended": False,
+        "human_summary": "The work-session registry could not be read; open grants are unknown.",
+        "presenter_evidence_command": (
+            "archive exact-approval-claims <archive-root> --status all --format json"
+        ),
+        "next_command": SESSION_PERMISSION_ATTENTION_NEXT_COMMAND,
+        "guidance": SESSION_PERMISSION_GUIDANCE,
+        "private_values_echoed": False,
+    }
+    try:
+        from . import work_session_permission as permission_rules
+        from . import work_session_query as query
+
+        snapshot = query._capture(Path(archive_root))
+        sessions = snapshot._document["sessions"]
+        claimed = [row for row in sessions.values() if row["state"] == "claimed"]
+        granted = [row for row in claimed if row.get("permission") is not None]
+        expired = sum(
+            1 for row in granted if permission_rules.permission_expired(row["permission"]) is True
+        )
+        legacy = sum(
+            1 for row in granted if permission_rules.permission_shape(row["permission"]) == "legacy"
+        )
+        bound = sum(
+            1 for row in granted if permission_rules.permission_shape(row["permission"]) == "v2"
+        )
+        active = len(granted) - expired - legacy
+        if not granted:
+            summary = "No claimed work session runs without a dialog."
+        else:
+            summary = (
+                f"{active} claimed work session(s) run without a dialog"
+                + (f", {expired} grant(s) expired" if expired else "")
+                + (f", {legacy} grant(s) predate v0.4.34 and ask the dialog again" if legacy else "")
+                + "; review who holds each grant before broad work."
+            )
+        return {
+            **unavailable,
+            "state": "observed",
+            "registry_inspected": True,
+            "claimed_session_count": len(claimed),
+            "non_manual_session_count": len(granted),
+            "expired_grant_count": expired,
+            "legacy_grant_count": legacy,
+            "presenter_bound_count": bound,
+            "review_recommended": bool(granted),
+            "human_summary": summary,
+        }
+    except Exception:  # noqa: BLE001 - attention must never fail the host
+        return unavailable
+
+
 def attach_inbox_attention(
     result: dict[str, Any], archive_root: Path | str
 ) -> dict[str, Any]:
@@ -142326,6 +142439,10 @@ def ai_start_here(
     git_backup_attention = write_result_git_backup_attention(
         require_existing_archive_root(archive_root)
     )
+    # v0.4.34 (letter 165 [A]): open session grants, registry counts only.
+    session_permission_attention = write_result_session_permission_attention(
+        require_existing_archive_root(archive_root)
+    )
 
     next_lines: list[str] = []
     if session_start_summary and isinstance(session_start_summary.get("next"), list):
@@ -142373,6 +142490,10 @@ def ai_start_here(
             "git_backup_attention_state": git_backup_attention["state"],
             "uncommitted_change_count": git_backup_attention[
                 "uncommitted_change_count"
+            ],
+            "session_permission_attention_state": session_permission_attention["state"],
+            "non_manual_session_count": session_permission_attention[
+                "non_manual_session_count"
             ],
         },
         "inspection": {
@@ -142425,6 +142546,7 @@ def ai_start_here(
         ),
         "inbox_attention": inbox_attention,
         "git_backup_attention": git_backup_attention,
+        "session_permission_attention": session_permission_attention,
         "runtime_guidance_readiness": context.get("runtime_guidance_readiness"),
         "agent_instruction_policy": context.get("agent_instruction_policy"),
         "operational_context": {
@@ -142483,6 +142605,19 @@ def ai_start_here(
                     if git_backup_attention["review_recommended"]
                     else []
                 ),
+                *(
+                    [
+                        "A work session runs without a dialog; review the session permission attention block (who holds the grant, when it expires) with archive work-session <archive-root> --action list --kind session --format json, and archive exact-approval-claims <archive-root> --status all --format json for presenter evidence.",
+                        SESSION_PERMISSION_GUIDANCE,
+                    ]
+                    if session_permission_attention["review_recommended"]
+                    else []
+                ),
+                *(
+                    [legacy_identifier_guidance_line(require_existing_archive_root(archive_root))]
+                    if legacy_identifier_mapping_available(require_existing_archive_root(archive_root))
+                    else []
+                ),
                 "Run first-read-readiness before the exhaustive catalog pass; treat a non-ready result as an explicit abstract or unique-id repair queue, not as permission to invent or auto-write missing memory.",
                 "Run abstract-freshness after first-read-readiness; treat stale or unverified rows as a human review queue and never auto-rewrite an abstract or body.",
                 "Run zet-catalog with projection=reading and coverage_mode=strict, keep the first response_profile full, inspect item and compact response-envelope estimates, set a host-appropriate max_estimated_tokens plus an explicit response_envelope_reserve_tokens when needed, then optionally use response_profile=continuation on later pages while following every continuation token before claiming archive-wide zet coverage.",
@@ -142520,6 +142655,11 @@ def ai_start_here(
                 *(
                     [git_backup_attention["human_summary"]]
                     if git_backup_attention["review_recommended"]
+                    else []
+                ),
+                *(
+                    [session_permission_attention["human_summary"]]
+                    if session_permission_attention["review_recommended"]
                     else []
                 ),
             ]
@@ -143993,6 +144133,16 @@ def source_intake_plan(
             "Object storage is not configured in provider-bindings.yml; "
             "run archive object-storage --dry-run to plan setup before real objet capture."
         )
+    # v0.4.34 (letter 165 [B]): a bare legacy identifier in the resolved label
+    # (the title, else the local file name) is named; plan-only, never echoed.
+    from .legacy_identifier import CODE_SOURCE_LABEL, label_legacy_identifier_present
+
+    resolved_label = title if isinstance(title, str) and title.strip() else (
+        Path(str(local_path)).name if local_path is not None else None
+    )
+    if label_legacy_identifier_present(resolved_label):
+        warnings.append(CODE_SOURCE_LABEL)
+        result_body["legacy_identifier_guidance"] = legacy_identifier_guidance_line(root)
 
     if blockers:
         result_body["objet_status"] = "blocked"
@@ -150787,16 +150937,72 @@ def zettel_body_has_status_contradiction(body: str) -> bool:
     return evidence["completed_marker_count"] > 0 and evidence["pending_marker_count"] > 0
 
 
-def mint_warning_explanations(body: str) -> list[dict[str, Any]]:
+def legacy_identifier_mapping_available(archive_root: Path | str) -> bool:
+    """v0.4.34 (letter 165 [B]): does the index hold migrated Notion zets?
+
+    Read-only count on the current generated index; any failure (no index,
+    locked, old schema) answers False so a warning explanation never fails
+    the plan it sits in.
+    """
+
+    try:
+        root = require_existing_archive_root(archive_root)
+        db_path = root / INDEX_RELATIVE_PATH
+        if not db_path.is_file():
+            return False
+        conn = connect_archive_index(db_path)
+        try:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM zettels WHERE zettel_id LIKE 'zet_notion_%' "
+                "OR zettel_id LIKE 'zet_import_notion_%'"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        return int(count) > 0
+    except Exception:  # noqa: BLE001 - evidence only
+        return False
+
+
+def legacy_identifier_guidance_line(archive_root: Path | str) -> str:
+    from .legacy_identifier import GUIDANCE
+
+    return GUIDANCE
+
+
+def legacy_identifier_explanation_for(
+    archive_root: Path | str, body: str, *, title: str | None = None,
+    frontmatter: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """The shared [B] explanation, downgraded for a record that is itself migrated."""
+
+    from .legacy_identifier import legacy_identifier_explanation
+
+    migrated = isinstance(frontmatter, dict) and notion_import_frontmatter_is_notion(frontmatter)
+    return legacy_identifier_explanation(
+        body, title=title, migrated_record=migrated,
+        mapping_available=legacy_identifier_mapping_available(archive_root),
+    )
+
+
+def mint_warning_explanations(
+    body: str, *, archive_root: Path | str | None = None, title: str | None = None,
+    frontmatter: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     """v0.4.31 (letter 163 ⑪): say WHAT the two body-wording warnings saw.
 
     One entry per warning actually raised, with the detector's fixed rule,
     marker category counts and body line numbers; matched text is never
     echoed. Lives inside ``quality_check`` so it is bound and receipted with
-    the plan it explains.
+    the plan it explains. v0.4.34 (letter 165 [B]): the legacy identifier
+    explanation joins the list when the body or title carries a bare Notion
+    page name or page id (only then, so clean plans keep their digest).
     """
 
     explanations: list[dict[str, Any]] = []
+    if archive_root is not None:
+        legacy = legacy_identifier_explanation_for(archive_root, body, title=title, frontmatter=frontmatter)
+        if legacy is not None:
+            explanations.append(legacy)
     trace = zettel_body_tool_execution_trace_evidence(body)
     if trace["command_marker_count"] > 0 or trace["distinct_flag_marker_count"] >= 2:
         explanations.append(
@@ -150819,6 +151025,79 @@ def mint_warning_explanations(body: str) -> list[dict[str, Any]]:
                 **status,
             }
         )
+    return explanations
+
+
+_TABLE_EVIDENCE_MAX = 16
+_MARKDOWN_TABLE_SEPARATOR_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$")
+
+
+def zettel_markdown_table_evidence(body: str) -> dict[str, Any]:
+    """Content-free table evidence (v0.4.34, letter 165 [E]): ordinal, header line, row count."""
+
+    lines = body.split("\n") if body else []
+    tables: list[dict[str, Any]] = []
+    index = 0
+    while index < len(lines) - 1:
+        line, separator = lines[index], lines[index + 1]
+        if "|" in line and _MARKDOWN_TABLE_SEPARATOR_RE.match(separator):
+            rows = 0
+            cursor = index + 2
+            while cursor < len(lines) and "|" in lines[cursor] and lines[cursor].strip():
+                rows += 1
+                cursor += 1
+            tables.append({"ordinal": len(tables) + 1, "header_body_line": index + 1, "row_count": rows})
+            index = cursor
+            continue
+        index += 1
+    return {
+        "table_count": len(tables),
+        "tables": tables[:_TABLE_EVIDENCE_MAX],
+        "tables_truncated": len(tables) > _TABLE_EVIDENCE_MAX,
+        "cell_text_echoed": False,
+    }
+
+
+def zettel_quality_warning_explanations(
+    frontmatter: dict[str, Any], body: str, issues: list[Any],
+) -> list[dict[str, Any]]:
+    """v0.4.34 (letter 165 [E]): say WHICH field or table a quality warning means.
+
+    One entry per raised warning the operator asked about: the frontmatter
+    field to fill (with its allowed values) or the table(s) whose parse
+    review is missing (ordinal, header line, row count). Values of the
+    proposal are never echoed.
+    """
+
+    codes = {
+        str(item.get("code"))
+        for item in issues
+        if isinstance(item, dict) and item.get("severity") == "warning" and item.get("code")
+    }
+    explanations: list[dict[str, Any]] = []
+    if "document_type_missing" in codes:
+        explanations.append({
+            "code": "document_type_missing",
+            "category": "frontmatter_field",
+            "field": "document_type",
+            "allowed_values": sorted(ZET_QUALITY_DOCUMENT_TYPES),
+            "field_present": "document_type" in (frontmatter if isinstance(frontmatter, dict) else {}),
+            "issue_values_echoed": False,
+        })
+    table_codes = [code for code in ("table_row_mapping_missing", "table_structure_review_missing") if code in codes]
+    if table_codes:
+        evidence = zettel_markdown_table_evidence(body if isinstance(body, str) else "")
+        for code in table_codes:
+            explanations.append({
+                "code": code,
+                "category": "table_parse_review",
+                "field": (
+                    "parse_review.row_mapping" if code == "table_row_mapping_missing"
+                    else "parse_review.structure_reviewed (or table_structure_reviewed)"
+                ),
+                **evidence,
+                "issue_values_echoed": False,
+            })
     return explanations
 
 

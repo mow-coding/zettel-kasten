@@ -297,6 +297,40 @@ def _authenticated(document: Mapping[str, Any], key: bytes | bytearray) -> dict[
     return result
 
 
+# v0.4.34 (beta letter 165 [A]): a grant-mechanism claim may carry one
+# optional top-level presenter block. Fixed keys, content-free values; the
+# MAC covers it; 15-key claims written before v0.4.34 stay valid.
+SESSION_PRESENTER_SCHEMA = "wom-kit/exact-human-approval-presenter/v0.1"
+SESSION_PRESENTER_KEYS = frozenset({
+    "schema", "work_session_ref", "presenter_sha256", "fingerprint_state",
+    "process_fingerprint_sha256", "presenters_observed_before_this_claim",
+})
+_WORK_SESSION_REF_RE = re.compile(r"work_session_[0-9a-f]{32}\Z")
+
+
+def validate_session_presenter(value: Any) -> dict[str, Any]:
+    """Shape-check the optional presenter block; never echoes its values."""
+
+    if (not isinstance(value, Mapping) or set(value) != SESSION_PRESENTER_KEYS
+            or value.get("schema") != SESSION_PRESENTER_SCHEMA
+            or type(value.get("work_session_ref")) is not str
+            or _WORK_SESSION_REF_RE.fullmatch(value["work_session_ref"]) is None
+            or type(value.get("presenter_sha256")) is not str
+            or _SHA256_RE.fullmatch(value["presenter_sha256"]) is None
+            or value.get("fingerprint_state") not in {"observed", "unavailable"}
+            or type(value.get("presenters_observed_before_this_claim")) is not int
+            or isinstance(value.get("presenters_observed_before_this_claim"), bool)
+            or value["presenters_observed_before_this_claim"] < 0):
+        raise _fail("exact_human_approval_claim_document_invalid")
+    digest = value.get("process_fingerprint_sha256")
+    if value["fingerprint_state"] == "observed":
+        if type(digest) is not str or _SHA256_RE.fullmatch(digest) is None:
+            raise _fail("exact_human_approval_claim_document_invalid")
+    elif digest is not None:
+        raise _fail("exact_human_approval_claim_document_invalid")
+    return dict(value)
+
+
 def _validate_claim_document(
     document: Any,
     *,
@@ -323,7 +357,7 @@ def _validate_claim_document(
         "failure_code",
         "authentication",
     }
-    if set(result) != expected:
+    if set(result) not in (expected, expected | {"session_presenter"}):
         raise _fail("exact_human_approval_claim_document_invalid")
     if result.get("schema_version") != CLAIM_SCHEMA_VERSION:
         raise _fail("exact_human_approval_claim_document_invalid")
@@ -416,6 +450,11 @@ def _validate_claim_document(
         or interactive_intent.get("confirmed") is not True
     ):
         raise _fail("exact_human_approval_claim_document_invalid")
+    if "session_presenter" in result:
+        # Only a grant-mechanism claim names its presenter.
+        if interactive_intent.get("mechanism") != PERMISSION_INTERACTIVE_INTENT_MECHANISM:
+            raise _fail("exact_human_approval_claim_document_invalid")
+        validate_session_presenter(result["session_presenter"])
     status = result.get("status")
     if status not in {"started", "succeeded", "failed"}:
         raise _fail("exact_human_approval_claim_state_invalid")
@@ -1588,17 +1627,24 @@ def _claim_exact_human_approval_core(
     bound_archive_root: Path | None = None,
     claim_parent_binding: dict[str, Any] | None = None,
     interactive_intent_mechanism: str = CURRENT_INTERACTIVE_INTENT_MECHANISM,
+    session_presenter: Mapping[str, Any] | None = None,
 ) -> _ClaimedExactHumanApproval:
     """Persist an authenticated started claim after an exact live decision.
 
     v0.4.24: ``interactive_intent_mechanism`` names how the decision was
     obtained; the permission-mode literal is the only non-dialog value.
+    v0.4.34: ``session_presenter`` (grant mechanism only) records which
+    presenter used the grant, as content-free digests.
     """
     if interactive_intent_mechanism not in {
         CURRENT_INTERACTIVE_INTENT_MECHANISM,
         PERMISSION_INTERACTIVE_INTENT_MECHANISM,
     }:
         raise _fail("exact_human_approval_decision_required")
+    if session_presenter is not None:
+        if interactive_intent_mechanism != PERMISSION_INTERACTIVE_INTENT_MECHANISM:
+            raise _fail("exact_human_approval_decision_required")
+        session_presenter = validate_session_presenter(session_presenter)
 
     root, archive_id = _archive_identity(archive_root)
     if type(context) is not ExactHumanApprovalContext:
@@ -1646,28 +1692,28 @@ def _claim_exact_human_approval_core(
         authority_sha256 = _sha256(
             _AUTHORITY_DOMAIN + _canonical_bytes(authority)
         )
-        document = _authenticated(
-            {
-                "schema_version": CLAIM_SCHEMA_VERSION,
-                "approval_id": approval_id,
-                "archive_id": archive_id,
-                "context": context_document,
-                "context_sha256": context_sha256,
-                "approval_authority_sha256": authority_sha256,
-                "reviewer_claim_sha256": reviewer_claim_sha256,
-                "reviewer_identity_authenticated": False,
-                "interactive_intent": {
-                    "mechanism": interactive_intent_mechanism,
-                    "confirmed": True,
-                },
-                "approved_at": approved_at,
-                "started_at": approved_at,
-                "status": "started",
-                "finished_at": None,
-                "failure_code": None,
+        claim_body: dict[str, Any] = {
+            "schema_version": CLAIM_SCHEMA_VERSION,
+            "approval_id": approval_id,
+            "archive_id": archive_id,
+            "context": context_document,
+            "context_sha256": context_sha256,
+            "approval_authority_sha256": authority_sha256,
+            "reviewer_claim_sha256": reviewer_claim_sha256,
+            "reviewer_identity_authenticated": False,
+            "interactive_intent": {
+                "mechanism": interactive_intent_mechanism,
+                "confirmed": True,
             },
-            key,
-        )
+            "approved_at": approved_at,
+            "started_at": approved_at,
+            "status": "started",
+            "finished_at": None,
+            "failure_code": None,
+        }
+        if session_presenter is not None:
+            claim_body["session_presenter"] = session_presenter
+        document = _authenticated(claim_body, key)
         _validate_claim_document(document, archive_id=archive_id, key=key)
         if (
             bound_archive_root is not None
@@ -1887,7 +1933,10 @@ __all__ = [
     "TERMINAL_RECORD_AUTHENTICATION_SCHEMA_VERSION",
     "TERMINAL_RECORD_MAC_DOMAIN",
     "TERMINAL_RECORD_MAC_MAX_PAYLOAD_BYTES",
+    "SESSION_PRESENTER_KEYS",
+    "SESSION_PRESENTER_SCHEMA",
     "audit_exact_human_approval_succeeded_terminal_record_read_only",
     "exact_human_approval_archive_identity_sha256",
     "exact_human_approval_context_sha256",
+    "validate_session_presenter",
 ]

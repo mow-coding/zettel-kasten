@@ -158,7 +158,9 @@ class ListingTests(_ClaimStoreCase):
         self.assertEqual(
             set(result["claims"][0]),
             {"approval_id", "operation", "status", "started_at", "finished_at", "failure_code",
-             "age_minutes", "approval_mechanism", "context_sha256", "review_binding_codes", "warning_codes"},
+             "age_minutes", "approval_mechanism", "context_sha256", "review_binding_codes", "warning_codes",
+             # v0.4.34 (letter 165 [A]): presenter evidence of a session-grant claim.
+             "presenter_recorded", "session_presenter"},
         )
         self.assertEqual(result["claims"][0]["age_minutes"], 120)
         self.assertEqual(result["claims"][0]["approval_mechanism"], CURRENT_INTERACTIVE_INTENT_MECHANISM)

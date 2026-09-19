@@ -40,6 +40,11 @@ _HUMAN_ACTIONS = frozenset({"create", "handoff", "accept", "recover", "set-permi
 # manual == no key; the key is optional so every historical generation
 # keeps validating, and it is never part of the WorkSessionBinding digest.
 _PERMISSION_MODES = frozenset({"limited", "allow_all"})
+# v0.4.34: the presenter-bound, time-boxed row. The two-key shape stays
+# valid on disk (historical generations) but resolves to the dialog.
+_PERMISSION_V1_KEYS = frozenset({"mode", "operations"})
+_PERMISSION_V2_KEYS = _PERMISSION_V1_KEYS | {"presenter_sha256", "granted_at", "expires_at"}
+_PERMISSION_TIMESTAMP = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\Z")
 _SESSION_KEYS = frozenset({"client_app_ref", "workstream_ref", "revision", "state",
                            "claim_ref", "predecessor_ref", "handoff_app_ref"})
 _OPERATION_TOKEN = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
@@ -63,6 +68,15 @@ def _validate_permission(value: Any) -> None:
     """Content-free grant: a mode and sorted unique operation tokens."""
     if value is None:
         return
+    if type(value) is dict and set(value) == _PERMISSION_V2_KEYS:
+        if (not _DIGEST.fullmatch(str(value["presenter_sha256"])) if type(value["presenter_sha256"]) is str else True):
+            raise _fail("work_session_registry_invalid")
+        for name in ("granted_at", "expires_at"):
+            if type(value[name]) is not str or _PERMISSION_TIMESTAMP.fullmatch(value[name]) is None:
+                raise _fail("work_session_registry_invalid")
+        if value["expires_at"] <= value["granted_at"]:
+            raise _fail("work_session_registry_invalid")
+        value = {"mode": value["mode"], "operations": value["operations"]}
     if (type(value) is not dict or set(value) != {"mode", "operations"}
             or value["mode"] not in _PERMISSION_MODES
             or type(value["operations"]) is not list or len(value["operations"]) > 64

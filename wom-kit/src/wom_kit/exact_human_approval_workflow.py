@@ -21,7 +21,9 @@ operation is performed.
 
 from __future__ import annotations
 
+import hashlib
 import hmac
+import json
 
 import os
 import re
@@ -110,19 +112,71 @@ _UNSET_SESSION_PERMISSION = object()
 
 
 def _resolved_session_permission(archive_root, session_permission, context):
-    """The grant that may skip the dialog for this exact context, or None."""
+    """(grant, refusal reason): the grant that may skip the dialog for this
+    exact context, or None plus the fixed code that explains the dialog.
+
+    v0.4.34 (letter 165 [A]): a refusal reason is returned only when the
+    caller presented session refs and a grant existed but was refused
+    (missing / mismatched presenter, expiry, legacy shape, route doubt, a
+    bound warning that the human must see). None/None is plain manual mode.
+    """
 
     from . import work_session_permission as permission
 
+    reason = None
     if session_permission is _UNSET_SESSION_PERMISSION:
         if context.operation in permission.ALWAYS_DIALOG_OPERATIONS:
-            return None
-        grant = permission.resolve_grant_from_environment(archive_root)
+            return None, None
+        grant, reason = permission.resolve_grant_outcome_from_environment(archive_root)
     else:
         grant = session_permission
     if grant is None or type(grant) is not permission.SessionPermissionGrant:
-        return None
-    return grant if grant.permits(context.operation) else None
+        return None, reason
+    if permission.grant_blocking_warnings(context.warning_codes):
+        return None, "work_session_grant_warning_review_required"
+    return (grant, None) if grant.permits(context.operation) else (None, None)
+
+
+def _session_presenter_with_key(
+    archive_root, key: memoryview, filesystem_boundary, *, grant, fingerprint_basis,
+) -> dict[str, Any]:
+    """Build the claim's presenter block inside the key scope.
+
+    The fingerprint basis (image basename, pid, creation time) is HMAC'd with
+    the archive receipt key and discarded; earlier presenters of this session
+    are derived from the authenticated claims already in the store (bounded,
+    ``scan_truncated`` when the page was full). Never raises.
+    """
+
+    from .exact_human_approval import SESSION_PRESENTER_SCHEMA
+    from .presenter_fingerprint import FINGERPRINT_DOMAIN
+
+    digest = None
+    if type(fingerprint_basis) is dict:
+        try:
+            raw = json.dumps(fingerprint_basis, ensure_ascii=True, sort_keys=True,
+                             separators=(",", ":")).encode("ascii")
+            digest = "sha256:" + hmac.new(bytes(key), FINGERPRINT_DOMAIN + raw, hashlib.sha256).hexdigest()
+        except (TypeError, ValueError):
+            digest = None
+    seen_count = 0
+    try:
+        from . import exact_approval_claims as claims
+
+        seen, _truncated = claims._presenters_seen_with_key(
+            archive_root, key, filesystem_boundary, work_session_ref=grant.work_session_ref,
+        )
+        seen_count = len(seen - ({digest} if digest is not None else set()))
+    except BaseException:
+        seen_count = 0
+    return {
+        "schema": SESSION_PRESENTER_SCHEMA,
+        "work_session_ref": grant.work_session_ref,
+        "presenter_sha256": grant.presenter_sha256,
+        "fingerprint_state": "observed" if digest is not None else "unavailable",
+        "process_fingerprint_sha256": digest,
+        "presenters_observed_before_this_claim": seen_count,
+    }
 
 
 class ExactHumanApprovalWorkflowError(RuntimeError):
@@ -362,6 +416,35 @@ def _run_started_claim_writer(
         claim.close()
 
 
+def _attach_session_permission_evidence(
+    result: dict[str, Any], *, session_presenter: dict[str, Any] | None, grant_refusal: str | None,
+) -> dict[str, Any]:
+    """v0.4.34 (letter 165 [A]): say on the result who used the grant, or why the dialog opened."""
+
+    summary = result.get("exact_human_approval")
+    if type(summary) is not dict:
+        return result
+    summary = dict(summary)
+    if session_presenter is not None:
+        seen = session_presenter["presenters_observed_before_this_claim"]
+        second = session_presenter["fingerprint_state"] == "observed" and seen > 0
+        summary["presenter"] = {
+            "fingerprint_state": session_presenter["fingerprint_state"],
+            "presenters_observed_before_this_claim": seen,
+            "second_presenter_observed": second,
+            "presenter_values_echoed": False,
+        }
+        if second:
+            summary["warnings"] = [*summary.get("warnings", []), "work_session_second_presenter_observed"]
+    result = dict(result)
+    result["exact_human_approval"] = summary
+    if grant_refusal is not None:
+        result["session_permission_refused"] = {
+            "reason_code": grant_refusal, "dialog_shown": True, "private_values_echoed": False,
+        }
+    return result
+
+
 def _execute_exact_human_approved_write_core(
     archive_root: Path | str,
     context: ExactHumanApprovalContext,
@@ -485,12 +568,16 @@ def _execute_exact_human_approved_write_with_review_kind_core(
             "observe_target_binding": observe_target_binding,
         }
     interactive_intent_mechanism = CURRENT_INTERACTIVE_INTENT_MECHANISM
-    grant = (
+    grant, grant_refusal = (
         _resolved_session_permission(archive_root, session_permission, context)
         if review_kind is _ExactHumanApprovalReviewKind.fresh
-        else None
+        else (None, None)
     )
+    fingerprint_basis = None
     if grant is not None:
+        from .presenter_fingerprint import observe as _observe_presenter
+
+        fingerprint_basis = _observe_presenter()
         # v0.4.24: the work session's human-granted permission mode stands
         # in for the dialog. The claim, its bindings, the writer and the
         # finalizer are unchanged; only the decision source differs, and
@@ -568,6 +655,16 @@ def _execute_exact_human_approved_write_with_review_kind_core(
                         raise _fail("exact_human_approval_resume_candidate_ambiguous")
                     if candidates:
                         raise _fail("exact_human_approval_resume_claim_invalid")
+                # v0.4.34: the presenter block is built with the key and
+                # written into the claim itself, before the writer runs.
+                session_presenter = (
+                    _session_presenter_with_key(
+                        archive_root, key, filesystem_boundary,
+                        grant=grant, fingerprint_basis=fingerprint_basis,
+                    )
+                    if grant is not None
+                    else None
+                )
                 # No domain/provider callback separates this same-key absence
                 # observation from publication of the new one-use claim.
                 claim = _claim_exact_human_approval_core(
@@ -586,14 +683,18 @@ def _execute_exact_human_approved_write_with_review_kind_core(
                         if filesystem_boundary is not None
                         else None
                     ),
+                    session_presenter=session_presenter,
                 )
         except ExactHumanApprovalError:
             raise _fail("exact_human_approval_claim_failed") from None
-        return _run_started_claim_writer(
+        result = _run_started_claim_writer(
             context,
             writer,
             claim,
             claim_succeeded_finalizer=claim_succeeded_finalizer,
+        )
+        return _attach_session_permission_evidence(
+            result, session_presenter=session_presenter, grant_refusal=grant_refusal,
         )
 
     try:

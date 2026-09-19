@@ -83,6 +83,11 @@ def dispatch_work_session_management(root, *, action, dry_run=False, approve=Fal
         "set-permission-mode": {"reviewer_claim", "permission_mode", "operations"},
         "permission_mode_preview": {"permission_mode", "operations"},
     }.get(mode, set())
+    # v0.4.34 (letter 165 [A]): the grant request may carry its time box.
+    optional_request = {
+        "set-permission-mode": {"grant_hours"},
+        "permission_mode_preview": {"grant_hours"},
+    }.get(mode, set())
     value = {} if request is None else request
     needs_session = mode.startswith("claim_") or mode in {
         "state_transition_apply", "original_state_transition_resume",
@@ -92,7 +97,7 @@ def dispatch_work_session_management(root, *, action, dry_run=False, approve=Fal
         "original_set-permission-mode_rereview", "permission_mode_preview",
     }
     if (type(value) is not dict or any(type(key) is not str for key in value)
-            or set(value) != required_request):
+            or not required_request <= set(value) <= (required_request | optional_request)):
         return management_failure("work_session_request_invalid")
     if ((action == "handoff" and type(target_app_ref) is not str)
             or (action != "handoff" and target_app_ref is not None)):
@@ -147,12 +152,14 @@ def dispatch_work_session_management(root, *, action, dry_run=False, approve=Fal
             result = service.review_original_task_recovery(root, **selected, work_session_ref=work_session_ref, **wait)
         elif mode == "permission_mode_preview":
             result = service.preview_permission_mode(root, **selected, work_session_ref=work_session_ref,
-                permission_mode=value.get("permission_mode"), operations=value.get("operations"))
+                permission_mode=value.get("permission_mode"), operations=value.get("operations"),
+                grant_hours=value.get("grant_hours"))
         elif mode in {"set-permission-mode", "original_set-permission-mode_resume"}:
             result = service.set_permission_mode(root, **selected, work_session_ref=work_session_ref,
                 original_resume=mode != "set-permission-mode",
                 reviewer_claim=value.get("reviewer_claim"),
-                permission_mode=value.get("permission_mode"), operations=value.get("operations"), **wait)
+                permission_mode=value.get("permission_mode"), operations=value.get("operations"),
+                grant_hours=value.get("grant_hours"), **wait)
         elif mode == "original_set-permission-mode_rereview":
             result = service.review_original_permission_mode(root, **selected,
                 work_session_ref=work_session_ref, **wait)
@@ -172,6 +179,10 @@ def dispatch_work_session_management(root, *, action, dry_run=False, approve=Fal
         result.get("schema") == "wom-kit/work-session-registration-selection/v1")))
     envelope = {"schema": SCHEMA, "ok": succeeded, "mode": mode, "result": result,
                 "private_values_echoed": False}
+    if succeeded and type(result) is dict and type(result.get("presenter_token")) is str:
+        # v0.4.34: the secret is a fresh value returned once, not a stored
+        # private value; the envelope names it so hosts can strip it.
+        envelope["presenter_token_field"] = "result.presenter_token"
     if succeeded and mode in INBOX_ATTENTION_MODES:
         # v0.4.30 (letter 163 ⑫): a session start or claim shows the inbox
         # backlog; computed after the service returned, outside any claim.
