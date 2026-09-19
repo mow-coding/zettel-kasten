@@ -36086,6 +36086,7 @@ def _create_draft_approval_handoff(
                 value_source="json_pointer",
                 json_pointer="/approval_replay/expected_archive_id",
                 value=approval_replay.get("expected_archive_id"),
+                omit_when_null=True,
             ),
             approval_handoff_argument(
                 "--expected-type",
@@ -36093,6 +36094,15 @@ def _create_draft_approval_handoff(
                 value_source="json_pointer",
                 json_pointer="/approval_replay/expected_type",
                 value=approval_replay.get("expected_type"),
+                omit_when_null=True,
+            ),
+            approval_handoff_argument(
+                "--profile-id",
+                required=False,
+                value_source="json_pointer",
+                json_pointer="/approval_replay/profile_id",
+                value=approval_replay.get("profile_id"),
+                omit_when_null=True,
             ),
             approval_handoff_argument(
                 "--draft-approved-by",
@@ -37348,9 +37358,13 @@ def create_draft_zettel(
         if not expected_body_sha256:
             warnings.append("Profile-bound write replay will require expected_body_sha256.")
 
+    assisted_by_hint = False
     if is_ai_draft:
         if not assisted:
             blockers.append("AI-assisted or AI-generated drafts must identify the assisting AI runtime.")
+            # v0.4.31 (letter 163 ⑦a): the fixed code and, below, the option names.
+            blockers.append("ai_draft_assisted_by_required")
+            assisted_by_hint = True
         if normalized_abstract is None:
             blockers.append(
                 "AI-assisted or AI-generated drafts require an explicit abstract before creation."
@@ -37675,6 +37689,12 @@ def create_draft_zettel(
         "reason_code": "draft_write_not_requested",
     }
     write_next_safe_actions: list[str] = []
+    if assisted_by_hint:
+        write_next_safe_actions.append(
+            "Identify the assisting AI runtime with --assisted-by ai_runtime:<name> "
+            "(repeatable); a supervising person is --supervised-by person:<id>; pair "
+            "them with --creation-mode ai_assisted or ai_generated."
+        )
     if is_ai_draft and not blockers and proposed_path in planned_writes:
         try:
             index_evidence = require_current_zettel_index(root)
@@ -37750,6 +37770,10 @@ def create_draft_zettel(
         # (letter 160 ③): automation that forwards them reaches --approve and
         # only then learns the preflight was blocked.
         approval_replay = {key: None for key in approval_replay}
+        write_next_safe_actions.append(
+            "approval_replay values are null while this dry-run is blocked; do not "
+            "forward them to --approve (a null value is never the literal None)."
+        )
     target_archive = {
         "archive_id": resolved_archive_id,
         "archive_type": archive_type,
@@ -48970,9 +48994,12 @@ def _promotion_edge_target_check(
 ) -> dict[str, Any]:
     """v0.4.30 (letter 163 [G]): do this zet's edge targets still exist?
 
-    Informational only in v0.4.30: counts of targets that the current index
-    does not know and of targets that a discard receipt says were discarded.
-    Outside the approval binding basis; no target id is echoed.
+    Counts of absent targets, split into those a discard receipt names
+    (``discarded``) and the rest (``missing``); a target the index knows
+    counts as neither. The check dict itself stays outside the approval
+    binding basis and echoes no target id. Since v0.4.31 the mint dry-run
+    turns non-zero counts into the warnings ``edge_target_discarded`` and
+    ``edge_target_missing``, which enter the binding through warning_codes.
     """
 
     targets = [
@@ -49011,13 +49038,17 @@ def _promotion_edge_target_check(
                     except sqlite3.Error:
                         exists = True
                         index_used = False
-                if not exists:
-                    missing += 1
+                if exists:
+                    continue
+                # v0.4.31: one absent target is exactly one of the two
+                # buckets; a discard receipt names the discarded one.
                 receipts_dir = root / DRAFT_DISCARD_RECEIPTS_DIR
                 if receipts_dir.is_dir() and safe_archive_glob(
                     receipts_dir, f"{target}.*.discard.json", root
                 ):
                     discarded += 1
+                else:
+                    missing += 1
         finally:
             if connection is not None:
                 connection.close()
@@ -49199,6 +49230,12 @@ def promote_zettel_dry_run(
     edge_target_check = _promotion_edge_target_check(
         root, frontmatter, duplicate_check
     )
+    # v0.4.31 (letter 163 item 11): a dangling edge is a fact a human must
+    # see before minting; the codes gate --approve behind --allow-warnings.
+    if edge_target_check["discarded"]:
+        warnings.append("edge_target_discarded")
+    if edge_target_check["missing"]:
+        warnings.append("edge_target_missing")
 
     zettel_id_value = str(frontmatter.get("id") or path.stem)
     proposed_receipt_path = f"{receipt_folder}promotion/{zettel_id_value}.promotion.json"
@@ -49599,9 +49636,9 @@ def _mint_zettel_edge_target_next_safe_actions(check: Any) -> list[str]:
         return []
     return [
         f"edge_target_check: {discarded} edge target(s) were discarded and {missing} "
-        "are unknown to the current index; review the draft's edges (related-zets) and "
-        "revert dangling ones with revert-edge after minting. v0.4.30 reports this; a "
-        "gating warning is planned."
+        "are unknown to the current index; the warnings edge_target_discarded / "
+        "edge_target_missing require --allow-warnings (batch: policy.allow_warnings) "
+        "after review; revert dangling edges with revert-edge after minting."
     ]
 
 
@@ -49746,10 +49783,14 @@ def mint_zettel_dry_run(
             blockers.append(f"Zet quality check blocked: {issue.get('code')}.")
     _emit_mint_progress(progress_callback, "quality", "done", 1, 1)
 
-    if zettel_body_has_tool_execution_trace(body):
-        warnings.append("tool_execution_trace_review_required")
-    if zettel_body_has_status_contradiction(body):
-        warnings.append("internal_status_consistency_review_required")
+    # v0.4.31 (letter 163 ⑪): the explanation is computed once, before the
+    # receipt preview, and stored inside quality_check so plan_sha256 and the
+    # receipt carry it; the warning list itself is unchanged.
+    warning_explanations = mint_warning_explanations(body)
+    quality_check["warning_explanations"] = warning_explanations
+    quality_check.setdefault("privacy_guards", {})["matched_status_markers_echoed"] = False
+    for explanation in warning_explanations:
+        warnings.append(str(explanation["code"]))
 
     _emit_mint_progress(progress_callback, "receipt_plan", "start", 0, 1)
     receipt_preview = build_mint_receipt_preview(
@@ -56271,6 +56312,56 @@ def archive_index_metadata_stale_reasons(
             "archive_index_zettel_identity_projection_mismatch"
         )
     return reasons
+
+
+_INDEX_PRECHECK_CODE_RE = re.compile(r"^[a-z][a-z0-9_]{0,95}$")
+_INDEX_PRECHECK_UNAVAILABLE_CODES = frozenset(
+    {
+        "archive_index_mutation_in_progress",
+        "archive_index_live_authority_watcher_unavailable",
+    }
+)
+
+
+def archive_index_precheck(root: Path) -> dict[str, Any]:
+    """v0.4.31 (letter 163 ⑧): the index fact a dry-run announces up front.
+
+    The same evidence the writers require (``require_current_zettel_index``),
+    projected as counts and fixed codes only, so an operator learns before
+    approving that the index must be rebuilt (``stale``) or is being written
+    by another process (``unavailable``). Never raises.
+    """
+
+    try:
+        evidence = require_current_zettel_index(root)
+    except (ArchiveServiceError, OSError, ValueError) as exc:
+        token = str(exc.args[0]) if exc.args and isinstance(exc.args[0], str) else ""
+        evidence = archive_index_rebuild_evidence(
+            token if _INDEX_PRECHECK_CODE_RE.fullmatch(token) else INDEX_REBUILD_REQUIRED
+        )
+    reason_codes = [
+        code
+        for code in (evidence.get("reason_codes") or [])
+        if type(code) is str and _INDEX_PRECHECK_CODE_RE.fullmatch(code)
+    ]
+    ok = evidence.get("ok") is True
+    state = (
+        "current"
+        if ok
+        else "unavailable"
+        if any(code in _INDEX_PRECHECK_UNAVAILABLE_CODES for code in reason_codes)
+        else "stale"
+    )
+    return {
+        "state": state,
+        "reason_codes": reason_codes,
+        "staleness_check": evidence.get("staleness_check"),
+        "live_zettel_count": int(evidence.get("live_zettel_count") or 0),
+        "indexed_zettel_count": int(evidence.get("indexed_zettel_count") or 0),
+        "generation_present": evidence.get("generation") is not None,
+        "next_safe_actions": [] if ok else list(INDEX_REBUILD_NEXT_SAFE_ACTIONS),
+        "paths_echoed": False,
+    }
 
 
 def archive_index_rebuild_evidence(reason_code: str) -> dict[str, Any]:
@@ -76715,11 +76806,13 @@ def zettel_edge_result(
     files_written: list[str],
     blockers: list[str],
     warnings: list[str],
+    index_precheck: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "ok": not blockers,
         "dry_run": dry_run,
         "lifecycle_action": "zettel_edge_plan" if dry_run else "zettel_edge_write",
+        "index_precheck": index_precheck,
         "archive_id": archive_id,
         "write_status": "blocked" if blockers else "would_write" if dry_run else "written",
         "source": source_summary or {},
@@ -76763,7 +76856,12 @@ def zettel_edge_result(
         },
         "would_change": would_change,
         "files_written": files_written,
-        "next_safe_actions": [
+        "next_safe_actions": (
+            list(INDEX_REBUILD_NEXT_SAFE_ACTIONS)
+            if INDEX_REBUILD_REQUIRED in blockers
+            else []
+        )
+        + [
             "Run archive index before relying on related-zets backlinks." if not blockers else "Fix blockers before writing an edge.",
             "Keep bulk candidate import separate until reviewed candidate records exist.",
         ],
@@ -77051,12 +77149,10 @@ def zettel_edge_write(
     # A single edge changes canonical Zet bytes and must update the generated
     # index in the same generation.  Put that mechanical fact in the dry-run
     # itself so the CLI never asks a person to approve an effect that cannot
-    # start safely.
-    try:
-        index_evidence = require_current_zettel_index(root)
-    except (ArchiveServiceError, OSError, ValueError):
-        index_evidence = {"ok": False}
-    if index_evidence.get("ok") is not True:
+    # start safely. v0.4.31: the same fact is projected as index_precheck so
+    # the operator sees the reason and the rebuild command up front.
+    index_precheck = archive_index_precheck(root)
+    if index_precheck["state"] != "current":
         blockers.append(INDEX_REBUILD_REQUIRED)
 
     if dry_run and approve:
@@ -77194,6 +77290,7 @@ def zettel_edge_write(
 
     if blockers:
         return zettel_edge_result(
+            index_precheck=index_precheck,
             archive_id=archive_id,
             dry_run=bool(dry_run),
             source_summary=source_summary,
@@ -77212,6 +77309,7 @@ def zettel_edge_write(
         )
 
     planned_result = zettel_edge_result(
+            index_precheck=index_precheck,
             archive_id=archive_id,
             dry_run=True,
             source_summary=source_summary,
@@ -77439,6 +77537,7 @@ def zettel_edge_write(
             lease_token=index_lease_token,
         )
         result = zettel_edge_result(
+            index_precheck=index_precheck,
             archive_id=archive_id,
             dry_run=False,
             source_summary=source_summary,
@@ -77471,6 +77570,7 @@ def zettel_edge_write(
         return result
 
     result = zettel_edge_result(
+        index_precheck=index_precheck,
         archive_id=archive_id,
         dry_run=False,
         source_summary=source_summary,
@@ -78322,6 +78422,7 @@ def zettel_edge_revert_result(
     files_written: list[str],
     blockers: list[str],
     warnings: list[str],
+    index_precheck: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if blockers:
         write_status = "blocked"
@@ -78379,7 +78480,13 @@ def zettel_edge_revert_result(
         },
         "would_change": would_change,
         "files_written": files_written,
-        "next_safe_actions": [
+        "index_precheck": index_precheck,
+        "next_safe_actions": (
+            list(INDEX_REBUILD_NEXT_SAFE_ACTIONS)
+            if INDEX_REBUILD_REQUIRED in blockers
+            else []
+        )
+        + [
             "Run archive index before relying on related-zets backlinks." if not blockers else "Fix blockers before reverting the edge.",
             "Keep the original write receipt and the revert receipt together as the audit trail.",
         ],
@@ -78453,12 +78560,10 @@ def zettel_edge_revert(
     warnings: list[str] = []
 
     # Revert is also an indexed Zet mutation.  Its reviewed preview must carry
-    # the same fail-closed precondition as the forward edge writer.
-    try:
-        index_evidence = require_current_zettel_index(root)
-    except (ArchiveServiceError, OSError, ValueError):
-        index_evidence = {"ok": False}
-    if index_evidence.get("ok") is not True:
+    # the same fail-closed precondition as the forward edge writer (v0.4.31:
+    # announced as index_precheck).
+    index_precheck = archive_index_precheck(root)
+    if index_precheck["state"] != "current":
         blockers.append(INDEX_REBUILD_REQUIRED)
 
     if dry_run and approve:
@@ -78571,6 +78676,7 @@ def zettel_edge_revert(
         ]
 
     planned_result = zettel_edge_revert_result(
+            index_precheck=index_precheck,
             archive_id=archive_id,
             dry_run=True,
             approve=False,
@@ -78790,6 +78896,7 @@ def zettel_edge_revert(
             lease_token=index_lease_token,
         )
         result = zettel_edge_revert_result(
+            index_precheck=index_precheck,
             archive_id=archive_id,
             dry_run=False,
             approve=True,
@@ -78819,6 +78926,7 @@ def zettel_edge_revert(
         return result
 
     result = zettel_edge_revert_result(
+        index_precheck=index_precheck,
         archive_id=archive_id,
         dry_run=False,
         approve=True,
@@ -122085,6 +122193,106 @@ def _project_update_terminal_cleanup_artifact_classification_read_only(
     return classification
 
 
+PROJECT_UPDATE_EXISTING_TRANSACTION_SCHEMA = (
+    "wom-kit/project-update-existing-transaction/v0.1"
+)
+
+
+def project_update_existing_transaction_read_only(
+    inspection_root: Path | str,
+) -> dict[str, Any]:
+    """v0.4.31 (letter 163 ②): the shape of the transaction that blocks a
+    fresh update, and which recovery flag applies to that shape.
+
+    Journal shape only: no key is opened, no live component is hashed, so
+    ``abandon_applicable`` says "the journal is exactly ``lock_backlinked``",
+    not "a started claim exists". Any failure degrades to ``journal_state:
+    unobserved`` rather than raising; every value is a fixed literal.
+    """
+
+    unobserved: dict[str, Any] = {
+        "schema": PROJECT_UPDATE_EXISTING_TRANSACTION_SCHEMA,
+        "present": None,
+        "status": "unknown",
+        "journal_state": "unobserved",
+        "verified_phase_count": None,
+        "last_verified_phase": None,
+        "lock_backlinked": None,
+        "prelock_classification": None,
+        "started_claim_present": None,
+        "abandon_applicable": None,
+        "abandon_applicability_basis": "journal_shape_only_live_components_unchecked",
+        "applicable_recovery": "--resume --affirm-external-writers-quiescent",
+        "private_identifiers_echoed": False,
+    }
+    try:
+        project_root = _project_update_resume_project_root_read_only(inspection_root)
+        try:
+            active_ref = (
+                project_update_transaction
+                .active_transaction_ref_for_resume_read_only(project_root)
+            )
+        except project_update_transaction.ProjectUpdateTransactionError as failure:
+            if failure.code != "project_update_transaction_not_found":
+                return unobserved
+            active_ref = None
+        prelock_classification: str | None = None
+        if active_ref is None:
+            orphans = project_update_transaction.inspect_prelock_orphans(project_root)
+            reserved = [
+                item.classification
+                for item in orphans
+                if str(item.classification).startswith("reserved_")
+            ]
+            if not reserved:
+                return {**unobserved, "present": False, "status": "absent", "journal_state": "absent"}
+            prelock_classification = sorted(reserved)[0]
+            return {
+                **unobserved,
+                "present": True,
+                "status": "reserved",
+                "journal_state": "absent",
+                "verified_phase_count": 0,
+                "prelock_classification": prelock_classification,
+                "abandon_applicable": False,
+            }
+        transaction = project_update_transaction.ProjectUpdateTransaction.open(
+            project_root, active_ref, verify_candidate_content=False
+        )
+        inspection = transaction.inspect(verify_candidate_content=False)
+        phases = [str(item.phase) for item in inspection.journal.verified_prefix]
+        journal_state = str(inspection.journal.state)
+        if inspection.terminal:
+            status = "terminal"
+        elif "approval_bound" in phases:
+            status = "started"
+        elif phases in ([], ["lock_backlinked"]):
+            status = "reserved"
+        else:
+            status = "in_progress"
+        abandon_applicable = journal_state == "exact" and phases == ["lock_backlinked"]
+        return {
+            **unobserved,
+            "present": True,
+            "status": status,
+            "journal_state": journal_state,
+            "verified_phase_count": len(phases),
+            "last_verified_phase": phases[-1] if phases else None,
+            "lock_backlinked": bool(inspection.lock_backlinked),
+            "abandon_applicable": abandon_applicable,
+            "applicable_recovery": (
+                "--resume --abandon-started-approval --affirm-external-writers-quiescent "
+                "(closes the started claim if one exists; otherwise plain --resume)"
+                if abandon_applicable
+                else "terminal_cleanup"
+                if status == "terminal"
+                else "--resume --affirm-external-writers-quiescent"
+            ),
+        }
+    except BaseException:
+        return unobserved
+
+
 def _project_update_fresh_update_cleanup_preflight_read_only(
     inspection_root: Path | str,
 ) -> dict[str, Any] | None:
@@ -150337,33 +150545,121 @@ def zettel_has_truncated_objet_reference(
     )
 
 
-def zettel_body_has_tool_execution_trace(body: str) -> bool:
+_TOOL_TRACE_COMMAND_MARKERS = (
+    "source-intake",
+    "source_intake",
+    "objet-capture",
+    "objet_capture",
+    "mint-zet",
+    "mint_zettel",
+    "stored_sha256_verified",
+    "files_written",
+    "receipt_path",
+    "plan_sha256",
+)
+_TOOL_TRACE_FLAG_MARKERS = ("--approve", "--dry-run", "--format json")
+_STATUS_COMPLETED_MARKERS = ("완료", "성공", "통과", "처리했습니다", "completed", "succeeded")
+_STATUS_PENDING_MARKERS = ("작업 중", "미정", "아직", "todo", "pending", "in progress", "not complete")
+_WARNING_EXPLANATION_MAX_LINES = 32
+
+
+def _marker_body_lines(lowered: str, markers: tuple[str, ...]) -> tuple[int, list[int], bool]:
+    """Occurrence count and 1-based body lines of fixed markers; never the text."""
+
+    lines: set[int] = set()
+    occurrences = 0
+    for marker in markers:
+        start = 0
+        while True:
+            position = lowered.find(marker, start)
+            if position < 0:
+                break
+            occurrences += 1
+            lines.add(lowered.count("\n", 0, position) + 1)
+            start = position + len(marker)
+    ordered = sorted(lines)
+    return occurrences, ordered[:_WARNING_EXPLANATION_MAX_LINES], len(ordered) > _WARNING_EXPLANATION_MAX_LINES
+
+
+def zettel_body_tool_execution_trace_evidence(body: str) -> dict[str, Any]:
+    """Content-free evidence behind ``tool_execution_trace_review_required`` (v0.4.31)."""
+
     lowered = body.casefold()
-    command_markers = (
-        "source-intake",
-        "source_intake",
-        "objet-capture",
-        "objet_capture",
-        "mint-zet",
-        "mint_zettel",
-        "stored_sha256_verified",
-        "files_written",
-        "receipt_path",
-        "plan_sha256",
-    )
-    flag_markers = ("--approve", "--dry-run", "--format json")
-    return any(marker in lowered for marker in command_markers) or sum(
-        marker in lowered for marker in flag_markers
-    ) >= 2
+    command_count, command_lines, command_truncated = _marker_body_lines(lowered, _TOOL_TRACE_COMMAND_MARKERS)
+    flag_count, flag_lines, flag_truncated = _marker_body_lines(lowered, _TOOL_TRACE_FLAG_MARKERS)
+    distinct_flag_markers = sum(marker in lowered for marker in _TOOL_TRACE_FLAG_MARKERS)
+    return {
+        "command_marker_count": command_count,
+        "command_marker_body_lines": command_lines,
+        "flag_marker_count": flag_count,
+        "distinct_flag_marker_count": distinct_flag_markers,
+        "flag_marker_body_lines": flag_lines,
+        "lines_truncated": command_truncated or flag_truncated,
+        "body_line_count": body.count("\n") + 1 if body else 0,
+        "matched_text_echoed": False,
+    }
+
+
+def zettel_body_has_tool_execution_trace(body: str) -> bool:
+    evidence = zettel_body_tool_execution_trace_evidence(body)
+    return evidence["command_marker_count"] > 0 or evidence["distinct_flag_marker_count"] >= 2
+
+
+def zettel_body_status_contradiction_evidence(body: str) -> dict[str, Any]:
+    """Content-free evidence behind ``internal_status_consistency_review_required`` (v0.4.31)."""
+
+    lowered = body.casefold()
+    completed_count, completed_lines, completed_truncated = _marker_body_lines(lowered, _STATUS_COMPLETED_MARKERS)
+    pending_count, pending_lines, pending_truncated = _marker_body_lines(lowered, _STATUS_PENDING_MARKERS)
+    return {
+        "completed_marker_count": completed_count,
+        "completed_marker_body_lines": completed_lines,
+        "pending_marker_count": pending_count,
+        "pending_marker_body_lines": pending_lines,
+        "lines_truncated": completed_truncated or pending_truncated,
+        "body_line_count": body.count("\n") + 1 if body else 0,
+        "matched_text_echoed": False,
+    }
 
 
 def zettel_body_has_status_contradiction(body: str) -> bool:
-    lowered = body.casefold()
-    completed_markers = ("완료", "성공", "통과", "처리했습니다", "completed", "succeeded")
-    pending_markers = ("작업 중", "미정", "아직", "todo", "pending", "in progress", "not complete")
-    return any(marker in lowered for marker in completed_markers) and any(
-        marker in lowered for marker in pending_markers
-    )
+    evidence = zettel_body_status_contradiction_evidence(body)
+    return evidence["completed_marker_count"] > 0 and evidence["pending_marker_count"] > 0
+
+
+def mint_warning_explanations(body: str) -> list[dict[str, Any]]:
+    """v0.4.31 (letter 163 ⑪): say WHAT the two body-wording warnings saw.
+
+    One entry per warning actually raised, with the detector's fixed rule,
+    marker category counts and body line numbers; matched text is never
+    echoed. Lives inside ``quality_check`` so it is bound and receipted with
+    the plan it explains.
+    """
+
+    explanations: list[dict[str, Any]] = []
+    trace = zettel_body_tool_execution_trace_evidence(body)
+    if trace["command_marker_count"] > 0 or trace["distinct_flag_marker_count"] >= 2:
+        explanations.append(
+            {
+                "code": "tool_execution_trace_review_required",
+                "category": "tool_trace",
+                "detector": "zettel_body_has_tool_execution_trace",
+                "rule": "any_command_marker_or_two_distinct_flag_markers",
+                **trace,
+            }
+        )
+    status = zettel_body_status_contradiction_evidence(body)
+    if status["completed_marker_count"] > 0 and status["pending_marker_count"] > 0:
+        explanations.append(
+            {
+                "code": "internal_status_consistency_review_required",
+                "category": "status_wording",
+                "detector": "zettel_body_has_status_contradiction",
+                "rule": "any_completed_marker_and_any_pending_marker_anywhere_in_body",
+                **status,
+            }
+        )
+    return explanations
 
 
 def source_intake_secret_like(value: str) -> bool:

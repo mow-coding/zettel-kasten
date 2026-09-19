@@ -2,6 +2,46 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.4.31 베타 편지 163 나머지: 안내, 엣지 경고, 경고 설명, preflight 원인
+
+일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.
+새 외부 CPython 3.12 환경의 실제 `python.exe -m pip`를 사용해 설치된 PEP 610
+metadata에 wheel hash가 남게 합니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0431-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.31/wom_kit-0.4.31-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+새 process에서 정확히 `archive 0.4.31`이 나와야 합니다. wheel을 공개하거나 설치하는
+것만으로 client archive, project runtime, version pin은 바뀌지 않습니다. project
+update는 client가 따로 선택하고 승인합니다.
+
+업데이트 뒤 일상에서 달라지는 것 네 가지입니다. AI runtime 식별이 빠진 `create-draft`
+dry-run은 어떤 옵션으로 식별하는지 알려 주고, `approval_handoff`는 replay 값이 null일 때
+빼야 하는 인자를 `omit_when_null`로 표시합니다(`None`이라는 글자를 넣지 마세요).
+엣지 대상이 폐기됐거나 인덱스가 모르는 초안의 `mint-zet` dry-run에는 경고
+`edge_target_discarded` / `edge_target_missing`이 붙어 확인 뒤 `--allow-warnings`가
+필요합니다(배치 계획은 `policy.allow_warnings`). 본문 문구 경고 두 가지는
+`quality_check.warning_explanations`에서 무엇을 봤는지(개수와 본문 행, 단어는 아님)
+설명하며, 이전 dry-run의 mint `plan_sha256`은 업데이트 뒤 낡은 값이니 dry-run을 다시
+돌리세요. 고정 코드가 없는 `project-version-update` 실패는
+`project_version_update_failure_family_<family>`를 기록하고, 기존 트랜잭션에 막힌
+dry-run은 `existing_transaction`에 적용되는 복구 플래그를 보여 줍니다. `zettel-edge`,
+`revert-edge`, `source-intake-chain`의 dry-run은 인덱스 상태(`index_precheck`)를 먼저
+알리고, 막히면 `archive index` / `archive index-health`를 안내합니다.
+
+검토한 project update 한 번 뒤에는 새 process에서 project launcher를 시작해 pin,
+source, launcher, runtime 근거를 확인하세요. 그 client 실행 결과만이 project가
+고쳐졌음을 보여 줍니다.
+
 ## v0.4.30 베타 편지 163: mint 게이트, 클레임 저장소, 감사 페이지 조회
 
 일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.

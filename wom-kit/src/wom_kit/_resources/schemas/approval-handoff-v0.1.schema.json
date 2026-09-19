@@ -47,7 +47,8 @@
           "json_pointer": {"type": ["string", "null"]},
           "value": {},
           "sensitive": {"type": "boolean"},
-          "echoed": {"type": "boolean"}
+          "echoed": {"type": "boolean"},
+          "omit_when_null": {"type": "boolean"}
         }
       }
     },

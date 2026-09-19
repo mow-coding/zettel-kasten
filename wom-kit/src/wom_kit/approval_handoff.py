@@ -22,8 +22,14 @@ def argument(
     value: Any = None,
     sensitive: bool = False,
     echoed: bool = True,
+    omit_when_null: bool = False,
 ) -> dict[str, Any]:
-    """Describe one replay argument without constructing a command string."""
+    """Describe one replay argument without constructing a command string.
+
+    ``omit_when_null`` (v0.4.31, beta letter 163 ⑦c) tells the reader that a
+    ``null`` replay value means "leave the option out", never pass the
+    literal ``None``.
+    """
 
     if value_source not in {"json_pointer", "reuse_input", "operator_input"}:
         raise ValueError("approval_handoff_value_source_invalid")
@@ -35,6 +41,7 @@ def argument(
         "value": None if sensitive or not echoed else value,
         "sensitive": bool(sensitive),
         "echoed": bool(echoed and not sensitive),
+        "omit_when_null": bool(omit_when_null),
     }
 
 

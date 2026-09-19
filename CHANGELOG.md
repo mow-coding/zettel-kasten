@@ -6,6 +6,29 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.31 - 2026-09-19
+
+- Beta letter 163 remainder. `create-draft` adds the fixed code
+  `ai_draft_assisted_by_required` and names `--assisted-by` /
+  `--supervised-by` / `--creation-mode` in `next_safe_actions`; every
+  `approval_handoff` argument carries `omit_when_null` (the new `--profile-id`
+  entry, `--expected-archive-id` and `--expected-type` set it); the literal
+  replay value `None` is refused before any archive read
+  (`create_draft_replay_value_null_literal`).
+- Mint dry-run warns `edge_target_discarded` / `edge_target_missing` (bound;
+  `--allow-warnings` after review) and explains the two body-wording warnings
+  inside `quality_check.warning_explanations` (detector, rule, marker counts,
+  body lines; matched text never echoed).
+- `project-version-update`: a failure without a fixed token records
+  `project_version_update_failure_family_<family>` (`cause_code_source:
+  exception_family`); the terminal-cleanup, outcome-unknown and
+  legacy-recovery gates carry `existing_transaction` (journal shape and the
+  recovery flag that applies).
+- `zettel-edge`, `revert-edge` and `source-intake-chain` dry-runs carry
+  `index_precheck` and, when blocked, the rebuild commands.
+- Carried to v0.4.32: incremental index, scratch classifier, `record_type`
+  registry, session refs for the three always-dialog writers.
+
 ## v0.4.30 - 2026-09-19
 
 - Beta letter 163 core. `mint-zet` checks the source-fidelity plan digest

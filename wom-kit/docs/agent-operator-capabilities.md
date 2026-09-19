@@ -1,6 +1,6 @@
 # Agent Operator Capabilities Manifest
 
-Status: v0.4.30 letter-163 mint gate and claim store, object-storage offload, and writer-session coverage gate
+Status: v0.4.31 letter-163 remainder, letter-163 mint gate and claim store, and writer-session coverage gate
 
 v0.4.29 adds one command path, `object-storage-offload` (alias
 `objet-storage-offload`, approval-available, always-dialog): local objet
@@ -160,7 +160,7 @@ field remain `history_not_audited`. Inventory, shared capability availability,
 and command help consume the same content-free history. Current availability
 continues to be parser-derived; history does not grant execution authority.
 
-For the current v0.4.30 working-tree parser, the inventory snapshot is:
+For the current v0.4.31 working-tree parser, the inventory snapshot is:
 
 ```text
 canonical executable command paths: 321

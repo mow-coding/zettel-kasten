@@ -10,28 +10,35 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.4.30 GitHub Release, when present, uses the self-contained wheel
+The exact v0.4.31 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0430-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0431-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.30/wom_kit-0.4.30-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.31/wom_kit-0.4.31-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-Run the version check in a new process and require exactly `archive 0.4.30`.
+Run the version check in a new process and require exactly `archive 0.4.31`.
 The dedicated external CPython 3.12 environment and exact real
 `python.exe -m pip` path retain the wheel SHA-256 required by the updater. A
 user-scoped `uv tool` environment whose installed metadata omits that archive
 hash is not project-updater supply evidence. Installing the bootstrap does not
 silently update a project-local WOM-kit source mirror or its pin.
+
+v0.4.31 finishes beta letter 163: `create-draft` names the options that
+identify an AI runtime and marks null replay values; the mint dry-run
+warns about discarded or unknown edge targets and explains the two
+body-wording warnings; a `project-version-update` failure always records
+a cause family and a blocked dry-run describes the existing transaction;
+edge, revert-edge and intake-chain dry-runs announce the index fact.
 
 v0.4.30 answers beta letter 163: `mint-zet` refuses a missing or stale
 source-fidelity plan digest before any claim and names its cause on
