@@ -1,6 +1,6 @@
 # Agent Operator Capabilities Manifest
 
-Status: v0.4.33 upload reopened, letter-164 first half, and writer-session coverage gate
+Status: v0.4.34 presenter-bound grants, letter-165, and writer-session coverage gate
 
 v0.4.34 adds no command path and moves no count: `operator-feedback-compose
 --approve` (already approval-available) now runs under the exact approval
@@ -184,7 +184,7 @@ field remain `history_not_audited`. Inventory, shared capability availability,
 and command help consume the same content-free history. Current availability
 continues to be parser-derived; history does not grant execution authority.
 
-For the current v0.4.33 working-tree parser, the inventory snapshot is:
+For the current v0.4.34 working-tree parser, the inventory snapshot is:
 
 ```text
 canonical executable command paths: 321

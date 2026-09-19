@@ -10,28 +10,37 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.4.33 GitHub Release, when present, uses the self-contained wheel
+The exact v0.4.34 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0433-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0434-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.33/wom_kit-0.4.33-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.34/wom_kit-0.4.34-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-Run the version check in a new process and require exactly `archive 0.4.33`.
+Run the version check in a new process and require exactly `archive 0.4.34`.
 The dedicated external CPython 3.12 environment and exact real
 `python.exe -m pip` path retain the wheel SHA-256 required by the updater. A
 user-scoped `uv tool` environment whose installed metadata omits that archive
 hash is not project-updater supply evidence. Installing the bootstrap does not
 silently update a project-local WOM-kit source mirror or its pin.
+
+v0.4.34 answers beta letter 165: presenter-bound, time-boxed session grants
+(`presenter_token` once, `grant_hours`, `session_permission_refused` codes,
+`session_presenter` in every grant claim, `session_permission_attention` in
+`ai-start-here`), the legacy-identifier warning on create-draft / mint /
+revision-plan / objet-link / intake (`--allow-warnings`; never under a grant),
+`operator-feedback-compose --approve` under the exact approval dialog with a
+v0.2 receipt naming the claim, the announced revise path
+(`--create-draft-record`) and revision-plan warning explanations.
 
 v0.4.33 reopens `object-storage-upload` (details in the paragraph below the
 v0.4.30 entry): one dialog, create-only PUT at the content-addressed key,

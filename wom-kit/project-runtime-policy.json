@@ -4,7 +4,7 @@
   "runtime_root": ".zettel-kasten/runtimes/vX.Y.Z",
   "active_version_pin": ".zettel-kasten/installed-version.txt",
   "launcher": ".zettel-kasten/bin/archive.cmd",
-  "supply_lock": "wom-kit/project-runtime-supply-lock-v0.4.33.json",
-  "supply_lock_sha256": "sha256:e7c3910bd2d37ec9e6cff40b0f324914bee6f25ba57c8791a75ff71a6526a70d",
+  "supply_lock": "wom-kit/project-runtime-supply-lock-v0.4.34.json",
+  "supply_lock_sha256": "sha256:5fbb5bc16d5b8ea0ddc448da65acaf77731a81f14ccf75a33eb927605617b447",
   "global_path_mutation": false
 }
