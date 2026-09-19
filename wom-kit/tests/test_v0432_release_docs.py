@@ -159,7 +159,7 @@ class V0432ReleaseDocsTests(unittest.TestCase):
         coverage = json.loads((KIT / "docs" / "writer-session-coverage.json").read_text(encoding="utf-8"))
         for row in ("object-storage-restore", "object-storage-offload", "exact-approval-claim-finalize"):
             self.assertEqual(coverage["paths"][row]["status"], "pending")
-            self.assertEqual(coverage["paths"][row]["target"], "v0.4.33")
+            self.assertEqual(coverage["paths"][row]["target"], "v0.4.34")
         for guide in (ROOT / "UPGRADE.md", ROOT / "UPGRADE.ko.md"):
             document = guide.read_text(encoding="utf-8")
             with self.subTest(guide=guide):
@@ -171,11 +171,11 @@ class V0432ReleaseDocsTests(unittest.TestCase):
         statuses = [row["status"] for row in manifest["paths"].values()]
         routed = sum(1 for row in manifest["paths"].values() if row.get("route"))
         # v0.4.23 integrated create-draft (LR-06a); v0.4.24 through v0.4.27 and v0.4.31/v0.4.32 change no writer;
-        # v0.4.28 restore, v0.4.29 offload and v0.4.30 claim finalize are pending (target v0.4.33).
-        self.assertEqual(len(statuses), 59)
+        # v0.4.28 restore, v0.4.29 offload, v0.4.30 claim finalize and v0.4.33 upload are pending (target v0.4.34).
+        self.assertEqual(len(statuses), 60)  # v0.4.33: object-storage-upload row
         self.assertEqual(statuses.count("session_integrated") - routed, 6)
         self.assertEqual(routed, 1)
-        self.assertEqual(statuses.count("pending"), 32)
+        self.assertEqual(statuses.count("pending"), 33)
         self.assertEqual(statuses.count("legacy_exception"), 20)
         self.assertEqual(manifest["paths"]["create-draft"]["status"], "session_integrated")
 

@@ -88,8 +88,9 @@ revalidated dimension by dimension without exposing compared values, and
 noninteractive Windows child processes use the common no-console policy while
 native approval and credential interaction remain visible.
 
-The current parser inventory has 59 approval-available, 60 fixed-closed, and
+The current parser inventory has 60 approval-available, 59 fixed-closed, and
 202 not-exposed canonical paths, including ten conditional approval scopes.
+v0.4.33 reopened `object-storage-upload` under the exact approval contract.
 v0.4.21 reopened `discard-draft`, `discard-draft-restore`, `zettel-edge-batch`,
 `mint-zet-batch`, `retire-draft-batch`, `revert-batch`, `zet-revision-write`
 and `zet-revision-restore-write` through operation-specific exact human
@@ -100,7 +101,7 @@ digest stays validation only and the native dialog with its authenticated
 claim is the sole write authority. One count-first dialog covers a whole
 reviewed batch, and each item write proves its own fresh binding is in the
 approved set.
-The 60 fixed-closed paths comprise 59 compound-approval migrations plus
+The 59 fixed-closed paths comprise 58 compound-approval migrations plus
 `operation-control` with `operation_cancel_not_supported`. Cancellation has no
 writer; its status, wait, and recovery-plan dry-runs remain available. Historical
 v0.4.12 counts below describe that release, not this current inventory.

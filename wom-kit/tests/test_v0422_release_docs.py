@@ -156,10 +156,10 @@ class V0422ReleaseDocsTests(unittest.TestCase):
         statuses = [row["status"] for row in manifest["paths"].values()]
         routed = sum(1 for row in manifest["paths"].values() if row.get("route"))
         # v0.4.22 changes no writer: the v0.4.21 inventory and gate stand.
-        self.assertEqual(len(statuses), 59)
+        self.assertEqual(len(statuses), 60)  # v0.4.33: object-storage-upload row
         self.assertEqual(statuses.count("session_integrated") - routed, 6)
         self.assertEqual(routed, 1)
-        self.assertEqual(statuses.count("pending"), 32)
+        self.assertEqual(statuses.count("pending"), 33)
         self.assertEqual(statuses.count("legacy_exception"), 20)
 
     def test_current_docs_are_private_safe(self) -> None:

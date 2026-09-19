@@ -40,6 +40,7 @@ ALWAYS_DIALOG_OPERATIONS = frozenset({
     ExactHumanApprovalOperation.object_storage_formal_adoption,
     ExactHumanApprovalOperation.object_storage_bytes_restore,
     ExactHumanApprovalOperation.object_storage_bytes_offload,
+    ExactHumanApprovalOperation.object_storage_bytes_upload,
     ExactHumanApprovalOperation.exact_approval_claim_finalize,
     ExactHumanApprovalOperation.work_session,
     ExactHumanApprovalOperation.integrity_repair,

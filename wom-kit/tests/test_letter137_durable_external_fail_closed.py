@@ -474,12 +474,8 @@ class Letter137DurableExternalCliBoundaryTests(
                     "object_storage_upload_evidence_register",
                     "object_storage_upload_evidence_register",
                 ),
-                (
-                    ["object-storage-upload", root, "--store-ref", PRIVATE_STORE, "--approve", "--reviewed-by", PRIVATE_REVIEWER, "--format", "json"],
-                    archive_services,
-                    "object_storage_upload_run",
-                    "object_storage_upload_run",
-                ),
+                # v0.4.33: object-storage-upload --approve is reopened under the exact contract
+                # (tests/test_v0433_object_storage_upload.py); the legacy service function still refuses below.
                 (
                     ["object-storage-adopt-existing", root, "--store-ref", PRIVATE_STORE, "--approve", "--reviewed-by", PRIVATE_REVIEWER, "--format", "json"],
                     archive_services,
@@ -686,7 +682,7 @@ class Letter137DurableExternalCliBoundaryTests(
             calls = (
                 (["prehashed-objet-ledger", root, "--ledger", PRIVATE_LEDGER, "--dry-run", "--format", "json"], archive_services, "prehashed_objet_ledger_register"),
                 (["object-storage-upload-evidence", root, "--ledger", PRIVATE_LEDGER, "--dry-run", "--format", "json"], archive_services, "object_storage_upload_evidence_register"),
-                (["object-storage-upload", root, "--store-ref", PRIVATE_STORE, "--dry-run", "--format", "json"], archive_services, "object_storage_upload_run"),
+                # v0.4.33: the object-storage-upload dry-run dispatches to object_storage_upload_exact (own tests).
                 (["object-storage-adopt-existing", root, "--store-ref", PRIVATE_STORE, "--dry-run", "--format", "json"], archive_services, "object_storage_adopt_existing_run"),
                 (["object-storage-wom-location-reconcile", root, "--receipt", PRIVATE_RECEIPT, "--dry-run", "--format", "json"], archive_services, "object_storage_wom_location_reconcile_run"),
                 (["object-storage-upload-evidence-audit", root, "--receipt", PRIVATE_RECEIPT, "--dry-run", "--format", "json"], archive_services, "object_storage_upload_evidence_audit"),

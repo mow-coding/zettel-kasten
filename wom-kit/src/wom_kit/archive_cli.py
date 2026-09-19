@@ -153,7 +153,7 @@ Commands:
   object-storage-upload-verify
           Verify planned objects' local RAW bytes hash to their object id (no network, no secret).
   object-storage-upload
-          Run an approval-gated live S3-compatible upload when all provider and credential gates resolve.
+          Upload local objet bytes under one native approval: create-only PUT, full-GET proof, manifest projection, execution receipts (v0.4.33).
   object-storage-restore
           Download WOM-verified remote objet bytes back into the local objet store, or prove them with a full GET (v0.4.28).
   object-storage-offload
@@ -436,6 +436,7 @@ from . import (
     object_storage_preservation,
     object_storage_restore,
     object_storage_setup_registration,
+    object_storage_upload_exact,
     project_runtime,
     runtime_guidance,
     runtime_skill_install,
@@ -17900,72 +17901,143 @@ def command_object_storage_upload_verify(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
+def _object_storage_upload_cli_error(args: argparse.Namespace, reason_code: str) -> int:
+    return _exact_human_approval_cli_error(
+        args,
+        lifecycle_action="object_storage_bytes_upload",
+        reason_code=reason_code,
+    )
+
+
+def _object_storage_upload_progress_hooks(
+    args: argparse.Namespace,
+) -> tuple[ProgressCallback | None, Callable[[ExactOperationProgress], None] | None]:
+    stage_progress = _make_stage_progress_callback(
+        bool(getattr(args, "progress", False)),
+        label="object-storage-upload",
+        detail="aggregate",
+    )
+    if stage_progress is None:
+        return None, None
+
+    def exact_progress(event: ExactOperationProgress) -> None:
+        document = event.public_document()
+        stage_progress(
+            "exact-operation-" + str(document["stage"]),
+            str(document["mode"]),
+            int(document["completed_items"]),
+            int(document["total_items"]),
+        )
+
+    return stage_progress, exact_progress
+
+
 def command_object_storage_upload(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="object_storage_upload_run",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
-    # Three-way gate (mirrors command_remint_reconcile); service re-enforces it.
-    if args.dry_run and args.approve:
-        print("Use either --dry-run or --approve, not both.", file=sys.stderr)
-        return 1
-    if not args.dry_run and not args.approve:
-        print("object-storage-upload requires exactly one of --dry-run or --approve.", file=sys.stderr)
-        return 1
-    approve = bool(args.approve)
-    if approve and not (args.reviewed_by or "").strip():
-        print("object-storage-upload requires --reviewed-by when --approve is used.", file=sys.stderr)
-        return 1
-    # FIX A (v0.3.175): --force-reupload is an approval-gated LIVE re-PUT of an
-    # already-present size/hash-matching object. Fail closed at the CLI with a
-    # clear message; the service re-enforces the same gates for a direct call.
-    force_reupload = bool(getattr(args, "force_reupload", False))
-    if force_reupload and args.dry_run:
-        print("--force-reupload has no effect under --dry-run; run with --approve to re-PUT.", file=sys.stderr)
-        return 1
-    if force_reupload and not approve:
-        print("--force-reupload requires --approve (a deliberate live provider PUT).", file=sys.stderr)
-        return 1
-    if force_reupload and not (args.reviewed_by or "").strip():
-        print("--force-reupload requires --reviewed-by (a deliberate live overwrite).", file=sys.stderr)
-        return 1
-    # Stage 2: wire the production send seam only for a real --approve run. The
-    # default sender is the ONLY place stdlib networking is reachable; --dry-run
-    # never builds it. The service still fails closed without env creds, a met
-    # tiered gate, and a resolvable endpoint/bucket.
-    send = archive_services._default_urllib_sender() if approve else None
+    """v0.4.33 (beta letter 164 ①③④): upload local objet bytes under one native approval.
+
+    Dry-run reports the writer line first, then classifies every manifest
+    object (counts only) and hashes the candidates; no provider call and no
+    credential read. Approve opens one dialog for the whole plan, then per
+    object: local re-hash, a whole-object remote query, a create-only PUT
+    only when the key is absent, a full-GET re-hash, a private ledger row;
+    then one manifest projection adding the wom_uploaded locations and the
+    v0.3-shaped execution receipts. An existing remote copy is never
+    overwritten and the remote object is never deleted.
+    """
+
+    if bool(args.dry_run) == bool(args.approve):
+        return _object_storage_upload_cli_error(args, "object_storage_upload_plan_invalid")
+    reviewer = str(getattr(args, "reviewed_by", None) or "").strip()
+    expected_manifest_sha256 = str(getattr(args, "expected_manifest_sha256", None) or "").strip().lower()
+    resume_approval_id = str(getattr(args, "resume_approval_id", None) or "").strip()
+    resume_execution_sha256 = str(getattr(args, "resume_execution_sha256", None) or "").strip().lower()
+    resume_requested = bool(resume_approval_id or resume_execution_sha256)
+    if resume_requested and not (resume_approval_id and resume_execution_sha256):
+        return _object_storage_upload_cli_error(args, "object_storage_upload_resume_invalid")
+    if resume_requested and (
+        not args.approve
+        or getattr(args, "only", None)
+        or getattr(args, "max_objects", None) is not None
+        or getattr(args, "local_bytes_only", False)
+    ):
+        return _object_storage_upload_cli_error(args, "object_storage_upload_resume_invalid")
+    if args.approve and (
+        not reviewer or re.fullmatch(r"sha256:[0-9a-f]{64}", expected_manifest_sha256) is None
+    ):
+        return _object_storage_upload_cli_error(args, "object_storage_upload_approval_required")
+    plan_progress, exact_progress = _object_storage_upload_progress_hooks(args)
     try:
-        result = archive_services.object_storage_upload_run(
-            Path(args.archive_root),
-            provider_kind=args.provider_kind,
-            store_ref=args.store_ref,
-            access_key_id_ref=args.access_key_id_ref,
-            secret_access_key_ref=args.secret_access_key_ref,
-            only=args.only,
-            max_objects=args.max_objects,
-            skip_uploaded=bool(args.skip_uploaded),
-            force_reupload=force_reupload,
-            reviewed_by=args.reviewed_by,
-            approve=approve,
-            dry_run=bool(args.dry_run),
-            key_strategy=getattr(args, "key_strategy", archive_services.OBJECT_STORAGE_UPLOAD_KEY_STRATEGY),
-            key_prefix=getattr(args, "key_prefix", None),
-            append_extension=bool(getattr(args, "key_append_extension", False)),
-            multipart_threshold_bytes=getattr(args, "multipart_threshold", None),
-            multipart_part_size_bytes=getattr(args, "multipart_part_size", None),
-            allow_tiny_parts=bool(getattr(args, "allow_tiny_parts", False)),
-            send=send,
-            endpoint_host=getattr(args, "endpoint_host", None),
-            bucket=getattr(args, "bucket", None),
-            region=getattr(args, "region", None),
+        if resume_requested:
+            plan = object_storage_upload_exact.load_object_storage_upload_plan(
+                Path(args.archive_root), manifest_sha256=expected_manifest_sha256
+            )
+        else:
+            plan = object_storage_upload_exact.plan_object_storage_upload(
+                Path(args.archive_root),
+                provider_kind=args.provider_kind,
+                store_ref=args.store_ref,
+                only=args.only,
+                max_objects=args.max_objects,
+                local_bytes_only=bool(getattr(args, "local_bytes_only", False)),
+                progress=plan_progress,
+            )
+        if args.dry_run:
+            result = plan.public_document()
+        else:
+            if plan.manifest is None or not secrets.compare_digest(
+                plan.manifest.manifest_sha256, expected_manifest_sha256
+            ):
+                return _object_storage_upload_cli_error(
+                    args,
+                    "object_storage_upload_writer_unavailable"
+                    if plan.writer_state != "available"
+                    else "object_storage_upload_plan_changed",
+                )
+            transport_factory = _object_storage_live_transport_factory(
+                args,
+                invalid=lambda: object_storage_upload_exact.ObjectStorageUploadError(
+                    "object_storage_upload_plan_invalid"
+                ),
+                unavailable=lambda: object_storage_upload_exact.ObjectStorageUploadError(
+                    "object_storage_upload_remote_unavailable"
+                ),
+            )
+            if resume_requested:
+                result = object_storage_upload_exact.resume_object_storage_upload(
+                    plan,
+                    reviewer_claim=reviewer,
+                    approval_id=resume_approval_id,
+                    execution_sha256=resume_execution_sha256,
+                    transport_factory=transport_factory,
+                    progress_hook=exact_progress,
+                )
+            else:
+                result = object_storage_upload_exact.execute_object_storage_upload(
+                    plan,
+                    reviewer_claim=reviewer,
+                    transport_factory=transport_factory,
+                    progress_hook=exact_progress,
+                )
+    except object_storage_upload_exact.ObjectStorageUploadError as exc:
+        return _object_storage_upload_cli_error(args, exc.code)
+    except object_storage_preservation.ObjectStoragePreservationError as exc:
+        code = (
+            "object_storage_upload_remote_unavailable"
+            if "remote" in exc.code
+            else "object_storage_upload_plan_invalid"
         )
-    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
+        return _object_storage_upload_cli_error(args, code)
+    except (
+        ExactHumanApprovalError,
+        ExactHumanApprovalWindowsError,
+        ExactHumanApprovalWorkflowError,
+        ExactOperationManifestError,
+    ) as exc:
+        return _object_storage_upload_cli_error(
+            args, str(getattr(exc, "code", "object_storage_upload_remote_unavailable"))
+        )
     print_object_storage_upload_result(result, args.format)
-    return 0 if result.get("ok", True) else 1
+    return 0 if result.get("ok", False) else 1
 
 
 def _object_storage_preservation_cli_error(
@@ -20877,21 +20949,26 @@ def print_object_storage_upload_result(result: dict[str, Any], output_format: st
     if output_format == "json":
         print_json(result)
         return
-    print(f"Object storage upload: {result.get('execution_status') or '-'}")
-    print(f"Archive: {result.get('archive_id') or '-'}")
-    print(f"Provider: {result.get('provider_kind') or '-'}")
-    print(f"Store ref: {result.get('store_ref') or '-'}")
-    print(f"Key strategy: {result.get('key_strategy') or '-'}")
-    print(f"Reviewed by: {result.get('reviewed_by') or '-'}")
-    print(f"Receipts written: {len(result.get('receipts_written') or [])}")
-    print(f"Manifest updates: {result.get('manifest_updates')}")
-    print("Live execution allowed now: no")
-    for warning in result.get("warnings") or []:
-        print(f"Warning: {warning}")
-    if result.get("blockers"):
-        print("Blockers:")
-        for blocker in result["blockers"]:
-            print(f"- {blocker}")
+    print(f"Object-storage upload {result.get('state') or 'blocked'}.")
+    print(f"Writer: {result.get('writer_state') or 'available'}"
+          + (f" ({result['writer_unavailable_reason']})" if result.get("writer_unavailable_reason") else ""))
+    print(f"Plan SHA-256: {result.get('plan_sha256') or result.get('manifest_sha256') or '-'}")
+    if "upload_planned_count" in result:
+        print(f"Planned objects: {result.get('upload_planned_count', 0)}")
+        print(f"Planned upload bytes: {result.get('planned_upload_bytes', 0)}")
+    classification = result.get("classification")
+    if isinstance(classification, dict):
+        print("Classification: " + ", ".join(f"{key}={value}" for key, value in sorted(classification.items())))
+    counts = result.get("status_counts")
+    if isinstance(counts, dict):
+        print("Outcomes: " + ", ".join(f"{key}={value}" for key, value in sorted(counts.items())))
+    for key in ("manifest_location_updates", "receipts_created_count", "bytes_uploaded"):
+        if key in result:
+            print(f"{key}: {result[key]}")
+    for blocker in result.get("blockers") or []:
+        print(f"Blocker: {blocker}")
+    for action in result.get("next_safe_actions") or []:
+        print(f"Next: {action}")
 
 
 def print_object_storage_adopt_existing_result(result: dict[str, Any], output_format: str) -> None:
@@ -40458,76 +40535,52 @@ def build_parser() -> argparse.ArgumentParser:
         "object-storage-upload",
         aliases=["object-storage-upload-execute", "objet-storage-upload"],
         help=(
-            "Run an approval-gated live S3-compatible upload when endpoint, bucket, "
-            "and credential references resolve; otherwise fail closed."
+            "Upload local objet bytes to the registered store under one native approval: create-only "
+            "content-addressed PUT, same-run full-GET proof, one manifest projection adding the "
+            "wom_uploaded locations, one execution receipt per object (v0.4.33)."
         ),
     )
-    object_storage_upload.add_argument("archive_root", help="Archive root to update.")
+    object_storage_upload.add_argument("archive_root", help="Archive root to upload from.")
     object_storage_upload.add_argument(
         "--provider-kind",
         choices=sorted(archive_services.OBJECT_STORAGE_ALLOWED_PROVIDERS),
         default="cloudflare-r2",
-        help="Object-storage provider kind label.",
+        help="Object-storage provider kind label (a live transport exists for cloudflare-r2 and generic-s3).",
     )
-    object_storage_upload.add_argument("--store-ref", help="Safe store label/ref. Required. Do not pass URLs, bucket names, paths, tokens, or secrets.")
-    object_storage_upload.add_argument("--access-key-id-ref", help="Access key id ref (env: required at first live).")
-    object_storage_upload.add_argument("--secret-access-key-ref", help="Secret access key ref (env: required at first live).")
-    object_storage_upload.add_argument("--endpoint-host", help="Non-secret S3 endpoint host, e.g. <account>.r2.cloudflarestorage.com. Required for a real --approve upload.")
-    object_storage_upload.add_argument("--bucket", help="Non-secret bucket name for the real upload. Required for a real --approve upload.")
-    object_storage_upload.add_argument("--region", help="S3 region. Defaults to 'auto' for cloudflare-r2; required for generic-s3.")
-    object_storage_upload.add_argument("--only", help="Upload only this object id (sha256:<hex> or bare 64 hex). Tiny-first.")
-    object_storage_upload.add_argument("--max-objects", type=int, help="REFUSE if the resolved plan exceeds this count.")
-    object_storage_upload.add_argument("--skip-uploaded", action="store_true", help="Digest-aware manifest + remote-HEAD idempotency.")
+    object_storage_upload.add_argument("--store-ref", help="Registered safe store label/ref. Required. Do not pass URLs, bucket names, paths, tokens, or secrets.")
+    object_storage_upload.add_argument("--access-key-id-ref", help="Access key id ref (env:/keyring:/credential-manager:); read only inside the approved write.")
+    object_storage_upload.add_argument("--secret-access-key-ref", help="Secret access key ref; read only inside the approved write.")
+    object_storage_upload.add_argument("--endpoint-host", help="Non-secret S3 endpoint host. Required for --approve.")
+    object_storage_upload.add_argument("--bucket", help="Non-secret bucket name. Required for --approve.")
+    object_storage_upload.add_argument("--region", help="S3 region. Defaults to 'auto' for cloudflare-r2.")
+    object_storage_upload.add_argument("--only", help="Upload only this object id (sha256:<hex> or bare 64 hex).")
+    object_storage_upload.add_argument("--max-objects", type=int, help="Plan at most this many candidates (the rest are counted as excluded_by_filter_count).")
     object_storage_upload.add_argument(
-        "--key-strategy",
-        choices=list(archive_services.OBJECT_STORAGE_UPLOAD_KEY_STRATEGIES),
-        default=archive_services.OBJECT_STORAGE_UPLOAD_KEY_STRATEGY,
-        help="Remote key strategy. Default sha256_content_addressed; 'prefix' places objects under --key-prefix.",
-    )
-    object_storage_upload.add_argument("--key-prefix", help="Literal raw-bytes key prefix (colon allowed) for --key-strategy prefix.")
-    object_storage_upload.add_argument("--key-append-extension", action="store_true", help="Append the recovered original-filename extension under 'prefix' (no-op when unrecoverable).")
-    object_storage_upload.add_argument(
-        "--multipart-threshold",
-        type=int,
-        dest="multipart_threshold",
-        metavar="BYTES",
-        help="Validation/testing aid: multipart threshold in BYTES. Default 5 GiB. Override must be within [effective part size, 5 GiB]; out-of-band is refused. Affects only the recorded/used threshold, never the integrity checks.",
-    )
-    object_storage_upload.add_argument(
-        "--multipart-part-size",
-        type=int,
-        dest="multipart_part_size",
-        metavar="BYTES",
-        help="Live-verification aid: multipart part size in BYTES. Default 64 MiB. Override must be within [4096, 64 MiB]; below the 64 MiB default requires --allow-tiny-parts. Lets an operator FORCE multipart on a small object (paired with a lowered --multipart-threshold) to prove live R2 multipart. Affects only handle.read() fragmentation, never the whole-object integrity checks. Real R2 rejects parts < 5 MiB except the last.",
-    )
-    object_storage_upload.add_argument(
-        "--allow-tiny-parts",
+        "--local-bytes-only",
         action="store_true",
-        dest="allow_tiny_parts",
-        help="Acknowledge a sub-64-MiB --multipart-part-size (a live-verification aid; real R2 rejects multipart parts < 5 MiB except the last). Required to set --multipart-part-size below the 64 MiB default.",
-    )
-    object_storage_upload.add_argument(
-        "--force-reupload",
-        action="store_true",
-        dest="force_reupload",
+        dest="local_bytes_only",
         help=(
-            "Live-verification aid: RE-PUT an already-present object whose remote bytes "
-            "already size/hash-match, to exercise a LIVE provider PUT (e.g. a forced small "
-            "multipart). Requires --approve AND --reviewed-by (a deliberate provider PUT cost "
-            "and a live overwrite). Refused for any non-sha-derived --key-strategy. The pre-PUT "
-            "local sha256==object_id re-verify still runs, so a corrupt local file is refused "
-            "before any PUT. Inert under --dry-run. Default absent = behavior byte-identical to prior."
+            "Proceed with the objects whose local bytes are present; without it a manifest row that "
+            "claims local bytes which are absent or the wrong size refuses the plan (local_bytes_missing)."
         ),
     )
+    object_storage_upload.add_argument(
+        "--expected-manifest-sha256",
+        help="Exact plan_sha256 from the preceding --dry-run; required for --approve and resume.",
+    )
+    object_storage_upload.add_argument("--resume-approval-id", help="Resume an interrupted exact upload using its one-use approval id.")
+    object_storage_upload.add_argument("--resume-execution-sha256", help="Resume the exact checkpoint execution bound to --resume-approval-id.")
     object_storage_upload.add_argument("--reviewed-by", help="Safe reviewer id required when --approve is used.")
-    object_storage_upload.add_argument("--dry-run", action="store_true", help="Preview the plan and execution-receipt shape without provider calls, byte reads, or secret reads.")
+    object_storage_upload.add_argument("--progress", action="store_true", help="Stream planning and per-object progress to stderr; stdout keeps the final result.")
+    object_storage_upload.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Plan only: the writer line, the manifest classification and the hashed candidates; no provider call, no credential read, no write.",
+    )
     object_storage_upload.add_argument(
         "--approve",
         action="store_true",
-        help=(
-            "Attempt the approval-gated live upload. Requires reviewer, provider, "
-            "endpoint, bucket, and credential references; unresolved gates fail closed."
-        ),
+        help="Run the exact native-approval upload (one dialog for the whole plan). Requires --reviewed-by and --expected-manifest-sha256.",
     )
     object_storage_upload.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     object_storage_upload.set_defaults(func=command_object_storage_upload)
