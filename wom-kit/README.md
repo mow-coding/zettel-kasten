@@ -55,6 +55,12 @@ receipt scan behind one dialog; the approval-integrity audit pages per
 receipt kind; approved draft writes carry `inbox_attention`; `revert-edge`
 works without `--exact-local` and on inbox drafts.
 
+Boundary stated at the client's request (beta letter 164): the
+`object-storage-upload` writer is fixed closed in the v0.4 line, so
+`object-storage-restore` and `object-storage-offload` apply only to objets
+that WOM uploaded under v0.3 (`wom_uploaded` manifest locations). Reopening
+the upload writer under the exact approval contract is the v0.4.33 design.
+
 v0.4.29 adds `object-storage-offload`: local objet bytes are removed only
 after a same-run full-GET remote proof, two local re-hashes and every
 retention predicate, through the handle-bound delete; the manifest keeps
