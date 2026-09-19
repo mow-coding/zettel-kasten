@@ -313,10 +313,11 @@ class NotionPropertyBackfillCliTests(unittest.TestCase):
                 ),
             },
         )
-        # v0.4.21 reopened eight writers and added source-intake-chain.
+        # v0.4.21 reopened eight writers and added source-intake-chain;
+        # v0.4.28 added object-storage-restore.
         self.assertEqual(
             inventory["counts"]["approval_available_command_count"],
-            56,
+            57,
         )
         self.assertEqual(
             inventory["counts"]["approval_fixed_closed_command_count"],

@@ -31,8 +31,8 @@ external-locator-record first-read-freshness first-read-readiness git-backup-pla
 git-backup-reconcile-plan inbox-pipeline-audit index index-health memory-readiness
 mint-zet mint-zettel notion-import-locator-evidence-plan
 notion-import-locator-loss-audit notion-locator-loss-audit
-object-storage-adopt-existing object-storage-upload-adopt-existing
-objet-capture-batch objet-capture-selection objet-storage-adopt-existing
+object-storage-adopt-existing object-storage-restore object-storage-upload-adopt-existing
+objet-capture-batch objet-capture-selection objet-storage-adopt-existing objet-storage-restore
 operator-start-here project-version-update revision-receipt-audit runtime-context
 source-intake-batch source-intake-chain source-intake-record staged-cleanup-check
 start-here
