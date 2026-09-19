@@ -187,7 +187,7 @@ class Letter163MintGateTests(unittest.TestCase):
         self.assertEqual(len(self.started_claims()), 1)  # preserved for reconciliation, now named
         # free text never becomes a cause
         def private_failure(*args, **kwargs):
-            raise archive_services.ArchiveServiceError("PRIVATE C:\\Users\\someone\\secret.md failed")
+            raise archive_services.ArchiveServiceError("PRIVATE-FREE-TEXT-CANARY secret.md failed")
 
         with patch.object(archive_services, "mint_zettel", private_failure):
             code, result = self.run_cli(
