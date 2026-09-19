@@ -73,7 +73,7 @@ the recorded operation. They do not add a `wom_uploaded` manifest location,
 constitute formal adoption, merge conflicts, enable remote deletion, or prove a
 whole-archive backup.
 
-## v0.4.33 Upload Execution (beta letter 164 ①③④)
+## v0.4.33 Upload Execution
 
 `object-storage-upload` is the composition of the two v0.4 writers that
 already existed: the preservation PUT and the formal-adoption projection,

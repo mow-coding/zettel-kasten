@@ -2,6 +2,52 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.4.33 베타 편지 164 ①③④: `object-storage-upload` 다시 열림
+
+일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.
+새 외부 CPython 3.12 환경의 실제 `python.exe -m pip`를 사용해 설치된 PEP 610
+metadata에 wheel hash가 남게 합니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0433-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.33/wom_kit-0.4.33-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+새 process에서 정확히 `archive 0.4.33`이 나와야 합니다. wheel을 공개하거나 설치하는
+것만으로 client archive, project runtime, version pin은 바뀌지 않습니다. project
+update는 client가 따로 선택하고 승인합니다.
+
+업데이트 뒤 `object-storage-upload --approve`가 다시 동작합니다. 먼저 dry-run을 돌리세요.
+결과는 무엇보다 먼저 writer 상태를 알립니다(`writer_state: unavailable`에
+`provider_unsupported`, `store_setup_missing`, `store_ref_invalid`가 붙으면 저장소를 먼저
+등록하거나 지원되는 provider 종류를 골라야 합니다). 그다음 manifest의 모든 오브제를 개수로
+분류합니다(`excluded_byte_external_count`, `excluded_already_uploaded_count`,
+`excluded_already_preserved_count`, `excluded_offloaded_count`, `local_absent_count`,
+`local_size_conflict_count`, `candidate_count`). manifest가 로컬 바이트가 있다고 적었는데
+파일이 없거나 크기가 다르면 계획은 `local_bytes_missing`으로 거절됩니다. 있는 것만 올리려면
+`--local-bytes-only`로 다시 돌리고, 아니면 빠진 바이트를 먼저 되찾으세요. `--max-objects N`은
+이제 거절 대신 앞의 N개만 계획합니다. 그다음 `--approve --reviewed-by <id>
+--expected-manifest-sha256 <plan_sha256>`에 endpoint·bucket·자격증명 ref를 붙이면 계획 전체에
+창이 한 번 뜹니다. 오브제마다 로컬 파일을 다시 해시하고, 원격 키를 통째로 GET해 비교하며,
+`verified_match`면 PUT 없이 건너뛰고, 원격 바이트가 다르면 손대지 않고 `review_required`로
+남기며, 없을 때만 create-only PUT을 한 뒤 다시 내려받아 검증하고 비공개 원장에 기록합니다.
+오브제가 끝나면 manifest 투영 한 번으로 `wom_uploaded` 위치를 더하고 실행 영수증을 씁니다.
+전송 실패는 영수증을 남기지 않으며 `--resume-approval-id` / `--resume-execution-sha256`으로
+이어갑니다. v0.3의 `--force-reupload`, `--skip-uploaded`, `--key-strategy`, `--key-prefix`,
+`--key-append-extension`과 multipart 재정의 옵션은 없어졌습니다. 되찾기·비우기는 새 업로드를
+그대로 받아들입니다.
+
+검토한 project update 한 번 뒤에는 새 process에서 project launcher를 시작해 pin,
+source, launcher, runtime 근거를 확인하세요. 그 client 실행 결과만이 project가
+고쳐졌음을 보여 줍니다.
+
 ## v0.4.32 베타 편지 164 전반부: finalize 스캐너, 프로브 실패 종류, Git 백업 주의, 승인 모드 미리보기
 
 일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.

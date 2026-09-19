@@ -1,10 +1,15 @@
 ﻿# WOM-kit Capability Matrix
 
-Status: v0.4.32 letter-164 first half, letter-163 remainder, and session-owned writes truth
+Status: v0.4.33 upload reopened, letter-164 first half, and session-owned writes truth
 Date: 2026-09-04
-Version: v0.4.32 implementation and release scope
+Version: v0.4.33 implementation and release scope
 
-The current v0.4.32 working tree answers the first half of beta letter
+The current v0.4.33 working tree reopens `object-storage-upload` under the
+exact approval contract (beta letter 164 ①③④): the writer line comes
+first, every manifest object is classified with counts, a create-only PUT
+at the content-addressed key is followed by a same-run full-GET proof, one
+manifest projection adds the `wom_uploaded` locations and the execution
+receipts follow it. The v0.4.32 tree answers the first half of beta letter
 164: the claim-finalize receipt scan reads bytes and separates oversize
 from unreadable; an unavailable update snapshot names the failed Git
 probe and its fixed kind; `ai-start-here`, `backup-evidence` and

@@ -1,7 +1,12 @@
 # Agent Operator Capabilities Manifest
 
-Status: v0.4.32 letter-164 first half, letter-163 remainder, and writer-session coverage gate
+Status: v0.4.33 upload reopened, letter-164 first half, and writer-session coverage gate
 
+v0.4.33 reopens one command path: `object-storage-upload --approve` is
+approval-available again (always a dialog; preservation PUT + adoption
+projection at the content-addressed key), so the inventory is 60
+approval-available and 59 fixed-closed; the v0.3 flags are gone and
+`--local-bytes-only`, `--progress` and the exact resume flags are added.
 v0.4.32 adds no command path: `work-session --action set-permission-mode
 --dry-run` resolves to the read-only mode `permission_mode_preview`
 (grantable and always-dialog names, `would_set` or the refusal detail,
@@ -169,7 +174,7 @@ field remain `history_not_audited`. Inventory, shared capability availability,
 and command help consume the same content-free history. Current availability
 continues to be parser-derived; history does not grant execution authority.
 
-For the current v0.4.32 working-tree parser, the inventory snapshot is:
+For the current v0.4.33 working-tree parser, the inventory snapshot is:
 
 ```text
 canonical executable command paths: 321
