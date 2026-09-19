@@ -10501,6 +10501,56 @@ def _project_version_update_direct_cause_code(
     return token
 
 
+_PROJECT_VERSION_UPDATE_FAILURE_FAMILIES: tuple[tuple[str, str], ...] = (
+    # (fully qualified class name, fixed family literal); class identity only.
+    ("wom_kit.operation_control.OperationControlError", "operation_control_error"),
+    ("wom_kit.operation_approval_binding.OperationApprovalBindingError", "approval_binding_error"),
+    ("wom_kit.project_update_transaction.ProjectUpdateTransactionError", "transaction_error"),
+    ("wom_kit.project_update_git_runner.ProjectUpdateGitRunnerError", "git_runner_error"),
+    ("wom_kit.project_runtime.ProjectRuntimeError", "project_runtime_error"),
+    ("wom_kit.project_update_legacy_recovery.LegacyProjectUpdateRecoveryError", "legacy_recovery_error"),
+    ("wom_kit.archive_services.ArchiveServiceError", "archive_service_error"),
+    ("wom_kit.exact_human_approval.ExactHumanApprovalError", "exact_human_approval_error"),
+    ("wom_kit.exact_human_approval_windows.ExactHumanApprovalWindowsError", "windows_approval_error"),
+    ("builtins.OSError", "os_error"),
+    ("builtins.ValueError", "value_error"),
+)
+
+
+def _project_version_update_family_cause(
+    error: BaseException,
+    *,
+    journal_stage: str | None = None,
+) -> dict[str, str]:
+    """v0.4.31 (letter 163 ②): a failure without a fixed token still names
+    its exception family and the journal stage, never its text.
+
+    Class identity only (module-qualified name walked over the MRO); the
+    result is code-shaped so the capture writer accepts it.
+    """
+
+    family = "other_error"
+    for klass in type(error).__mro__:
+        qualified = f"{klass.__module__}.{klass.__name__}"
+        for name, literal in _PROJECT_VERSION_UPDATE_FAILURE_FAMILIES:
+            if qualified == name:
+                family = literal
+                break
+        if family != "other_error":
+            break
+    stage = (
+        journal_stage
+        if type(journal_stage) is str
+        and journal_stage in operation_control.COMMAND_STAGES["project-version-update"]
+        else "unknown"
+    )
+    return {
+        "cause_code": f"project_version_update_failure_family_{family}",
+        "cause_stage": stage,
+        "cause_code_source": "exception_family",
+    }
+
+
 def _project_version_update_content_free_cause(
     error: BaseException,
     *,
@@ -11383,6 +11433,8 @@ def _command_project_version_update_core(
         archive_services.ArchiveServiceError,
         archive_services.project_update_transaction.ProjectUpdateTransactionError,
         archive_services.project_update_git_runner.ProjectUpdateGitRunnerError,
+        archive_services.project_runtime.ProjectRuntimeError,
+        archive_services.project_update_legacy_recovery.LegacyProjectUpdateRecoveryError,
         ExactHumanApprovalError,
         ExactHumanApprovalWindowsError,
         ExactHumanApprovalWorkflowError,
@@ -11396,6 +11448,20 @@ def _command_project_version_update_core(
             # keeping it a command result rather than an inferred domain
             # success.  No raw exception string is copied.
             result = safe_failure
+            if safe_failure.get("status") in {
+                "terminal_cleanup_required",
+                "terminal_cleanup_outcome_unknown",
+                "legacy_prewrite_recovery_blocked",
+            }:
+                # v0.4.31 (letter 163 ②): say what the existing transaction
+                # looks like and which recovery flag applies; journal shape
+                # only, no key opened, fail-quiet.
+                result = dict(safe_failure)
+                result["existing_transaction"] = (
+                    archive_services.project_update_existing_transaction_read_only(
+                        inspection_root
+                    )
+                )
         else:
             failure_result_written = False
             content_free_cause = _project_version_update_content_free_cause(
@@ -11406,6 +11472,19 @@ def _command_project_version_update_core(
                     else None
                 ),
             )
+            if content_free_cause is None and not isinstance(
+                exc, ExactHumanApprovalWorkflowError
+            ):
+                # v0.4.31 (letter 163 ②): result_unavailable never travels
+                # without a cause; a broker wrapper keeps its allowlist rule.
+                content_free_cause = _project_version_update_family_cause(
+                    exc,
+                    journal_stage=(
+                        operation_journal.current_stage
+                        if operation_journal is not None
+                        else None
+                    ),
+                )
             if capture is not None:
                 try:
                     capture.write_completed(
@@ -27729,6 +27808,23 @@ def command_create_draft(args: argparse.Namespace) -> int:
                 "--dry-run or --approve."
             ),
         )
+    if args.approve and any(
+        str(getattr(args, name, "") or "").strip() == "None"
+        for name in ("profile_id", "expected_archive_id", "expected_type", "draft_id")
+    ):
+        # v0.4.31 (letter 163 ⑦c): a null replay value was pasted literally.
+        return _create_draft_cli_error(
+            args,
+            reason_code="create_draft_replay_value_null_literal",
+            message=(
+                "A replay option was given the literal value None; omit options "
+                "whose approval_replay value is null."
+            ),
+            next_safe_actions=[
+                "Re-run the dry-run and copy only the non-null approval_replay values; "
+                "options marked omit_when_null in approval_handoff are left out when null."
+            ],
+        )
     if ai_creation_mode and args.approve:
         missing_approval_prerequisites = [
             option
@@ -28018,6 +28114,28 @@ def command_create_draft(args: argparse.Namespace) -> int:
                 print(f"Warning: {warning}")
             _print_inbox_attention_line(result)
     return 0 if result.get("ok", True) else 1
+
+
+def _mint_warning_explanation_suffix(explanation: dict[str, Any] | None) -> str:
+    """v0.4.31: counts and body lines only; the matched words never print."""
+
+    if not isinstance(explanation, dict):
+        return ""
+    if explanation.get("category") == "status_wording":
+        return (
+            f" (completed-status markers: {explanation.get('completed_marker_count', 0)} at body lines "
+            f"{', '.join(str(n) for n in explanation.get('completed_marker_body_lines') or []) or '-'}; "
+            f"pending-status markers: {explanation.get('pending_marker_count', 0)} at body lines "
+            f"{', '.join(str(n) for n in explanation.get('pending_marker_body_lines') or []) or '-'})"
+        )
+    if explanation.get("category") == "tool_trace":
+        return (
+            f" (command markers: {explanation.get('command_marker_count', 0)} at body lines "
+            f"{', '.join(str(n) for n in explanation.get('command_marker_body_lines') or []) or '-'}; "
+            f"flag markers: {explanation.get('flag_marker_count', 0)} at body lines "
+            f"{', '.join(str(n) for n in explanation.get('flag_marker_body_lines') or []) or '-'})"
+        )
+    return ""
 
 
 def _print_inbox_attention_line(result: dict[str, Any]) -> None:
@@ -30131,8 +30249,13 @@ def command_mint_zettel(args: argparse.Namespace) -> int:
                     print(f"- {blocker}")
             if result["warnings"]:
                 print("Warnings:")
+                explanations = {
+                    item.get("code"): item
+                    for item in (result.get("quality_check") or {}).get("warning_explanations") or []
+                    if isinstance(item, dict)
+                }
                 for warning in result["warnings"]:
-                    print(f"- {warning}")
+                    print(f"- {warning}{_mint_warning_explanation_suffix(explanations.get(warning))}")
             source_fidelity_plan_sha256 = _source_fidelity_plan_sha256_from_result(result)
             if source_fidelity_plan_sha256:
                 print(f"Current source-fidelity plan: {source_fidelity_plan_sha256}")
@@ -36627,8 +36750,11 @@ class _CommandRunResultCapture:
                 ):
                     error_payload["cause_code"] = cause_code
                     error_payload["cause_stage"] = cause_stage
+                    source = cause.get("cause_code_source")
                     error_payload["cause_code_source"] = (
-                        "fixed_literal_allowlist"
+                        source
+                        if source in {"fixed_literal_allowlist", "exception_family"}
+                        else "fixed_literal_allowlist"
                     )
         payload["cli_execution"] = {
             "status": "completed",
@@ -44987,9 +45113,12 @@ def build_parser() -> argparse.ArgumentParser:
     create_draft.add_argument(
         "--expected-type",
         choices=sorted(archive_services.RUNTIME_CONTEXT_ARCHIVE_TYPES),
-        help="Expected archive type; mismatch blocks.",
+        help="Expected archive type from approval_replay; omit when the replay value is null; mismatch blocks.",
     )
-    create_draft.add_argument("--profile-id", help="Resolved WOM profile id for profile-bound draft replay.")
+    create_draft.add_argument(
+        "--profile-id",
+        help="Resolved WOM profile id from approval_replay; omit when the replay value is null.",
+    )
     create_draft.add_argument("--profile-operator-id", help="Actor operating under the resolved profile.")
     create_draft.add_argument("--profile-authority-mode", help="Authority mode from the resolved profile.")
     create_draft.add_argument(

@@ -354,6 +354,16 @@ source-fidelity plan digest before the claim exists
 `_not_applicable` in `reason_codes`), so the letter-163 orphan claims are not
 created again, and its failure envelope carries the writer's `cause_code` /
 `cause_stage` (`mint_preflight` or `domain_writer`).
+Since v0.4.31 a `project-version-update` failure that carries no fixed token
+still records a cause: the exception family as a fixed literal
+(`project_version_update_failure_family_<family>`, `cause_code_source:
+exception_family`) with the journal stage, so `result_unavailable` never
+travels alone; a broker wrapper keeps its allowlist rule. A dry-run blocked
+by an existing transaction adds `existing_transaction` (journal shape only:
+status `reserved` / `started` / `in_progress` / `terminal`, verified phase
+count, last phase, `abandon_applicable` and the recovery flag that applies),
+so the operator no longer loops between `terminal_cleanup_required` and a
+refused `--resume`.
 There is no claim expiry: one workflow invocation consumes the one-use
 authority. A later attempt normally requires a new live review. The narrow
 v0.4.8 exception is `duplicate-object-reconcile --revert --resume`: when one

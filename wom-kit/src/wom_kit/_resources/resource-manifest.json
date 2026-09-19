@@ -1,6 +1,6 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.4.30",
+  "version": "0.4.31",
   "source_of_truth": "wom-kit source resource directories",
   "file_count": 173,
   "files": [
@@ -43,8 +43,8 @@
     {
       "source": "schemas/approval-handoff-v0.1.schema.json",
       "packaged": "schemas/approval-handoff-v0.1.schema.json",
-      "bytes": 2654,
-      "sha256": "0812a6d9ea2bafc34c0b107540b40e3f8264529e76ef1da81f723db0e7c95608"
+      "bytes": 2703,
+      "sha256": "edaba77cb3b2e01ef25ddb3b3d7f0f33e2183d75c768c3d12cd03d28caa6d817"
     },
     {
       "source": "schemas/approval-integrity-audit-result-v0.1.schema.json",
@@ -1037,10 +1037,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.4.30.md",
-      "packaged": "release-notes/v0.4.30.md",
-      "bytes": 7119,
-      "sha256": "81ae0683659c60f133ccfc4e99455c0894ce68aa0f5dc90259fc17c3a20ccd10"
+      "source": "docs/releases/v0.4.31.md",
+      "packaged": "release-notes/v0.4.31.md",
+      "bytes": 6422,
+      "sha256": "afeedd7e10a7a24cc32fad6db9b8b434e54b2c4ce8a564212d75403d3f738a17"
     }
   ]
 }

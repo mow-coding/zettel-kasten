@@ -1,10 +1,17 @@
 ﻿# WOM-kit Capability Matrix
 
-Status: v0.4.30 letter-163 mint gate and claim store, object-storage offload, and session-owned writes truth
+Status: v0.4.31 letter-163 remainder, letter-163 mint gate and claim store, and session-owned writes truth
 Date: 2026-09-04
-Version: v0.4.30 implementation and release scope
+Version: v0.4.31 implementation and release scope
 
-The current v0.4.30 working tree answers beta letter 163: `mint-zet` refuses
+The current v0.4.31 working tree finishes beta letter 163: `create-draft`
+names the options that identify an AI runtime and marks null replay values
+(`omit_when_null`); the mint dry-run warns `edge_target_discarded` /
+`edge_target_missing` and explains the two body-wording warnings inside
+`quality_check`; a `project-version-update` failure always records a cause
+family and a blocked dry-run carries `existing_transaction`; edge,
+revert-edge and intake-chain dry-runs carry `index_precheck`. The v0.4.30
+tree answers beta letter 163: `mint-zet` refuses
 a missing or stale source-fidelity plan digest before any claim and names
 its cause on failure; `exact-approval-claims` lists the claim store and
 `exact-approval-claim-finalize` closes reviewed started claims after a

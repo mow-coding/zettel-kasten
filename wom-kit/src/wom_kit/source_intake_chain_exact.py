@@ -167,6 +167,8 @@ class SourceIntakeChainExactPlan:
     blockers: tuple[str, ...]
     warnings: tuple[str, ...]
     state: str
+    # v0.4.31: the index fact announced when the capture step is blocked.
+    index_precheck: dict[str, Any] | None = field(default=None, repr=False)
 
     @property
     def approveable(self) -> bool:
@@ -198,6 +200,12 @@ class SourceIntakeChainExactPlan:
             "single_step_approval_count": 3,
             "blockers": list(self.blockers),
             "warnings": list(self.warnings),
+            "index_precheck": self.index_precheck,
+            "next_safe_actions": (
+                list(self.index_precheck.get("next_safe_actions") or [])
+                if isinstance(self.index_precheck, dict)
+                else []
+            ),
             "writes_performed": False,
             "provider_calls_performed": False,
             "credential_values_read": False,
@@ -266,8 +274,10 @@ def _blocked_plan(
     blocker: str,
     record: source_intake_record_exact.SourceIntakeRecordExactPlan | None = None,
     selection: objet_capture_selection_exact.ExistingIntakeCaptureSelectionPlan | None = None,
+    index_precheck: dict[str, Any] | None = None,
 ) -> SourceIntakeChainExactPlan:
     return SourceIntakeChainExactPlan(
+        index_precheck=index_precheck,
         archive_root=root,
         archive_id=archive_id,
         input_plan_path=input_plan_path,
@@ -480,6 +490,7 @@ def plan_source_intake_chain(
     # mutation authority).  The single-step preview does not check this, but
     # a chain must know before the record and selection steps have written.
     summary = preview.get("summary") if isinstance(preview.get("summary"), dict) else {}
+    index_precheck: dict[str, Any] | None = None
     if (
         not capture_blockers
         and not item_blockers
@@ -503,6 +514,11 @@ def plan_source_intake_chain(
             )
         except Exception:
             capture_blockers = [archive_services.INDEX_REBUILD_REQUIRED]
+            # v0.4.31 (letter 163 ⑧): say up front whether the index is
+            # stale, being written, or current while the manifest authority
+            # refused for another reason.
+            index_precheck = archive_services.archive_index_precheck(root)
+            index_precheck["capture_authority_refused"] = True
     if preview.get("ok") is not True or capture_blockers or item_blockers or capture_binding is None:
         blocker = str((capture_blockers or item_blockers or ["objet_capture_plan_blocked"])[0])
         return _blocked_plan(
@@ -515,6 +531,7 @@ def plan_source_intake_chain(
                 _blocked_step(STEP_NAMES[2], blocker, warnings=capture_warnings),
             ),
             blocker="source_intake_chain_plan_blocked",
+            index_precheck=index_precheck,
         )
     capture_step = _ChainStep(
         step=STEP_NAMES[2],
