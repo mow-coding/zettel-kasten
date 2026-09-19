@@ -137,10 +137,10 @@ class V0421ReleaseDocsTests(unittest.TestCase):
         routed = sum(1 for row in manifest["paths"].values() if row.get("route"))
         # v0.4.21 reopened eight writers and added the intake chain; all nine
         # are classified pending session integration (LR-06).
-        self.assertEqual(len(statuses), 56)
+        self.assertEqual(len(statuses), 57)
         self.assertEqual(statuses.count("session_integrated") - routed, 6)
         self.assertEqual(routed, 1)
-        self.assertEqual(statuses.count("pending"), 29)
+        self.assertEqual(statuses.count("pending"), 30)
         self.assertEqual(statuses.count("legacy_exception"), 20)
 
     def test_current_docs_are_private_safe(self) -> None:

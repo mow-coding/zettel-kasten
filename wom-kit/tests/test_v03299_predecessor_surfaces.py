@@ -125,10 +125,12 @@ CLI_ADDITIONS = {
     ("zettel-objet-link",),
     ("zettel-objet-link-receipts",),
     ("zettel-objet-link-revert",),
+    ("object-storage-restore",),
+    ("objet-storage-restore",),
 }
-CURRENT_CLI_COUNT = 577
+CURRENT_CLI_COUNT = 579
 CURRENT_CLI_CANONICAL_SHA256 = (
-    "0b17395706b99b5599a7a799b8be5e02e3b5d3587e7ae295bb9425d46f3ad3f0"
+    "2d9df57dfefb40c81d356d77a412501fe20290124e3cd12a344ff9416a9cb860"
 )
 CURRENT_MCP_COUNT = 137
 CURRENT_MCP_CANONICAL_SHA256 = (
@@ -189,6 +191,7 @@ RESOURCE_ADDITIONS = {
     "schemas/object-storage-preservation-terminal-receipt-v0.2.schema.json",
     "schemas/object-storage-preservation-terminal-receipt-v0.3.schema.json",
     "schemas/object-storage-formal-adoption-receipt-v0.1.schema.json",
+    "schemas/object-storage-restore-receipt-v0.1.schema.json",
     "schemas/objet-capture-batch-receipt.schema.json",
     "schemas/objet-capture-batch-request.schema.json",
     "schemas/principal-record.schema.json",
@@ -218,9 +221,9 @@ RESOURCE_ADDITIONS = {
     "schemas/zettel-objet-link-revert-receipt.schema.json",
 }
 RESOURCE_REMOVALS = {"release-notes/v0.3.297.md"}
-CURRENT_RESOURCE_COUNT = 169
+CURRENT_RESOURCE_COUNT = 170
 CURRENT_RESOURCE_CANONICAL_SHA256 = (
-    "4893158edd10efa5025f238e88f5b50e196538735358e45bd41d865bf013b344"
+    "f6248215e7a691cd0ca85c6d28bf5f09ba800c36e23db91c894d1bb1a2745783"
 )
 
 

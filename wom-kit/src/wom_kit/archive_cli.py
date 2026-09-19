@@ -154,6 +154,8 @@ Commands:
           Verify planned objects' local RAW bytes hash to their object id (no network, no secret).
   object-storage-upload
           Run an approval-gated live S3-compatible upload when all provider and credential gates resolve.
+  object-storage-restore
+          Download WOM-verified remote objet bytes back into the local objet store, or prove them with a full GET (v0.4.28).
   connection-edge-intelligence-plan
           Classify sanitized connection fixture candidates into meaning/mechanism review signals.
   notion-nested-tree-plan
@@ -428,6 +430,7 @@ from . import (
     operation_approval_binding,
     object_storage_adoption,
     object_storage_preservation,
+    object_storage_restore,
     object_storage_setup_registration,
     project_runtime,
     runtime_guidance,
@@ -17615,6 +17618,28 @@ def _object_storage_preservation_progress_hooks(
 def _object_storage_preservation_transport_factory(
     args: argparse.Namespace,
 ) -> Callable[[], archive_services.ObjectStorageTransport]:
+    return _object_storage_live_transport_factory(
+        args,
+        invalid=lambda: object_storage_preservation.ObjectStoragePreservationError(
+            "object_storage_preservation_plan_invalid"
+        ),
+        unavailable=lambda: object_storage_preservation.ObjectStoragePreservationError(
+            "object_storage_preservation_remote_unavailable"
+        ),
+    )
+
+
+def _object_storage_live_transport_factory(
+    args: argparse.Namespace,
+    *,
+    invalid: Callable[[], Exception],
+    unavailable: Callable[[], Exception],
+) -> Callable[[], archive_services.ObjectStorageTransport]:
+    """Validate the non-secret provider arguments now; read credential values only
+    inside the approved write. Shared by preservation, formal adoption and the
+    v0.4.28 restore so every live transport goes through one seam.
+    """
+
     blockers: list[str] = []
     access_ref = str(getattr(args, "access_key_id_ref", None) or "").strip()
     secret_ref = str(getattr(args, "secret_access_key_ref", None) or "").strip()
@@ -17646,9 +17671,7 @@ def _object_storage_preservation_transport_factory(
     if not archive_services.safe_object_storage_region(region):
         blockers.append("region_invalid")
     if blockers:
-        raise object_storage_preservation.ObjectStoragePreservationError(
-            "object_storage_preservation_plan_invalid"
-        )
+        raise invalid()
 
     def resolve() -> archive_services.ObjectStorageTransport:
         try:
@@ -17677,9 +17700,7 @@ def _object_storage_preservation_transport_factory(
                 raise ValueError("unavailable")
             return transport
         except Exception:
-            raise object_storage_preservation.ObjectStoragePreservationError(
-                "object_storage_preservation_remote_unavailable"
-            ) from None
+            raise unavailable() from None
 
     return resolve
 
@@ -17917,6 +17938,170 @@ def _command_object_storage_formal_adoption(args: argparse.Namespace) -> int:
         )
     print_json(result)
     return 0 if result.get("ok", False) else 1
+
+
+def _object_storage_restore_cli_error(args: argparse.Namespace, reason_code: str) -> int:
+    return _exact_human_approval_cli_error(
+        args,
+        lifecycle_action="object_storage_bytes_restore",
+        reason_code=reason_code,
+    )
+
+
+def _object_storage_restore_progress_hooks(
+    args: argparse.Namespace,
+) -> tuple[ProgressCallback | None, Callable[[ExactOperationProgress], None] | None]:
+    stage_progress = _make_stage_progress_callback(
+        bool(getattr(args, "progress", False)),
+        label="object-storage-restore",
+        detail="aggregate",
+    )
+    if stage_progress is None:
+        return None, None
+
+    def exact_progress(event: ExactOperationProgress) -> None:
+        document = event.public_document()
+        stage_progress(
+            "exact-operation-" + str(document["stage"]),
+            str(document["mode"]),
+            int(document["completed_items"]),
+            int(document["total_items"]),
+        )
+
+    return stage_progress, exact_progress
+
+
+def command_object_storage_restore(args: argparse.Namespace) -> int:
+    """v0.4.28 (OB-01 / OB-03): rehydrate or prove WOM-verified remote objet bytes.
+
+    Dry-run reads the manifest, hashes any local candidate and echoes counts
+    only. Approve opens one native dialog for the whole plan, then streams each
+    remote object into a private sink, keeps it only when size and sha256
+    reproduce the object id, places it create-only into the objet store and
+    records one receipt per object plus one manifest projection. The remote
+    object is never deleted and an existing local file is never overwritten.
+    """
+
+    if bool(args.dry_run) == bool(args.approve):
+        return _object_storage_restore_cli_error(args, "object_storage_restore_plan_invalid")
+    reviewer = str(getattr(args, "reviewed_by", None) or "").strip()
+    expected_manifest_sha256 = str(getattr(args, "expected_manifest_sha256", None) or "").strip().lower()
+    resume_approval_id = str(getattr(args, "resume_approval_id", None) or "").strip()
+    resume_execution_sha256 = str(getattr(args, "resume_execution_sha256", None) or "").strip().lower()
+    resume_requested = bool(resume_approval_id or resume_execution_sha256)
+    if resume_requested and not (resume_approval_id and resume_execution_sha256):
+        return _object_storage_restore_cli_error(args, "object_storage_restore_resume_invalid")
+    if resume_requested and (
+        not args.approve
+        or getattr(args, "only", None)
+        or getattr(args, "max_objects", None) is not None
+        or getattr(args, "verify_only", False)
+    ):
+        return _object_storage_restore_cli_error(args, "object_storage_restore_resume_invalid")
+    if args.approve and (
+        not reviewer or re.fullmatch(r"sha256:[0-9a-f]{64}", expected_manifest_sha256) is None
+    ):
+        return _object_storage_restore_cli_error(args, "object_storage_restore_approval_required")
+    mode = (
+        object_storage_restore.MODE_VERIFY_ONLY
+        if getattr(args, "verify_only", False)
+        else object_storage_restore.MODE_RESTORE
+    )
+    plan_progress, exact_progress = _object_storage_restore_progress_hooks(args)
+    try:
+        if resume_requested:
+            plan = object_storage_restore.load_object_storage_restore_plan(
+                Path(args.archive_root), manifest_sha256=expected_manifest_sha256
+            )
+        else:
+            plan = object_storage_restore.plan_object_storage_restore(
+                Path(args.archive_root),
+                provider_kind=args.provider_kind,
+                store_ref=args.store_ref,
+                mode=mode,
+                only=args.only,
+                max_objects=args.max_objects,
+                progress=plan_progress,
+            )
+        if args.dry_run:
+            result = plan.public_document()
+        else:
+            if plan.manifest is None or not secrets.compare_digest(
+                plan.manifest.manifest_sha256, expected_manifest_sha256
+            ):
+                return _object_storage_restore_cli_error(args, "object_storage_restore_plan_changed")
+            transport_factory = _object_storage_live_transport_factory(
+                args,
+                invalid=lambda: object_storage_restore.ObjectStorageRestoreError(
+                    "object_storage_restore_plan_invalid"
+                ),
+                unavailable=lambda: object_storage_restore.ObjectStorageRestoreError(
+                    "object_storage_restore_remote_unavailable"
+                ),
+            )
+            if resume_requested:
+                result = object_storage_restore.resume_object_storage_restore(
+                    plan,
+                    reviewer_claim=reviewer,
+                    approval_id=resume_approval_id,
+                    execution_sha256=resume_execution_sha256,
+                    transport_factory=transport_factory,
+                    progress_hook=exact_progress,
+                )
+            else:
+                result = object_storage_restore.execute_object_storage_restore(
+                    plan,
+                    reviewer_claim=reviewer,
+                    transport_factory=transport_factory,
+                    progress_hook=exact_progress,
+                )
+    except object_storage_restore.ObjectStorageRestoreError as exc:
+        return _object_storage_restore_cli_error(args, exc.code)
+    except object_storage_preservation.ObjectStoragePreservationError as exc:
+        code = (
+            "object_storage_restore_remote_unavailable"
+            if "remote" in exc.code
+            else "object_storage_restore_plan_invalid"
+        )
+        return _object_storage_restore_cli_error(args, code)
+    except (
+        ExactHumanApprovalError,
+        ExactHumanApprovalWindowsError,
+        ExactHumanApprovalWorkflowError,
+        ExactOperationManifestError,
+    ) as exc:
+        return _object_storage_restore_cli_error(
+            args, str(getattr(exc, "code", "object_storage_restore_remote_unavailable"))
+        )
+    print_object_storage_restore_result(result, args.format)
+    return 0 if result.get("ok", False) else 1
+
+
+def print_object_storage_restore_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    print(f"Object-storage restore {result.get('state') or 'blocked'} (mode {result.get('mode') or '-'}).")
+    print(f"Plan SHA-256: {result.get('plan_sha256') or result.get('manifest_sha256') or '-'}")
+    if "planned_object_count" in result:
+        print(f"Planned objects: {result.get('planned_object_count', 0)}")
+    if "planned_download_bytes" in result:
+        print(f"Planned download bytes: {result.get('planned_download_bytes', 0)}")
+    counts = result.get("status_counts")
+    if isinstance(counts, dict):
+        print("Outcomes: " + ", ".join(f"{key}={value}" for key, value in sorted(counts.items())))
+    for key in (
+        "restore_target_count",
+        "verify_target_count",
+        "already_present_count",
+        "local_conflict_count",
+        "remote_evidence_missing_count",
+        "manifest_location_updates",
+    ):
+        if key in result:
+            print(f"{key}: {result[key]}")
+    for action in result.get("next_safe_actions") or []:
+        print(f"Next: {action}")
 
 
 def command_object_storage_adopt_existing(args: argparse.Namespace) -> int:
@@ -39645,6 +39830,63 @@ def build_parser() -> argparse.ArgumentParser:
             ),
         },
     )
+
+    object_storage_restore_parser = subcommands.add_parser(
+        "object-storage-restore",
+        aliases=["objet-storage-restore"],
+        help=(
+            "Download WOM-verified remote objet bytes back into the local objet store "
+            "(create-only, never overwriting, never deleting the remote object), or with "
+            "--verify-only prove them with a full authenticated GET and receipts (v0.4.28)."
+        ),
+    )
+    object_storage_restore_parser.add_argument("archive_root", help="Archive root to restore into.")
+    object_storage_restore_parser.add_argument(
+        "--provider-kind",
+        choices=sorted(archive_services.OBJECT_STORAGE_ALLOWED_PROVIDERS),
+        default="cloudflare-r2",
+        help="Object-storage provider kind label.",
+    )
+    object_storage_restore_parser.add_argument(
+        "--store-ref",
+        help="Safe store label/ref the wom_uploaded locations were recorded under. Required. No URLs, bucket names, paths, tokens or secrets.",
+    )
+    object_storage_restore_parser.add_argument("--access-key-id-ref", help="Access key id ref (env:/keyring:/credential-manager:); read only inside the approved write.")
+    object_storage_restore_parser.add_argument("--secret-access-key-ref", help="Secret access key ref; read only inside the approved write.")
+    object_storage_restore_parser.add_argument("--endpoint-host", help="Non-secret S3 endpoint host. Required for --approve.")
+    object_storage_restore_parser.add_argument("--bucket", help="Non-secret bucket name. Required for --approve.")
+    object_storage_restore_parser.add_argument("--region", help="S3 region. Defaults to 'auto' for cloudflare-r2.")
+    object_storage_restore_parser.add_argument("--only", help="Restore or verify only this object id (sha256:<hex> or bare 64 hex).")
+    object_storage_restore_parser.add_argument("--max-objects", type=int, help="REFUSE if the resolved plan exceeds this count.")
+    object_storage_restore_parser.add_argument(
+        "--verify-only",
+        action="store_true",
+        dest="verify_only",
+        help=(
+            "OB-01 general proof: download and re-hash every WOM-verified remote object of this store "
+            "without writing local bytes; one remote_verified receipt per object. Local files are untouched."
+        ),
+    )
+    object_storage_restore_parser.add_argument(
+        "--expected-manifest-sha256",
+        help="Exact plan_sha256 from the preceding --dry-run; required for --approve and resume.",
+    )
+    object_storage_restore_parser.add_argument("--resume-approval-id", help="Resume an interrupted exact restore using its one-use approval id.")
+    object_storage_restore_parser.add_argument("--resume-execution-sha256", help="Resume the exact checkpoint execution bound to --resume-approval-id.")
+    object_storage_restore_parser.add_argument("--reviewed-by", help="Safe reviewer id required when --approve is used.")
+    object_storage_restore_parser.add_argument("--progress", action="store_true", help="Stream planning and per-object progress to stderr; stdout keeps the final result.")
+    object_storage_restore_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Plan only: scan the manifest and hash local candidates; no provider call, no credential read, no write.",
+    )
+    object_storage_restore_parser.add_argument(
+        "--approve",
+        action="store_true",
+        help="Run the exact native-approval restore (one dialog for the whole plan). Requires --reviewed-by and --expected-manifest-sha256.",
+    )
+    object_storage_restore_parser.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    object_storage_restore_parser.set_defaults(func=command_object_storage_restore)
 
     object_storage_wom_location_reconcile = subcommands.add_parser(
         "object-storage-wom-location-reconcile",
