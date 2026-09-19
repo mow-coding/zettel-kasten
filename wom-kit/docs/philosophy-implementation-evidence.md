@@ -1,6 +1,6 @@
 # WOM Philosophy Implementation Evidence
 
-Status: v0.4.31 review of the v0.3.252 public traceability checkpoint
+Status: v0.4.32 review of the v0.3.252 public traceability checkpoint
 Date: 2026-09-17
 
 ## Purpose
@@ -36,6 +36,12 @@ layers.
 | Writes require human review, provenance, and an explicit approval boundary. | The supported exact workflows use a native TaskDialog, an authenticated durable `started` claim, writer-side revalidation, and workflow finalization. v0.4.14 may show a bounded filename, title, gist, role, or relation endpoint derived from the current SHA-bound plan so the person can recognize the target. v0.4.15 restores an interrupted update's exact context from its live lock and authenticated sealed plan, accepts exactly one checkpoint-valid claim without caller-supplied identifiers or a second decision, and keeps ordinary writers blocked until convergence. The sole locked-state exception is separately exact-approved, create-only operator feedback body preservation; it cannot revise metadata or change `version-update.lock`. Unsafe optional clues are omitted and never become durable authority. Routes without a complete operation-specific binding remain dry-run/plan/audit-only or unavailable and fail before sensitive reads or writes. | Exact-human workflow tests, authenticated update-resume and emergency-feedback guard tests, privacy-filtered target-preview tests, and the CLI/help and service fail-closed suites. | WOM can verify the command boundary; it cannot infer that a person understood every semantic consequence. Resume reuses only the already-approved exact context; it does not grant authority to a new target. A preview clue and a historical approval receipt grant no current write authority. |
 | AI-generated documents and conversation-derived work must not evaporate. | `ai-artifact-inventory` classifies local AI artifacts, operational context records unfinished work, and `session-handoff-checkpoint` blocks a clean handoff when durable capture evidence is missing or stale. | AI artifact inventory and session-handoff CLI tests. | The tool does not ingest chat automatically or decide which generated artifact deserves preservation. Human/AI review remains necessary. |
 | AI operation should use progressive disclosure and plain human language. | The packaged Agent Skill has a compact root, goal-focused references, a machine-readable capabilities manifest, and a human-language response contract and terminology guide. Approval surfaces let WOM verify counts, hashes, and target state while the person decides only whether to perform the plainly described effect; safe local-only clues help identify the target without entering receipts or public output. | Runtime-skill package validation, capability tests, approval-preview privacy tests, and documentation contract tests. | Plain-language quality and good judgment are guidance-level behavior; WOM cannot deterministically validate every model response, and an omitted unsafe clue must never be replaced by leaked private context. |
+
+v0.4.32 makes silence speak: a session start says how much of the person's
+work Git does not yet hold, a blocked close says which file it could not read,
+a lost snapshot says which probe failed and why, and a permission request can
+be checked before a window asks for a decision. What the tool cannot prove it
+now says plainly, in numbers, without reading anything it should not.
 
 v0.4.31 makes a refusal teach: a blocked draft names the option it lacks, a
 warning says which lines it read, a failed update names its family and the
@@ -159,7 +165,7 @@ follow-up control step succeeded.
 
 ## Current Engineering Conclusion
 
-The public v0.4.31 implementation contains concrete, regression-checked
+The public v0.4.32 implementation contains concrete, regression-checked
 mechanisms for the Memento Problem: first-read reconstruction, artifact-first
 reasoning, reviewed revision and recovery, durable session handoff, and honest
 local backup evidence. These mechanisms are not merely roadmap prose.

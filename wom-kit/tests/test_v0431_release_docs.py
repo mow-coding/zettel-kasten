@@ -13,8 +13,9 @@ ROOT = Path(__file__).resolve().parents[2]
 KIT = ROOT / "wom-kit"
 RESOURCE_ROOT = KIT / "src" / "wom_kit" / "_resources"
 RELEASE = KIT / "docs" / "releases" / "v0.4.31.md"
-PACKAGED_RELEASE = RESOURCE_ROOT / "release-notes" / "v0.4.31.md"
-LOCK = KIT / "project-runtime-supply-lock-v0.4.31.json"
+CURRENT_RELEASE = KIT / "docs" / "releases" / "v0.4.32.md"
+PACKAGED_RELEASE = RESOURCE_ROOT / "release-notes" / "v0.4.32.md"
+LOCK = KIT / "project-runtime-supply-lock-v0.4.32.json"
 BOOTSTRAP_DOCUMENTS = (
     ROOT / "README.md",
     ROOT / "README.ko.md",
@@ -48,48 +49,48 @@ CURRENT_PUBLIC_DOCUMENTS = (
 
 class V0431ReleaseDocsTests(unittest.TestCase):
     def test_current_version_surfaces_are_exact(self) -> None:
-        self.assertEqual(__version__, "0.4.31")
-        self.assertIn('version = "0.4.31"', (KIT / "pyproject.toml").read_text(encoding="utf-8"))
+        self.assertEqual(__version__, "0.4.32")
+        self.assertIn('version = "0.4.32"', (KIT / "pyproject.toml").read_text(encoding="utf-8"))
         for shim in (KIT / "src" / "wom_kit" / "__init__.py", ROOT / "wom_kit" / "__init__.py"):
-            self.assertIn('__version__ = "0.4.31"', shim.read_text(encoding="utf-8"))
+            self.assertIn('__version__ = "0.4.32"', shim.read_text(encoding="utf-8"))
         citation = (ROOT / "CITATION.cff").read_text(encoding="utf-8")
-        self.assertIn('version: "0.4.31"', citation)
+        self.assertIn('version: "0.4.32"', citation)
         self.assertRegex(citation, r'date-released: "2026-09-(19|2[0-9])"')
         versioning = (ROOT / "VERSIONING.md").read_text(encoding="utf-8")
-        self.assertIn("Current public baseline:\n\n```text\nv0.4.31", versioning)
-        self.assertIn("Previous public baseline:\n\n```text\nv0.4.30", versioning)
-        self.assertIn("Previous public baseline: v0.4.30.", (ROOT / "README.md").read_text(encoding="utf-8"))
-        self.assertIn("v0.4.31 (현재 checkpoint)", (ROOT / "README.ko.md").read_text(encoding="utf-8"))
+        self.assertIn("Current public baseline:\n\n```text\nv0.4.32", versioning)
+        self.assertIn("Previous public baseline:\n\n```text\nv0.4.31", versioning)
+        self.assertIn("Previous public baseline: v0.4.31.", (ROOT / "README.md").read_text(encoding="utf-8"))
+        self.assertIn("v0.4.32 (현재 checkpoint)", (ROOT / "README.ko.md").read_text(encoding="utf-8"))
 
     def test_supply_lock_and_policy_are_exact(self) -> None:
         current = LOCK.read_bytes()
-        previous = (KIT / "project-runtime-supply-lock-v0.4.30.json").read_bytes()
-        self.assertEqual(previous.replace(b'"target_tag": "v0.4.30"', b'"target_tag": "v0.4.31"'), current)
+        previous = (KIT / "project-runtime-supply-lock-v0.4.31.json").read_bytes()
+        self.assertEqual(previous.replace(b'"target_tag": "v0.4.31"', b'"target_tag": "v0.4.32"'), current)
         policy = json.loads((KIT / "project-runtime-policy.json").read_text(encoding="utf-8"))
-        self.assertEqual(policy["supply_lock"], "wom-kit/project-runtime-supply-lock-v0.4.31.json")
+        self.assertEqual(policy["supply_lock"], "wom-kit/project-runtime-supply-lock-v0.4.32.json")
         self.assertEqual(policy["supply_lock_sha256"], "sha256:" + hashlib.sha256(current).hexdigest())
 
     def test_current_release_is_the_only_packaged_note(self) -> None:
-        self.assertEqual(RELEASE.read_bytes(), PACKAGED_RELEASE.read_bytes())
-        self.assertEqual(sorted(path.name for path in PACKAGED_RELEASE.parent.iterdir()), ["v0.4.31.md"])
+        self.assertEqual(CURRENT_RELEASE.read_bytes(), PACKAGED_RELEASE.read_bytes())
+        self.assertEqual(sorted(path.name for path in PACKAGED_RELEASE.parent.iterdir()), ["v0.4.32.md"])
         manifest = json.loads((RESOURCE_ROOT / "resource-manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(manifest["version"], "0.4.31")
+        self.assertEqual(manifest["version"], "0.4.32")
         packaged_paths = {row["packaged"] for row in manifest["files"]}
-        self.assertIn("release-notes/v0.4.31.md", packaged_paths)
-        self.assertNotIn("release-notes/v0.4.30.md", packaged_paths)
-        self.assertTrue((KIT / "docs" / "releases" / "v0.4.30.md").is_file())
+        self.assertIn("release-notes/v0.4.32.md", packaged_paths)
+        self.assertNotIn("release-notes/v0.4.31.md", packaged_paths)
+        self.assertTrue((KIT / "docs" / "releases" / "v0.4.31.md").is_file())
 
-    def test_current_install_guides_use_exact_v0431_bootstrap(self) -> None:
+    def test_current_install_guides_use_exact_v0432_bootstrap(self) -> None:
         for path in BOOTSTRAP_DOCUMENTS:
             document = path.read_text(encoding="utf-8")
             with self.subTest(path=path):
                 self.assertIn('$womBootstrapNonce = [guid]::NewGuid().ToString("N")', document)
-                self.assertIn('$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\\bootstrap-v0431-$womBootstrapNonce"', document)
+                self.assertIn('$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\\bootstrap-v0432-$womBootstrapNonce"', document)
                 self.assertRegex(document, re.escape("& $womBootstrapPython") + r"\s+-m\s+pip\s+install\b")
-                self.assertIn("wom_kit-0.4.31-py3-none-any.whl", document)
+                self.assertIn("wom_kit-0.4.32-py3-none-any.whl", document)
                 if path.name.startswith("UPGRADE"):
                     continue  # upgrade guides keep every historical section
-                self.assertNotIn("bootstrap-v0430-", document)
+                self.assertNotIn("bootstrap-v0431-", document)
 
     def test_release_describes_v0431_contract(self) -> None:
         flat = " ".join(RELEASE.read_text(encoding="utf-8").split()).casefold()
@@ -111,24 +112,24 @@ class V0431ReleaseDocsTests(unittest.TestCase):
             with self.subTest(required=required):
                 self.assertIn(required.casefold(), flat)
 
-    def test_current_docs_use_v0431_status_without_erasing_v0430_history(self) -> None:
+    def test_current_docs_use_v0432_status_without_erasing_v0431_history(self) -> None:
         expected = {
             KIT / "docs" / "agent-operator-capabilities.md":
-                "Status: v0.4.31 letter-163 remainder, letter-163 mint gate and claim store, and writer-session coverage gate",
+                "Status: v0.4.32 letter-164 first half, letter-163 remainder, and writer-session coverage gate",
             KIT / "docs" / "capability-matrix.md":
-                "Version: v0.4.31 implementation and release scope",
+                "Version: v0.4.32 implementation and release scope",
             KIT / "docs" / "runtime-canonical-entrypoints.md":
-                "Status: v0.4.31 letter-163 remainder, letter-163 mint gate and claim store, and session-owned writes truth",
+                "Status: v0.4.32 letter-164 first half, letter-163 remainder, and session-owned writes truth",
             KIT / "docs" / "version-truth-source.md":
-                "Status: v0.4.31 letter-163 remainder, letter-163 mint gate and claim store, and session-owned writes",
+                "Status: v0.4.32 letter-164 first half, letter-163 remainder, and session-owned writes",
             KIT / "docs" / "python-tool-install.md":
-                "Status: v0.4.31 conditional GitHub wheel contract; letter-163 remainder; letter-163 mint gate and claim store",
+                "Status: v0.4.32 conditional GitHub wheel contract; letter-164 first half; letter-163 remainder",
         }
         for path, phrase in expected.items():
             document = path.read_text(encoding="utf-8")
             with self.subTest(path=path):
                 self.assertIn(phrase, document)
-                self.assertIn("v0.4.30", document)
+                self.assertIn("v0.4.31", document)
 
     def test_release_surfaces_are_documented(self) -> None:
         contract = (KIT / "docs" / "exact-human-approval-contract.md").read_text(encoding="utf-8")

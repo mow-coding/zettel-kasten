@@ -1,10 +1,16 @@
 ﻿# WOM-kit Capability Matrix
 
-Status: v0.4.31 letter-163 remainder, letter-163 mint gate and claim store, and session-owned writes truth
+Status: v0.4.32 letter-164 first half, letter-163 remainder, and session-owned writes truth
 Date: 2026-09-04
-Version: v0.4.31 implementation and release scope
+Version: v0.4.32 implementation and release scope
 
-The current v0.4.31 working tree finishes beta letter 163: `create-draft`
+The current v0.4.32 working tree answers the first half of beta letter
+164: the claim-finalize receipt scan reads bytes and separates oversize
+from unreadable; an unavailable update snapshot names the failed Git
+probe and its fixed kind; `ai-start-here`, `backup-evidence` and
+`work-session` create/claim carry `git_backup_attention` (counts and days
+only); `set-permission-mode --dry-run` previews a grant without a dialog.
+The v0.4.31 tree finishes beta letter 163: `create-draft`
 names the options that identify an AI runtime and marks null replay values
 (`omit_when_null`); the mint dry-run warns `edge_target_discarded` /
 `edge_target_missing` and explains the two body-wording warnings inside
