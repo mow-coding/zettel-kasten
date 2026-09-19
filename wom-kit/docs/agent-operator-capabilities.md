@@ -1,7 +1,16 @@
 # Agent Operator Capabilities Manifest
 
-Status: v0.4.31 letter-163 remainder, letter-163 mint gate and claim store, and writer-session coverage gate
+Status: v0.4.32 letter-164 first half, letter-163 remainder, and writer-session coverage gate
 
+v0.4.32 adds no command path: `work-session --action set-permission-mode
+--dry-run` resolves to the read-only mode `permission_mode_preview`
+(grantable and always-dialog names, `would_set` or the refusal detail,
+no dialog, no session read), and `ai-start-here`, `backup-evidence` and
+`work-session` create/claim carry the numbers-only `git_backup_attention`
+block; inventory, availability and dispatch are unchanged. v0.4.31 adds
+no command path: `create-draft` names the runtime-identification options,
+the mint dry-run gains two bound edge-target warnings, and edge,
+revert-edge and intake-chain dry-runs announce `index_precheck`.
 v0.4.29 adds one command path, `object-storage-offload` (alias
 `objet-storage-offload`, approval-available, always-dialog): local objet
 bytes are removed only after a same-run full-GET remote proof, two local
@@ -160,7 +169,7 @@ field remain `history_not_audited`. Inventory, shared capability availability,
 and command help consume the same content-free history. Current availability
 continues to be parser-derived; history does not grant execution authority.
 
-For the current v0.4.31 working-tree parser, the inventory snapshot is:
+For the current v0.4.32 working-tree parser, the inventory snapshot is:
 
 ```text
 canonical executable command paths: 321

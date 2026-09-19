@@ -285,6 +285,12 @@ and results say so (`exact_human_approval.approval_mechanism`,
 session lifecycle, repairs and overrides cannot be granted in any mode;
 credential writers use the Windows credential native path and are
 unaffected. Dry-run still never opens a window and never issues authority.
+Since v0.4.32 `set-permission-mode --dry-run` is that dry-run made useful:
+mode `permission_mode_preview` returns `would_set`, the fixed
+`permission_modes`, `grantable_operations` and `always_dialog_operations`
+lists, or the refusal code with its positional detail, reading no session
+state and echoing no value, so a valid grant request can be composed before
+the one dialog is opened.
 
 ## One-use claim and durable linkage
 
@@ -364,6 +370,16 @@ status `reserved` / `started` / `in_progress` / `terminal`, verified phase
 count, last phase, `abandon_applicable` and the recovery flag that applies),
 so the operator no longer loops between `terminal_cleanup_required` and a
 refused `--resume`.
+Since v0.4.32 (beta letter 164) the finalize scan reads every receipt as a
+byte stream (`scan_method: byte_stream_search`, 256 MiB per-file ceiling), so
+a malformed or large receipt is searched rather than counted as unreadable;
+`oversize_skipped_count` / `oversize_skipped_receipt_paths` are separate from
+`unreadable_file_count` / `unreadable_receipt_paths` and both name the
+archive-relative file, and only those two make the scan incomplete. The
+update preflight's `git_transaction_snapshot` check, when `unavailable` or
+`failed`, carries `detail.probes` — each Git probe's name, availability,
+exit code and fixed `failure_kind` (`timeout`, `probe_budget_exhausted`,
+`output_cap_exceeded`, `launch_failed`, ...) — and never any output.
 There is no claim expiry: one workflow invocation consumes the one-use
 authority. A later attempt normally requires a new live review. The narrow
 v0.4.8 exception is `duplicate-object-reconcile --revert --resume`: when one

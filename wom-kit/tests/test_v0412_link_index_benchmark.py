@@ -42,6 +42,12 @@ V0412_RELEASE_NOTES_SHA256 = (
 V0412_BENCHMARK_SHA256 = (
     "d521a0d308008c64ea0bd9e79975747106b3a5f3e308519d11fe32d8ffbb64ff"
 )
+# v0.4.32: the approved 2026-09-20 public-history rewrite replaced the
+# pre-rewrite commit objects; committed evidence that names one verifies
+# through this reviewed map (see the rewrite minutes and decision log).
+HISTORY_REWRITE_MAP_PATH = (
+    KIT_ROOT / "docs" / "evidence" / "history-rewrite-2026-09-20-commit-map.json"
+)
 
 
 def _source_version() -> str:
@@ -239,21 +245,51 @@ class V0412LinkIndexBenchmarkTests(unittest.TestCase):
         recorded_commit_oid = str(provenance["git_commit_oid"]).split(
             ":", 1
         )[1]
-        ancestry = subprocess.run(
-            [
-                "git",
-                "-C",
-                str(ROOT),
-                "merge-base",
-                "--is-ancestor",
-                recorded_commit_oid,
-                tag_commit_oid,
-            ],
-            check=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        self.assertEqual(ancestry.returncode, 0)
+        expected_commit_sha256 = str(provenance["git_commit_sha256"])
+        expected_source_tree_oid = provenance["git_source_tree_oid"].split(
+            ":", 1
+        )[1]
+        def is_ancestor(commit_oid: str) -> bool:
+            return subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(ROOT),
+                    "merge-base",
+                    "--is-ancestor",
+                    commit_oid,
+                    tag_commit_oid,
+                ],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            ).returncode == 0
+
+        if not is_ancestor(recorded_commit_oid):
+            # The recorded commit predates the 2026-09-20 history rewrite
+            # (absent from a fresh clone, or present but no longer an
+            # ancestor of the rewritten tag); verify the rewritten commit
+            # the committed map names instead.
+            rewrite_map = json.loads(
+                HISTORY_REWRITE_MAP_PATH.read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                rewrite_map["schema"], "wom-kit/history-rewrite-commit-map/v1"
+            )
+            mapped = rewrite_map["commits"][provenance["git_commit_oid"]]
+            self.assertEqual(mapped["evidence_file"], REFERENCE_GIT_PATH)
+            self.assertEqual(
+                mapped["recorded_source_tree_oid"],
+                provenance["git_source_tree_oid"],
+            )
+            recorded_commit_oid = str(mapped["rewritten_commit_oid"]).split(
+                ":", 1
+            )[1]
+            expected_commit_sha256 = str(mapped["rewritten_commit_sha256"])
+            expected_source_tree_oid = str(
+                mapped["rewritten_source_tree_oid"]
+            ).split(":", 1)[1]
+        self.assertTrue(is_ancestor(recorded_commit_oid))
         recorded_commit_content = git_bytes(
             "cat-file",
             "commit",
@@ -266,7 +302,7 @@ class V0412LinkIndexBenchmarkTests(unittest.TestCase):
             + recorded_commit_content
         )
         self.assertEqual(
-            provenance["git_commit_sha256"],
+            expected_commit_sha256,
             "sha256:"
             + hashlib.sha256(recorded_commit_object).hexdigest(),
         )
@@ -279,10 +315,7 @@ class V0412LinkIndexBenchmarkTests(unittest.TestCase):
             f"{tag_commit_oid}:wom-kit/src/wom_kit",
         ).decode("ascii", "strict").strip()
         self.assertEqual(recorded_source_tree_oid, tag_source_tree_oid)
-        self.assertEqual(
-            provenance["git_source_tree_oid"].split(":", 1)[1],
-            tag_source_tree_oid,
-        )
+        self.assertEqual(expected_source_tree_oid, tag_source_tree_oid)
         recorded_benchmark = git_bytes(
             "cat-file",
             "blob",

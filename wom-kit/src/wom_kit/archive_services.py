@@ -101823,10 +101823,15 @@ def backup_evidence_status(
         "evidence_scope": "local provider-confirmed execution receipts and linked wom_uploaded manifest locations at their recorded time",
     }
 
+    # v0.4.32 (letter 164 ⑥): the local repository is inspected for counts
+    # and ages only; the lane status is unchanged because a local commit or
+    # a cached remote-tracking ref is still not proof of the remote.
+    git_backup_attention = write_result_git_backup_attention(root)
     github_lane = {
         "role": "metadata_and_version_history_backup",
         "status": "unverified_no_generic_completion_receipt",
-        "local_commit_inspected": False,
+        "local_commit_inspected": bool(git_backup_attention["repository_inspected"]),
+        "local_repository_attention": git_backup_attention,
         "remote_ref_checked": False,
         "provider_api_called": False,
         "completion_claim_ready": False,
@@ -101844,6 +101849,11 @@ def backup_evidence_status(
     next_safe_actions = [
         "Do not claim complete backup: GitHub remote-ref and external-database completion evidence are not verified by this command.",
     ]
+    if git_backup_attention["review_recommended"]:
+        next_safe_actions.append(
+            "Local changes are not yet in Git or not yet pushed (see lanes.github.local_repository_attention); plan the backup with archive git-backup-plan <archive-root> --dry-run --format json."
+        )
+        warnings.append(git_backup_attention["human_summary"])
     if object_storage_status in {"no_remote_byte_evidence", "declared_only_no_wom_byte_proof"}:
         next_safe_actions.append(
             "Use the existing object-storage upload or verified-adopt workflow; declared_uploaded alone never proves remote bytes."
@@ -101896,7 +101906,7 @@ def backup_evidence_status(
             "execution_receipt_metadata_read": bool(receipt_cache),
             "objet_bytes_read": False,
             "zet_bodies_read": False,
-            "git_repository_inspected": False,
+            "git_repository_inspected": bool(git_backup_attention["repository_inspected"]),
             "provider_api_called": False,
             "network_checked": False,
             "database_called": False,
@@ -101909,6 +101919,7 @@ def backup_evidence_status(
             "provider_or_store_labels_echoed": False,
             "local_absolute_paths_echoed": False,
             "source_body_text_echoed": False,
+            "git_paths_branches_or_messages_echoed": False,
         },
         "would_change": [],
         "blockers": unique_preserve_order(blockers),
@@ -105864,6 +105875,31 @@ WOM_KIT_VERSION_GIT_PROBE_BUDGET_SECONDS = 45.0
 WOM_KIT_WINDOWS_PATH_PROBE_TIMEOUT_SECONDS = 2.0
 WOM_KIT_WINDOWS_PATH_MAX_CANDIDATES = 64
 _WOM_KIT_GIT_PROBE_BUDGET_LOCAL = threading.local()
+# v0.4.32 (letter 164 ⑤): the fixed kind of the last capped-run failure on
+# this thread, so an unavailable probe can say why without any text.
+_WOM_KIT_GIT_LAST_FAILURE_LOCAL = threading.local()
+_WOM_KIT_GIT_FAILURE_KINDS = frozenset(
+    {
+        "argument_invalid",
+        "launch_failed",
+        "stream_unavailable",
+        "timeout",
+        "output_cap_exceeded",
+        "stream_read_failed",
+        "stdin_write_failed",
+        "probe_budget_exhausted",
+    }
+)
+
+
+def _wom_kit_git_note_failure(kind: str) -> None:
+    _WOM_KIT_GIT_LAST_FAILURE_LOCAL.kind = kind if kind in _WOM_KIT_GIT_FAILURE_KINDS else "launch_failed"
+
+
+def _wom_kit_git_take_failure() -> str | None:
+    kind = getattr(_WOM_KIT_GIT_LAST_FAILURE_LOCAL, "kind", None)
+    _WOM_KIT_GIT_LAST_FAILURE_LOCAL.kind = None
+    return kind if type(kind) is str else None
 
 
 def _wom_kit_git_probe_budget_summary() -> dict[str, Any] | None:
@@ -112640,6 +112676,7 @@ def _wom_kit_project_update_run_capped(
         or timeout_seconds <= 0
         or (input_bytes is not None and len(input_bytes) > 1024 * 1024)
     ):
+        _wom_kit_git_note_failure("argument_invalid")
         return None
     try:
         process = subprocess.Popen(
@@ -112651,6 +112688,7 @@ def _wom_kit_project_update_run_capped(
             creationflags=noninteractive_creationflags(),
         )
     except (OSError, ValueError):
+        _wom_kit_git_note_failure("launch_failed")
         return None
     if process.stdout is None or (input_bytes is not None and process.stdin is None):
         try:
@@ -112658,6 +112696,7 @@ def _wom_kit_project_update_run_capped(
         except OSError:
             pass
         process.wait()
+        _wom_kit_git_note_failure("stream_unavailable")
         return None
 
     output_box: list[bytes] = []
@@ -112790,6 +112829,15 @@ def _wom_kit_project_update_run_capped(
         or write_failed.is_set()
         or workers_alive
     ):
+        _wom_kit_git_note_failure(
+            "timeout"
+            if timed_out or workers_alive
+            else "output_cap_exceeded"
+            if overflow.is_set()
+            else "stdin_write_failed"
+            if write_failed.is_set()
+            else "stream_read_failed"
+        )
         return None
     return return_code, output
 
@@ -112814,6 +112862,7 @@ def _wom_kit_project_update_git_observation(
         )
     effective_timeout_seconds = float(timeout_seconds)
     probe_budget = getattr(_WOM_KIT_GIT_PROBE_BUDGET_LOCAL, "state", None)
+    _wom_kit_git_take_failure()
     if isinstance(probe_budget, dict):
         remaining_seconds = float(probe_budget["deadline"]) - time.monotonic()
         if remaining_seconds <= 0:
@@ -112821,6 +112870,7 @@ def _wom_kit_project_update_git_observation(
             probe_budget["git_calls_skipped"] = int(
                 probe_budget["git_calls_skipped"]
             ) + 1
+            _wom_kit_git_note_failure("probe_budget_exhausted")
             return False, None, ""
         effective_timeout_seconds = min(
             effective_timeout_seconds,
@@ -112896,6 +112946,9 @@ def _wom_kit_project_update_git(
         _observation_sink.update(
             {"available": available, "return_code": return_code}
         )
+        if not available:
+            # v0.4.32 (letter 164 ⑤): the fixed kind of this probe's failure.
+            _observation_sink["failure_kind"] = _wom_kit_git_take_failure()
     if not available or return_code != 0:
         return False, ""
     return True, output
@@ -116407,12 +116460,20 @@ def _wom_kit_project_update_git_snapshot_observation(
     *,
     runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> dict[str, Any]:
+    # v0.4.32 (letter 164 ⑤): which probe failed and how, never its output.
+    probe_records: list[dict[str, Any]] = []
+
     def outcome(
         state: str,
         reason_code: str,
         snapshot: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        return {"state": state, "reason_code": reason_code, "snapshot": snapshot}
+        return {
+            "state": state,
+            "reason_code": reason_code,
+            "snapshot": snapshot,
+            "probes": list(probe_records),
+        }
 
     def probe(
         arguments: list[str],
@@ -116430,12 +116491,24 @@ def _wom_kit_project_update_git_snapshot_observation(
             runner=runner,
             _observation_sink=sink,
         )
+        probe_name = str(arguments[0]) if arguments else "git"
         if sink:
+            probe_records.append(
+                {
+                    "probe": probe_name,
+                    "available": bool(sink.get("available")),
+                    "return_code": sink.get("return_code"),
+                    "failure_kind": sink.get("failure_kind"),
+                }
+            )
             return (
                 bool(sink.get("available")),
                 sink.get("return_code"),
                 output,
             )
+        probe_records.append(
+            {"probe": probe_name, "available": bool(ok), "return_code": 0 if ok else None, "failure_kind": None}
+        )
         return ok, 0 if ok else None, output
 
     head_available, head_return_code, head = probe(
@@ -136923,7 +136996,7 @@ def _wom_kit_project_version_update_legacy_core_generator(
         "git_transaction_snapshot",
         "git_config_trust",
     )
-    preflight_checks: dict[str, dict[str, str]] = {
+    preflight_checks: dict[str, dict[str, Any]] = {
         name: {
             "state": "not_reached",
             "reason_code": "project_preflight_not_reached",
@@ -137695,12 +137768,18 @@ def _wom_kit_project_version_update_legacy_core_generator(
     initial_preflight_complete = (
         preflight_checks["source_version_metadata"]["state"] == "passed"
     )
-    preflight_git_snapshot = (
-        _wom_kit_project_update_git_snapshot(
+    preflight_git_snapshot_observation = (
+        _wom_kit_project_update_git_snapshot_observation(
             mirror_path,
             runner=git_runner,
         )
         if initial_preflight_complete
+        else None
+    )
+    preflight_git_snapshot = (
+        dict(preflight_git_snapshot_observation["snapshot"])
+        if isinstance(preflight_git_snapshot_observation, dict)
+        and isinstance(preflight_git_snapshot_observation.get("snapshot"), Mapping)
         else None
     )
     if initial_preflight_complete:
@@ -137737,6 +137816,25 @@ def _wom_kit_project_version_update_legacy_core_generator(
         if preflight_checks["git_transaction_snapshot"]["state"] == "passed"
         else None
     )
+    if preflight_checks["git_transaction_snapshot"]["state"] in {"unavailable", "failed"} and isinstance(
+        preflight_git_snapshot_observation, dict
+    ):
+        # v0.4.32 (letter 164 ⑤): name the probes and their fixed failure
+        # kinds (timeout / probe_budget_exhausted / exit code); no output.
+        preflight_checks["git_transaction_snapshot"]["detail"] = {
+            "observation_reason_code": preflight_git_snapshot_observation.get("reason_code"),
+            "probes": [
+                {
+                    "probe": str(record.get("probe")),
+                    "available": bool(record.get("available")),
+                    "return_code": record.get("return_code"),
+                    "failure_kind": record.get("failure_kind"),
+                }
+                for record in preflight_git_snapshot_observation.get("probes") or []
+                if isinstance(record, dict)
+            ],
+            "output_echoed": False,
+        }
     if preflight_checks["git_transaction_snapshot"]["state"] == "unavailable":
         blockers.append(
             "The project source mirror state snapshot could not be captured safely."
@@ -142069,6 +142167,47 @@ def write_result_inbox_attention(archive_root: Path | str) -> dict[str, Any]:
         }
 
 
+def write_result_git_backup_attention(archive_root: Path | str) -> dict[str, Any]:
+    """v0.4.32 (letter 164 ⑥): the content-free Git backup gap block.
+
+    Never raises: the block itself degrades to ``state: unavailable`` and an
+    import or unexpected failure here degrades the same way, so a session
+    start or an evidence read is never turned into a failure by it.
+    """
+
+    from . import git_backup_attention as attention_module
+
+    try:
+        return attention_module.git_backup_attention(archive_root)
+    except Exception:  # noqa: BLE001 - attention must never fail the host
+        return {
+            "schema": attention_module.GIT_BACKUP_ATTENTION_SCHEMA,
+            "state": "unavailable",
+            "reason_code": "git_backup_attention_unavailable",
+            "repository_inspected": False,
+            "repository_scope": None,
+            "head_state": None,
+            "uncommitted_change_count": None,
+            "uncommitted_change_count_state": "unavailable",
+            "untracked_count": None,
+            "tracked_change_count": None,
+            "last_commit_age_days": None,
+            "upstream_state": None,
+            "ahead_count": None,
+            "behind_count": None,
+            "remote_tip_age_days": None,
+            "attention": [],
+            "review_recommended": True,
+            "human_summary": attention_module.GIT_BACKUP_ATTENTION_UNAVAILABLE_SUMMARY,
+            "next_command": attention_module.GIT_BACKUP_ATTENTION_NEXT_COMMAND,
+            "probes": [],
+            "probe_budget_seconds": attention_module.GIT_BACKUP_ATTENTION_BUDGET_SECONDS,
+            "network_checked": False,
+            "remote_state_is_proof": False,
+            "paths_branches_or_messages_echoed": False,
+        }
+
+
 def attach_inbox_attention(
     result: dict[str, Any], archive_root: Path | str
 ) -> dict[str, Any]:
@@ -142183,6 +142322,10 @@ def ai_start_here(
     inbox_attention = ai_start_here_inbox_attention(
         require_existing_archive_root(archive_root)
     )
+    # v0.4.32 (letter 164 ⑥): the local Git backup gap, counts and ages only.
+    git_backup_attention = write_result_git_backup_attention(
+        require_existing_archive_root(archive_root)
+    )
 
     next_lines: list[str] = []
     if session_start_summary and isinstance(session_start_summary.get("next"), list):
@@ -142227,6 +142370,10 @@ def ai_start_here(
                 "unpublished_draft_count"
             ],
             "inbox_attention_status": inbox_attention["status"],
+            "git_backup_attention_state": git_backup_attention["state"],
+            "uncommitted_change_count": git_backup_attention[
+                "uncommitted_change_count"
+            ],
         },
         "inspection": {
             "mode": mode,
@@ -142277,6 +142424,7 @@ def ai_start_here(
             else source_fidelity_policy()
         ),
         "inbox_attention": inbox_attention,
+        "git_backup_attention": git_backup_attention,
         "runtime_guidance_readiness": context.get("runtime_guidance_readiness"),
         "agent_instruction_policy": context.get("agent_instruction_policy"),
         "operational_context": {
@@ -142328,6 +142476,13 @@ def ai_start_here(
                     if inbox_attention["review_recommended"]
                     else []
                 ),
+                *(
+                    [
+                        "Local changes are not yet in Git or not yet pushed; review the Git backup attention block and plan the backup with archive git-backup-plan <archive-root> --dry-run --format json before broad work."
+                    ]
+                    if git_backup_attention["review_recommended"]
+                    else []
+                ),
                 "Run first-read-readiness before the exhaustive catalog pass; treat a non-ready result as an explicit abstract or unique-id repair queue, not as permission to invent or auto-write missing memory.",
                 "Run abstract-freshness after first-read-readiness; treat stale or unverified rows as a human review queue and never auto-rewrite an abstract or body.",
                 "Run zet-catalog with projection=reading and coverage_mode=strict, keep the first response_profile full, inspect item and compact response-envelope estimates, set a host-appropriate max_estimated_tokens plus an explicit response_envelope_reserve_tokens when needed, then optionally use response_profile=continuation on later pages while following every continuation token before claiming archive-wide zet coverage.",
@@ -142360,6 +142515,11 @@ def ai_start_here(
                     [inbox_attention["human_summary"]]
                     if inbox_attention["review_recommended"]
                     or not inbox_attention["complete"]
+                    else []
+                ),
+                *(
+                    [git_backup_attention["human_summary"]]
+                    if git_backup_attention["review_recommended"]
                     else []
                 ),
             ]

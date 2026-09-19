@@ -2,6 +2,48 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.4.32 베타 편지 164 전반부: finalize 스캐너, 프로브 실패 종류, Git 백업 주의, 승인 모드 미리보기
+
+일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.
+새 외부 CPython 3.12 환경의 실제 `python.exe -m pip`를 사용해 설치된 PEP 610
+metadata에 wheel hash가 남게 합니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0432-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.32/wom_kit-0.4.32-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+새 process에서 정확히 `archive 0.4.32`가 나와야 합니다. wheel을 공개하거나 설치하는
+것만으로 client archive, project runtime, version pin은 바뀌지 않습니다. project
+update는 client가 따로 선택하고 승인합니다.
+
+업데이트 뒤 일상에서 달라지는 것 네 가지입니다. 영수증 하나가 커서
+`exact_approval_claim_evidence_scan_incomplete`로 막히던 `exact-approval-claim-finalize`
+dry-run은 이제 그 영수증을 바이트로 읽어 스캔합니다. 읽을 수 없는 파일이나 256 MiB를
+넘는 파일만 스캔을 불완전하게 만들고, `write_evidence`가 그 파일을 이름으로
+알립니다(`oversize_skipped_receipt_paths` / `unreadable_receipt_paths`).
+`git_transaction_snapshot` 검사가 unavailable인 `project-version-update` dry-run은
+`detail.probes`에 각 Git 프로브의 고정 `failure_kind`(timeout, 프로브 예산 소진, exit
+code 등)를 담고 출력은 절대 담지 않습니다. `ai-start-here`, `backup-evidence`,
+`work-session` create/claim 결과에 `git_backup_attention`이 붙습니다. 커밋되지 않은
+변경이 몇 건인지, 마지막 커밋이 며칠 전인지, push되지 않은 커밋이 몇 건인지, 원격이
+가진 것으로 아는 최신 커밋이 며칠 됐는지를 숫자로만, 8초 예산 안의 로컬 Git 읽기로
+알립니다. 검토가 권장되면 경고 줄이 붙고, 자세한 읽기는 여전히 `git-backup-plan
+--dry-run`입니다. 그리고 `work-session --action set-permission-mode --dry-run`은 창을
+열지 않고 허용 결과(`would_set`, 허용 가능 목록과 항상 창이 뜨는 목록, 또는 거절
+사유)를 미리 보여 줍니다.
+
+검토한 project update 한 번 뒤에는 새 process에서 project launcher를 시작해 pin,
+source, launcher, runtime 근거를 확인하세요. 그 client 실행 결과만이 project가
+고쳐졌음을 보여 줍니다.
+
 ## v0.4.31 베타 편지 163 나머지: 안내, 엣지 경고, 경고 설명, preflight 원인
 
 일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.

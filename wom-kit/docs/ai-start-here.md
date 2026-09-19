@@ -42,6 +42,21 @@ or source value. Markdown renders the same summary under `Unpublished Draft
 Attention`. This signal must be surfaced before broad work, but grants no
 repair, discard, semantic-merge, or mint authority.
 
+Since v0.4.32 (beta letter 164) the result's `git_backup_attention` gives
+the local Git backup gap in the same spirit: the uncommitted change count
+(untracked and tracked), the last commit age in days, the upstream state,
+ahead/behind counts and the age of the newest commit the cached
+remote-tracking ref knows. It comes from bounded local Git reads under one
+8-second budget (no network, no hooks, nothing written) and degrades to
+`state: unavailable` with each failed probe's fixed kind; an archive that is
+not a repository reports `not_a_repository` calmly. No path, branch name,
+remote URL, commit subject or hash is returned. Markdown renders it under
+`Git Backup Attention`; `summary.git_backup_attention_state` and
+`summary.uncommitted_change_count` carry the headline, a warning line and a
+`next_safe_steps` entry appear when review is recommended. A cached
+remote-tracking ref is not proof of the remote; plan the backup with
+`git-backup-plan --dry-run`.
+
 The map already includes runtime-context. Since v0.3.224, the compatibility
 `first_commands` list marks that command `already_included` with
 `run_required: false`. AI operators should continue through `next_commands` and

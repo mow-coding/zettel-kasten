@@ -1,0 +1,33 @@
+{
+  "schema": "wom-kit/history-rewrite-commit-map/v1",
+  "rewrite_date": "2026-09-20",
+  "record": "meeting-minutes/2026-09-20-public-history-rewrite.md",
+  "decision_log": "wom-kit/docs/archive-infra-decision-log-2026-09-20-public-history-rewrite.md",
+  "why": "Committed evidence files record the git commit their measurement was taken from. The approved 2026-09-20 rewrite of the public history replaced private strings with placeholders, so those pre-rewrite commit objects no longer exist in the repository; this map names the rewritten commit that carries the same measurement and the digests a verifier can check today.",
+  "commits": {
+    "sha1:23d14048c40f3dfb17832481c2bd7f1fa77b304c": {
+      "evidence_file": "wom-kit/docs/evidence/v0.4.12-link-index-windows-reference.json",
+      "rewritten_commit_oid": "sha1:d801a030e27afeada95416660f8e75cfe5ce1428",
+      "rewritten_commit_sha256": "sha256:aafb8bfa5f694c4f4a5a7b2525ae17798018f002826feea16b95aaaa967c8b1c",
+      "recorded_source_tree_oid": "sha1:2ca081a80c7bd7b4680c3a18352d5faebb96d860",
+      "rewritten_source_tree_oid": "sha1:dfe8ff24cc05d87a03c11f91a3174728a65c996e",
+      "source_tree_change": "one docstring line in wom-kit/src/wom_kit/archive_services.py carried a private label and was replaced by the placeholder; the measured benchmark script and the reference document are byte-identical before and after the rewrite"
+    },
+    "sha1:96a37f10907951039130ea0b1cc574e2b3f80ffa": {
+      "evidence_file": "wom-kit/tests/test_private_objet_metadata_index.py",
+      "rewritten_commit_oid": "sha1:616d027b35b42ead475b838357c21a73d9764283",
+      "rewritten_commit_sha256": "sha256:39531cf0bc2816c4712425eb9c60c2a64a5b68f85d2954578f300c3d4b2b107c",
+      "recorded_source_tree_oid": "sha1:4e8809e08a7641744677558b60e8f80f158d0b14",
+      "rewritten_source_tree_oid": "sha1:c6fd292c03d41c35ceabdc7206d145d2c8ad7fb2",
+      "source_tree_change": "the v0.3.297 predecessor of the private-metadata privacy gate: the rewrite replaced the sealed private label everywhere (203 occurrences in 38 files before; 0 after), so the gate now matches six-grams by SHA-256 instead of deriving the member from this commit"
+    },
+    "sha1:53b8715ec8af9c90148a442bdc8502807b0a5dc3": {
+      "evidence_file": "wom-kit/tests/test_cli.py",
+      "rewritten_commit_oid": "sha1:ffec7ba2ac6574a28727bce65c3ea5b7382f1d19",
+      "rewritten_commit_sha256": "sha256:6b93315412043969bbe03288fffa7ecd4aab3b576710c746026eb344cde1bc2c",
+      "recorded_source_tree_oid": "sha1:40dd147471704375fd603b02fd2e183f12057504",
+      "rewritten_source_tree_oid": "sha1:40dd147471704375fd603b02fd2e183f12057504",
+      "source_tree_change": "the v0.4.15 predecessor runtime that the approval-bound resume tests archive: the paths they archive (wom-kit/src/wom_kit, wom-kit/tests, the policy and the v0.4.3 supply lock) are byte-identical before and after the rewrite"
+    }
+  }
+}

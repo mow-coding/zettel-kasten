@@ -34,10 +34,10 @@ not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.4.31
+v0.4.32
 ```
 
-Previous public baseline: v0.4.30.
+Previous public baseline: v0.4.31.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -58,13 +58,13 @@ not proof that the asset is available.
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0431-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0432-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.31/wom_kit-0.4.31-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.32/wom_kit-0.4.32-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
@@ -115,8 +115,10 @@ approval-gated write, or docs-only), see the
 - v0.4.16 preserves an authenticated project-update result before cleanup and reports cleanup, owned-resource close, Git-runner close, durable output handoff, and attention truth independently. Its immutable journal and `active` -> `display-pending` -> `consumed` handoff reuse the exact bound output for identical at-least-once display without rerunning the writer; consumed state is history, and acknowledgement does not prove a person or model saw stdout. A complete legacy cleanup tombstone is recoverable only after exact validation, proof-only state attributes no past success, and partial or malformed residue stays fail-closed. Canonical `python -m wom_kit.archive_cli` runtime binding verifies all three core modules against receipt bytes with content-free diagnostics. The narrow create-only feedback lane also covers runtime mismatch, product vocabulary no longer trips value-shaped secret checks by wording alone, and caller-input/body safety reads are reported truthfully. Publishing or installing the release changes no client archive; the client separately chooses a reviewed project update. See the [v0.4.16 release notes](wom-kit/docs/releases/v0.4.16.md),
 - v0.4.17 gives fresh project-update preview and approval the same read-only terminal-cleanup preflight. Exact WOM-produced preapproval-abort history routes to identifier-free `--resume`, which compacts only plan-bound private control evidence into canonical proof history without running the project-domain writer, changing source/runtime/pin/archive content, or asking a person to count artifacts. Known cleanup gates return fixed privacy-safe reason codes and useful next actions; partial, changed, ambiguous, mixed, or unsafe residue remains fail-closed and must not be edited manually. Publishing or installing the release changes no client archive; the client separately chooses recovery and one reviewed project update. See the [v0.4.17 release notes](wom-kit/docs/releases/v0.4.17.md),
 - v0.4.18 finishes one completed project-update original that outlived its own cleanup after the project moved to another version. Dry-run, approval, and identifier-free `--resume` classify that directory the same way; resume re-authenticates the original approval claim from the archive, cleans only that private control directory into one canonical proof, attributes no past success, and grants no fresh approval authority. When the live pin still matches, the v0.4.16 replay contract stays in force with the same cleanup as fallback. The redacted failure artifact may now carry one fixed inner reason code, and `marker.json` is documented as an identity anchor rather than a lifecycle record. Publishing or installing the release changes no client archive. See the [v0.4.18 release notes](wom-kit/docs/releases/v0.4.18.md),
+- v0.4.32 answers the first half of beta letter 164: the claim-finalize receipt scan reads bytes and separates oversize from unreadable; an unavailable update snapshot names the failed Git probe and its fixed kind; `ai-start-here`, `backup-evidence` and `work-session` create/claim carry `git_backup_attention` (uncommitted count, last-commit age, unpushed commits, remote-tip age — numbers only); `set-permission-mode --dry-run` previews a grant without a dialog.
 - v0.4.31 finishes beta letter 163: `create-draft` names the runtime-identification options and marks null replay values (`omit_when_null`); the mint dry-run warns `edge_target_discarded` / `edge_target_missing` and explains the two body-wording warnings; `project-version-update` failures always record a cause family and blocked dry-runs describe the existing transaction; edge, revert-edge and intake-chain dry-runs announce the index fact.
 - v0.4.30 answers beta letter 163: `mint-zet` checks the source-fidelity plan digest before any claim and its dry-run carries `approval_handoff`; `exact-approval-claims` lists the claim store and `exact-approval-claim-finalize` closes reviewed started claims behind one dialog after a receipt scan; `approval-integrity-audit --kind/--offset` pages per receipt kind; approved draft writes and session starts carry `inbox_attention`; `revert-edge --approve` needs no `--exact-local` and accepts inbox drafts; `discard-draft` counts inbound edges; `create-draft` blocks a truncated objet reference.
+- Boundary (beta letter 164): the `object-storage-upload` writer is fixed closed in the v0.4 line, so restore and offload apply only to objets WOM uploaded under v0.3; reopening upload under the exact approval contract is the v0.4.33 design.
 - v0.4.29 adds `object-storage-offload` (OB-02): local objet bytes are removed only after a same-run full-GET remote proof, two local re-hashes and every retention predicate (no inbox draft references or was created from the object), through the handle-bound delete; the manifest keeps the row marked `offloaded`, Doctor reports it as information, the remote object is never deleted, and `object-storage-restore` reverses it. Apply is Windows-only by design.
 - v0.4.28 adds `object-storage-restore` (OB-01 / OB-03, planned for v0.4.23 and pushed aside by the hotfix train): WOM-verified remote objets whose local bytes are absent or offloaded are downloaded once under one always-dialog approval, kept only when size and sha256 reproduce the object id, placed create-only and receipted; `--verify-only` records the full-GET proof without local writes; the remote object is never deleted and a local file is never overwritten. `resolve-objet-ref` reports `remote_verified_local_absent`. The offload (v0.4.29) follows.
 - v0.4.27 answers the client's v0.4.25 follow-ups: `project-version-update` usage refusals carry a fixed `cause_code`, a file-installed bootstrap is told to reinstall from the public URL, a refused permission grant reports the refused position and the grantable names, intake plans accept a UTF-8 byte-order mark, and the discard previews expose `plan_sha256` at the top level. No contract, digest or schema changes.
@@ -549,7 +551,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
-v0.4.31 (current checkpoint)
+v0.4.32 (current checkpoint)
 ```
 
 Public releases from `v0.2.5` onward are tagged as compatibility checkpoints.

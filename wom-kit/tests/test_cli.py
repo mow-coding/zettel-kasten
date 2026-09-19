@@ -231,7 +231,9 @@ _R2_SECRET_HEX64 = "3f786850e387550fdab836ed7e6dc881de23001b3f786850e387550fdab8
 _AWS_SECRET_40 = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 _FAKE_SHA_A = "acc6e73fb84988ecb538dfc0ceb883b88694e469a05172a5aeb0cce8902ce136"
 _FAKE_SHA_B = "9dabf9b965a3f789b1b36100f3f70515ce8dfd81b411b1503e1e2c3304303647"
-_V0415_PREDECESSOR_COMMIT = "53b8715ec8af9c90148a442bdc8502807b0a5dc3"
+# v0.4.33: the 2026-09-20 history rewrite replaced 53b8715e with ffec7ba2 (identical
+# archived paths; see docs/evidence/history-rewrite-2026-09-20-commit-map.json).
+_V0415_PREDECESSOR_COMMIT = "ffec7ba2ac6574a28727bce65c3ea5b7382f1d19"
 
 
 class _SyntheticPreparedRuntimeBundle:

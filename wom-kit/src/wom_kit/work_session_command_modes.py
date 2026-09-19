@@ -53,6 +53,12 @@ def resolve_work_session_mode(
                 (True, False, True): "original_rereview",
                 (False, True, False): "original_create_resume",
             }.get((approve, resume, review_original))
+    elif action == "set-permission-mode" and dry_run:
+        # v0.4.32 (letter 164 ⑦): a read-only preview of the grant — the
+        # grantable and always-dialog names and the refusal detail — without
+        # a dialog, a session read or a write.
+        if not any((approve, apply, resume, review_original)):
+            mode = "permission_mode_preview"
     elif action in {"accept", "handoff", "recover", "set-permission-mode"}:
         if not dry_run and not apply:
             mode = {
@@ -75,7 +81,7 @@ def resolve_work_session_mode(
 
     if mode is None:
         return unavailable
-    read_only = mode in {"read_only_query", "registration_preview", "task_request_init"}
+    read_only = mode in {"read_only_query", "registration_preview", "task_request_init", "permission_mode_preview"}
     return {
         "available": True,
         "mode": mode,

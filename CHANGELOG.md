@@ -6,6 +6,34 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.32 - 2026-09-19
+
+- Beta letter 164, first half. `exact-approval-claim-finalize` scans every
+  receipt as a byte stream (`scan_method: byte_stream_search`, 256 MiB
+  per-file ceiling) and separates `oversize_skipped_count` /
+  `oversize_skipped_receipt_paths` from `unreadable_file_count` /
+  `unreadable_receipt_paths`, so a large Doctor receipt no longer blocks the
+  close of a reviewed started claim.
+- `project-version-update`: the capped Git runner records a fixed failure kind
+  (`timeout`, `probe_budget_exhausted`, `output_cap_exceeded`, `launch_failed`,
+  ...); the snapshot observation returns `probes` and the preflight attaches
+  `checks.git_transaction_snapshot.detail` when that check is unavailable or
+  failed. No output is echoed.
+- `ai-start-here`, `backup-evidence` and `work-session` create/claim carry
+  `git_backup_attention` (`wom-kit/git-backup-attention/v1`): uncommitted change
+  count, last-commit age, upstream state, ahead/behind and remote-tip age —
+  counts and days only, local Git only, fail-quiet. The backup-evidence GitHub
+  lane keeps `unverified_no_generic_completion_receipt`.
+- `work-session --action set-permission-mode --dry-run` resolves to the
+  read-only mode `permission_mode_preview` and returns `would_set`, the fixed
+  grantable / always-dialog lists or the refusal detail, without a dialog or a
+  session read (`wom-kit/work-session-permission-preview/v1`).
+- Carried to v0.4.33: `object-storage-upload` under exact approval (with
+  `writer_unavailable` first, `--local-bytes-only`, `--progress`, byte-external
+  exclusion, store-ref validation), a select-all group for
+  `git-backup-reconcile-plan`; to v0.4.34: delivered-feedback archival and
+  same-generation index participation.
+
 ## v0.4.31 - 2026-09-19
 
 - Beta letter 163 remainder. `create-draft` adds the fixed code

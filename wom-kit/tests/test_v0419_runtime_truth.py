@@ -1616,8 +1616,11 @@ class V0419RuntimeTruthTests(unittest.TestCase):
             project_root = self._create_project_update_preflight_fixture(
                 Path(tmp)
             )
-            original_snapshot = (
-                archive_services._wom_kit_project_update_git_snapshot
+            # v0.4.32 (letter 164 ⑤): the transaction snapshot reads the
+            # observation directly so it can name the failed probe, so the
+            # fault is injected at the observation seam.
+            original_observation = (
+                archive_services._wom_kit_project_update_git_snapshot_observation
             )
             snapshot_calls = 0
 
@@ -1625,12 +1628,24 @@ class V0419RuntimeTruthTests(unittest.TestCase):
                 nonlocal snapshot_calls
                 snapshot_calls += 1
                 if snapshot_calls == 2:
-                    return None
-                return original_snapshot(root, **kwargs)
+                    return {
+                        "state": "unavailable",
+                        "reason_code": "project_git_head_unavailable",
+                        "snapshot": None,
+                        "probes": [
+                            {
+                                "probe": "rev-parse",
+                                "available": False,
+                                "return_code": None,
+                                "failure_kind": "timeout",
+                            }
+                        ],
+                    }
+                return original_observation(root, **kwargs)
 
             with mock.patch.object(
                 archive_services,
-                "_wom_kit_project_update_git_snapshot",
+                "_wom_kit_project_update_git_snapshot_observation",
                 side_effect=unavailable_second_snapshot,
             ):
                 snapshot_result = (
@@ -1645,6 +1660,21 @@ class V0419RuntimeTruthTests(unittest.TestCase):
             self.assertEqual(
                 snapshot_checks["git_transaction_snapshot"]["state"],
                 "unavailable",
+            )
+            self.assertEqual(
+                snapshot_checks["git_transaction_snapshot"]["detail"],
+                {
+                    "observation_reason_code": "project_git_head_unavailable",
+                    "probes": [
+                        {
+                            "probe": "rev-parse",
+                            "available": False,
+                            "return_code": None,
+                            "failure_kind": "timeout",
+                        }
+                    ],
+                    "output_echoed": False,
+                },
             )
             self.assertEqual(
                 snapshot_checks["git_config_trust"]["state"],

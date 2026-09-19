@@ -355,6 +355,55 @@ def set_permission_mode(root, *, client_app_ref, task_route_ref, work_session_re
     return _safe_call(run)
 
 
+def preview_permission_mode(root, *, client_app_ref, task_route_ref, work_session_ref,
+                            permission_mode=None, operations=None):
+    """v0.4.32 (letter 164 ⑦): validate a grant request without a dialog or a write.
+
+    Pure: the refs are shape-checked, the request is normalized exactly as
+    the write would normalize it, and the fixed name lists are returned so
+    an operator can compose a valid --request-stdin before opening a dialog.
+    No session state is read, so claim ownership is not asserted here.
+    """
+
+    def run():
+        _refs(client_app_ref, task_route_ref, work_session_ref, require_session=True)
+        _root(root)
+        grantable = sorted(member.value for member in permission_mode_module.GRANTABLE_OPERATIONS)
+        always_dialog = sorted(member.value for member in permission_mode_module.ALWAYS_DIALOG_OPERATIONS)
+        base = {
+            "schema": "wom-kit/work-session-permission-preview/v1",
+            "dry_run": True,
+            "read_only": True,
+            "session_state_read": False,
+            "native_approval_required_for_write": True,
+            "permission_modes": list(permission_mode_module.MODES),
+            "grantable_operations": grantable,
+            "always_dialog_operations": always_dialog,
+            "private_values_echoed": False,
+        }
+        try:
+            grant = permission_mode_module.normalize_grant(permission_mode, operations)
+        except permission_mode_module.WorkSessionPermissionError as error:
+            failure = {**base, "ok": False, "reason_code": error.code}
+            if type(getattr(error, "detail", None)) is dict and error.detail:
+                failure["reason_detail"] = dict(error.detail)
+            return failure
+        return {
+            **base,
+            "ok": True,
+            "would_set": (
+                {"mode": permission_mode_module.MODE_MANUAL, "operations": []}
+                if grant is None
+                else {"mode": grant["mode"], "operations": list(grant["operations"])}
+            ),
+            "next_safe_actions": [
+                "Re-run with --approve and the same --request-stdin (plus reviewer_claim) "
+                "on the claimed session; one native dialog sets the mode.",
+            ],
+        }
+    return _safe_call(run)
+
+
 def review_original_permission_mode(root, *, client_app_ref, task_route_ref, work_session_ref,
                                     cancel_requested=lambda: False, progress=lambda _event: None):
     """Explicit original re-review of a permission-mode decision; no replacement reviewer."""

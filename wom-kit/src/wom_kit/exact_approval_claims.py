@@ -63,8 +63,15 @@ EVIDENCE_SCAN_ROOTS = (
     ("receipts",),
     (".zettel-kasten", "receipts", "version-updates"),
 )
-_MAX_EVIDENCE_FILES = 50_000
-_MAX_EVIDENCE_FILE_BYTES = 2 * 1024 * 1024
+_MAX_EVIDENCE_FILES = 500_000
+# v0.4.32 (letter 164 ②): receipts are scanned as byte streams, so a 3 MB
+# Doctor or title-remap receipt is read in full instead of counted as
+# unreadable; only a file above this ceiling is skipped, and it is named.
+_MAX_EVIDENCE_FILE_BYTES = 256 * 1024 * 1024
+_EVIDENCE_CHUNK_BYTES = 1024 * 1024
+_EVIDENCE_OVERLAP_BYTES = 64
+_MAX_NAMED_EVIDENCE_PATHS = 16
+_APPROVAL_ID_BYTES_RE = re.compile(rb"approval_[0-9a-f]{32}")
 # Operations whose success always leaves a receipt under the scanned roots
 # that names the claim; the letter-137 audit reads exactly these kinds.
 RECEIPTED_OPERATIONS = frozenset(
@@ -425,23 +432,57 @@ def _collect_approval_ids(value: Any, into: set[str], *, depth: int = 0) -> None
             into.add(match)
 
 
+def _scan_file_for_approval_ids(path: Path, wanted: set[str]) -> set[str]:
+    """Stream one file and return the wanted approval ids it contains.
+
+    A byte-level search (chunked, with overlap) rather than a JSON parse:
+    strictly more lenient — any occurrence of an id string counts as a
+    reference, whatever the envelope shape or size — and bounded in memory.
+    """
+
+    found: set[str] = set()
+    wanted_bytes = {item.encode("ascii") for item in wanted}
+    tail = b""
+    with path.open("rb") as handle:
+        while True:
+            chunk = handle.read(_EVIDENCE_CHUNK_BYTES)
+            if not chunk:
+                break
+            window = tail + chunk
+            for match in _APPROVAL_ID_BYTES_RE.finditer(window):
+                token = match.group(0)
+                if token in wanted_bytes:
+                    found.add(token.decode("ascii"))
+            tail = window[-_EVIDENCE_OVERLAP_BYTES:]
+    return found
+
+
 def scan_receipt_references(
     root: Path,
     approval_ids: set[str],
 ) -> dict[str, Any]:
-    """Which of ``approval_ids`` any receipt JSON under the scan roots names.
+    """Which of ``approval_ids`` any receipt file under the scan roots names.
 
-    Lenient by design: every ``*.json`` regular file is parsed and every
-    string value is searched for an approval id, so batch item envelopes,
-    version-update journals and future receipt shapes all count.  Any file
-    that cannot be read, parsed or exceeds the byte cap makes the scan
-    incomplete; the caller fails closed on that.
+    Lenient by design: every ``*.json`` regular file is streamed and searched
+    for an approval id, so batch item envelopes, version-update journals,
+    oversized Doctor receipts and future receipt shapes all count. A file
+    that cannot be read, or one above the byte ceiling, makes the scan
+    incomplete and is named (archive-relative); the caller fails closed.
     """
 
     referenced: dict[str, int] = {}
     files_scanned = 0
     unreadable = 0
+    oversize_skipped = 0
+    unreadable_paths: list[str] = []
+    oversize_paths: list[str] = []
     complete = True
+
+    def _relative(path: Path) -> str:
+        try:
+            return path.relative_to(root).as_posix()
+        except ValueError:
+            return path.name
     for parts in EVIDENCE_SCAN_ROOTS:
         base = root.joinpath(*parts)
         try:
@@ -476,25 +517,31 @@ def scan_receipt_references(
                     if _is_reparse(info) or not stat.S_ISREG(info.st_mode):
                         continue
                     if info.st_size > _MAX_EVIDENCE_FILE_BYTES:
-                        unreadable += 1
+                        oversize_skipped += 1
                         complete = False
+                        if len(oversize_paths) < _MAX_NAMED_EVIDENCE_PATHS:
+                            oversize_paths.append(_relative(path))
                         continue
-                    raw = path.read_bytes()
-                    document = json.loads(raw.decode("utf-8"))
-                except (OSError, UnicodeError, json.JSONDecodeError, RecursionError):
+                    found = _scan_file_for_approval_ids(path, approval_ids) if approval_ids else set()
+                except OSError:
                     unreadable += 1
                     complete = False
+                    if len(unreadable_paths) < _MAX_NAMED_EVIDENCE_PATHS:
+                        unreadable_paths.append(_relative(path))
                     continue
-                found: set[str] = set()
-                _collect_approval_ids(document, found)
-                for approval_id in found & approval_ids:
+                for approval_id in found:
                     referenced[approval_id] = referenced.get(approval_id, 0) + 1
             if not complete and files_scanned > _MAX_EVIDENCE_FILES:
                 break
     return {
         "scan_roots": ["/".join(parts) for parts in EVIDENCE_SCAN_ROOTS],
+        "scan_method": "byte_stream_search",
         "files_scanned": files_scanned,
         "unreadable_file_count": unreadable,
+        "unreadable_receipt_paths": unreadable_paths,
+        "oversize_skipped_count": oversize_skipped,
+        "oversize_skipped_receipt_paths": oversize_paths,
+        "oversize_ceiling_bytes": _MAX_EVIDENCE_FILE_BYTES,
         "complete": complete,
         "referenced": referenced,
     }
@@ -626,8 +673,13 @@ def plan_exact_human_approval_claim_finalize(
         root, {str(item["approval_id"]) for item in selected}
     ) if selected else {
         "scan_roots": ["/".join(parts) for parts in EVIDENCE_SCAN_ROOTS],
+        "scan_method": "byte_stream_search",
         "files_scanned": 0,
         "unreadable_file_count": 0,
+        "unreadable_receipt_paths": [],
+        "oversize_skipped_count": 0,
+        "oversize_skipped_receipt_paths": [],
+        "oversize_ceiling_bytes": _MAX_EVIDENCE_FILE_BYTES,
         "complete": True,
         "referenced": {},
     }
@@ -695,6 +747,11 @@ def plan_exact_human_approval_claim_finalize(
             "with 'archive approval-integrity-audit <archive-root>' instead of "
             "closing the claim."
         )
+    if not evidence["complete"]:
+        next_safe_actions.append(
+            "The receipt scan is incomplete: write_evidence names the unreadable or "
+            "oversize receipts (archive-relative); repair or move them, then rerun."
+        )
     return {
         "ok": ok,
         "dry_run": True,
@@ -731,8 +788,13 @@ def plan_exact_human_approval_claim_finalize(
         "excluded_project_version_update_count": excluded_project_version_update,
         "write_evidence": {
             "scan_roots": evidence["scan_roots"],
+            "scan_method": evidence.get("scan_method", "byte_stream_search"),
             "files_scanned": evidence["files_scanned"],
             "unreadable_file_count": evidence["unreadable_file_count"],
+            "unreadable_receipt_paths": list(evidence.get("unreadable_receipt_paths") or []),
+            "oversize_skipped_count": int(evidence.get("oversize_skipped_count") or 0),
+            "oversize_skipped_receipt_paths": list(evidence.get("oversize_skipped_receipt_paths") or []),
+            "oversize_ceiling_bytes": int(evidence.get("oversize_ceiling_bytes") or 0),
             "referenced_count": referenced_count,
             "complete": evidence["complete"],
             "kind": "receipts_only",
@@ -751,7 +813,11 @@ def plan_exact_human_approval_claim_finalize(
         else [],
         "next_safe_actions": next_safe_actions,
         "private_values_echoed": False,
-        "paths_echoed": False,
+        # archive-relative receipt paths appear only to name a skipped or
+        # unreadable receipt (letter 164 ②); never a private path.
+        "paths_echoed": bool(
+            evidence.get("unreadable_receipt_paths") or evidence.get("oversize_skipped_receipt_paths")
+        ),
         "reviewer_echoed": False,
     }
 

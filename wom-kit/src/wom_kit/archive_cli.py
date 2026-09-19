@@ -13753,6 +13753,11 @@ def render_ai_start_here_markdown(result: dict[str, Any]) -> str:
         if isinstance(result.get("inbox_attention"), dict)
         else {}
     )
+    git_backup_attention = (
+        result.get("git_backup_attention")
+        if isinstance(result.get("git_backup_attention"), dict)
+        else {}
+    )
 
     lines = [
         "# WOM AI Start Here",
@@ -13775,6 +13780,11 @@ def render_ai_start_here_markdown(result: dict[str, Any]) -> str:
         "",
         f"- {inbox_attention.get('human_summary') or 'Inbox draft attention was not reported.'}",
         f"- Detailed check: `{inbox_attention.get('next_command') or 'archive inbox-pipeline-audit <archive-root> --dry-run --format json'}`",
+        "",
+        "## Git Backup Attention",
+        "",
+        f"- {git_backup_attention.get('human_summary') or 'Git backup attention was not reported.'}",
+        f"- Detailed check: `{git_backup_attention.get('next_command') or 'archive git-backup-plan <archive-root> --dry-run --format json'}`",
         "",
         "## Read First",
         "",

@@ -288,7 +288,7 @@ class ProjectRuntimeTests(unittest.TestCase):
             "wom-kit/project-runtime-supply-lock-v*.json text eol=lf",
             attributes.splitlines(),
         )
-        raw = (KIT_ROOT / "project-runtime-supply-lock-v0.4.31.json").read_bytes()
+        raw = (KIT_ROOT / "project-runtime-supply-lock-v0.4.32.json").read_bytes()
         policy = project_runtime.project_runtime_policy_document(
             (KIT_ROOT / "project-runtime-policy.json").read_bytes()
         )
@@ -296,21 +296,21 @@ class ProjectRuntimeTests(unittest.TestCase):
         assert policy is not None
         self.assertEqual(
             policy["supply_lock"],
-            "wom-kit/project-runtime-supply-lock-v0.4.31.json",
+            "wom-kit/project-runtime-supply-lock-v0.4.32.json",
         )
         self.assertEqual(
             policy["supply_lock_sha256"],
-            "sha256:f1d74e47c4ceb5d91212a1ce82f476cf085583db2d5afd2a3230eed7e1a9bd86",
+            "sha256:124e669d5d11bfcc599f4d422c2b9a8f7eb69b022dd6d68e26d81093ad961142",
         )
         supply = project_runtime.project_runtime_supply_lock(
             raw,
-            expected_target="v0.4.31",
+            expected_target="v0.4.32",
         )
         self.assertIsNotNone(supply)
         assert supply is not None
         self.assertEqual(
             supply.sha256,
-            "f1d74e47c4ceb5d91212a1ce82f476cf085583db2d5afd2a3230eed7e1a9bd86",
+            "124e669d5d11bfcc599f4d422c2b9a8f7eb69b022dd6d68e26d81093ad961142",
         )
         self.assertEqual(
             [(item.distribution, item.version, item.size_bytes, item.sha256) for item in supply.artifacts],

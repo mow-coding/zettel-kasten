@@ -24,6 +24,51 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.4.32 Beta Letter 164 First Half: Finalize Scanner, Probe Kinds, Git Backup Attention, Permission Preview
+
+Install the exact public wheel only after the matching release and asset exist.
+Use a new external CPython 3.12 environment so the real `python.exe -m pip`
+records the wheel hash in installed PEP 610 metadata.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0432-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.32/wom_kit-0.4.32-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+Require exactly `archive 0.4.32` from a new process. Publishing or installing
+the wheel changes no client archive, project runtime, or version pin. A client
+separately chooses and approves any project update.
+
+After the update, expect four small changes in daily use. An
+`exact-approval-claim-finalize` dry-run that was blocked by
+`exact_approval_claim_evidence_scan_incomplete` because one receipt was large
+now scans that receipt as bytes; only an unreadable file or one above 256 MiB
+still makes the scan incomplete, and `write_evidence` names it
+(`oversize_skipped_receipt_paths` / `unreadable_receipt_paths`). A
+`project-version-update` dry-run whose `git_transaction_snapshot` check is
+unavailable now carries `detail.probes` with each Git probe's fixed
+`failure_kind` (timeout, exhausted probe budget, exit code, ...), never its
+output. `ai-start-here`, `backup-evidence` and `work-session` create/claim
+results add `git_backup_attention`: how many changes are not committed, how
+old the last commit is, how many commits are not pushed and how old the
+newest commit the remote is known to have is — numbers only, from local Git
+reads under an 8-second budget; a warning line appears when review is
+recommended, and `git-backup-plan --dry-run` remains the detailed read. And
+`work-session --action set-permission-mode --dry-run` now previews the grant
+(`would_set`, the grantable and always-dialog lists, or the refusal detail)
+without opening a dialog.
+
+After one reviewed project update, start the project launcher in a new process
+and verify its pin, source, launcher, and runtime evidence. Only that client-run
+result can show that the project was repaired.
+
 ## v0.4.31 Beta Letter 163 Remainder: Hints, Edge Warnings, Explanations, Preflight Cause
 
 Install the exact public wheel only after the matching release and asset exist.
