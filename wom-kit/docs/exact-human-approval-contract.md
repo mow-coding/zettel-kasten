@@ -330,6 +330,30 @@ resume preflight, reopen, cleanup classification — carries its own fixed
 code as `cause_code` and the operation journal's stage as `cause_stage`
 (`project-preflight`, `verify-release`, ... or `unknown`), under the same
 allowlist plus the `operation_` family.
+Since v0.4.30 (beta letter 163) the started claims of every other operation
+are visible and closable: `exact-approval-claims` lists the claim store after
+MAC verification, projecting only the approval id, operation, status,
+timestamps, failure code, approval mechanism, context digest and bound codes
+(never the reviewer id, the archive id or a path); and
+`exact-approval-claim-finalize` closes reviewed started claims as `failed`
+with `operator_closed_started_claim_after_review` through the claim's own
+compare-and-swap finalizer, always behind a native dialog (never grantable to
+a session permission mode). The plan refuses a claim younger than
+`--min-age-minutes` (default 30; 0 is a bound warning) because a writer may
+still be running, a claim that any receipt JSON under `receipts/` or the
+version-update receipts names (that write happened; audit it instead), and a
+`project_version_update` claim (its abandon path above owns that store); it
+runs under the exact-operation writer lock, re-scans receipts inside the
+lock, writes one receipt per closed claim under
+`receipts/exact-human-approvals/claim-finalize/` (backfilled on the next run
+when a crash separated the swap from its receipt) and records that its write
+evidence is receipts only. Because the code is not the abandon code, resume
+discovery never treats a closed claim as absence. `mint-zet` now checks its
+source-fidelity plan digest before the claim exists
+(`mint_source_fidelity_plan_sha256_required` / `_mismatch` /
+`_not_applicable` in `reason_codes`), so the letter-163 orphan claims are not
+created again, and its failure envelope carries the writer's `cause_code` /
+`cause_stage` (`mint_preflight` or `domain_writer`).
 There is no claim expiry: one workflow invocation consumes the one-use
 authority. A later attempt normally requires a new live review. The narrow
 v0.4.8 exception is `duplicate-object-reconcile --revert --resume`: when one
