@@ -276,7 +276,7 @@ class PresenterBoundGrantTests(_permission_fixture.SessionPermissionModeTests):
         dialogs = self.native.calls
         with patch.dict(os.environ, self.env(task)):
             refused = self.draft_call(*flags, *self.approve_flags(preview), ok=False)
-        self.assertEqual(refused["reason_code"], "create_draft_warning_override_required")
+        self.assertEqual(refused["reason_codes"], ["create_draft_warning_override_required"])
         self.assertEqual(self.native.calls, dialogs)
         self.assertTrue(any("ZET0637" in line for line in refused["next_safe_actions"]))
         with patch.dict(os.environ, self.env(task)):
@@ -319,7 +319,8 @@ class PresenterBoundGrantTests(_permission_fixture.SessionPermissionModeTests):
             "client_app_ref": task["app"], "task_route_ref": route_ref, "work_session_ref": session,
             "request": {"reviewer_claim": REVIEWER, "permission_mode": "allow_all", "operations": [], "grant_hours": 1}})
         inner = granted["structuredContent"]["result"]
-        self.assertNotIn("presenter_token", json.dumps(granted))
+        self.assertNotIn("presenter_token", inner)
+        self.assertNotIn("presenter_token_field", granted["structuredContent"])
         self.assertTrue(inner["presenter_token_held_in_process"])
         self.assertFalse(inner["presenter_token_returned_once"])
         held = permission._process_presenter(session)

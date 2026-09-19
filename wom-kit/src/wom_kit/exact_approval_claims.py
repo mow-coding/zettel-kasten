@@ -255,7 +255,13 @@ def _presenters_seen_with_key(
     """
 
     if filesystem_boundary is None:
-        return set(), True
+        # A writer without its own filesystem boundary (the plain CLI route)
+        # still gets the bounded read-only claim-store binding.
+        root, _archive_id = _archive_identity(archive_root)
+        if not root.joinpath(*Path(CLAIMS_RELATIVE_ROOT).parts).is_dir():
+            return set(), False
+        with _claims_boundary_default(archive_root)() as bound:
+            return _presenters_seen_with_key(archive_root, key, bound, work_session_ref=work_session_ref)
     claims, _scanned, _invalid, complete = _enumerate_claims_with_key(
         archive_root, key, filesystem_boundary, max_claims=PRESENTER_SCAN_LIMIT, clock=_utc_now,
     )
