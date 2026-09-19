@@ -11,6 +11,10 @@ from .work_session_command_modes import resolve_work_session_mode
 
 REQUEST_LIMIT_BYTES = 32768
 SCHEMA = "wom-kit/work-session-management/v1"
+# v0.4.30: succeeded modes whose envelope carries the inbox attention block.
+INBOX_ATTENTION_MODES = frozenset({
+    "create", "original_create_resume", "claim_apply", "claim_resume",
+})
 
 
 class WorkSessionRequestError(ValueError):
@@ -162,5 +166,12 @@ def dispatch_work_session_management(root, *, action, dry_run=False, approve=Fal
     succeeded = (type(result) is dict and (
         result.get("ok") is True or (mode == "registration_preview" and
         result.get("schema") == "wom-kit/work-session-registration-selection/v1")))
-    return {"schema": SCHEMA, "ok": succeeded, "mode": mode, "result": result,
-            "private_values_echoed": False}
+    envelope = {"schema": SCHEMA, "ok": succeeded, "mode": mode, "result": result,
+                "private_values_echoed": False}
+    if succeeded and mode in INBOX_ATTENTION_MODES:
+        # v0.4.30 (letter 163 ⑫): a session start or claim shows the inbox
+        # backlog; computed after the service returned, outside any claim.
+        from . import archive_services
+
+        envelope["inbox_attention"] = archive_services.write_result_inbox_attention(root)
+    return envelope

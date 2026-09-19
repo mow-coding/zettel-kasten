@@ -7137,6 +7137,9 @@ def tool_create_draft_zettel(arguments: dict[str, Any]) -> dict[str, Any]:
         state = "passed" if result.get("ok") else "blocked"
         return tool_success_result(f"create_draft_zettel dry-run: {state}.", result)
     state = "recorded" if result.get("ok", True) else "blocked"
+    if result.get("ok", True):
+        # v0.4.30 (letter 163 ⑫): an AI operator sees the backlog it grows.
+        result = archive_services.attach_inbox_attention(result, archive_root)
     return tool_success_result(f"create_draft_zettel: {state}.", result)
 
 
