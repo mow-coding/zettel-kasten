@@ -1,10 +1,16 @@
 ﻿# WOM-kit Capability Matrix
 
-Status: v0.4.27 client follow-ups, target-details dialog hotfix, and session-owned writes truth
+Status: v0.4.28 object-storage restore, client follow-ups, and session-owned writes truth
 Date: 2026-09-04
-Version: v0.4.27 implementation and release scope
+Version: v0.4.28 implementation and release scope
 
-The current v0.4.27 working tree answers the client's v0.4.25 report:
+The current v0.4.28 working tree adds `object-storage-restore`: WOM-verified
+remote objet bytes are downloaded once under one always-dialog approval,
+kept only when size and sha256 reproduce the object id, placed create-only
+into the local objet store and receipted; `--verify-only` records the
+full-GET proof without local writes; the remote object is never deleted and
+a local file is never overwritten (OB-01 / OB-03; the v0.4.29 offload
+follows). The v0.4.27 tree answers the client's v0.4.25 report:
 usage refusals of `project-version-update` carry a fixed cause, a
 file-installed bootstrap is pointed at the public URL, a refused permission
 grant names the refused position and the grantable kinds, intake plans

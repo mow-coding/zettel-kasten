@@ -35,7 +35,7 @@ wom-kit/docs/releases/에만 쌓고, baseline 사다리와 tag 목록을 여기�
 v0.4.21
 ```
 
-이전 공개 기준: v0.4.26.
+이전 공개 기준: v0.4.27.
 
 전체 릴리스 이력은 [CHANGELOG.md](CHANGELOG.md)와 [wom-kit/docs/releases/](wom-kit/docs/releases/)를 보세요.
 
@@ -55,13 +55,13 @@ Roadmap 요약: `v0.1.x`는 아이디어/프로토콜 언어 라인, `v0.2.x`는
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0427-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0428-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.27/wom_kit-0.4.27-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.28/wom_kit-0.4.28-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
@@ -107,6 +107,7 @@ archive runtime-skill-install --dry-run --format json
 - v0.4.16은 cleanup 전에 인증된 project-update 결과를 durable terminal handoff로 보존하고 transaction cleanup·owned-resource close·Git-runner close·durable output handoff·attention을 각각 정직하게 보고합니다. 불변 journal과 `active` -> `display-pending` -> `consumed` 상태는 이미 결속된 동일 output을 재사용해 writer 재실행 없이 같은 결과를 at-least-once로 표시합니다. consumed는 이력이며 acknowledgement는 사람이나 AI가 stdout을 실제로 봤다는 증거가 아닙니다. 완전한 legacy cleanup tombstone만 exact 검증 뒤 복구하고, proof-only 상태는 과거 성공을 주장하지 않으며, 일부·malformed residue는 계속 fail-closed입니다. 표준 `python -m wom_kit.archive_cli` 실행은 세 core module을 receipt byte와 대조하고 경로·해시 없는 진단만 냅니다. create-only feedback lane은 runtime mismatch도 다루며, product vocabulary는 단어만으로 secret 오탐되지 않되 실제 credential shape는 계속 fail-closed입니다. caller input과 body를 safety 검사로 읽었는지도 별도 필드에 정확히 표시합니다. 공개·설치만으로 client archive는 바뀌지 않으며 project update는 client가 별도로 선택합니다. [v0.4.16 릴리스 노트](wom-kit/docs/releases/v0.4.16.md)를 보세요.
 - v0.4.17은 fresh project-update dry-run과 approval이 같은 read-only terminal-cleanup preflight를 사용하게 합니다. WOM이 만든 exact preapproval-abort 이력은 identifier 없는 `--resume`으로 보내고, project-domain writer나 source·runtime·pin·archive content를 바꾸지 않은 채 plan에 결속된 비공개 control evidence만 canonical proof 이력으로 정리합니다. 사람은 artifact 개수·해시·내부 ID를 확인하지 않습니다. 알려진 cleanup gate는 고정된 privacy-safe reason code와 실제 다음 행동을 반환하며, 일부·변경·모호·혼합·unsafe residue는 계속 fail-closed이고 손으로 고치면 안 됩니다. 공개·설치만으로 client archive는 바뀌지 않으며 client가 복구와 한 번의 검토된 project update를 별도로 선택합니다. [v0.4.17 릴리스 노트](wom-kit/docs/releases/v0.4.17.md)를 보세요.
 - v0.4.18은 project가 다른 버전으로 넘어간 뒤에도 자기 cleanup을 끝내지 못한 채 남은 완료된 project-update 원본 하나를 마무리합니다. dry-run·approval·identifier 없는 `--resume`이 그 directory를 같은 방식으로 분류하고, resume은 archive에서 원래 승인 claim을 다시 인증한 뒤 그 비공개 control directory만 canonical proof 하나로 정리하며, 과거 성공을 주장하지 않고 새 approval 권한도 만들지 않습니다. live pin이 아직 일치하면 v0.4.16 재생 계약이 그대로 적용되고 같은 정리가 fallback이 됩니다. redacted 실패 산출물은 이제 고정된 내부 reason code 하나를 담을 수 있고, `marker.json`은 lifecycle 기록이 아니라 identity anchor로 문서화됩니다. 공개·설치만으로 client archive는 바뀌지 않습니다. [v0.4.18 릴리스 노트](wom-kit/docs/releases/v0.4.18.md)를 보세요.
+- v0.4.28은 `object-storage-restore`를 추가합니다(OB-01 / OB-03, v0.4.23에 계획됐다가 hotfix 열차에 밀린 것): 로컬 바이트가 없거나 오프로드된 WOM 검증 원격 오브제를 승인 창 하나로 한 번씩 내려받아 크기와 sha256이 오브제 id와 일치할 때만 새 파일로 놓고 영수증을 남기며, `--verify-only`는 로컬에 쓰지 않고 전체 GET 검증만 기록합니다. 원격 오브제는 지우지 않고 로컬 파일은 덮어쓰지 않습니다. `resolve-objet-ref`는 `remote_verified_local_absent`를 보고합니다. 오프로드(v0.4.29)가 뒤따릅니다.
 - v0.4.27은 v0.4.25 실행 보고의 후속 요청을 반영합니다: `project-version-update` 인자 오류도 고정 `cause_code`를 남기고, 파일로 설치한 bootstrap에는 공개 URL 재설치 안내가 붙으며, 거절된 승인 모드 작업 이름은 위치와 허용 목록으로 알려 주고, 반입 plan의 UTF-8 BOM을 받아들이며, discard 미리보기가 `plan_sha256`을 최상위에 노출합니다. 계약·digest·schema 변경 없음.
 - v0.4.26은 Windows 11에서 승인 창의 "대상 자세히 보기" 버튼을 고칩니다: 페이지 이동 확인이 늦게 와도 더는 창을 `exact_human_approval_native_call_failed`로 닫지 않고 읽기 전용 대상 목록이 열리며, 확인 전 페이지는 취소 외에는 반응하지 않습니다. 계약·digest·schema 변경 없음.
 - v0.4.25는 archive root에서 시작한 project update를 고칩니다(베타 편지 161): 기록된 `parent_of_archive/...` 미러·pin·영수증 위치를 모든 소비자가 project root 기준으로 풀어 쓰므로 승인 뒤 스냅샷 검사가 통과하고 `--resume`이 멈춘 트랜잭션을 다시 열어 풀 수 있으며, 결과가 나오기 전의 실패는 고정 `cause_code`와 저널 `cause_stage`를 남깁니다. 기록된 계획·의도·영수증의 바이트는 그대로입니다.
@@ -445,7 +446,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
-v0.4.27 (현재 checkpoint)
+v0.4.28 (현재 checkpoint)
 ```
 
 `v0.2.5` 이후의 공개 릴리스에는 compatibility checkpoint tag가 붙습니다. 전체

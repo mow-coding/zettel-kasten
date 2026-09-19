@@ -6,6 +6,27 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.28 - 2026-09-19
+
+- Object-storage restore (acceptance rows OB-01 / OB-03, planned for
+  v0.4.23 by the 2026-09-04 decision log and pushed aside by the hotfix
+  train): `archive object-storage-restore` (alias `objet-storage-restore`)
+  plans WOM-verified remote objets whose local bytes are absent or
+  offloaded, then under one always-dialog exact approval streams each remote
+  body into a private create-only sink, keeps it only when size and sha256
+  reproduce the object id, places it no-replace into `objects/sha256/`,
+  writes one receipt per object (`wom-kit/object-storage-restore-receipt/v0.1`)
+  and one manifest projection; `--verify-only` records the full-GET proof
+  without local writes. Absent or mismatching remote copies are
+  `review_required` and never block the batch; interruption resumes without
+  a second download; an existing local file is never overwritten; the remote
+  object is never deleted. New transport primitive
+  `ObjectStorageTransport.get_object` (sink keywords passed only by restore)
+  and a 120 s socket idle timeout on every object-storage call.
+  `resolve-objet-ref` reports `remote_verified_local_absent` and names the
+  workflow. New approval kind `object_storage_bytes_restore`; the `offloaded`
+  local-location state is decided for v0.4.29 and already read here.
+
 ## v0.4.27 - 2026-09-18
 
 - Answered the client's v0.4.25 follow-ups: `project-version-update` usage
