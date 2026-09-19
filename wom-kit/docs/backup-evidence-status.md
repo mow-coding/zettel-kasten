@@ -35,13 +35,16 @@ human language without guessing from prose.
 
 | Lane | What local evidence can prove | What remains unproven |
 | --- | --- | --- |
-| GitHub | Nothing generic yet | A local commit or cached tracking ref does not prove that the remote currently contains it. |
+| GitHub | Nothing generic yet; since v0.4.32 the lane carries `local_repository_attention` (uncommitted change count, last-commit age, ahead/behind, remote-tip age — counts and days only, no path, branch or URL) | A local commit or cached tracking ref does not prove that the remote currently contains it; the attention block says what is *not yet* in Git, never that anything is backed up. |
 | Object storage | A valid `wom_uploaded` manifest location linked to a matching provider-confirmed execution receipt proves that one object's bytes were verified at the receipt's recorded time. | It does not prove that the remote bytes still exist now. `declared_uploaded` is not byte proof. |
 | External database | Nothing generic yet | Configuration, generated indexes, and database labels do not prove that a provider-specific snapshot or replica completed. |
 
 Because the GitHub and external-database lanes do not yet have generic
 provider-confirmed completion receipts, the command never reports the whole
-WOM backup as complete.
+WOM backup as complete. When the attention block recommends review, the
+result adds a warning line and a `next_safe_actions` entry naming
+`git-backup-plan --dry-run`; `closed_actions.git_repository_inspected` is
+then true while `network_checked` stays false.
 
 ## Object-Storage Statuses
 
