@@ -9,9 +9,13 @@ separate exact metadata-only writer. The operation-specific
 `object-storage-adopt-existing --preserve-local-only` mode is a narrow live
 exception that may conditionally preserve and independently verify bytes after
 its own native approval. `--formal-adoption` is a separate zero-PUT exact mode.
-`object-storage-upload`, unscoped legacy adoption, evidence reconciliation, and
-other provider writers remain fixed closed. Historical v0.3 upload details
-below are implementation history, not authority to use a closed mode.
+Since v0.4.33 `object-storage-upload` is reopened under the exact approval
+contract (see the section below); unscoped legacy adoption, evidence
+reconciliation, and the other provider writers remain fixed closed.
+Historical v0.3 upload details below are implementation history; the v0.4.33
+writer keeps the content-addressed key, the execution receipt and the
+`wom_uploaded` location contract from them and takes its execution spine from
+the v0.4.13 preservation route.
 
 `object-storage-adapter-execution-contract` defines the safety contract a
 generic live object-storage upload adapter must satisfy. The current narrow
@@ -68,6 +72,51 @@ authority within the unchanged manifest and remaining charged budget.
 the recorded operation. They do not add a `wom_uploaded` manifest location,
 constitute formal adoption, merge conflicts, enable remote deletion, or prove a
 whole-archive backup.
+
+## v0.4.33 Upload Execution (beta letter 164 ①③④)
+
+`object-storage-upload` is the composition of the two v0.4 writers that
+already existed: the preservation PUT and the formal-adoption projection,
+under one native dialog (`object_storage_bytes_upload`, always a dialog, never
+grantable to a session permission mode).
+
+Plan (`--dry-run`): the writer line comes first (`writer_state`
+`available` / `unavailable` with `writer_unavailable_reason`
+`provider_unsupported`, `store_ref_invalid`, `store_setup_missing`,
+`store_setup_mismatch`) and an unavailable writer returns before the manifest
+is read (`manifest_scanned: false`). Then one manifest scan classifies every
+unique object with a count per class, in this order: conflicting definition,
+byte-external (`external_prehashed` / `declared_external`), already uploaded
+(a verified or official `wom_uploaded` location), already emergency-preserved
+(a `bytes_preserved` receipt; adopt with `--formal-adoption`), offloaded,
+local absent, local size conflict, ambiguous local paths, filtered
+(`--only`; `--max-objects` bounds the candidates), candidates. Candidates are
+hashed; `provider_calls_in_plan` is always `0` and no credential is read.
+Without `--local-bytes-only` a manifest row that claims local bytes which are
+absent or the wrong size refuses the plan (`local_bytes_missing`); with it
+those rows are counted and the plan is built from the rows that have bytes.
+There is no tier gate: the approved manifest and the plan-time provider-call
+ceiling bound the batch.
+
+Approve (`--approve --reviewed-by <id> --expected-manifest-sha256 <plan_sha256>`
+plus the endpoint, bucket and credential refs): per object, the local file is
+re-hashed, the remote key `sha256/<2>/<digest>` is queried with a whole-object
+GET re-hash, a `verified_match` becomes `skipped_remote_same` with no PUT, a
+size or checksum mismatch becomes `review_required` (never a PUT, never an
+overwrite, no manifest location), and only an absent key gets a journaled
+create-only PUT followed by a full-GET re-hash and a private ledger terminal
+row. Every transport failure is nonterminal: no receipt, resumable with
+`--resume-approval-id` / `--resume-execution-sha256`. After the objects, one
+compare-and-swap rewrite of `objects/manifests/files.jsonl` under the
+manifest-index authority adds a `wom_uploaded` location per verified object
+(`remote_key_verification: content_hash`), and only then are the execution
+receipts written — the v0.3 receipt fields (`result_status uploaded |
+skipped_remote_same | remote_conflict_different_bytes`,
+`manifest_update_applied`) plus `exact_operation_manifest_sha256`,
+`receipt_state_sha256` and `remote_verification.verification_kind:
+get_rehash_whole_object` — so `manifest_update_applied` is never a forward
+claim. The remote object is never deleted; `--force-reupload` no longer exists
+(a reviewed re-PUT is a separate future operation).
 
 ## Command
 
