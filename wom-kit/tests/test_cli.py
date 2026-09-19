@@ -5256,8 +5256,12 @@ class ArchiveCliTests(unittest.TestCase):
             )
         )
 
-        self.assertIn("approval-gated live S3-compatible upload", rendered_help)
-        self.assertIn("endpoint, bucket, and credential references", rendered_help)
+        # v0.4.33: the reopened writer names its contract in the parser help.
+        self.assertIn("Upload local objet bytes", rendered_help)
+        self.assertIn("under one native approval", rendered_help)
+        self.assertIn("create-only", rendered_help)
+        self.assertIn("--endpoint-host", rendered_help)
+        self.assertIn("--secret-access-key-ref", rendered_help)
         self.assertNotIn("no live transport in this release", rendered_help)
 
     def test_capabilities_machine_manifest_reports_real_parser_commands_without_paths(self) -> None:
