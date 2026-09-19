@@ -135,7 +135,7 @@ class PreflightCauseTests(unittest.TestCase):
         self.assertEqual(cause["cause_code_source"], "exception_family")
         self.assertEqual(archive_cli._project_version_update_family_cause(ValueError("x"))["cause_stage"], "unknown")
         self.assertEqual(
-            archive_cli._project_version_update_family_cause(archive_services.ArchiveServiceError("free text with C:/Users/x"))["cause_code"],
+            archive_cli._project_version_update_family_cause(archive_services.ArchiveServiceError("free text with a private locator"))["cause_code"],
             "project_version_update_failure_family_archive_service_error",
         )
         self.assertEqual(archive_cli._project_version_update_family_cause(RuntimeError("x"))["cause_code"], "project_version_update_failure_family_other_error")
@@ -218,7 +218,7 @@ class IndexPrecheckTests(unittest.TestCase):
         self.assertTrue(stale["index_precheck"]["reason_codes"])
         self.assertEqual(stale["next_safe_actions"][:2], list(archive_services.INDEX_REBUILD_NEXT_SAFE_ACTIONS))
         self.assertNotIn(str(self.root), json.dumps(stale["index_precheck"]))
-        with patch.object(archive_services, "require_current_zettel_index", side_effect=OSError("C:/Users/private/db")):
+        with patch.object(archive_services, "require_current_zettel_index", side_effect=OSError("PRIVATE-DB-CANARY")):
             broken = archive_services.archive_index_precheck(self.root)
         self.assertEqual(broken["state"], "stale")
         self.assertEqual(broken["reason_codes"], [archive_services.INDEX_REBUILD_REQUIRED])

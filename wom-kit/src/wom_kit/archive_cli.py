@@ -10501,6 +10501,56 @@ def _project_version_update_direct_cause_code(
     return token
 
 
+_PROJECT_VERSION_UPDATE_FAILURE_FAMILIES: tuple[tuple[str, str], ...] = (
+    # (fully qualified class name, fixed family literal); class identity only.
+    ("wom_kit.operation_control.OperationControlError", "operation_control_error"),
+    ("wom_kit.operation_approval_binding.OperationApprovalBindingError", "approval_binding_error"),
+    ("wom_kit.project_update_transaction.ProjectUpdateTransactionError", "transaction_error"),
+    ("wom_kit.project_update_git_runner.ProjectUpdateGitRunnerError", "git_runner_error"),
+    ("wom_kit.project_runtime.ProjectRuntimeError", "project_runtime_error"),
+    ("wom_kit.project_update_legacy_recovery.LegacyProjectUpdateRecoveryError", "legacy_recovery_error"),
+    ("wom_kit.archive_services.ArchiveServiceError", "archive_service_error"),
+    ("wom_kit.exact_human_approval.ExactHumanApprovalError", "exact_human_approval_error"),
+    ("wom_kit.exact_human_approval_windows.ExactHumanApprovalWindowsError", "windows_approval_error"),
+    ("builtins.OSError", "os_error"),
+    ("builtins.ValueError", "value_error"),
+)
+
+
+def _project_version_update_family_cause(
+    error: BaseException,
+    *,
+    journal_stage: str | None = None,
+) -> dict[str, str]:
+    """v0.4.31 (letter 163 ②): a failure without a fixed token still names
+    its exception family and the journal stage, never its text.
+
+    Class identity only (module-qualified name walked over the MRO); the
+    result is code-shaped so the capture writer accepts it.
+    """
+
+    family = "other_error"
+    for klass in type(error).__mro__:
+        qualified = f"{klass.__module__}.{klass.__name__}"
+        for name, literal in _PROJECT_VERSION_UPDATE_FAILURE_FAMILIES:
+            if qualified == name:
+                family = literal
+                break
+        if family != "other_error":
+            break
+    stage = (
+        journal_stage
+        if type(journal_stage) is str
+        and journal_stage in operation_control.COMMAND_STAGES["project-version-update"]
+        else "unknown"
+    )
+    return {
+        "cause_code": f"project_version_update_failure_family_{family}",
+        "cause_stage": stage,
+        "cause_code_source": "exception_family",
+    }
+
+
 def _project_version_update_content_free_cause(
     error: BaseException,
     *,
@@ -11383,6 +11433,8 @@ def _command_project_version_update_core(
         archive_services.ArchiveServiceError,
         archive_services.project_update_transaction.ProjectUpdateTransactionError,
         archive_services.project_update_git_runner.ProjectUpdateGitRunnerError,
+        archive_services.project_runtime.ProjectRuntimeError,
+        archive_services.project_update_legacy_recovery.LegacyProjectUpdateRecoveryError,
         ExactHumanApprovalError,
         ExactHumanApprovalWindowsError,
         ExactHumanApprovalWorkflowError,
@@ -11396,6 +11448,20 @@ def _command_project_version_update_core(
             # keeping it a command result rather than an inferred domain
             # success.  No raw exception string is copied.
             result = safe_failure
+            if safe_failure.get("status") in {
+                "terminal_cleanup_required",
+                "terminal_cleanup_outcome_unknown",
+                "legacy_prewrite_recovery_blocked",
+            }:
+                # v0.4.31 (letter 163 ②): say what the existing transaction
+                # looks like and which recovery flag applies; journal shape
+                # only, no key opened, fail-quiet.
+                result = dict(safe_failure)
+                result["existing_transaction"] = (
+                    archive_services.project_update_existing_transaction_read_only(
+                        inspection_root
+                    )
+                )
         else:
             failure_result_written = False
             content_free_cause = _project_version_update_content_free_cause(
@@ -11406,6 +11472,19 @@ def _command_project_version_update_core(
                     else None
                 ),
             )
+            if content_free_cause is None and not isinstance(
+                exc, ExactHumanApprovalWorkflowError
+            ):
+                # v0.4.31 (letter 163 ②): result_unavailable never travels
+                # without a cause; a broker wrapper keeps its allowlist rule.
+                content_free_cause = _project_version_update_family_cause(
+                    exc,
+                    journal_stage=(
+                        operation_journal.current_stage
+                        if operation_journal is not None
+                        else None
+                    ),
+                )
             if capture is not None:
                 try:
                     capture.write_completed(
@@ -36671,8 +36750,11 @@ class _CommandRunResultCapture:
                 ):
                     error_payload["cause_code"] = cause_code
                     error_payload["cause_stage"] = cause_stage
+                    source = cause.get("cause_code_source")
                     error_payload["cause_code_source"] = (
-                        "fixed_literal_allowlist"
+                        source
+                        if source in {"fixed_literal_allowlist", "exception_family"}
+                        else "fixed_literal_allowlist"
                     )
         payload["cli_execution"] = {
             "status": "completed",
