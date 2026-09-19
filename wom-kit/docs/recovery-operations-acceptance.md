@@ -647,6 +647,19 @@ batch approve loop reuses the dry-run's fidelity digest. Record:
 [v0.4.30 minutes](../../meeting-minutes/2026-09-19-v0430-letter-163.md),
 [decision log](archive-infra-decision-log-2026-09-19-v0430-letter-163.md).
 
+### 2026-09-19 v0.4.30 released (letter 163 core public)
+
+v0.4.30 is public: tag `v0.4.30` on main `6ff9fb89`, one wheel
+`wom_kit-0.4.30-py3-none-any.whl` (SHA-256
+`2fe2d46fe62d8ae0cd46dd86b75bd4fb74ce8cd0ea0df3665e424f9d70c936e1`),
+candidate CI 14/14 after two test-only correction commits and one flake
+rerun, exact-merge installed verification, anonymous download and two
+fresh-venv installations recorded in the
+[release evidence](../../meeting-minutes/2026-09-19-v0430-release-evidence.md).
+L163-01 is now installable from the public artifact and stays open for the
+client's own runs; by the user's decision the client receives one reply
+covering v0.4.28 through v0.4.30 now that all three are public.
+
 ### 2026-09-19 v0.4.31 letter 163 remainder implemented
 
 Scope: the five letter-163 items carried from v0.4.30 that survive review —
