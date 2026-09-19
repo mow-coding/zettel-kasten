@@ -48994,9 +48994,12 @@ def _promotion_edge_target_check(
 ) -> dict[str, Any]:
     """v0.4.30 (letter 163 [G]): do this zet's edge targets still exist?
 
-    Informational only in v0.4.30: counts of targets that the current index
-    does not know and of targets that a discard receipt says were discarded.
-    Outside the approval binding basis; no target id is echoed.
+    Counts of absent targets, split into those a discard receipt names
+    (``discarded``) and the rest (``missing``); a target the index knows
+    counts as neither. The check dict itself stays outside the approval
+    binding basis and echoes no target id. Since v0.4.31 the mint dry-run
+    turns non-zero counts into the warnings ``edge_target_discarded`` and
+    ``edge_target_missing``, which enter the binding through warning_codes.
     """
 
     targets = [
@@ -49035,13 +49038,17 @@ def _promotion_edge_target_check(
                     except sqlite3.Error:
                         exists = True
                         index_used = False
-                if not exists:
-                    missing += 1
+                if exists:
+                    continue
+                # v0.4.31: one absent target is exactly one of the two
+                # buckets; a discard receipt names the discarded one.
                 receipts_dir = root / DRAFT_DISCARD_RECEIPTS_DIR
                 if receipts_dir.is_dir() and safe_archive_glob(
                     receipts_dir, f"{target}.*.discard.json", root
                 ):
                     discarded += 1
+                else:
+                    missing += 1
         finally:
             if connection is not None:
                 connection.close()
@@ -49223,6 +49230,12 @@ def promote_zettel_dry_run(
     edge_target_check = _promotion_edge_target_check(
         root, frontmatter, duplicate_check
     )
+    # v0.4.31 (letter 163 item 11): a dangling edge is a fact a human must
+    # see before minting; the codes gate --approve behind --allow-warnings.
+    if edge_target_check["discarded"]:
+        warnings.append("edge_target_discarded")
+    if edge_target_check["missing"]:
+        warnings.append("edge_target_missing")
 
     zettel_id_value = str(frontmatter.get("id") or path.stem)
     proposed_receipt_path = f"{receipt_folder}promotion/{zettel_id_value}.promotion.json"
@@ -49623,9 +49636,9 @@ def _mint_zettel_edge_target_next_safe_actions(check: Any) -> list[str]:
         return []
     return [
         f"edge_target_check: {discarded} edge target(s) were discarded and {missing} "
-        "are unknown to the current index; review the draft's edges (related-zets) and "
-        "revert dangling ones with revert-edge after minting. v0.4.30 reports this; a "
-        "gating warning is planned."
+        "are unknown to the current index; the warnings edge_target_discarded / "
+        "edge_target_missing require --allow-warnings (batch: policy.allow_warnings) "
+        "after review; revert dangling edges with revert-edge after minting."
     ]
 
 

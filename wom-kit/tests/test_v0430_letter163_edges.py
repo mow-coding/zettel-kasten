@@ -322,10 +322,20 @@ class EdgeTests(unittest.TestCase):
         archive_services.index_archive(self.root)
         preview = archive_services.mint_zettel_dry_run(self.root, zettel_id=DRAFT_A)
         check = preview["edge_target_check"]
-        self.assertEqual(check, {"checked": 2, "missing": 1, "discarded": 1, "index_used": True, "target_ids_echoed": False})
+        # v0.4.31: an absent target with a discard receipt is discarded, not
+        # also missing; the counts gate the mint as warnings.
+        self.assertEqual(check, {"checked": 2, "missing": 0, "discarded": 1, "index_used": True, "target_ids_echoed": False})
         self.assertTrue(any("edge_target_check" in action for action in preview["next_safe_actions"]))
-        self.assertNotIn("edge_target_discarded", preview["warnings"])
+        self.assertIn("edge_target_discarded", preview["warnings"])
+        self.assertNotIn("edge_target_missing", preview["warnings"])
         self.assertNotIn("zet_20260904_discarded_draft", json.dumps(check))
+        frontmatter["edges"].append({"type": "continues", "target": "zet_20990101_never_existed"})
+        path.write_text("---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\n" + body, encoding="utf-8")
+        archive_services.index_archive(self.root)
+        again = archive_services.mint_zettel_dry_run(self.root, zettel_id=DRAFT_A)
+        self.assertEqual(again["edge_target_check"]["missing"], 1)
+        self.assertIn("edge_target_missing", again["warnings"])
+        self.assertIn("edge_target_discarded", again["warnings"])
 
 
 if __name__ == "__main__":
