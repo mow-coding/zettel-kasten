@@ -1,8 +1,8 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.4.29",
+  "version": "0.4.30",
   "source_of_truth": "wom-kit source resource directories",
-  "file_count": 171,
+  "file_count": 173,
   "files": [
     {
       "source": "schemas/activity-group-membership-receipt.schema.json",
@@ -51,6 +51,12 @@
       "packaged": "schemas/approval-integrity-audit-result-v0.1.schema.json",
       "bytes": 4416,
       "sha256": "6215789c872b829705b1f2e35eba960bdd2f7008f97e690ba21afc84413a239a"
+    },
+    {
+      "source": "schemas/approval-integrity-audit-result-v0.2.schema.json",
+      "packaged": "schemas/approval-integrity-audit-result-v0.2.schema.json",
+      "bytes": 6346,
+      "sha256": "eb0f902ac8b99e672775050369165d9749403938fe27a4805fe57d6be3891f2a"
     },
     {
       "source": "schemas/approval-integrity-overlay-entry-v0.1.schema.json",
@@ -159,6 +165,12 @@
       "packaged": "schemas/duplicate-object-reconciliation-receipt-v0.1.schema.json",
       "bytes": 2101,
       "sha256": "272b0da5eb00eedb58a106085e39b2ee0e06616a44383d615a94ca1a55091bda"
+    },
+    {
+      "source": "schemas/exact-human-approval-claim-finalize-receipt-v0.1.schema.json",
+      "packaged": "schemas/exact-human-approval-claim-finalize-receipt-v0.1.schema.json",
+      "bytes": 3756,
+      "sha256": "0296d7e2759d69da67fc1f1d9b6ff239542b6ba49059203a1e71bf76e8504b95"
     },
     {
       "source": "schemas/exact-human-approval-link-receipt-v0.1.schema.json",
@@ -1025,10 +1037,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.4.29.md",
-      "packaged": "release-notes/v0.4.29.md",
-      "bytes": 7196,
-      "sha256": "dfe81e2d32e02c0fd53d93bfc9ded74337431c8ba28a5ba77e743c2b7d1f00aa"
+      "source": "docs/releases/v0.4.30.md",
+      "packaged": "release-notes/v0.4.30.md",
+      "bytes": 7119,
+      "sha256": "81ae0683659c60f133ccfc4e99455c0894ce68aa0f5dc90259fc17c3a20ccd10"
     }
   ]
 }

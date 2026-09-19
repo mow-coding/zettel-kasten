@@ -1,6 +1,6 @@
 # Agent Operator Capabilities Manifest
 
-Status: v0.4.29 object-storage offload, object-storage restore, and writer-session coverage gate
+Status: v0.4.30 letter-163 mint gate and claim store, object-storage offload, and writer-session coverage gate
 
 v0.4.29 adds one command path, `object-storage-offload` (alias
 `objet-storage-offload`, approval-available, always-dialog): local objet
@@ -160,17 +160,17 @@ field remain `history_not_audited`. Inventory, shared capability availability,
 and command help consume the same content-free history. Current availability
 continues to be parser-derived; history does not grant execution authority.
 
-For the current v0.4.29 working-tree parser, the inventory snapshot is:
+For the current v0.4.30 working-tree parser, the inventory snapshot is:
 
 ```text
-canonical executable command paths: 317
-alias invocation paths:              259
-all invocation paths:                576
-approval_available:                   58
+canonical executable command paths: 321
+alias invocation paths:              262
+all invocation paths:                583
+approval_available:                   59
 approval_fixed_closed:                60
-approval_not_exposed:                201
-conditional approval paths:            11
-dry_run_exposed:                     274
+approval_not_exposed:                202
+conditional approval paths:            10
+dry_run_exposed:                     277
 unmatched fixed-close entries:         0
 ```
 
@@ -254,7 +254,9 @@ v0.4.7 adds five receipt-bound conditional scopes without adding top-level
 commands. `objet-capture`, `revert-edge`, `external-locator-record`,
 `zet-title-remap-write`, and `zet-title-remap-revert` enter an operation-specific
 or common exact local-recovery writer only
-when one of their explicitly listed recovery-mode flags is present. The v0.2
+when one of their explicitly listed recovery-mode flags is present (since
+v0.4.30 `revert-edge --approve` is unconditionally approval-available and its
+`--exact-local` flag is accepted for compatibility only, so four scopes remain). The v0.2
 inventory represents this as `argument_flag_any_allowlist`; every legacy mode
 outside those flags remains fixed closed, and each handler independently
 enforces the same boundary.

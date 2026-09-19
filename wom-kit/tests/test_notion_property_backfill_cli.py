@@ -314,10 +314,11 @@ class NotionPropertyBackfillCliTests(unittest.TestCase):
             },
         )
         # v0.4.21 reopened eight writers and added source-intake-chain;
-        # v0.4.28 added object-storage-restore; v0.4.29 object-storage-offload.
+        # v0.4.28 added object-storage-restore; v0.4.29 object-storage-offload;
+        # v0.4.30 exact-approval-claim-finalize.
         self.assertEqual(
             inventory["counts"]["approval_available_command_count"],
-            58,
+            59,
         )
         self.assertEqual(
             inventory["counts"]["approval_fixed_closed_command_count"],
@@ -339,7 +340,7 @@ class NotionPropertyBackfillCliTests(unittest.TestCase):
         )
         self.assertEqual(
             inventory["counts"]["conditional_approval_command_count"],
-            11,
+            10,  # v0.4.30: revert-edge --approve is unconditional
         )
         self.assertEqual(by_path["create-draft"]["approval_scope"]["kind"], "namespace_predicate")
 

@@ -24,6 +24,64 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.4.30 Beta Letter 163: Mint Gate, Claim Store, Audit Paging
+
+Install the exact public wheel only after the matching release and asset exist.
+Use a new external CPython 3.12 environment so the real `python.exe -m pip`
+records the wheel hash in installed PEP 610 metadata.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0430-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.30/wom_kit-0.4.30-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+Require exactly `archive 0.4.30` from a new process. Publishing or installing
+the wheel changes no client archive, project runtime, or version pin. A client
+separately chooses and approves any project update.
+
+After the update, mint a source-fidelity draft the way the dry-run tells you:
+`archive mint-zet <archive-root> --path inbox/<draft>.md --dry-run --format json`
+prints `approval_handoff` and `next_safe_actions`; copy
+`current_source_fidelity_plan_sha256` into
+`--expected-source-fidelity-plan-sha256` on the `--approve` call. A missing or
+stale digest is now refused before any claim exists
+(`mint_source_fidelity_plan_sha256_required` / `_mismatch`), and a failure
+inside the approved writer names its `cause_code` and `cause_stage`. A
+fidelity draft whose body you edited by hand after approval carries the
+warning `draft_body_changed_since_approval` and needs `--allow-warnings`.
+
+Then review the started claims earlier failures left behind: `archive
+exact-approval-claims <archive-root> --status started` lists them (operation,
+timestamps, approval mechanism; never the reviewer id or a path). Close the
+reviewed ones with `archive exact-approval-claim-finalize <archive-root>
+--all-started --dry-run --format json` (claims younger than 30 minutes, claims
+any receipt names, and `project_version_update` claims are left alone), then
+`--approve --reviewed-by <id> --expected-plan-sha256 <plan_sha256>`; one native
+dialog closes them as `failed` with `operator_closed_started_claim_after_review`
+and writes one receipt each. `project_version_update` claims still close with
+`project-version-update --resume --abandon-started-approval`. For an archive
+above the audit cap, `archive approval-integrity-audit <archive-root> --kind
+canonical_mint --max-receipts 10000 --offset 0 --format json` audits one kind
+per page (`page.next_offset` names the next page).
+
+`revert-edge --approve` no longer needs `--exact-local` (the flag is accepted
+and ignored) and works on edge receipts of inbox drafts; add
+`zettel_edge_revert` to a limited session grant to run it without a dialog.
+`discard-draft --dry-run` shows how many edges point at the draft
+(`inbound_edge_count`), and `create-draft` refuses a body with a truncated
+`sha256:` objet reference before approval.
+
+After one reviewed project update, start the project launcher in a new process
+and verify its pin, source, launcher, and runtime evidence. Only that client-run
+result can show that the project was repaired.
+
 ## v0.4.29 Object-Storage Offload (OB-02)
 
 Install the exact public wheel only after the matching release and asset exist.

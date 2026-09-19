@@ -134,15 +134,18 @@ class V0401ReleaseDocsTests(unittest.TestCase):
         # v0.4.21 LR-01e adds source-intake-chain (one approval for the
         # record → selection → capture chain); v0.4.28 OB-01/OB-03 adds
         # object-storage-restore (one alias); v0.4.29 OB-02 adds
-        # object-storage-offload (one alias).
-        self.assertEqual(counts["canonical_executable_command_count"], 319)
-        self.assertEqual(counts["alias_invocation_path_count"], 261)
-        self.assertEqual(counts["invocation_path_count"], 580)
-        self.assertEqual(counts["approval_available_command_count"], 58)
+        # object-storage-offload (one alias); v0.4.30 (letter 163) adds the
+        # read-only exact-approval-claims (one alias) and the always-dialog
+        # exact-approval-claim-finalize writer, and makes revert-edge --approve
+        # unconditional (one conditional scope fewer).
+        self.assertEqual(counts["canonical_executable_command_count"], 321)
+        self.assertEqual(counts["alias_invocation_path_count"], 262)
+        self.assertEqual(counts["invocation_path_count"], 583)
+        self.assertEqual(counts["approval_available_command_count"], 59)
         self.assertEqual(counts["approval_fixed_closed_command_count"], 60)
-        self.assertEqual(counts["approval_not_exposed_command_count"], 201)
-        self.assertEqual(counts["conditional_approval_command_count"], 11)
-        self.assertEqual(counts["dry_run_exposed_command_count"], 276)
+        self.assertEqual(counts["approval_not_exposed_command_count"], 202)
+        self.assertEqual(counts["conditional_approval_command_count"], 10)
+        self.assertEqual(counts["dry_run_exposed_command_count"], 277)
         self.assertEqual(counts["unmatched_fixed_closed_command_count"], 0)
         by_path = {
             row["canonical_path"]: row for row in inventory["commands"]
@@ -218,10 +221,8 @@ class V0401ReleaseDocsTests(unittest.TestCase):
             by_path["objet-capture"]["approval_scope"]["allowed_flags"],
             ["--exact-local"],
         )
-        self.assertEqual(
-            by_path["revert-edge"]["approval_scope"]["allowed_flags"],
-            ["--exact-local"],
-        )
+        self.assertIsNone(by_path["revert-edge"]["approval_scope"])
+        self.assertEqual(by_path["revert-edge"]["approval_status"], "approval_available")
         self.assertEqual(
             by_path["objet-capture-selection"]["approval_scope"]["allowed_flags"],
             ["--exact-existing-intake"],

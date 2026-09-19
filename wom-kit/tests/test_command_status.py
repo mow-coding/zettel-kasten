@@ -478,7 +478,6 @@ class CommandStatusArchiveParserTests(unittest.TestCase):
         expected_local_recovery_scopes = {
             "objet-capture": ["--exact-local"],
             "objet-capture-selection": ["--exact-existing-intake"],
-            "revert-edge": ["--exact-local"],
             "external-locator-record": [
                 "--all-markup-receipts",
                 "--markup-receipt",
@@ -511,9 +510,12 @@ class CommandStatusArchiveParserTests(unittest.TestCase):
                         ),
                     },
                 )
+        # v0.4.30: revert-edge --approve is unconditional (letter 163 ③c).
+        self.assertIsNone(by_path["revert-edge"]["approval_scope"])
+        self.assertEqual(by_path["revert-edge"]["approval_status"], "approval_available")
         self.assertEqual(
             exposed["counts"]["conditional_approval_command_count"],
-            11,
+            10,
         )
         self.assertEqual(
             by_path["work-session"]["approval_scope"],

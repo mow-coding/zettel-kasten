@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wom-kit/exact-human-approval-claim-finalize-receipt/v0.1",
+  "title": "WOM-kit exact-approval claim finalize receipt (v0.4.30, letter 163)",
+  "description": "One immutable receipt per started claim an operator closed as failed after review. The claim's own compare-and-swap finalizer wrote failure_code operator_closed_started_claim_after_review; write evidence is a receipt scan only. No reviewer id, archive id or path is echoed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "archive_identity_sha256",
+    "target_approval_id",
+    "target_context_sha256",
+    "target_operation",
+    "target_started_at",
+    "failure_code",
+    "finished_at",
+    "backfilled",
+    "write_evidence",
+    "finalize_plan_sha256",
+    "finalize_approval",
+    "private_values_echoed",
+    "paths_echoed",
+    "reviewer_echoed"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "wom-kit/exact-human-approval-claim-finalize-receipt/v0.1"
+    },
+    "archive_identity_sha256": {
+      "$ref": "#/$defs/hex64"
+    },
+    "target_approval_id": {
+      "type": "string",
+      "pattern": "^approval_[0-9a-f]{32}$"
+    },
+    "target_context_sha256": {
+      "$ref": "#/$defs/hex64"
+    },
+    "target_operation": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,95}$"
+    },
+    "target_started_at": {
+      "type": "string",
+      "minLength": 1
+    },
+    "failure_code": {
+      "const": "operator_closed_started_claim_after_review"
+    },
+    "finished_at": {
+      "type": "string",
+      "minLength": 1
+    },
+    "backfilled": {
+      "type": "boolean"
+    },
+    "write_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "scan_roots",
+        "files_scanned",
+        "reference_found",
+        "complete",
+        "operation_receipted_on_success"
+      ],
+      "properties": {
+        "kind": {
+          "const": "receipts_only"
+        },
+        "scan_roots": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "files_scanned": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reference_found": {
+          "const": false
+        },
+        "complete": {
+          "const": true
+        },
+        "operation_receipted_on_success": {
+          "type": "boolean"
+        }
+      }
+    },
+    "finalize_plan_sha256": {
+      "$ref": "#/$defs/hex64"
+    },
+    "finalize_approval": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schema_version",
+            "approval_id",
+            "context_sha256",
+            "approval_authority_sha256",
+            "one_use"
+          ],
+          "properties": {
+            "schema_version": {
+              "const": "wom-kit/exact-human-approval-reference/v0.1"
+            },
+            "approval_id": {
+              "type": "string",
+              "pattern": "^approval_[0-9a-f]{32}$"
+            },
+            "context_sha256": {
+              "$ref": "#/$defs/hex64"
+            },
+            "approval_authority_sha256": {
+              "$ref": "#/$defs/hex64"
+            },
+            "one_use": {
+              "const": true
+            }
+          }
+        }
+      ]
+    },
+    "private_values_echoed": {
+      "const": false
+    },
+    "paths_echoed": {
+      "const": false
+    },
+    "reviewer_echoed": {
+      "const": false
+    }
+  },
+  "$defs": {
+    "hex64": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

@@ -9,7 +9,7 @@ authors:
     email: "mow.coding@gmail.com"
 repository-code: "https://github.com/mow-coding/zettel-kasten"
 license: "MIT"
-version: "0.4.29"
+version: "0.4.30"
 date-released: "2026-09-19"
 keywords:
   - "zettelkasten"

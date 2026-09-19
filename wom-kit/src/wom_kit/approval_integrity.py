@@ -44,6 +44,12 @@ from .exact_human_approval_windows import (
 
 
 AUDIT_SCHEMA_VERSION = "wom-kit/approval-integrity-audit-result/v0.1"
+# v0.4.30 (letter 163 ⑥): a paged per-kind audit result carries a `page`
+# block; the unpaged result keeps the v0.1 schema byte for byte.
+AUDIT_PAGED_SCHEMA_VERSION = "wom-kit/approval-integrity-audit-result/v0.2"
+# Hard ceiling on the entries one paged location may hold before the page
+# is cut; deterministic name order makes offsets stable between calls.
+_MAX_PAGED_LOCATION_ENTRIES = 1_000_000
 OPERATION_APPROVAL_SCHEMA_VERSION = (
     "wom-kit/operation-exact-human-approval/v0.1"
 )
@@ -1338,6 +1344,92 @@ def inspect_approval_integrity_operation_receipt(
         _wipe(key)
 
 
+def _scan_receipts_page(
+    root: Path,
+    *,
+    affected_kind: str,
+    max_receipts: int,
+    offset: int,
+) -> tuple[list[tuple[str, Path]], list[str], bool, dict[str, Any]]:
+    """v0.4.30: one name-ordered page of one receipt kind.
+
+    Every matching regular entry of the location is collected first, sorted
+    by name, then sliced; the same offset therefore names the same receipts
+    as long as the set does not change, and a full page is not a blocker.
+    """
+
+    blocker_codes: list[str] = []
+    complete = True
+    entries: list[tuple[str, Path]] = []
+    location = next(
+        (row for row in _RECEIPT_LOCATIONS if row[0] == affected_kind), None
+    )
+    if location is None:
+        raise _fail("approval_integrity_argument_invalid")
+    _kind, parts, suffix = location
+    try:
+        directory = _directory_chain(root, parts, create=False)
+    except ApprovalIntegrityError:
+        blocker_codes.append("approval_integrity_receipt_directory_unsafe")
+        directory = None
+        complete = False
+    if directory is not None:
+        try:
+            before = os.lstat(directory)
+            with os.scandir(directory) as iterator:
+                for entry in iterator:
+                    if not entry.name.endswith(suffix):
+                        continue
+                    try:
+                        info = entry.stat(follow_symlinks=False)
+                    except OSError:
+                        blocker_codes.append(
+                            "approval_integrity_receipt_set_unstable"
+                        )
+                        complete = False
+                        continue
+                    if _is_reparse(info) or not stat.S_ISREG(info.st_mode):
+                        blocker_codes.append(
+                            "approval_integrity_receipt_entry_unsafe"
+                        )
+                        complete = False
+                        continue
+                    entries.append((entry.name, Path(entry.path)))
+                    if len(entries) > _MAX_PAGED_LOCATION_ENTRIES:
+                        blocker_codes.append(
+                            "approval_integrity_receipt_limit_exceeded"
+                        )
+                        complete = False
+                        break
+            after = os.lstat(directory)
+            if (
+                not _same_file(before, after)
+                or getattr(before, "st_mtime_ns", None)
+                != getattr(after, "st_mtime_ns", None)
+            ):
+                blocker_codes.append("approval_integrity_receipt_set_unstable")
+                complete = False
+        except OSError:
+            blocker_codes.append("approval_integrity_receipt_directory_unsafe")
+            complete = False
+    entries.sort(key=lambda item: item[0])
+    total = len(entries)
+    window = entries[offset : offset + max_receipts]
+    found = [(affected_kind, path) for _name, path in window]
+    exhausted = offset + len(window) >= total
+    page = {
+        "kind": affected_kind,
+        "ordering": "name",
+        "offset": offset,
+        "page_size": max_receipts,
+        "returned": len(found),
+        "total_in_kind": total,
+        "next_offset": None if exhausted else offset + len(window),
+        "exhausted": exhausted,
+    }
+    return found, sorted(set(blocker_codes)), complete, page
+
+
 def _scan_receipts(
     root: Path,
     *,
@@ -1405,17 +1497,43 @@ def audit_approval_integrity(
     *,
     max_receipts: int = _DEFAULT_MAX_RECEIPTS,
     receipt_authentication_key: bytes | bytearray | memoryview | None = None,
+    kind: str | None = None,
+    offset: int = 0,
 ) -> dict[str, Any]:
-    """Classify the bounded legacy receipt set without reading artifact bytes."""
+    """Classify the bounded legacy receipt set without reading artifact bytes.
+
+    v0.4.30 (letter 163 ⑥): ``kind`` selects one receipt kind and ``offset``
+    pages through it in name order, so an archive above the receipt cap can
+    be audited to completion page by page.  Without ``kind`` the result is
+    the unchanged v0.1 document.
+    """
 
     if type(max_receipts) is not int or not 1 <= max_receipts <= 10_000:
+        raise _fail("approval_integrity_argument_invalid")
+    if kind is not None and kind not in AFFECTED_KINDS:
+        raise _fail("approval_integrity_argument_invalid")
+    if (
+        type(offset) is not int
+        or isinstance(offset, bool)
+        or offset < 0
+        or (offset > 0 and kind is None)
+    ):
         raise _fail("approval_integrity_argument_invalid")
     root, archive_id, archive_identity_sha256 = _archive_identity(archive_root)
     key = _validated_key(receipt_authentication_key, required=False)
     try:
-        paths, blocker_codes, complete = _scan_receipts(
-            root, max_receipts=max_receipts
-        )
+        page: dict[str, Any] | None = None
+        if kind is None:
+            paths, blocker_codes, complete = _scan_receipts(
+                root, max_receipts=max_receipts
+            )
+        else:
+            paths, blocker_codes, complete, page = _scan_receipts_page(
+                root,
+                affected_kind=kind,
+                max_receipts=max_receipts,
+                offset=offset,
+            )
         results: list[dict[str, Any]] = []
         for affected_kind, path in paths:
             try:
@@ -1449,8 +1567,10 @@ def audit_approval_integrity(
         for item in results:
             counts[item["classification"]] += 1
         blockers = sorted(set(blocker_codes))
-        return {
-            "schema_version": AUDIT_SCHEMA_VERSION,
+        document: dict[str, Any] = {
+            "schema_version": (
+                AUDIT_SCHEMA_VERSION if page is None else AUDIT_PAGED_SCHEMA_VERSION
+            ),
             "ok": complete and not blockers,
             "complete": complete and not blockers,
             "bounded": True,
@@ -1468,6 +1588,9 @@ def audit_approval_integrity(
                 "receipt_path_echoed": False,
             },
         }
+        if page is not None:
+            document["page"] = page
+        return document
     finally:
         _wipe(key)
 
@@ -2409,6 +2532,7 @@ def create_approval_integrity_overlay(
 __all__ = [
     "AFFECTED_KINDS",
     "AUDIT_SCHEMA_VERSION",
+    "AUDIT_PAGED_SCHEMA_VERSION",
     "ApprovalIntegrityError",
     "BLOCKING_OVERLAY_STATES",
     "CLASSIFICATIONS",
