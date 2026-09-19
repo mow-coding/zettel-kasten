@@ -105864,6 +105864,31 @@ WOM_KIT_VERSION_GIT_PROBE_BUDGET_SECONDS = 45.0
 WOM_KIT_WINDOWS_PATH_PROBE_TIMEOUT_SECONDS = 2.0
 WOM_KIT_WINDOWS_PATH_MAX_CANDIDATES = 64
 _WOM_KIT_GIT_PROBE_BUDGET_LOCAL = threading.local()
+# v0.4.32 (letter 164 ⑤): the fixed kind of the last capped-run failure on
+# this thread, so an unavailable probe can say why without any text.
+_WOM_KIT_GIT_LAST_FAILURE_LOCAL = threading.local()
+_WOM_KIT_GIT_FAILURE_KINDS = frozenset(
+    {
+        "argument_invalid",
+        "launch_failed",
+        "stream_unavailable",
+        "timeout",
+        "output_cap_exceeded",
+        "stream_read_failed",
+        "stdin_write_failed",
+        "probe_budget_exhausted",
+    }
+)
+
+
+def _wom_kit_git_note_failure(kind: str) -> None:
+    _WOM_KIT_GIT_LAST_FAILURE_LOCAL.kind = kind if kind in _WOM_KIT_GIT_FAILURE_KINDS else "launch_failed"
+
+
+def _wom_kit_git_take_failure() -> str | None:
+    kind = getattr(_WOM_KIT_GIT_LAST_FAILURE_LOCAL, "kind", None)
+    _WOM_KIT_GIT_LAST_FAILURE_LOCAL.kind = None
+    return kind if type(kind) is str else None
 
 
 def _wom_kit_git_probe_budget_summary() -> dict[str, Any] | None:
@@ -112640,6 +112665,7 @@ def _wom_kit_project_update_run_capped(
         or timeout_seconds <= 0
         or (input_bytes is not None and len(input_bytes) > 1024 * 1024)
     ):
+        _wom_kit_git_note_failure("argument_invalid")
         return None
     try:
         process = subprocess.Popen(
@@ -112651,6 +112677,7 @@ def _wom_kit_project_update_run_capped(
             creationflags=noninteractive_creationflags(),
         )
     except (OSError, ValueError):
+        _wom_kit_git_note_failure("launch_failed")
         return None
     if process.stdout is None or (input_bytes is not None and process.stdin is None):
         try:
@@ -112658,6 +112685,7 @@ def _wom_kit_project_update_run_capped(
         except OSError:
             pass
         process.wait()
+        _wom_kit_git_note_failure("stream_unavailable")
         return None
 
     output_box: list[bytes] = []
@@ -112790,6 +112818,15 @@ def _wom_kit_project_update_run_capped(
         or write_failed.is_set()
         or workers_alive
     ):
+        _wom_kit_git_note_failure(
+            "timeout"
+            if timed_out or workers_alive
+            else "output_cap_exceeded"
+            if overflow.is_set()
+            else "stdin_write_failed"
+            if write_failed.is_set()
+            else "stream_read_failed"
+        )
         return None
     return return_code, output
 
@@ -112814,6 +112851,7 @@ def _wom_kit_project_update_git_observation(
         )
     effective_timeout_seconds = float(timeout_seconds)
     probe_budget = getattr(_WOM_KIT_GIT_PROBE_BUDGET_LOCAL, "state", None)
+    _wom_kit_git_take_failure()
     if isinstance(probe_budget, dict):
         remaining_seconds = float(probe_budget["deadline"]) - time.monotonic()
         if remaining_seconds <= 0:
@@ -112821,6 +112859,7 @@ def _wom_kit_project_update_git_observation(
             probe_budget["git_calls_skipped"] = int(
                 probe_budget["git_calls_skipped"]
             ) + 1
+            _wom_kit_git_note_failure("probe_budget_exhausted")
             return False, None, ""
         effective_timeout_seconds = min(
             effective_timeout_seconds,
@@ -112896,6 +112935,9 @@ def _wom_kit_project_update_git(
         _observation_sink.update(
             {"available": available, "return_code": return_code}
         )
+        if not available:
+            # v0.4.32 (letter 164 ⑤): the fixed kind of this probe's failure.
+            _observation_sink["failure_kind"] = _wom_kit_git_take_failure()
     if not available or return_code != 0:
         return False, ""
     return True, output
@@ -116407,12 +116449,20 @@ def _wom_kit_project_update_git_snapshot_observation(
     *,
     runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> dict[str, Any]:
+    # v0.4.32 (letter 164 ⑤): which probe failed and how, never its output.
+    probe_records: list[dict[str, Any]] = []
+
     def outcome(
         state: str,
         reason_code: str,
         snapshot: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        return {"state": state, "reason_code": reason_code, "snapshot": snapshot}
+        return {
+            "state": state,
+            "reason_code": reason_code,
+            "snapshot": snapshot,
+            "probes": list(probe_records),
+        }
 
     def probe(
         arguments: list[str],
@@ -116430,12 +116480,24 @@ def _wom_kit_project_update_git_snapshot_observation(
             runner=runner,
             _observation_sink=sink,
         )
+        probe_name = str(arguments[0]) if arguments else "git"
         if sink:
+            probe_records.append(
+                {
+                    "probe": probe_name,
+                    "available": bool(sink.get("available")),
+                    "return_code": sink.get("return_code"),
+                    "failure_kind": sink.get("failure_kind"),
+                }
+            )
             return (
                 bool(sink.get("available")),
                 sink.get("return_code"),
                 output,
             )
+        probe_records.append(
+            {"probe": probe_name, "available": bool(ok), "return_code": 0 if ok else None, "failure_kind": None}
+        )
         return ok, 0 if ok else None, output
 
     head_available, head_return_code, head = probe(
@@ -136923,7 +136985,7 @@ def _wom_kit_project_version_update_legacy_core_generator(
         "git_transaction_snapshot",
         "git_config_trust",
     )
-    preflight_checks: dict[str, dict[str, str]] = {
+    preflight_checks: dict[str, dict[str, Any]] = {
         name: {
             "state": "not_reached",
             "reason_code": "project_preflight_not_reached",
@@ -137695,12 +137757,18 @@ def _wom_kit_project_version_update_legacy_core_generator(
     initial_preflight_complete = (
         preflight_checks["source_version_metadata"]["state"] == "passed"
     )
-    preflight_git_snapshot = (
-        _wom_kit_project_update_git_snapshot(
+    preflight_git_snapshot_observation = (
+        _wom_kit_project_update_git_snapshot_observation(
             mirror_path,
             runner=git_runner,
         )
         if initial_preflight_complete
+        else None
+    )
+    preflight_git_snapshot = (
+        dict(preflight_git_snapshot_observation["snapshot"])
+        if isinstance(preflight_git_snapshot_observation, dict)
+        and isinstance(preflight_git_snapshot_observation.get("snapshot"), Mapping)
         else None
     )
     if initial_preflight_complete:
@@ -137737,6 +137805,25 @@ def _wom_kit_project_version_update_legacy_core_generator(
         if preflight_checks["git_transaction_snapshot"]["state"] == "passed"
         else None
     )
+    if preflight_checks["git_transaction_snapshot"]["state"] in {"unavailable", "failed"} and isinstance(
+        preflight_git_snapshot_observation, dict
+    ):
+        # v0.4.32 (letter 164 ⑤): name the probes and their fixed failure
+        # kinds (timeout / probe_budget_exhausted / exit code); no output.
+        preflight_checks["git_transaction_snapshot"]["detail"] = {
+            "observation_reason_code": preflight_git_snapshot_observation.get("reason_code"),
+            "probes": [
+                {
+                    "probe": str(record.get("probe")),
+                    "available": bool(record.get("available")),
+                    "return_code": record.get("return_code"),
+                    "failure_kind": record.get("failure_kind"),
+                }
+                for record in preflight_git_snapshot_observation.get("probes") or []
+                if isinstance(record, dict)
+            ],
+            "output_echoed": False,
+        }
     if preflight_checks["git_transaction_snapshot"]["state"] == "unavailable":
         blockers.append(
             "The project source mirror state snapshot could not be captured safely."
