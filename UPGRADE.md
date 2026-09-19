@@ -24,6 +24,49 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.4.31 Beta Letter 163 Remainder: Hints, Edge Warnings, Explanations, Preflight Cause
+
+Install the exact public wheel only after the matching release and asset exist.
+Use a new external CPython 3.12 environment so the real `python.exe -m pip`
+records the wheel hash in installed PEP 610 metadata.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0431-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.31/wom_kit-0.4.31-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+Require exactly `archive 0.4.31` from a new process. Publishing or installing
+the wheel changes no client archive, project runtime, or version pin. A client
+separately chooses and approves any project update.
+
+After the update, expect four small changes in daily use. A `create-draft`
+dry-run that lacks the assisting runtime now says which options identify it,
+and its `approval_handoff` marks the arguments to omit when their replay value
+is null (`omit_when_null`); never pass the literal `None`. A `mint-zet`
+dry-run of a draft whose edge targets were discarded or are unknown to the
+index now carries the warnings `edge_target_discarded` / `edge_target_missing`,
+so that mint needs `--allow-warnings` after you have looked (batch plans:
+`policy.allow_warnings`); the two body-wording warnings explain what they saw
+in `quality_check.warning_explanations` (counts and body lines, never the
+words), and mint `plan_sha256` values from earlier dry-runs are stale after
+the upgrade, so rerun the dry-run. A `project-version-update` failure without
+a fixed token now records `project_version_update_failure_family_<family>`,
+and a dry-run blocked by an existing transaction shows `existing_transaction`
+with the recovery flag that applies. `zettel-edge`, `revert-edge` and
+`source-intake-chain` dry-runs announce the index fact (`index_precheck`) and
+list `archive index` / `archive index-health` when it blocks.
+
+After one reviewed project update, start the project launcher in a new process
+and verify its pin, source, launcher, and runtime evidence. Only that client-run
+result can show that the project was repaired.
+
 ## v0.4.30 Beta Letter 163: Mint Gate, Claim Store, Audit Paging
 
 Install the exact public wheel only after the matching release and asset exist.
