@@ -2,6 +2,48 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.4.28 오브제 저장소 되찾기 (OB-01 / OB-03)
+
+일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.
+새 외부 CPython 3.12 환경의 실제 `python.exe -m pip`를 사용해 설치된 PEP 610
+metadata에 wheel hash가 남게 합니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0428-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.28/wom_kit-0.4.28-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+새 process에서 정확히 `archive 0.4.28`이 나와야 합니다. wheel을 공개하거나 설치하는
+것만으로 client archive, project runtime, version pin은 바뀌지 않습니다. project
+update는 client가 따로 선택하고 승인합니다.
+
+업데이트 뒤에는 새 명령으로 없어진 원본을 되찾을 수 있습니다. 먼저 계획:
+`archive object-storage-restore <archive-root> --provider-kind cloudflare-r2
+--store-ref <store> --dry-run --format json`은 manifest를 훑고 로컬 후보를 해시할 뿐,
+provider를 부르지 않고 개수와 `plan_sha256`만 냅니다. 그다음 승인:
+`--endpoint-host`, `--bucket`, `--access-key-id-ref`, `--secret-access-key-ref`,
+`--reviewed-by <id>`, `--expected-manifest-sha256 <plan_sha256>`를 붙여 `--approve`로
+실행하면 승인 창 하나가 모든 오브제를 덮습니다. 원격 사본은 오브제마다 한 번만
+내려받아 크기와 sha256을 오브제 id와 대조한 뒤 새 파일로만 놓고 영수증을 남깁니다.
+원격 사본이 없거나 다르면 그 오브제만 `review_required`로 끝나고 나머지는 계속되며,
+중단된 실행은 `--resume-approval-id` / `--resume-execution-sha256`로 이어받되 끝난
+오브제를 다시 내려받지 않습니다. `--verify-only`는 로컬에 쓰지 않고 그 저장소의
+WOM 검증 원격 오브제 전부에 같은 전체 GET 검증만 수행합니다(오브제마다 내려받으므로
+`--only`나 `--max-objects`로 범위를 제한하세요). 원격 오브제는 절대 지우지 않고
+이미 있는 로컬 파일은 절대 덮어쓰지 않습니다. 이 검증 뒤 로컬 용량을 비우는
+오프로드는 v0.4.29 범위입니다.
+
+검토한 project update 한 번 뒤에는 새 process에서 project launcher를 시작해 pin,
+source, launcher, runtime 근거를 확인하세요. 그 client 실행 결과만이 project가
+고쳐졌음을 보여 줍니다.
+
 ## v0.4.27 v0.4.25 실행 보고의 후속 요청
 
 일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.

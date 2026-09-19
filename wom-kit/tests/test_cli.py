@@ -119,8 +119,11 @@ def _observe_project_update_fixture_boundaries():
 class _FakeUrlOpener:
     def __init__(self, callback):
         self._callback = callback
+        self.timeouts: list[object] = []
 
-    def open(self, request):
+    def open(self, request, timeout=None):
+        # v0.4.28: the live sender passes the socket idle timeout on every call.
+        self.timeouts.append(timeout)
         return self._callback(request)
 
 
@@ -38690,7 +38693,7 @@ state:
         )
 
         class _RedirectingOpener:
-            def open(self, request):
+            def open(self, request, timeout=None):
                 raise redirect_error
 
         def fake_build_opener(*handlers):

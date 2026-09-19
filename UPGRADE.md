@@ -24,6 +24,50 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.4.28 Object-Storage Restore (OB-01 / OB-03)
+
+Install the exact public wheel only after the matching release and asset exist.
+Use a new external CPython 3.12 environment so the real `python.exe -m pip`
+records the wheel hash in installed PEP 610 metadata.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0428-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.28/wom_kit-0.4.28-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+Require exactly `archive 0.4.28` from a new process. Publishing or installing
+the wheel changes no client archive, project runtime, or version pin. A client
+separately chooses and approves any project update.
+
+After the update, bring missing originals back with the new command. Plan
+first: `archive object-storage-restore <archive-root> --provider-kind
+cloudflare-r2 --store-ref <store> --dry-run --format json` scans the manifest,
+hashes local candidates, calls no provider and prints counts and
+`plan_sha256`. Then approve: add `--endpoint-host`, `--bucket`,
+`--access-key-id-ref`, `--secret-access-key-ref`, `--reviewed-by <id>` and
+`--expected-manifest-sha256 <plan_sha256>` with `--approve`; one native
+dialog covers every object. Each remote copy is downloaded once, verified by
+size and sha256 against the object id, placed create-only, and receipted; a
+corrupt or absent remote copy ends as `review_required` without blocking the
+rest, and an interrupted run resumes with `--resume-approval-id` /
+`--resume-execution-sha256` without downloading finished objects again.
+`--verify-only` runs the same full-GET proof for every WOM-verified remote
+object of the store without writing local bytes; bound it with `--only` or
+`--max-objects` because it downloads each object. The remote object is never
+deleted and an existing local file is never overwritten. The offload
+(freeing local disk after this proof) is the v0.4.29 scope.
+
+After one reviewed project update, start the project launcher in a new process
+and verify its pin, source, launcher, and runtime evidence. Only that client-run
+result can show that the project was repaired.
+
 ## v0.4.27 Client Follow-Ups From The v0.4.25 Run
 
 Install the exact public wheel only after the matching release and asset exist.

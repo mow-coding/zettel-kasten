@@ -1,6 +1,6 @@
 # Agent Operator Capabilities Manifest
 
-Status: v0.4.27 client follow-ups, target-details dialog hotfix, and writer-session coverage gate
+Status: v0.4.28 object-storage restore, client follow-ups, and writer-session coverage gate
 
 v0.4.27 adds no command path: usage refusals of `project-version-update`
 carry a fixed `cause_code`, a file-installed bootstrap is told to reinstall
@@ -151,13 +151,13 @@ field remain `history_not_audited`. Inventory, shared capability availability,
 and command help consume the same content-free history. Current availability
 continues to be parser-derived; history does not grant execution authority.
 
-For the current v0.4.27 working-tree parser, the inventory snapshot is:
+For the current v0.4.28 working-tree parser, the inventory snapshot is:
 
 ```text
 canonical executable command paths: 317
 alias invocation paths:              259
 all invocation paths:                576
-approval_available:                   56
+approval_available:                   57
 approval_fixed_closed:                60
 approval_not_exposed:                201
 conditional approval paths:            11

@@ -2141,6 +2141,13 @@ OBJECT_STORAGE_HTTP_CONTROL_BODY_MAX_BYTES = 64 * 1024  # 64 KiB
 # More than 20 decimal digits cannot describe a supported object size and may
 # trip Python's defensive integer-string limit. Treat it as unavailable proof.
 OBJECT_STORAGE_HTTP_CONTENT_LENGTH_MAX_DIGITS = 20
+# v0.4.28 restore GET: the sink never grows past the manifest's size_bytes; this
+# ceiling only guards a caller that passes no expected size.
+OBJECT_STORAGE_RESTORE_SINK_MAX_BYTES = 5 * 1024 * 1024 * 1024 * 1024  # 5 TiB
+# v0.4.28 (OB-01): a stalled socket is a retryable transport error, not a hang.
+# This is a per-operation idle timeout (each blocking read/write), so a slow but
+# progressing multi-GB transfer is never cut; only a silent socket is.
+OBJECT_STORAGE_HTTP_IDLE_TIMEOUT_SECONDS = 120
 # SigV4 named constants (CA-2/CA-6). EMPTY_SHA256_HEX is sha256(b"").
 SIGV4_EMPTY_SHA256_HEX = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 SIGV4_UNSIGNED_PAYLOAD = "UNSIGNED-PAYLOAD"
@@ -144334,6 +144341,25 @@ class ObjectStorageTransport(Protocol):
         # proof. The upload executor never invokes unconditional cleanup.
         ...
 
+    def get_object(
+        self,
+        *,
+        key: str,
+        sink_path: Path,
+        expected_size: int,
+        expected_sha256: str,
+    ) -> dict[str, Any]:
+        # -> {"status_class": "ok"|"absent"|"auth"|"rate_limited"|"failed",
+        #     "size": int | None, "checksum_sha256": str | None,
+        #     "size_match": bool, "checksum_match": bool, "sink_written": bool}
+        # v0.4.28 restore primitive (OB-03): stream the complete GET body into
+        # sink_path (create-only, never an existing file) while hashing it, and
+        # report whether the streamed bytes reproduce expected_size and
+        # expected_sha256. On any incomplete or mismatching body the sink is
+        # removed and sink_written is False. The caller promotes a verified
+        # sink into the objet store; this primitive never touches objects/.
+        ...
+
 
 class NullTransport:
     """Fail-closed compatibility test double; production resolution does not select it."""
@@ -144375,6 +144401,16 @@ class NullTransport:
         raise ObjectStorageTransportNotImplemented(self._MESSAGE)
 
     def delete_object(self, *, key: str) -> None:
+        raise ObjectStorageTransportNotImplemented(self._MESSAGE)
+
+    def get_object(
+        self,
+        *,
+        key: str,
+        sink_path: Path,
+        expected_size: int,
+        expected_sha256: str,
+    ) -> dict[str, Any]:
         raise ObjectStorageTransportNotImplemented(self._MESSAGE)
 
 
@@ -144503,6 +144539,40 @@ def _object_storage_stream_response_digest(handle: Any) -> tuple[str, int]:
     return digest.hexdigest(), size
 
 
+def _object_storage_stream_response_to_sink(
+    handle: Any, sink_path: Path, *, max_bytes: int
+) -> tuple[str, int]:
+    """Stream a GET body into a create-only sink file with O(1) memory.
+
+    Returns the whole-body sha256 hex and byte count. The sink is opened
+    O_EXCL so an interrupted earlier attempt (a stale sink) is never silently
+    appended to or overwritten; the caller removes stale sinks first. A body
+    longer than max_bytes stops the stream (the caller then discards the sink).
+    """
+
+    digest = hashlib.sha256()
+    size = 0
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+    fd = os.open(sink_path, flags, 0o600)
+    with os.fdopen(fd, "wb") as out:
+        while True:
+            chunk = handle.read(OBJECT_STORAGE_HTTP_STREAM_CHUNK_BYTES)
+            if not chunk:
+                break
+            if not isinstance(chunk, (bytes, bytearray)):
+                raise OSError("object-storage response returned non-bytes")
+            if len(chunk) > OBJECT_STORAGE_HTTP_STREAM_CHUNK_BYTES:
+                raise OSError("object-storage response exceeded requested chunk")
+            size += len(chunk)
+            if size > max_bytes:
+                raise OSError("object-storage response exceeded the sink limit")
+            out.write(chunk)
+            digest.update(chunk)
+        out.flush()
+        os.fsync(out.fileno())
+    return digest.hexdigest(), size
+
+
 def _object_storage_parse_content_length(raw: Any) -> int | None:
     if not isinstance(raw, str) or re.fullmatch(r"[0-9]+", raw) is None:
         return None
@@ -144553,7 +144623,20 @@ def _default_urllib_sender() -> Callable[..., dict[str, Any]]:
 
     opener = urllib.request.build_opener(_NoRedirectHandler())
 
-    def _send(*, method: str, url: str, headers: dict[str, str], data_path=None, data_bytes=None) -> dict[str, Any]:
+    def _send(
+        *,
+        method: str,
+        url: str,
+        headers: dict[str, str],
+        data_path=None,
+        data_bytes=None,
+        sink_path=None,
+        sink_max_bytes=None,
+    ) -> dict[str, Any]:
+        # sink_path / sink_max_bytes are passed ONLY by the v0.4.28 restore GET
+        # (ObjectStorageTransport.get_object); every other call keeps the
+        # original five-keyword contract, so injected fakes without the two
+        # extra keywords keep working for HEAD/PUT/multipart/verification GETs.
         normalized_method = str(method).upper()
         body = None
         if data_path is not None:
@@ -144569,9 +144652,48 @@ def _default_urllib_sender() -> Callable[..., dict[str, Any]]:
             body = data_bytes
         request = urllib.request.Request(url=url, method=normalized_method, headers=headers, data=body)
         try:
-            with opener.open(request) as response:  # noqa: S310 - signed request, fixed host
+            with opener.open(  # noqa: S310 - signed request, fixed host
+                request, timeout=OBJECT_STORAGE_HTTP_IDLE_TIMEOUT_SECONDS
+            ) as response:
                 resp_headers = {str(k).lower(): str(v) for k, v in response.headers.items()}
                 status = int(response.status)
+                if normalized_method == "GET" and status == 200 and sink_path is not None:
+                    expected_size = _object_storage_response_content_length(resp_headers)
+                    limit = (
+                        int(sink_max_bytes)
+                        if isinstance(sink_max_bytes, int) and sink_max_bytes >= 0
+                        else OBJECT_STORAGE_RESTORE_SINK_MAX_BYTES
+                    )
+                    try:
+                        digest_hex, body_size = _object_storage_stream_response_to_sink(
+                            response, Path(sink_path), max_bytes=limit
+                        )
+                    except (OSError, _http_client.HTTPException):
+                        return {
+                            "status": status,
+                            "headers": resp_headers,
+                            "body": b"",
+                            "body_sha256": None,
+                            "body_size": None,
+                            "body_complete": False,
+                            "body_length_known": expected_size is not None,
+                            "body_truncated": False,
+                            "sink_written": False,
+                            "transport_error": True,
+                        }
+                    complete = expected_size is None or body_size == expected_size
+                    return {
+                        "status": status,
+                        "headers": resp_headers,
+                        "body": b"",
+                        "body_sha256": digest_hex if complete else None,
+                        "body_size": body_size,
+                        "body_complete": complete,
+                        "body_length_known": expected_size is not None,
+                        "body_truncated": False,
+                        "sink_written": complete,
+                        "transport_error": not complete,
+                    }
                 if normalized_method == "GET" and status == 200:
                     digest_hex, body_size = _object_storage_stream_response_digest(response)
                     expected_size = _object_storage_response_content_length(resp_headers)
@@ -144726,14 +144848,29 @@ class _S3CompatibleTransport:
         extra_headers: dict[str, str] | None = None,
         data_path=None,
         data_bytes=None,
+        sink_path=None,
+        sink_max_bytes=None,
     ) -> dict[str, Any]:
         headers = self._signed_request(
             method=method, key=key, payload_hash=payload_hash, query=query, extra_headers=extra_headers
         )
         url = self._url(key, query)
-        response = self._send(
-            method=method, url=url, headers=headers, data_path=data_path, data_bytes=data_bytes
-        )
+        if sink_path is not None:
+            # Restore GET only: the two sink keywords are omitted everywhere
+            # else so the five-keyword injected-sender contract is unchanged.
+            response = self._send(
+                method=method,
+                url=url,
+                headers=headers,
+                data_path=data_path,
+                data_bytes=data_bytes,
+                sink_path=sink_path,
+                sink_max_bytes=sink_max_bytes,
+            )
+        else:
+            response = self._send(
+                method=method, url=url, headers=headers, data_path=data_path, data_bytes=data_bytes
+            )
         return response if isinstance(response, dict) else {"status": 0, "headers": {}, "body": b""}
 
     # -- transport methods -------------------------------------------------
@@ -145055,6 +145192,87 @@ class _S3CompatibleTransport:
     def delete_object(self, *, key: str) -> None:
         # Not used by the executor without a generation-bound condition.
         self._dispatch(method="DELETE", key=key, payload_hash=SIGV4_EMPTY_SHA256_HEX)
+
+    def get_object(
+        self,
+        *,
+        key: str,
+        sink_path: Path,
+        expected_size: int,
+        expected_sha256: str,
+    ) -> dict[str, Any]:
+        # v0.4.28 restore GET (OB-03). Signs UNSIGNED-PAYLOAD like the
+        # verification GET, streams the body into the create-only sink and
+        # compares the streamed evidence to the manifest's size and object id.
+        # The sink survives only a complete, size- and digest-matching body;
+        # every other outcome removes it and reports sink_written False. No
+        # provider body, header or URL is returned (RC5).
+        sink = Path(sink_path)
+        failure = {
+            "status_class": "failed",
+            "size": None,
+            "checksum_sha256": None,
+            "size_match": False,
+            "checksum_match": False,
+            "sink_written": False,
+        }
+        if (
+            type(expected_size) is not int
+            or expected_size < 0
+            or not isinstance(expected_sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None
+        ):
+            return dict(failure)
+        response = self._dispatch(
+            method="GET",
+            key=key,
+            payload_hash=SIGV4_UNSIGNED_PAYLOAD,
+            sink_path=sink,
+            sink_max_bytes=expected_size,
+        )
+        status = int(response.get("status") or 0)
+
+        def _discard() -> None:
+            try:
+                sink.unlink()
+            except OSError:
+                pass
+
+        if response.get("transport_error"):
+            _discard()
+            return {**failure, "status_class": "rate_limited"}
+        if status == 404:
+            _discard()
+            return {**failure, "status_class": "absent"}
+        if status != 200:
+            _discard()
+            error_code = _sigv4_extract_error_code(response.get("body"))
+            status_class = _object_storage_classify_http_status(status, error_code)
+            return {**failure, "status_class": "failed" if status_class == "ok" else status_class}
+        checksum_hex = response.get("body_sha256")
+        body_size = response.get("body_size")
+        if (
+            response.get("body_complete") is not True
+            or response.get("sink_written") is not True
+            or not isinstance(checksum_hex, str)
+            or re.fullmatch(r"[0-9a-f]{64}", checksum_hex) is None
+            or type(body_size) is not int
+            or body_size < 0
+        ):
+            _discard()
+            return dict(failure)
+        size_match = body_size == expected_size
+        checksum_match = hmac.compare_digest(checksum_hex, expected_sha256)
+        if not (size_match and checksum_match):
+            _discard()
+        return {
+            "status_class": "ok",
+            "size": body_size,
+            "checksum_sha256": checksum_hex,
+            "size_match": size_match,
+            "checksum_match": checksum_match,
+            "sink_written": bool(size_match and checksum_match),
+        }
 
 
 def _object_storage_resolve_transport(
@@ -149326,6 +149544,16 @@ def resolve_objet_ref(
             if provider == "local" and isinstance(path_value, str):
                 add_local_candidate(path_value, provider=provider, availability=availability)
                 continue
+            # v0.4.28 (OB-03): WOM's own upload or formal-adoption evidence is the
+            # only remote proof the restore workflow accepts; a declared claim is not.
+            remote_verified_by_wom_kit = bool(
+                provider == "object_storage"
+                and availability == "wom_uploaded"
+                and location.get("remote_key_verified") is True
+                and location.get("provider_confirmation_by_wom_kit") is True
+                and isinstance(location.get("execution_receipt_ref"), str)
+                and bool(location.get("execution_receipt_ref"))
+            )
             external_candidates.append(
                 {
                     "provider": provider,
@@ -149334,6 +149562,7 @@ def resolve_objet_ref(
                     "availability": availability,
                     "content_addressed": bool(location.get("content_addressed")),
                     "byte_verification_by_wom_kit": bool(location.get("byte_verification_by_wom_kit")),
+                    "remote_verified_by_wom_kit": remote_verified_by_wom_kit,
                     "presigned_url_created": False,
                     "provider_api_called": False,
                     "download_performed": False,
@@ -149342,10 +149571,16 @@ def resolve_objet_ref(
 
     local_available = any(candidate.get("exists") for candidate in local_candidates)
     external_declared = bool(external_candidates)
+    remote_verified = any(
+        candidate.get("remote_verified_by_wom_kit") for candidate in external_candidates
+    )
+    remote_verified_local_absent = bool(remote_verified and not local_available and not blockers)
     if blockers:
         resolution_state = "blocked"
     elif local_available:
         resolution_state = "local_available"
+    elif remote_verified:
+        resolution_state = "remote_verified_local_absent"
     elif external_declared:
         resolution_state = "external_declared"
     elif records:
@@ -149356,6 +149591,11 @@ def resolve_objet_ref(
     next_safe_actions: list[str] = []
     if local_available:
         next_safe_actions.append("Open the existing archive-relative local candidate from the archive root.")
+    if remote_verified_local_absent:
+        next_safe_actions.append(
+            "Run object-storage-restore <archive_root> --store-ref <store> --only <object_id> --dry-run "
+            "to plan a verified rehydration of the WOM-uploaded bytes (v0.4.28); the remote object is never deleted."
+        )
     if external_declared:
         next_safe_actions.append("Use the external store label for manual lookup; this command does not call providers or create presigned URLs.")
     if not local_available and not external_declared and records:
@@ -149377,6 +149617,8 @@ def resolve_objet_ref(
         "external_candidates": external_candidates,
         "local_openable": local_available,
         "external_declared": external_declared,
+        "remote_verified_local_absent": remote_verified_local_absent,
+        "restore_workflow": "object-storage-restore" if remote_verified_local_absent else None,
         "privacy_guards": {
             "absolute_local_paths_echoed": False,
             "provider_urls_echoed": False,

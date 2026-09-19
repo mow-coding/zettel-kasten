@@ -10,28 +10,35 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.4.27 GitHub Release, when present, uses the self-contained wheel
+The exact v0.4.28 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0427-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0428-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.27/wom_kit-0.4.27-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.28/wom_kit-0.4.28-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-Run the version check in a new process and require exactly `archive 0.4.27`.
+Run the version check in a new process and require exactly `archive 0.4.28`.
 The dedicated external CPython 3.12 environment and exact real
 `python.exe -m pip` path retain the wheel SHA-256 required by the updater. A
 user-scoped `uv tool` environment whose installed metadata omits that archive
 hash is not project-updater supply evidence. Installing the bootstrap does not
 silently update a project-local WOM-kit source mirror or its pin.
+
+v0.4.28 adds `object-storage-restore`: WOM-verified remote objet bytes are
+downloaded once under one always-dialog approval, kept only when size and
+sha256 reproduce the object id, placed create-only into the local objet
+store and receipted; `--verify-only` records the full-GET proof without
+local writes; the remote object is never deleted and a local file is never
+overwritten (OB-01 / OB-03; the v0.4.29 offload follows).
 
 v0.4.27 answers the client's v0.4.25 follow-ups: usage refusals carry a
 fixed cause, a file-installed bootstrap is pointed at the public URL, a

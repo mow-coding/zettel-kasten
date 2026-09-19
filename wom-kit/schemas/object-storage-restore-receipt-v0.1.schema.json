@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wom-kit/object-storage-restore-receipt/v0.1",
+  "title": "WOM-kit object-storage restore receipt (v0.4.28, OB-01 / OB-03)",
+  "description": "One immutable receipt per object of an approved object-storage-restore plan. The remote bytes were streamed by a full authenticated GET and compared to the object id; local bytes were written create-only or not at all. No remote key, URL, credential or local path is echoed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "object_id", "content_sha256", "size_bytes", "provider_kind",
+    "store_ref", "remote_key_sha256", "remote_source_kind", "mode",
+    "source_inventory_sha256", "exact_operation_manifest_sha256", "receipt_state_sha256",
+    "restore_status", "completed_at", "remote_verification", "local_bytes_written",
+    "local_bytes_verified_after_write", "local_location_state_before",
+    "local_overwrite_performed", "remote_delete_performed", "review_reason",
+    "private_values_echoed", "credential_values_echoed", "provider_url_echoed",
+    "local_path_echoed"
+  ],
+  "properties": {
+    "schema_version": {"const": "wom-kit/object-storage-restore-receipt/v0.1"},
+    "object_id": {"$ref": "#/$defs/sha256_ref"},
+    "content_sha256": {"$ref": "#/$defs/sha256_ref"},
+    "size_bytes": {"type": "integer", "minimum": 0},
+    "provider_kind": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$"},
+    "store_ref": {"type": "string", "minLength": 1, "maxLength": 255},
+    "remote_key_sha256": {"$ref": "#/$defs/sha256_ref"},
+    "remote_source_kind": {"enum": ["wom_uploaded_location", "bytes_preserved_receipt"]},
+    "mode": {"enum": ["restore", "verify_only"]},
+    "source_inventory_sha256": {"$ref": "#/$defs/sha256_ref"},
+    "exact_operation_manifest_sha256": {"$ref": "#/$defs/sha256_ref"},
+    "receipt_state_sha256": {"$ref": "#/$defs/sha256_ref"},
+    "restore_status": {
+      "enum": ["bytes_restored", "already_present_verified", "remote_verified", "review_required"]
+    },
+    "completed_at": {"type": "string", "minLength": 1},
+    "remote_verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["performed", "state", "verification_kind", "size_match", "whole_object_sha256_match"],
+      "properties": {
+        "performed": {"type": "boolean"},
+        "state": {"enum": ["verified_match", "absent", "size_mismatch", "checksum_mismatch", "not_queried"]},
+        "verification_kind": {"const": "get_rehash_whole_object"},
+        "size_match": {"type": "boolean"},
+        "whole_object_sha256_match": {"type": "boolean"}
+      }
+    },
+    "local_bytes_written": {"type": "boolean"},
+    "local_bytes_verified_after_write": {"type": "boolean"},
+    "local_location_state_before": {"enum": ["available", "offloaded", "absent"]},
+    "local_overwrite_performed": {"const": false},
+    "remote_delete_performed": {"const": false},
+    "review_reason": {
+      "anyOf": [
+        {"type": "null"},
+        {"enum": ["remote_absent", "remote_size_mismatch", "remote_checksum_mismatch"]}
+      ]
+    },
+    "private_values_echoed": {"const": false},
+    "credential_values_echoed": {"const": false},
+    "provider_url_echoed": {"const": false},
+    "local_path_echoed": {"const": false}
+  },
+  "$defs": {
+    "sha256_ref": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

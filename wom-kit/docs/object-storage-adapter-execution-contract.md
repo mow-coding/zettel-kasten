@@ -189,6 +189,62 @@ presence+size records `remote_key_verification: presence_size`, and the executor
 later skip re-HEAD of such a location is likewise presence-only — a size-only proof
 is never silently promoted to a content-hash claim.
 
+## v0.4.28 Restore Execution (OB-01 / OB-03)
+
+`archive object-storage-restore <archive_root> --store-ref <store> ...` (alias
+`objet-storage-restore`) is the first live download route. It answers the two
+acceptance rows the 2026-09-04 decision log planned for v0.4.23: a full
+authenticated GET whose size and sha256 reproduce the object id is the only
+proof of remote bytes (OB-01), and verified bytes are rehydrated into the local
+objet store without overwriting a local file and without deleting the remote
+object (OB-03).
+
+- Selection. Only objects whose manifest row carries a WOM-verified
+  `wom_uploaded` location for the requested provider and store (a safe
+  `remote_key`, `remote_key_verified`, `provider_confirmation_by_wom_kit` and an
+  execution receipt), or a v0.4.13 `bytes_preserved` /
+  `already_remote_verified` preservation receipt for that store, are
+  candidates. `declared_uploaded` and `declared_external` claims never are. In
+  the default mode a candidate is planned when its canonical
+  `objects/sha256/<2>/<64>` file is absent, or when its local location is
+  `offloaded` (the v0.4.29 offload state). A local file that already
+  reproduces the object id is `already_present`; a local file that does not is
+  a `local_conflict` and is never touched. `--verify-only` plans every
+  candidate regardless of local bytes.
+- Dry-run. Scans the manifest once, hashes local candidates, calls no
+  provider, reads no credential value, writes nothing, and echoes counts and
+  `plan_sha256` only (no object ids, keys or paths).
+- Approve. One native dialog (`오브제 원격 바이트 되찾기`, always-dialog,
+  never grantable to a session permission mode) covers the whole plan with the
+  count-first target list. Credential values are read only inside the
+  approved write through the same live-transport seam as preservation. For
+  each object the transport issues one signed `GetObject` and streams the body
+  into a private create-only sink under
+  `profiles/local/exact-operations/restore-sinks/`; the sink survives only a
+  complete body whose byte count equals `size_bytes` and whose sha256 equals
+  the object id. The sink is re-hashed from disk, moved no-replace into the
+  objet store, and the destination is re-hashed once more. A remote copy that
+  is absent, shorter, longer or different ends as a `review_required` receipt
+  (`remote_absent`, `remote_size_mismatch`, `remote_checksum_mismatch`) and
+  never blocks the other objects; a transport failure leaves the item
+  unfinished and resumable with `--resume-approval-id` /
+  `--resume-execution-sha256`, and a finished object is never downloaded twice.
+- Receipts and manifest. One immutable receipt per object under
+  `receipts/providers/object-storage-restore/` (schema
+  `wom-kit/object-storage-restore-receipt/v0.1`; key as sha256 only), then one
+  final manifest projection that adds `{"provider": "local", "availability":
+  "available"}` (or flips `offloaded` back to `available`) only for objects
+  whose receipt says `bytes_restored` or `already_present_verified`. The
+  projection runs under the manifest index mutation lease and is resumed like
+  formal adoption.
+- Never. No `PutObject`, no `DeleteObject`, no overwrite of an existing local
+  file, no presigned URL, no provider body or URL in any result.
+
+The live sender now applies a per-operation idle timeout
+(`OBJECT_STORAGE_HTTP_IDLE_TIMEOUT_SECONDS`, 120 s) to every object-storage HTTP
+call so a silent socket becomes a retryable transport error instead of a hang;
+a slow but progressing transfer is never cut.
+
 ## Integrity Rules
 
 The object id is the WOM content identity. A future live adapter must verify the
@@ -223,6 +279,11 @@ the provider to store or surface a whole-object SHA-256.
 Since v0.3.258, the default sender keeps both directions bounded: single path
 PUTs are replayable 1 MiB iterables under the exact signed `Content-Length`, and
 verification GETs retain only digest, byte count, and completeness evidence.
+Since v0.4.28 a restore GET is the one exception: it streams the body into a
+create-only sink file the caller names, still with O(1) memory, and reports the
+same digest, byte count and completeness evidence plus whether the sink was
+kept; the two sink keywords are passed only by the restore primitive, so every
+other call keeps the original five-keyword sender contract.
 Automatic redirects are disabled so signed authorization headers cannot cross
 origins. HEAD/whole-object GET must be HTTP 200; only HEAD 404 proves absence.
 Missing, invalid, contradictory, partial, or truncated length/body evidence is
