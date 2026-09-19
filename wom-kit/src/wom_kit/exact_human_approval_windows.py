@@ -193,6 +193,7 @@ class ExactHumanApprovalOperation(Enum):
     object_storage_bytes_preservation = "object_storage_bytes_preservation"
     object_storage_formal_adoption = "object_storage_formal_adoption"
     object_storage_bytes_restore = "object_storage_bytes_restore"
+    object_storage_bytes_offload = "object_storage_bytes_offload"
     local_recovery = "local_recovery"
     local_recovery_revert = "local_recovery_revert"
     work_session = "work_session"
@@ -461,6 +462,9 @@ _OPERATION_LABELS = {
     ExactHumanApprovalOperation.object_storage_bytes_restore: (
         "오브제 원격 바이트 되찾기"
     ),
+    ExactHumanApprovalOperation.object_storage_bytes_offload: (
+        "오브제 로컬 바이트 비우기"
+    ),
     ExactHumanApprovalOperation.local_recovery: "검증된 로컬 복구",
     ExactHumanApprovalOperation.local_recovery_revert: "로컬 복구 되돌리기",
     ExactHumanApprovalOperation.work_session: "앱과 작업 연결",
@@ -532,6 +536,9 @@ _OPERATION_QUESTIONS = {
     ),
     ExactHumanApprovalOperation.object_storage_bytes_restore: (
         "원격에 보존된 오브제 바이트를 내려받아 검증한 뒤 로컬 오브제 저장소에 되살릴까요?"
+    ),
+    ExactHumanApprovalOperation.object_storage_bytes_offload: (
+        "원격 사본을 지금 다시 내려받아 검증한 오브제만 로컬 저장소에서 지워 용량을 비울까요?"
     ),
     ExactHumanApprovalOperation.local_recovery: (
         "WOM이 검증한 로컬 복구를 실행할까요?"
@@ -649,6 +656,12 @@ _OPERATION_SUMMARIES = {
         "로컬 오브제 저장소에 씁니다. 이미 있는 로컬 파일은 덮어쓰지 않고, "
         "원격 오브제는 삭제하지 않습니다."
     ),
+    ExactHumanApprovalOperation.object_storage_bytes_offload: (
+        "오브제마다 원격 사본을 이 실행에서 통째로 내려받아 크기와 sha256이 오브제 id와 "
+        "일치하고 로컬 바이트도 같음을 확인한 뒤에만 로컬 파일을 지웁니다. 발행 전 초안이 "
+        "쓰는 오브제는 건드리지 않고, manifest에는 되찾을 수 있도록 offloaded 표시가 남으며, "
+        "원격 오브제는 삭제하지 않습니다."
+    ),
     ExactHumanApprovalOperation.local_recovery: (
         "근거가 정확히 일치하는 필드와 로컬 기록만 바꾸고, "
         "불명확한 항목은 검토 상태로 남깁니다."
@@ -722,6 +735,7 @@ _OPERATION_APPROVE_BUTTONS = {
     ExactHumanApprovalOperation.object_storage_bytes_preservation: "바이트 보존",
     ExactHumanApprovalOperation.object_storage_formal_adoption: "정식 채택",
     ExactHumanApprovalOperation.object_storage_bytes_restore: "바이트 되찾기",
+    ExactHumanApprovalOperation.object_storage_bytes_offload: "로컬 바이트 비우기",
     ExactHumanApprovalOperation.local_recovery: "복구 실행",
     ExactHumanApprovalOperation.local_recovery_revert: "복구 되돌리기",
     ExactHumanApprovalOperation.draft_discard: "초안 버리기",

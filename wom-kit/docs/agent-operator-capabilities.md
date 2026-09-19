@@ -1,8 +1,17 @@
 # Agent Operator Capabilities Manifest
 
-Status: v0.4.28 object-storage restore, client follow-ups, and writer-session coverage gate
+Status: v0.4.29 object-storage offload, object-storage restore, and writer-session coverage gate
 
-v0.4.27 adds no command path: usage refusals of `project-version-update`
+v0.4.29 adds one command path, `object-storage-offload` (alias
+`objet-storage-offload`, approval-available, always-dialog): local objet
+bytes are removed only after a same-run full-GET remote proof, two local
+re-hashes and every retention predicate; the manifest keeps the row marked
+`offloaded` and `object-storage-restore` reverses it. v0.4.28 adds one
+command path, `object-storage-restore` (alias `objet-storage-restore`,
+approval-available, always-dialog): WOM-verified remote objet bytes are
+downloaded once, kept only when size and sha256 reproduce the object id,
+placed create-only and receipted; `--verify-only` records the proof without
+local writes. v0.4.27 adds no command path: usage refusals of `project-version-update`
 carry a fixed `cause_code`, a file-installed bootstrap is told to reinstall
 from the public URL, a refused permission grant reports the refused position
 and the grantable names, intake plans may carry a UTF-8 byte-order mark, and
@@ -151,13 +160,13 @@ field remain `history_not_audited`. Inventory, shared capability availability,
 and command help consume the same content-free history. Current availability
 continues to be parser-derived; history does not grant execution authority.
 
-For the current v0.4.28 working-tree parser, the inventory snapshot is:
+For the current v0.4.29 working-tree parser, the inventory snapshot is:
 
 ```text
 canonical executable command paths: 317
 alias invocation paths:              259
 all invocation paths:                576
-approval_available:                   57
+approval_available:                   58
 approval_fixed_closed:                60
 approval_not_exposed:                201
 conditional approval paths:            11

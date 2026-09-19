@@ -64,6 +64,14 @@ WOM backup as complete.
 Even the full recorded-time status leaves
 `current_remote_availability_checked: false`.
 
+Since v0.4.29 the object-storage lane also counts
+`offloaded_local_location_object_count` (objects whose local location is
+recorded as `offloaded` after an approved offload and no `available` local
+location remains) and `remote_only_object_count` (those of them that also
+carry valid receipt-linked `wom_uploaded` evidence). A remote-only object is
+a recovery dependency, not a coverage failure; `object-storage-restore`
+brings its bytes back.
+
 ## Safety And Privacy
 
 The command reads only object-manifest metadata and linked object-storage

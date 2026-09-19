@@ -42,8 +42,14 @@ and names the restore workflow. The 2026-09-04 decision log (decision 6) allows
 one deliberate exception to "local is canonical": a local objet copy may be
 offloaded only after that complete remote proof and every retention and
 filesystem-safety predicate passes, and WOM never automatically deletes the
-remote object. The offload writer itself is the v0.4.29 scope; until then an
-`offloaded` local location is only read (and restored) by v0.4.28.
+remote object. The offload writer is `archive object-storage-offload` (v0.4.29): it removes
+a local copy only after a same-run full-GET proof, a local re-hash and every
+retention predicate, keeps the manifest row with its local location marked
+`offloaded`, and never deletes the remote object. An offloaded object is a
+named recovery dependency: Doctor reports it as information, backup-evidence
+counts it as remote-only, staged cleanup defers it, and restore brings it
+back. Local stays canonical; an offload is a deliberate, receipted, reversible
+exception to "bytes present", never to "bytes owned".
 
 ## Backup Evidence
 

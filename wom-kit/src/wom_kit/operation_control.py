@@ -66,6 +66,7 @@ STAGED_CLEANUP_REASON_CODES = frozenset(
         "objet_store_missing",
         "objet_store_sha256_mismatch",
         "objet_store_missing_or_sha256_mismatch",
+        "objet_bytes_offloaded_remote_only_restore_before_cleanup",
         "ordinary_manifest_missing",
         "ordinary_store_missing",
         "ordinary_store_mismatch",

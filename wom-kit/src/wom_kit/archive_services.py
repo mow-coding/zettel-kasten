@@ -101290,6 +101290,10 @@ def backup_evidence_status(
     eligible_object_count = len(eligible_records)
 
     local_location_object_count = 0
+    # v0.4.29 (OB-02): objects whose local location is recorded as offloaded
+    # after a full-GET proof; they are remote-only recovery dependencies.
+    offloaded_local_location_object_count = 0
+    remote_only_object_count = 0
     declared_location_count = 0
     wom_uploaded_location_count = 0
     valid_wom_uploaded_location_count = 0
@@ -101310,6 +101314,7 @@ def backup_evidence_status(
         else:
             locations = record["locations"]
         has_local = False
+        has_offloaded = False
         has_declared = False
         has_wom_claim = False
         has_valid_wom_evidence = False
@@ -101320,6 +101325,8 @@ def backup_evidence_status(
                 continue
             if location.get("provider") == "local" and location.get("availability") == "available":
                 has_local = True
+            if location.get("provider") == "local" and location.get("availability") == "offloaded":
+                has_offloaded = True
             if location.get("provider") == "object_storage" and location.get("availability") == "declared_uploaded":
                 has_declared = True
                 declared_location_count += 1
@@ -101344,6 +101351,10 @@ def backup_evidence_status(
 
         if has_local:
             local_location_object_count += 1
+        if has_offloaded and not has_local:
+            offloaded_local_location_object_count += 1
+            if has_valid_wom_evidence:
+                remote_only_object_count += 1
         if has_valid_wom_evidence:
             receipt_verified_object_count += 1
         if has_invalid_wom_evidence:
@@ -101402,6 +101413,8 @@ def backup_evidence_status(
         "truncated": truncated,
         "eligible_object_count": eligible_object_count,
         "local_location_object_count": local_location_object_count,
+        "offloaded_local_location_object_count": offloaded_local_location_object_count,
+        "remote_only_object_count": remote_only_object_count,
         "receipt_verified_object_count": receipt_verified_object_count,
         "declared_only_object_count": declared_only_object_count,
         "invalid_wom_evidence_object_count": invalid_wom_evidence_object_count,
@@ -146855,6 +146868,13 @@ def _object_storage_upload_plan_candidate(
     gating_verification = gating_match["remote_key_verification"] if gating_match else None
     already_uploaded = gating_remote_key is not None
     verdict = "already_uploaded" if (skip_uploaded and already_uploaded) else "would_upload"
+    # v0.4.29: an offloaded local location is a deliberate absence, not missing bytes.
+    local_offloaded = any(
+        isinstance(location, dict)
+        and location.get("provider") == "local"
+        and location.get("availability") == "offloaded"
+        for location in locations
+    ) and not local_relative
     return {
         "object_id": object_id,
         "key_hint": key_hint,
@@ -146864,6 +146884,7 @@ def _object_storage_upload_plan_candidate(
         "key_resolution_error": key_resolution_error,
         "size_bytes": size_bytes,
         "local_available": bool(local_relative),
+        "local_offloaded": local_offloaded,
         "local_relative": local_relative,
         "wom_uploaded_present": already_uploaded,
         "gating_remote_key": gating_remote_key,
@@ -147681,6 +147702,13 @@ def object_storage_upload_run(
                             # the upload past the ledger short-circuit.
                             force_upload_after_absent = True
                         if not row["local_available"]:
+                            if row.get("local_offloaded"):
+                                # v0.4.29: offloaded bytes are a recovery dependency; the
+                                # run reports and skips them instead of blocking the store.
+                                warnings.append(
+                                    f"offloaded_object_skipped_restore_before_upload: {object_id[:20]}"
+                                )
+                                continue
                             blockers.append(f"local_bytes_missing_for_object: {object_id[:20]}")
                             continue
                         local_path = archive_internal_path(root, str(row["local_relative"]))
@@ -149571,6 +149599,11 @@ def resolve_objet_ref(
 
     local_available = any(candidate.get("exists") for candidate in local_candidates)
     external_declared = bool(external_candidates)
+    # v0.4.29: a local location recorded as offloaded names a deliberate absence.
+    local_offloaded = bool(
+        not local_available
+        and any(candidate.get("availability") == "offloaded" for candidate in local_candidates)
+    )
     remote_verified = any(
         candidate.get("remote_verified_by_wom_kit") for candidate in external_candidates
     )
@@ -149618,7 +149651,8 @@ def resolve_objet_ref(
         "local_openable": local_available,
         "external_declared": external_declared,
         "remote_verified_local_absent": remote_verified_local_absent,
-        "restore_workflow": "object-storage-restore" if remote_verified_local_absent else None,
+        "local_offloaded": local_offloaded,
+        "restore_workflow": "object-storage-restore" if (remote_verified_local_absent or local_offloaded) else None,
         "privacy_guards": {
             "absolute_local_paths_echoed": False,
             "provider_urls_echoed": False,
@@ -163036,13 +163070,15 @@ def _staged_cleanup_strict_object_manifest(
         size_bytes = record.get("size_bytes")
         locations = record.get("locations")
         provenance = record.get("provenance")
+        # v0.4.29 (OB-02): an offloaded local location still names the
+        # canonical record; the bytes check below decides preservation.
         canonical_location = bool(
             isinstance(locations, list)
             and any(
                 isinstance(location, dict)
                 and location.get("provider") == "local"
                 and location.get("path") == logical_key
-                and location.get("availability") == "available"
+                and location.get("availability") in {"available", "offloaded"}
                 for location in locations
             )
         )
@@ -164263,6 +164299,31 @@ def staged_cleanup_check(
                 selected_manifest_present = bool(derived_evidence["manifest_record_present"])
                 selected_receipt_present = bool(derived_evidence["capture_receipt_present"])
                 selected_bytes_verified = bool(derived_evidence["preserved_bytes_verified"])
+            elif (
+                record_present
+                and not bytes_verified
+                and any(
+                    record.get("object_id") == object_id
+                    and any(
+                        isinstance(location, dict)
+                        and location.get("provider") == "local"
+                        and location.get("availability") == "offloaded"
+                        for location in (record.get("locations") or [])
+                    )
+                    for record in manifest_records
+                )
+            ):
+                # v0.4.29 (OB-02): the canonical bytes were deliberately
+                # offloaded after a full-GET remote proof. The staged copy is
+                # then the only local copy, so cleanup stays unsafe until
+                # object-storage-restore brings the bytes back; this is a
+                # deferment, not corruption. No provider is called here.
+                status = "deferred"
+                preservation_kind = "objet"
+                reason_code = "objet_bytes_offloaded_remote_only_restore_before_cleanup"
+                selected_manifest_present = True
+                selected_receipt_present = receipt_candidate_present
+                selected_bytes_verified = False
             else:
                 status = "not_preserved"
                 preservation_kind = "none"

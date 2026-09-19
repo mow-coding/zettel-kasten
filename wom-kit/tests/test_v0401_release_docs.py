@@ -133,15 +133,16 @@ class V0401ReleaseDocsTests(unittest.TestCase):
         counts = inventory["counts"]
         # v0.4.21 LR-01e adds source-intake-chain (one approval for the
         # record → selection → capture chain); v0.4.28 OB-01/OB-03 adds
-        # object-storage-restore (one alias).
-        self.assertEqual(counts["canonical_executable_command_count"], 318)
-        self.assertEqual(counts["alias_invocation_path_count"], 260)
-        self.assertEqual(counts["invocation_path_count"], 578)
-        self.assertEqual(counts["approval_available_command_count"], 57)
+        # object-storage-restore (one alias); v0.4.29 OB-02 adds
+        # object-storage-offload (one alias).
+        self.assertEqual(counts["canonical_executable_command_count"], 319)
+        self.assertEqual(counts["alias_invocation_path_count"], 261)
+        self.assertEqual(counts["invocation_path_count"], 580)
+        self.assertEqual(counts["approval_available_command_count"], 58)
         self.assertEqual(counts["approval_fixed_closed_command_count"], 60)
         self.assertEqual(counts["approval_not_exposed_command_count"], 201)
         self.assertEqual(counts["conditional_approval_command_count"], 11)
-        self.assertEqual(counts["dry_run_exposed_command_count"], 275)
+        self.assertEqual(counts["dry_run_exposed_command_count"], 276)
         self.assertEqual(counts["unmatched_fixed_closed_command_count"], 0)
         by_path = {
             row["canonical_path"]: row for row in inventory["commands"]

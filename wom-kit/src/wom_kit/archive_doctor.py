@@ -68,6 +68,10 @@ class DoctorObjectByteVerification:
     unresolved_local_reference_count: int = 0
     completion_revalidation_state: str = "not_run"
     completion_revalidated_unique_local_file_count: int = 0
+    # v0.4.29 (OB-02): local locations whose bytes were deliberately offloaded
+    # after a full-GET remote proof. They are recovery dependencies, not
+    # missing files: never counted as unresolved, never a strict failure.
+    offloaded_local_reference_count: int = 0
 
     def __post_init__(self) -> None:
         if self.mode not in DOCTOR_OBJECT_BYTE_VERIFICATION_MODES:
@@ -79,6 +83,7 @@ class DoctorObjectByteVerification:
             self.attested_unchanged,
             self.bytes_unverified,
             self.unresolved_local_reference_count,
+            self.offloaded_local_reference_count,
         )
         if any(type(value) is not int or value < 0 for value in counts):
             raise ValueError("doctor_object_byte_verification_count_invalid")
@@ -161,6 +166,7 @@ class DoctorObjectByteVerification:
                     self.completion_revalidated_unique_local_file_count
                 ),
             },
+            "offloaded_local_reference_count": self.offloaded_local_reference_count,
             "byte_integrity_verified": self.byte_integrity_verified,
             "all_unique_local_files_rehashed_this_run": bool(
                 self.unique_local_file_count > 0

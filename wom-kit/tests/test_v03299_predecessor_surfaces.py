@@ -127,10 +127,12 @@ CLI_ADDITIONS = {
     ("zettel-objet-link-revert",),
     ("object-storage-restore",),
     ("objet-storage-restore",),
+    ("object-storage-offload",),
+    ("objet-storage-offload",),
 }
-CURRENT_CLI_COUNT = 579
+CURRENT_CLI_COUNT = 581
 CURRENT_CLI_CANONICAL_SHA256 = (
-    "2d9df57dfefb40c81d356d77a412501fe20290124e3cd12a344ff9416a9cb860"
+    "6993927a05e003808001478e7382386fdffd45f89fc7783996e94afed267dda5"
 )
 CURRENT_MCP_COUNT = 137
 CURRENT_MCP_CANONICAL_SHA256 = (
@@ -159,7 +161,7 @@ CURRENT_DATABASE_CANONICAL_SHA256 = (
     "d9a42f08ee12a6d42e40214cfb12441e4077bf50c38c25b2692ec1344328294a"
 )
 RESOURCE_ADDITIONS = {
-    "release-notes/v0.4.28.md",
+    "release-notes/v0.4.29.md",
     "schemas/agent-instruction-policy-v0.1.schema.json",
     "schemas/approval-handoff-v0.1.schema.json",
     "schemas/approval-integrity-audit-result-v0.1.schema.json",
@@ -192,6 +194,7 @@ RESOURCE_ADDITIONS = {
     "schemas/object-storage-preservation-terminal-receipt-v0.3.schema.json",
     "schemas/object-storage-formal-adoption-receipt-v0.1.schema.json",
     "schemas/object-storage-restore-receipt-v0.1.schema.json",
+    "schemas/object-storage-offload-receipt-v0.1.schema.json",
     "schemas/objet-capture-batch-receipt.schema.json",
     "schemas/objet-capture-batch-request.schema.json",
     "schemas/principal-record.schema.json",
@@ -221,9 +224,9 @@ RESOURCE_ADDITIONS = {
     "schemas/zettel-objet-link-revert-receipt.schema.json",
 }
 RESOURCE_REMOVALS = {"release-notes/v0.3.297.md"}
-CURRENT_RESOURCE_COUNT = 170
+CURRENT_RESOURCE_COUNT = 171
 CURRENT_RESOURCE_CANONICAL_SHA256 = (
-    "b42b9ee62615cb74abe81c25204948f2ec78a5a34085b18f89e0f0dcad662974"
+    "aaa58dcf09dc6b0e2056a0725a72a74710c050b1a4f17c4d8374abe483cc8b82"
 )
 
 
@@ -581,10 +584,10 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             actual,
             expected,
             "Current package-resource paths must be the full v0.3.297 set plus "
-            "the exact cumulative v0.3.298 through v0.4.28 delta. "
+            "the exact cumulative v0.3.298 through v0.4.29 delta. "
             f"missing={compact(missing)}; extra={compact(extra)}",
         )
-        self.assertEqual(manifest["version"], "0.4.28")
+        self.assertEqual(manifest["version"], "0.4.29")
         self.assertEqual(len(actual), CURRENT_RESOURCE_COUNT)
         self.assertEqual(
             canonical_sha256(actual),
@@ -604,13 +607,13 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         self.assertNotIn("C:\\Users\\", predecessor_text)
 
     def test_v0419_release_note_is_current_and_older_notes_remain_historical(self) -> None:
-        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.4.28.md"
+        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.4.29.md"
         current_packaged_release = (
             SRC_ROOT
             / "wom_kit"
             / "_resources"
             / "release-notes"
-            / "v0.4.28.md"
+            / "v0.4.29.md"
         )
         self.assertEqual(
             current_source_release.read_bytes(),
@@ -619,10 +622,10 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         current_text = current_source_release.read_text(encoding="utf-8")
         current_flat = " ".join(current_text.split())
         for token in (
-            "v0.4.28",
+            "v0.4.29",
             "project-version-update",
             "Publishing or installing this release does not read or modify a client archive",
-            "wom_kit-0.4.28-py3-none-any.whl",
+            "wom_kit-0.4.29-py3-none-any.whl",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, current_flat)

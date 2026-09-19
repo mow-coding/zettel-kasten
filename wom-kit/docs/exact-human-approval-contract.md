@@ -173,7 +173,7 @@ and does not infer success, failure, or cancellation, automatically retry, or
 delete that evidence. A full authenticated terminal handoff and terminal
 cleanup outcome reconstruction remain a v0.4.16 follow-up.
 
-The current parser-derived inventory is 57 approval-available, 60 fixed-closed,
+The current parser-derived inventory is 58 approval-available, 60 fixed-closed,
 and 201 not-exposed paths. v0.4.21 added `source-intake-chain` (the
 record → selection → capture intake of one staged original under one exact
 approval; each step re-verifies the chain claim before it writes, and the
