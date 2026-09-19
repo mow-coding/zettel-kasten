@@ -29554,12 +29554,54 @@ def command_promote(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") is True else 1
 
 
+_MINT_CAUSE_TOKEN_RE = re.compile(r"^[a-z][a-z0-9_]{0,95}$")
+_MINT_CONTENT_FREE_CAUSE_PREFIXES = (
+    "mint_",
+    "expected_source_fidelity_plan_sha256_",
+    "source_fidelity_",
+    "exact_human_approval_",
+    "archive_index_",
+    "zettel_",
+    "draft_",
+)
+
+
+def _mint_content_free_cause(error: BaseException) -> dict[str, str | None]:
+    """Fixed inner cause of a mint failure, never its text (v0.4.30, letter 163 ⑤).
+
+    Mirrors the project-version-update contract: an exact-approval workflow
+    error carries the writer's code-shaped cause and its stage; a bare service
+    error qualifies only when its single argument is itself a fixed token.
+    """
+
+    cause_code = getattr(error, "cause_code", None)
+    cause_stage = getattr(error, "cause_stage", None)
+    if not (isinstance(cause_code, str) and _MINT_CAUSE_TOKEN_RE.fullmatch(cause_code)):
+        cause_code = None
+        cause_stage = None
+        if (
+            type(error).__name__ == "ArchiveServiceError"
+            and len(error.args) == 1
+            and isinstance(error.args[0], str)
+            and _MINT_CAUSE_TOKEN_RE.fullmatch(error.args[0])
+            and error.args[0].startswith(_MINT_CONTENT_FREE_CAUSE_PREFIXES)
+        ):
+            cause_code = error.args[0]
+            cause_stage = "service"
+    if cause_code is not None and not cause_code.startswith(_MINT_CONTENT_FREE_CAUSE_PREFIXES):
+        cause_code = None
+        cause_stage = None
+    return {"cause_code": cause_code, "cause_stage": cause_stage if cause_code else None}
+
+
 def _mint_cli_error(
     args: argparse.Namespace,
     *,
     reason_code: str,
     message: str,
     progress_summary: dict[str, object] | None = None,
+    cause: dict[str, str | None] | None = None,
+    next_safe_actions: list[str] | None = None,
 ) -> int:
     if getattr(args, "format", None) == "json":
         result: dict[str, object] = {
@@ -29570,11 +29612,20 @@ def _mint_cli_error(
             "files_written": [],
             "private_values_echoed": False,
         }
+        if cause is not None and cause.get("cause_code"):
+            result["cause_code"] = cause["cause_code"]
+            result["cause_stage"] = cause.get("cause_stage")
+        if next_safe_actions:
+            result["next_safe_actions"] = list(next_safe_actions)
         if progress_summary is not None:
             result["progress_summary"] = progress_summary
         print_json(result)
     else:
         print(message, file=sys.stderr)
+        if cause is not None and cause.get("cause_code"):
+            print(f"cause_code: {cause['cause_code']} (stage {cause.get('cause_stage')})", file=sys.stderr)
+        for action in next_safe_actions or []:
+            print(f"Next: {action}", file=sys.stderr)
     return 1
 
 
@@ -29660,6 +29711,53 @@ def command_mint_zettel(args: argparse.Namespace) -> int:
                     ),
                     progress_summary=reporter.summary(),
                 )
+            # v0.4.30 (letter 163 ⑤): the source-fidelity plan digest is checked
+            # here, before any claim exists, so a missing or stale value ends as
+            # a fixed code and never as a started claim.
+            current_plan = preview.get("current_source_fidelity_plan_sha256")
+            supplied_plan = str(
+                getattr(args, "expected_source_fidelity_plan_sha256", None) or ""
+            ).strip().lower()
+            if isinstance(current_plan, str):
+                if not re.fullmatch(r"[0-9a-f]{64}", supplied_plan):
+                    reporter.finish()
+                    return _mint_cli_error(
+                        args,
+                        reason_code="mint_source_fidelity_plan_sha256_required",
+                        message=(
+                            "This source-fidelity draft needs --expected-source-fidelity-plan-sha256 "
+                            "<current_source_fidelity_plan_sha256 from the dry-run> on approve."
+                        ),
+                        progress_summary=reporter.summary(),
+                        next_safe_actions=[
+                            "Run the same command with --dry-run --format json, copy "
+                            "current_source_fidelity_plan_sha256, and pass it as "
+                            "--expected-source-fidelity-plan-sha256 with --approve."
+                        ],
+                    )
+                if not secrets.compare_digest(supplied_plan, current_plan):
+                    reporter.finish()
+                    return _mint_cli_error(
+                        args,
+                        reason_code="mint_source_fidelity_plan_sha256_mismatch",
+                        message=(
+                            "The supplied source-fidelity plan digest does not match the current "
+                            "draft; rerun --dry-run and use its current value."
+                        ),
+                        progress_summary=reporter.summary(),
+                        next_safe_actions=[
+                            "Rerun --dry-run --format json; the draft or its fidelity evidence changed "
+                            "since the digest you supplied was computed."
+                        ],
+                    )
+            elif supplied_plan and "current_source_fidelity_plan_sha256" in preview:
+                reporter.finish()
+                return _mint_cli_error(
+                    args,
+                    reason_code="mint_source_fidelity_plan_sha256_not_applicable",
+                    message="--expected-source-fidelity-plan-sha256 applies only to source-fidelity drafts.",
+                    progress_summary=reporter.summary(),
+                )
             binding = operation_approval_binding.mint_zet_approval_binding(
                 preview
             )
@@ -29718,12 +29816,24 @@ def command_mint_zettel(args: argparse.Namespace) -> int:
         ExactHumanApprovalWindowsError,
         ExactHumanApprovalWorkflowError,
         OSError,
-    ):
+    ) as exc:
+        # v0.4.30 (letter 163 ⑤): the fixed inner cause and its stage travel with
+        # the safe envelope; free text still does not.
+        cause = _mint_content_free_cause(exc)
         return _mint_cli_error(
             args,
             reason_code="mint_service_failed",
             message="Minting failed safely; private values were not echoed.",
             progress_summary=reporter.summary(),
+            cause=cause,
+            next_safe_actions=(
+                [
+                    "The claim for this attempt stays started for reconciliation; "
+                    "list it with 'archive exact-approval-claims <root> --status started --dry-run'."
+                ]
+                if getattr(exc, "cause_stage", None) == "domain_writer"
+                else None
+            ),
         )
     finally:
         reporter.close()
@@ -29760,6 +29870,8 @@ def command_mint_zettel(args: argparse.Namespace) -> int:
             source_fidelity_plan_sha256 = _source_fidelity_plan_sha256_from_result(result)
             if source_fidelity_plan_sha256:
                 print(f"Current source-fidelity plan: {source_fidelity_plan_sha256}")
+            for action in result.get("next_safe_actions") or []:
+                print(f"Next: {action}")
             print("Mint dry-run passed." if result["ok"] else "Mint dry-run blocked.")
         return 0 if result["ok"] else 1
 

@@ -49434,6 +49434,107 @@ def promote_zettel(
     }
 
 
+def _mint_zettel_approval_handoff(
+    *,
+    blocked: bool,
+    has_warnings: bool,
+    current_source_fidelity_plan_sha256: str | None,
+) -> dict[str, Any]:
+    """The exact approve shape for one inbox draft (v0.4.30, letter 163 ⑤).
+
+    A source-fidelity draft binds its current plan digest into the approve
+    call; the argument names the JSON pointer so an operator never guesses.
+    """
+
+    arguments = [
+        approval_handoff_argument(
+            "--path",
+            required=True,
+            value_source="reuse_input",
+            sensitive=True,
+            echoed=False,
+        ),
+        approval_handoff_argument(
+            "--affirm",
+            required=False,
+            value_source="reuse_input",
+            sensitive=False,
+        ),
+        approval_handoff_argument(
+            "--allow-warnings",
+            required=has_warnings,
+            value_source="operator_input",
+            sensitive=False,
+        ),
+        approval_handoff_argument(
+            "--reviewed-by",
+            required=True,
+            value_source="operator_input",
+            sensitive=True,
+            echoed=False,
+        ),
+        approval_handoff_argument(
+            "--expected-source-fidelity-plan-sha256",
+            required=current_source_fidelity_plan_sha256 is not None,
+            value_source="json_pointer",
+            json_pointer="/current_source_fidelity_plan_sha256",
+            value=current_source_fidelity_plan_sha256,
+        ),
+        approval_handoff_argument(
+            "--approve",
+            required=True,
+            value_source="operator_input",
+            sensitive=False,
+        ),
+    ]
+    review_bindings = []
+    if current_source_fidelity_plan_sha256 is not None:
+        review_bindings.append(
+            approval_handoff_review_binding(
+                "source_fidelity_plan_sha256",
+                required=True,
+                value_json_pointer="/current_source_fidelity_plan_sha256",
+            )
+        )
+    return build_approval_replay_handoff(
+        stage="blocked" if blocked else "approval_required",
+        next_command="archive mint-zet",
+        ready=not blocked,
+        exact_replay_required=True,
+        replay_scope="one_exact_inbox_draft_mint",
+        arguments=arguments,
+        required_review_bindings=review_bindings,
+        receipt_ref=None,
+    )
+
+
+def _mint_zettel_dry_run_next_safe_actions(
+    *,
+    blocked: bool,
+    has_warnings: bool,
+    fidelity_plan_required: bool,
+) -> list[str]:
+    if blocked:
+        return [
+            "Fix every blocker named in checklist/blockers, then rerun --dry-run; "
+            "mint never proceeds past a blocked dry-run."
+        ]
+    parts = ["Re-run the same command with --approve --reviewed-by <id>"]
+    if has_warnings:
+        parts.append("--allow-warnings (after reading each warning)")
+    if fidelity_plan_required:
+        parts.append(
+            "--expected-source-fidelity-plan-sha256 <current_source_fidelity_plan_sha256 from this dry-run>"
+        )
+    actions = [" ".join(parts) + "; one native dialog (or the session permission mode) covers the mint."]
+    if fidelity_plan_required:
+        actions.append(
+            "This is a source-fidelity draft: the plan digest is required on approve, "
+            "and approve refuses with mint_source_fidelity_plan_sha256_required before any claim when it is missing."
+        )
+    return actions
+
+
 def mint_zettel_dry_run(
     archive_root: Path | str,
     *,
@@ -49499,6 +49600,15 @@ def mint_zettel_dry_run(
         for code in fidelity_verification.get("warnings", [])
         if isinstance(code, str)
     )
+    # v0.4.30 (letter 163 ⑩): a fidelity draft whose body no longer matches
+    # the body approved at creation is named, not silently re-planned.
+    fidelity_projection = fidelity_verification.get("source_fidelity")
+    if (
+        isinstance(fidelity_projection, dict)
+        and fidelity_projection.get("review_state") == "mint_reapproval_required"
+        and "draft_body_changed_since_approval" not in warnings
+    ):
+        warnings.append("draft_body_changed_since_approval")
     privacy_blockers = [
         str(code)
         for code in fidelity_verification.get("blockers", [])
@@ -49572,9 +49682,22 @@ def mint_zettel_dry_run(
     _emit_mint_progress(progress_callback, "self_contained", "done", 1, 1)
     scratch_cleanup = build_ai_scratch_gc_plan(root, source_path, source_frontmatter, body)
     scratch_would_change = [] if scratch_cleanup.get("blockers") else scratch_cleanup.get("would_change", [])
+    current_plan_for_handoff = fidelity_verification.get("current_plan_sha256")
     return {
         "ok": not blockers,
         "dry_run": True,
+        "approval_handoff": _mint_zettel_approval_handoff(
+            blocked=bool(blockers),
+            has_warnings=bool(warnings),
+            current_source_fidelity_plan_sha256=(
+                current_plan_for_handoff if isinstance(current_plan_for_handoff, str) else None
+            ),
+        ),
+        "next_safe_actions": _mint_zettel_dry_run_next_safe_actions(
+            blocked=bool(blockers),
+            has_warnings=bool(warnings),
+            fidelity_plan_required=isinstance(current_plan_for_handoff, str),
+        ),
         "draft_path": promotion_dry_run["draft_path"],
         "zettel_id": zettel_id_value,
         "title": source_frontmatter.get("title"),
@@ -49758,21 +49881,23 @@ def mint_zettel(
     supplied_fidelity_plan = str(
         expected_source_fidelity_plan_sha256 or ""
     ).strip().lower()
+    # v0.4.30 (letter 163 ⑤): these three gates are fixed codes so a caller
+    # that reaches them inside the approved write can still name the cause;
+    # the CLI checks the same three before it mints a claim.
     if isinstance(current_fidelity_plan, str):
         if not SHA256_RE.fullmatch(supplied_fidelity_plan):
             raise ArchiveServiceError(
-                "Minting source fidelity requires "
-                "expected_source_fidelity_plan_sha256."
+                "mint_source_fidelity_plan_sha256_required"
             )
         if not hmac.compare_digest(
             supplied_fidelity_plan, current_fidelity_plan
         ):
             raise ArchiveServiceError(
-                "expected_source_fidelity_plan_sha256_mismatch"
+                "mint_source_fidelity_plan_sha256_mismatch"
             )
     elif expected_source_fidelity_plan_sha256 is not None:
         raise ArchiveServiceError(
-            "expected_source_fidelity_plan_sha256_only_valid_for_fidelity_drafts"
+            "mint_source_fidelity_plan_sha256_not_applicable"
         )
 
     source_path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=relative_path)
@@ -53596,6 +53721,15 @@ def mint_zet_batch(
         for row in planned_rows:
             planned_item = planned_items_by_key[mint_lifecycle_batch_item_key(row)]
             try:
+                # v0.4.30 (letter 163 ⑤): a fidelity draft in a batch carries the
+                # plan digest the batch dry-run bound for it; the batch approval
+                # already covers the exact draft bytes that digest derives from.
+                item_dry_run = mint_zettel_dry_run(
+                    root,
+                    zettel_id=row.get("zettel_id"),
+                    relative_path=row.get("path"),
+                )
+                item_fidelity_plan = item_dry_run.get("current_source_fidelity_plan_sha256")
                 write_result = mint_zettel(
                     root,
                     zettel_id=row.get("zettel_id"),
@@ -53603,6 +53737,9 @@ def mint_zet_batch(
                     reviewed_by=str(reviewed_by or ""),
                     allow_warnings=bool(policy.get("allow_warnings")),
                     exact_human_approval_claim=exact_human_approval_claim,
+                    expected_source_fidelity_plan_sha256=(
+                        item_fidelity_plan if isinstance(item_fidelity_plan, str) else None
+                    ),
                     batch_authority=batch_authority.for_item(
                         str(planned_item.get("approval_item_identity_sha256") or "")
                     ),
@@ -54253,7 +54390,13 @@ def infer_promotion_checklist_item(
         if zettel_body_has_forbidden_location_reference(body):
             return "blocked", "Body contains a private provider locator or local absolute path."
         if zettel_has_truncated_objet_reference(frontmatter, body):
-            return "blocked", "Zet contains an incomplete SHA-256 Objet reference."
+            body_lines = zettel_truncated_objet_reference_body_lines(body)
+            where = (
+                " (body lines: " + ", ".join(str(number) for number in body_lines) + ")"
+                if body_lines
+                else " (in frontmatter)"
+            )
+            return "blocked", "Zet contains an incomplete SHA-256 Objet reference" + where + "."
         return "passed", "No private provider locator or local absolute path was detected."
     if item_id == "stable_facets":
         if isinstance(facets, dict) and bool(facets):
@@ -149978,6 +150121,19 @@ def zettel_body_has_private_provider_locator(value: str) -> bool:
 
 def zettel_body_has_forbidden_location_reference(value: str) -> bool:
     return contains_forbidden_location_reference(value) or zettel_body_has_private_provider_locator(value)
+
+
+def zettel_truncated_objet_reference_body_lines(body: str) -> list[int]:
+    """Body-relative 1-based line numbers of incomplete objet references.
+
+    Only positions are returned, never the matched text (v0.4.30, letter
+    163 ⑩); the caller decides whether to show them.
+    """
+
+    lines: set[int] = set()
+    for match in TRUNCATED_OBJET_REF_RE.finditer(body or ""):
+        lines.add(body.count("\n", 0, match.start()) + 1)
+    return sorted(lines)
 
 
 def zettel_has_truncated_objet_reference(
