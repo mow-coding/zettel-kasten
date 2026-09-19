@@ -49783,10 +49783,14 @@ def mint_zettel_dry_run(
             blockers.append(f"Zet quality check blocked: {issue.get('code')}.")
     _emit_mint_progress(progress_callback, "quality", "done", 1, 1)
 
-    if zettel_body_has_tool_execution_trace(body):
-        warnings.append("tool_execution_trace_review_required")
-    if zettel_body_has_status_contradiction(body):
-        warnings.append("internal_status_consistency_review_required")
+    # v0.4.31 (letter 163 ⑪): the explanation is computed once, before the
+    # receipt preview, and stored inside quality_check so plan_sha256 and the
+    # receipt carry it; the warning list itself is unchanged.
+    warning_explanations = mint_warning_explanations(body)
+    quality_check["warning_explanations"] = warning_explanations
+    quality_check.setdefault("privacy_guards", {})["matched_status_markers_echoed"] = False
+    for explanation in warning_explanations:
+        warnings.append(str(explanation["code"]))
 
     _emit_mint_progress(progress_callback, "receipt_plan", "start", 0, 1)
     receipt_preview = build_mint_receipt_preview(
@@ -150374,33 +150378,121 @@ def zettel_has_truncated_objet_reference(
     )
 
 
-def zettel_body_has_tool_execution_trace(body: str) -> bool:
+_TOOL_TRACE_COMMAND_MARKERS = (
+    "source-intake",
+    "source_intake",
+    "objet-capture",
+    "objet_capture",
+    "mint-zet",
+    "mint_zettel",
+    "stored_sha256_verified",
+    "files_written",
+    "receipt_path",
+    "plan_sha256",
+)
+_TOOL_TRACE_FLAG_MARKERS = ("--approve", "--dry-run", "--format json")
+_STATUS_COMPLETED_MARKERS = ("완료", "성공", "통과", "처리했습니다", "completed", "succeeded")
+_STATUS_PENDING_MARKERS = ("작업 중", "미정", "아직", "todo", "pending", "in progress", "not complete")
+_WARNING_EXPLANATION_MAX_LINES = 32
+
+
+def _marker_body_lines(lowered: str, markers: tuple[str, ...]) -> tuple[int, list[int], bool]:
+    """Occurrence count and 1-based body lines of fixed markers; never the text."""
+
+    lines: set[int] = set()
+    occurrences = 0
+    for marker in markers:
+        start = 0
+        while True:
+            position = lowered.find(marker, start)
+            if position < 0:
+                break
+            occurrences += 1
+            lines.add(lowered.count("\n", 0, position) + 1)
+            start = position + len(marker)
+    ordered = sorted(lines)
+    return occurrences, ordered[:_WARNING_EXPLANATION_MAX_LINES], len(ordered) > _WARNING_EXPLANATION_MAX_LINES
+
+
+def zettel_body_tool_execution_trace_evidence(body: str) -> dict[str, Any]:
+    """Content-free evidence behind ``tool_execution_trace_review_required`` (v0.4.31)."""
+
     lowered = body.casefold()
-    command_markers = (
-        "source-intake",
-        "source_intake",
-        "objet-capture",
-        "objet_capture",
-        "mint-zet",
-        "mint_zettel",
-        "stored_sha256_verified",
-        "files_written",
-        "receipt_path",
-        "plan_sha256",
-    )
-    flag_markers = ("--approve", "--dry-run", "--format json")
-    return any(marker in lowered for marker in command_markers) or sum(
-        marker in lowered for marker in flag_markers
-    ) >= 2
+    command_count, command_lines, command_truncated = _marker_body_lines(lowered, _TOOL_TRACE_COMMAND_MARKERS)
+    flag_count, flag_lines, flag_truncated = _marker_body_lines(lowered, _TOOL_TRACE_FLAG_MARKERS)
+    distinct_flag_markers = sum(marker in lowered for marker in _TOOL_TRACE_FLAG_MARKERS)
+    return {
+        "command_marker_count": command_count,
+        "command_marker_body_lines": command_lines,
+        "flag_marker_count": flag_count,
+        "distinct_flag_marker_count": distinct_flag_markers,
+        "flag_marker_body_lines": flag_lines,
+        "lines_truncated": command_truncated or flag_truncated,
+        "body_line_count": body.count("\n") + 1 if body else 0,
+        "matched_text_echoed": False,
+    }
+
+
+def zettel_body_has_tool_execution_trace(body: str) -> bool:
+    evidence = zettel_body_tool_execution_trace_evidence(body)
+    return evidence["command_marker_count"] > 0 or evidence["distinct_flag_marker_count"] >= 2
+
+
+def zettel_body_status_contradiction_evidence(body: str) -> dict[str, Any]:
+    """Content-free evidence behind ``internal_status_consistency_review_required`` (v0.4.31)."""
+
+    lowered = body.casefold()
+    completed_count, completed_lines, completed_truncated = _marker_body_lines(lowered, _STATUS_COMPLETED_MARKERS)
+    pending_count, pending_lines, pending_truncated = _marker_body_lines(lowered, _STATUS_PENDING_MARKERS)
+    return {
+        "completed_marker_count": completed_count,
+        "completed_marker_body_lines": completed_lines,
+        "pending_marker_count": pending_count,
+        "pending_marker_body_lines": pending_lines,
+        "lines_truncated": completed_truncated or pending_truncated,
+        "body_line_count": body.count("\n") + 1 if body else 0,
+        "matched_text_echoed": False,
+    }
 
 
 def zettel_body_has_status_contradiction(body: str) -> bool:
-    lowered = body.casefold()
-    completed_markers = ("완료", "성공", "통과", "처리했습니다", "completed", "succeeded")
-    pending_markers = ("작업 중", "미정", "아직", "todo", "pending", "in progress", "not complete")
-    return any(marker in lowered for marker in completed_markers) and any(
-        marker in lowered for marker in pending_markers
-    )
+    evidence = zettel_body_status_contradiction_evidence(body)
+    return evidence["completed_marker_count"] > 0 and evidence["pending_marker_count"] > 0
+
+
+def mint_warning_explanations(body: str) -> list[dict[str, Any]]:
+    """v0.4.31 (letter 163 ⑪): say WHAT the two body-wording warnings saw.
+
+    One entry per warning actually raised, with the detector's fixed rule,
+    marker category counts and body line numbers; matched text is never
+    echoed. Lives inside ``quality_check`` so it is bound and receipted with
+    the plan it explains.
+    """
+
+    explanations: list[dict[str, Any]] = []
+    trace = zettel_body_tool_execution_trace_evidence(body)
+    if trace["command_marker_count"] > 0 or trace["distinct_flag_marker_count"] >= 2:
+        explanations.append(
+            {
+                "code": "tool_execution_trace_review_required",
+                "category": "tool_trace",
+                "detector": "zettel_body_has_tool_execution_trace",
+                "rule": "any_command_marker_or_two_distinct_flag_markers",
+                **trace,
+            }
+        )
+    status = zettel_body_status_contradiction_evidence(body)
+    if status["completed_marker_count"] > 0 and status["pending_marker_count"] > 0:
+        explanations.append(
+            {
+                "code": "internal_status_consistency_review_required",
+                "category": "status_wording",
+                "detector": "zettel_body_has_status_contradiction",
+                "rule": "any_completed_marker_and_any_pending_marker_anywhere_in_body",
+                **status,
+            }
+        )
+    return explanations
 
 
 def source_intake_secret_like(value: str) -> bool:

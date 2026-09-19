@@ -28037,6 +28037,28 @@ def command_create_draft(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
+def _mint_warning_explanation_suffix(explanation: dict[str, Any] | None) -> str:
+    """v0.4.31: counts and body lines only; the matched words never print."""
+
+    if not isinstance(explanation, dict):
+        return ""
+    if explanation.get("category") == "status_wording":
+        return (
+            f" (completed-status markers: {explanation.get('completed_marker_count', 0)} at body lines "
+            f"{', '.join(str(n) for n in explanation.get('completed_marker_body_lines') or []) or '-'}; "
+            f"pending-status markers: {explanation.get('pending_marker_count', 0)} at body lines "
+            f"{', '.join(str(n) for n in explanation.get('pending_marker_body_lines') or []) or '-'})"
+        )
+    if explanation.get("category") == "tool_trace":
+        return (
+            f" (command markers: {explanation.get('command_marker_count', 0)} at body lines "
+            f"{', '.join(str(n) for n in explanation.get('command_marker_body_lines') or []) or '-'}; "
+            f"flag markers: {explanation.get('flag_marker_count', 0)} at body lines "
+            f"{', '.join(str(n) for n in explanation.get('flag_marker_body_lines') or []) or '-'})"
+        )
+    return ""
+
+
 def _print_inbox_attention_line(result: dict[str, Any]) -> None:
     """v0.4.30: one privacy-safe text line for an attached inbox block."""
 
@@ -30148,8 +30170,13 @@ def command_mint_zettel(args: argparse.Namespace) -> int:
                     print(f"- {blocker}")
             if result["warnings"]:
                 print("Warnings:")
+                explanations = {
+                    item.get("code"): item
+                    for item in (result.get("quality_check") or {}).get("warning_explanations") or []
+                    if isinstance(item, dict)
+                }
                 for warning in result["warnings"]:
-                    print(f"- {warning}")
+                    print(f"- {warning}{_mint_warning_explanation_suffix(explanations.get(warning))}")
             source_fidelity_plan_sha256 = _source_fidelity_plan_sha256_from_result(result)
             if source_fidelity_plan_sha256:
                 print(f"Current source-fidelity plan: {source_fidelity_plan_sha256}")
