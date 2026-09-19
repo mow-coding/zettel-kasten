@@ -10,28 +10,36 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.4.29 GitHub Release, when present, uses the self-contained wheel
+The exact v0.4.30 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0429-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0430-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.29/wom_kit-0.4.29-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.30/wom_kit-0.4.30-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-Run the version check in a new process and require exactly `archive 0.4.29`.
+Run the version check in a new process and require exactly `archive 0.4.30`.
 The dedicated external CPython 3.12 environment and exact real
 `python.exe -m pip` path retain the wheel SHA-256 required by the updater. A
 user-scoped `uv tool` environment whose installed metadata omits that archive
 hash is not project-updater supply evidence. Installing the bootstrap does not
 silently update a project-local WOM-kit source mirror or its pin.
+
+v0.4.30 answers beta letter 163: `mint-zet` refuses a missing or stale
+source-fidelity plan digest before any claim and names its cause on
+failure; `exact-approval-claims` lists the claim store and
+`exact-approval-claim-finalize` closes reviewed started claims after a
+receipt scan behind one dialog; the approval-integrity audit pages per
+receipt kind; approved draft writes carry `inbox_attention`; `revert-edge`
+works without `--exact-local` and on inbox drafts.
 
 v0.4.29 adds `object-storage-offload`: local objet bytes are removed only
 after a same-run full-GET remote proof, two local re-hashes and every

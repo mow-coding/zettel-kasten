@@ -121,8 +121,26 @@ class DoctorPayloadFixtureContractTests(unittest.TestCase):
             profile, deep_regression_budget_seconds=0.000001
         )
         self.assertFalse(report["ok"])
-        self.assertTrue(report["operational_doctor"]["ok"])
-        self.assertEqual(report["operational_doctor"]["error_code_counts"], {})
+        operational = report["operational_doctor"]
+        # Name the failed content-free check (and the timings) instead of a
+        # bare False so a shard failure is diagnosable from the CI log.
+        self.assertTrue(
+            operational["ok"],
+            json.dumps(
+                {
+                    "failed_checks": sorted(
+                        name for name, passed in operational["checks"].items() if not passed
+                    ),
+                    "error_code_counts": operational["error_code_counts"],
+                    "timing_seconds": operational["timing_seconds"],
+                    "progress": operational["progress"],
+                    "instrumentation": operational["instrumentation"],
+                    "object_byte_verification": operational["object_byte_verification"],
+                },
+                sort_keys=True,
+            ),
+        )
+        self.assertEqual(operational["error_code_counts"], {})
         self.assertFalse(
             report["deep_full_doctor"]["checks"][
                 "completed_within_configured_regression_budget"

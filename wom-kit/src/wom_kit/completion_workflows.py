@@ -14,6 +14,7 @@ import json
 import math
 import os
 import re
+import sqlite3
 import stat
 import time
 import unicodedata
@@ -7951,6 +7952,28 @@ def _draft_discard_plan_core(
     if canonical_twin_present:
         blockers.append("discard_draft_canonical_twin_present_use_retire_draft")
 
+    # v0.4.30 (letter 163 ④c): count the edges other zets point at this draft
+    # from the generated index (zettels/ and inbox/ are both indexed). A count
+    # and a warning only: never the sources' ids or the raw edge types.
+    inbound_edge_count = 0
+    inbound_edge_scan = "index_missing"
+    if safe_zettel_id:
+        index_path = root / archive_services.INDEX_RELATIVE_PATH
+        if index_path.is_file():
+            try:
+                connection = archive_services.connect_archive_index(index_path, row_factory=True)
+                try:
+                    row = connection.execute(
+                        "SELECT COUNT(*) FROM edges WHERE to_id = ?",
+                        (safe_zettel_id,),
+                    ).fetchone()
+                finally:
+                    connection.close()
+                inbound_edge_count = int(row[0] if row is not None else 0)
+                inbound_edge_scan = "index"
+            except (sqlite3.Error, OSError, archive_services.ArchiveServiceError, ValueError):
+                inbound_edge_scan = "index_unreadable"
+
     snapshot_relative = (
         f"{DRAFT_DISCARD_SNAPSHOT_DIR}/{draft_sha256}.draft.md"
         if draft_sha256
@@ -7998,6 +8021,14 @@ def _draft_discard_plan_core(
         and any("use_retire_draft" in item for item in aggregate)
         else []
     )
+    warnings: list[str] = []
+    if inbound_edge_count:
+        warnings.append("discard_draft_inbound_edges_present")
+        next_safe_actions.append(
+            f"archive related-zets <archive-root> --zettel-id {safe_zettel_id} "
+            "(lists the zets whose edges point here; revert them with revert-edge "
+            "before or after discarding)"
+        )
     result = {
         "ok": validation_ready,
         "state": "ready" if validation_ready else "blocked",
@@ -8025,11 +8056,13 @@ def _draft_discard_plan_core(
             "canonical_twin_present": canonical_twin_present,
             "exact_byte_restore_supported": True,
             "exact_byte_restore_approval_available": True,
+            "inbound_edge_count": inbound_edge_count,
+            "inbound_edge_scan": inbound_edge_scan,
         },
         "approval_contract": approval_contract,
         "approval_handoff": None,
         "blockers": aggregate,
-        "warnings": [],
+        "warnings": warnings,
         "next_safe_actions": next_safe_actions,
         "would_change": (
             [

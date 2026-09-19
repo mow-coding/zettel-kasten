@@ -2,6 +2,60 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.4.30 베타 편지 163: mint 게이트, 클레임 저장소, 감사 페이지 조회
+
+일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.
+새 외부 CPython 3.12 환경의 실제 `python.exe -m pip`를 사용해 설치된 PEP 610
+metadata에 wheel hash가 남게 합니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0430-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.30/wom_kit-0.4.30-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+새 process에서 정확히 `archive 0.4.30`이 나와야 합니다. wheel을 공개하거나 설치하는
+것만으로 client archive, project runtime, version pin은 바뀌지 않습니다. project
+update는 client가 따로 선택하고 승인합니다.
+
+업데이트 뒤에는 fidelity 초안을 dry-run이 알려 주는 대로 발행하세요. `archive mint-zet
+<archive-root> --path inbox/<draft>.md --dry-run --format json`이 `approval_handoff`와
+`next_safe_actions`를 내니, `current_source_fidelity_plan_sha256` 값을 `--approve` 호출의
+`--expected-source-fidelity-plan-sha256`에 넣으면 됩니다. 값이 없거나 오래됐으면 claim이
+생기기 전에 `mint_source_fidelity_plan_sha256_required` / `_mismatch`로 거절되고, 승인된
+writer 안에서 난 실패는 `cause_code`·`cause_stage`를 함께 냅니다. 승인 뒤 본문을 직접 고친
+fidelity 초안은 경고 `draft_body_changed_since_approval`이 붙어 `--allow-warnings`가
+필요합니다.
+
+그다음 이전 실패가 남긴 started 클레임을 검토하세요. `archive exact-approval-claims
+<archive-root> --status started`가 목록(작업 종류, 시각, 승인 방식; 검토자 id나 경로는
+안 찍음)을 냅니다. 검토가 끝난 것은 `archive exact-approval-claim-finalize <archive-root>
+--all-started --dry-run --format json`(30분이 안 된 클레임, 영수증이 가리키는 클레임,
+`project_version_update` 클레임은 건드리지 않음) 뒤 `--approve --reviewed-by <id>
+--expected-plan-sha256 <plan_sha256>`로 닫습니다. 승인 창 하나가 그것들을
+`operator_closed_started_claim_after_review`로 failed 처리하고 클레임마다 영수증을
+남깁니다. `project_version_update` 클레임은 여전히 `project-version-update --resume
+--abandon-started-approval`로 닫습니다. 감사 상한을 넘는 아카이브는 `archive
+approval-integrity-audit <archive-root> --kind canonical_mint --max-receipts 10000
+--offset 0 --format json`으로 종류별 페이지를 감사합니다(`page.next_offset`이 다음
+페이지).
+
+`revert-edge --approve`는 더 이상 `--exact-local`이 필요 없고(플래그는 받되 무시), inbox
+초안의 엣지 영수증도 받습니다. limited 세션 허용 목록에 `zettel_edge_revert`를 넣으면
+창 없이 실행됩니다. `discard-draft --dry-run`은 그 초안을 가리키는 엣지 수
+(`inbound_edge_count`)를 보여 주고, `create-draft`는 잘린 `sha256:` 오브제 참조가 있는
+본문을 승인 전에 거절합니다.
+
+검토한 project update 한 번 뒤에는 새 process에서 project launcher를 시작해 pin,
+source, launcher, runtime 근거를 확인하세요. 그 client 실행 결과만이 project가
+고쳐졌음을 보여 줍니다.
+
 ## v0.4.29 오브제 저장소 비우기 (OB-02)
 
 일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.

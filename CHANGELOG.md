@@ -6,6 +6,34 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.30 - 2026-09-19
+
+- Beta letter 163 core. `mint-zet` checks the source-fidelity plan digest
+  before any claim (`mint_source_fidelity_plan_sha256_required` / `_mismatch` /
+  `_not_applicable` in `reason_codes`), its dry-run carries `approval_handoff`
+  and `next_safe_actions`, the `object_id_only` refusal names body lines, a
+  hand-edited fidelity body is the warning `draft_body_changed_since_approval`,
+  and `mint_service_failed` carries `cause_code` / `cause_stage`.
+- `exact-approval-claims` (alias `approval-claims`) lists the MAC-verified
+  claim store with fixed fields only; `exact-approval-claim-finalize` closes
+  reviewed started claims as `operator_closed_started_claim_after_review`
+  behind one native dialog (new always-dialog kind
+  `exact_approval_claim_finalize`) after a receipt scan, a minimum claim age
+  and under the exact-operation writer lock, with one receipt per claim
+  (`wom-kit/exact-human-approval-claim-finalize-receipt/v0.1`).
+- `approval-integrity-audit --kind <kind> --offset N` pages one receipt kind
+  in name order (result schema v0.2 with a `page` block); the unpaged v0.1
+  result is unchanged.
+- Approved `mint-zet`, `create-draft`, `retire-draft`, their batches and
+  `work-session create/claim` carry the `inbox_attention` block.
+- `revert-edge --approve` takes the exact path without `--exact-local`
+  (session-grantable like `zettel-edge`), accepts `inbox/` edge receipts and
+  resolves a minted source by id; `discard-draft --dry-run` reports
+  `inbound_edge_count` and warns `discard_draft_inbound_edges_present`; the
+  mint dry-run reports `edge_target_check`; `create-draft` blocks
+  `draft_body_truncated_objet_reference`. Batch item failures caused by an
+  OS error report a fixed token instead of the error text.
+
 ## v0.4.29 - 2026-09-19
 
 - Object-storage offload (acceptance row OB-02, planned for v0.4.23 by the

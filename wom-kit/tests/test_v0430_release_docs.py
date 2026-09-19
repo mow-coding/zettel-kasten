@@ -12,8 +12,7 @@ from wom_kit import __version__
 ROOT = Path(__file__).resolve().parents[2]
 KIT = ROOT / "wom-kit"
 RESOURCE_ROOT = KIT / "src" / "wom_kit" / "_resources"
-RELEASE = KIT / "docs" / "releases" / "v0.4.29.md"
-CURRENT_RELEASE = KIT / "docs" / "releases" / "v0.4.30.md"
+RELEASE = KIT / "docs" / "releases" / "v0.4.30.md"
 PACKAGED_RELEASE = RESOURCE_ROOT / "release-notes" / "v0.4.30.md"
 LOCK = KIT / "project-runtime-supply-lock-v0.4.30.json"
 BOOTSTRAP_DOCUMENTS = (
@@ -47,7 +46,7 @@ CURRENT_PUBLIC_DOCUMENTS = (
 )
 
 
-class V0429ReleaseDocsTests(unittest.TestCase):
+class V0430ReleaseDocsTests(unittest.TestCase):
     def test_current_version_surfaces_are_exact(self) -> None:
         self.assertEqual(__version__, "0.4.30")
         self.assertIn('version = "0.4.30"', (KIT / "pyproject.toml").read_text(encoding="utf-8"))
@@ -71,7 +70,7 @@ class V0429ReleaseDocsTests(unittest.TestCase):
         self.assertEqual(policy["supply_lock_sha256"], "sha256:" + hashlib.sha256(current).hexdigest())
 
     def test_current_release_is_the_only_packaged_note(self) -> None:
-        self.assertEqual(CURRENT_RELEASE.read_bytes(), PACKAGED_RELEASE.read_bytes())
+        self.assertEqual(RELEASE.read_bytes(), PACKAGED_RELEASE.read_bytes())
         self.assertEqual(sorted(path.name for path in PACKAGED_RELEASE.parent.iterdir()), ["v0.4.30.md"])
         manifest = json.loads((RESOURCE_ROOT / "resource-manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["version"], "0.4.30")
@@ -92,18 +91,23 @@ class V0429ReleaseDocsTests(unittest.TestCase):
                     continue  # upgrade guides keep every historical section
                 self.assertNotIn("bootstrap-v0429-", document)
 
-    def test_release_describes_v0429_contract(self) -> None:
+    def test_release_describes_v0430_contract(self) -> None:
         flat = " ".join(RELEASE.read_text(encoding="utf-8").split()).casefold()
         for required in (
-            "object-storage-offload",
-            "object_storage_bytes_offload",
-            "object-storage-offload-receipt/v0.1",
-            "local_object_offloaded",
-            "objet_bytes_offloaded_remote_only_restore_before_cleanup",
-            "object_storage_offload_platform_unsupported",
-            "remote object is never deleted",
-            "ob-02",
-            "object-storage-restore",
+            "mint_source_fidelity_plan_sha256_required",
+            "approval_handoff",
+            "cause_code",
+            "exact-approval-claims",
+            "exact-approval-claim-finalize",
+            "operator_closed_started_claim_after_review",
+            "exact-human-approval-claim-finalize-receipt/v0.1",
+            "--min-age-minutes",
+            "--kind",
+            "inbox_attention",
+            "revert-edge",
+            "discard_draft_inbound_edges_present",
+            "edge_target_check",
+            "draft_body_truncated_objet_reference",
             "publishing or installing this release does not read or modify a client archive",
             "client-run result and a new-process verification",
         ):
@@ -130,32 +134,34 @@ class V0429ReleaseDocsTests(unittest.TestCase):
                 self.assertIn("v0.4.29", document)
 
     def test_release_surfaces_are_documented(self) -> None:
-        contract = (KIT / "docs" / "object-storage-adapter-execution-contract.md").read_text(encoding="utf-8")
-        self.assertIn("## v0.4.29 Offload Execution (OB-02)", contract)
-        self.assertIn("object_storage_offload_platform_unsupported", contract)
-        sovereignty = (KIT / "docs" / "local-sovereignty-and-backup-authority.md").read_text(encoding="utf-8")
-        self.assertIn("`archive object-storage-offload`", sovereignty)
+        contract = (KIT / "docs" / "exact-human-approval-contract.md").read_text(encoding="utf-8")
+        self.assertIn("`exact-approval-claim-finalize`", contract)
+        self.assertIn("operator_closed_started_claim_after_review", contract)
+        self.assertIn("mint_source_fidelity_plan_sha256_required", contract)
         register = (KIT / "docs" / "recovery-operations-acceptance.md").read_text(encoding="utf-8")
-        self.assertIn("| OB-02 | v0.4.23 → v0.4.29 |", register)
-        self.assertIn("**development verified in v0.4.29**", register)
+        self.assertIn("| L163-01 | v0.4.30 |", register)
+        self.assertIn("**development verified in v0.4.30**", register)
+        self.assertIn("### 2026-09-19 v0.4.30 letter 163 core implemented", register)
+        decision_log = (KIT / "docs" / "archive-infra-decision-log-2026-09-19-v0430-letter-163.md").read_text(encoding="utf-8")
+        self.assertIn("## Carried to v0.4.31", decision_log)
         matrix = (KIT / "docs" / "capability-matrix.md").read_text(encoding="utf-8")
-        self.assertIn("| Object storage offload (v0.4.29) |", matrix)
-        decision_log = (KIT / "docs" / "archive-infra-decision-log-2026-09-19-v0428-v0429-object-restore-offload.md").read_text(encoding="utf-8")
-        self.assertIn("## Amendment 2026-09-19", decision_log)
-        backup_doc = (KIT / "docs" / "backup-evidence-status.md").read_text(encoding="utf-8")
-        self.assertIn("remote_only_object_count", backup_doc)
+        self.assertIn("ten conditional approval scopes", matrix)
+        capabilities = (KIT / "docs" / "agent-operator-capabilities.md").read_text(encoding="utf-8")
+        self.assertIn("conditional approval paths:            10", capabilities)
+        coverage = json.loads((KIT / "docs" / "writer-session-coverage.json").read_text(encoding="utf-8"))
+        self.assertEqual(coverage["paths"]["exact-approval-claim-finalize"]["status"], "pending")
         for guide in (ROOT / "UPGRADE.md", ROOT / "UPGRADE.ko.md"):
             document = guide.read_text(encoding="utf-8")
             with self.subTest(guide=guide):
-                self.assertIn("object-storage-offload", document)
-                self.assertIn("--min-age-days", document)
+                self.assertIn("exact-approval-claim-finalize", document)
+                self.assertIn("--expected-source-fidelity-plan-sha256", document)
 
     def test_coverage_manifest_matches_release_claim(self) -> None:
         manifest = json.loads((KIT / "docs" / "writer-session-coverage.json").read_text(encoding="utf-8"))
         statuses = [row["status"] for row in manifest["paths"].values()]
         routed = sum(1 for row in manifest["paths"].values() if row.get("route"))
         # v0.4.23 integrated create-draft (LR-06a); v0.4.24 through v0.4.27 change no writer;
-        # v0.4.28 adds object-storage-restore and v0.4.29 object-storage-offload (both pending, target v0.4.30).
+        # v0.4.29 adds object-storage-restore and v0.4.30 object-storage-offload (both pending, target v0.4.30).
         self.assertEqual(len(statuses), 59)
         self.assertEqual(statuses.count("session_integrated") - routed, 6)
         self.assertEqual(routed, 1)

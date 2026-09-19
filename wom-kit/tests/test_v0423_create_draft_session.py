@@ -197,7 +197,7 @@ class CreateDraftSessionTests(unittest.TestCase):
         manifest = json.loads((KIT_ROOT / "docs" / "writer-session-coverage.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["paths"]["create-draft"]["status"], "session_integrated")
         self.assertIn("test_v0423_create_draft_session", manifest["paths"]["create-draft"]["evidence"])
-        self.assertEqual(counts["pending"], 31)  # v0.4.28 restore and v0.4.29 offload are pending (target v0.4.30)
+        self.assertEqual(counts["pending"], 32)  # v0.4.28 restore, v0.4.29 offload and v0.4.30 claim finalize are pending (target v0.4.31)
 
 
 if __name__ == "__main__":

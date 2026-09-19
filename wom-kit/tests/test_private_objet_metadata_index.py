@@ -58,9 +58,9 @@ EMPTY_ALLOWLIST_SHA256 = (
     "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
 )
 
-CLI_COUNT = 581
+CLI_COUNT = 584
 CLI_CANONICAL_SHA256 = (
-    "6993927a05e003808001478e7382386fdffd45f89fc7783996e94afed267dda5"
+    "3ea0cce306bd5792056d067cd31ebb86001dac1ba2fc2236f552dad90fde007e"
 )
 MCP_COUNT = 137
 MCP_CANONICAL_SHA256 = (
@@ -72,7 +72,7 @@ DB_SOURCE_CANONICAL_SHA256 = (
 )
 RESOURCE_ADDITIONS = frozenset(
     {
-        "release-notes/v0.4.29.md",
+        "release-notes/v0.4.30.md",
         "schemas/agent-instruction-policy-v0.1.schema.json",
         "schemas/approval-handoff-v0.1.schema.json",
         "schemas/approval-integrity-audit-result-v0.1.schema.json",
@@ -106,6 +106,8 @@ RESOURCE_ADDITIONS = frozenset(
         "schemas/object-storage-formal-adoption-receipt-v0.1.schema.json",
         "schemas/object-storage-restore-receipt-v0.1.schema.json",
         "schemas/object-storage-offload-receipt-v0.1.schema.json",
+        "schemas/approval-integrity-audit-result-v0.2.schema.json",
+        "schemas/exact-human-approval-claim-finalize-receipt-v0.1.schema.json",
         "schemas/objet-capture-batch-receipt.schema.json",
         "schemas/objet-capture-batch-request.schema.json",
         "schemas/principal-record.schema.json",
@@ -1216,7 +1218,7 @@ class PrivateObjetMetadataIndexPrivacyGateTests(unittest.TestCase):
             manifest["schema"],
             "wom-kit/package-resource-manifest/v0.1",
         )
-        self.assertEqual(manifest["version"], "0.4.29")
+        self.assertEqual(manifest["version"], "0.4.30")
         self.assertEqual(manifest["file_count"], len(manifest["files"]))
         current_paths = {row["packaged"] for row in manifest["files"]}
         self.assertEqual(

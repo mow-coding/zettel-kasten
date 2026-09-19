@@ -414,6 +414,7 @@ from uuid import UUID
 from . import (
     __version__,
     approval_integrity,
+    exact_approval_claims,
     archive_doctor,
     archive_services,
     artifact_lifecycle_inventory,
@@ -15032,6 +15033,8 @@ def command_approval_integrity_audit(args: argparse.Namespace) -> int:
                 archive_root,
                 max_receipts=args.max_receipts,
                 receipt_authentication_key=key,
+                kind=getattr(args, "kind", None),
+                offset=int(getattr(args, "offset", 0) or 0),
             ),
         )
     except approval_integrity.ApprovalIntegrityError as exc:
@@ -15064,6 +15067,15 @@ def command_approval_integrity_audit(args: argparse.Namespace) -> int:
             dict(result.get("classification_counts") or {}).items()
         ):
             print(f"{classification}: {count}")
+        page = result.get("page")
+        if isinstance(page, dict):
+            if page.get("exhausted"):
+                print(f"Page: {page.get('kind')} offset {page.get('offset')}; exhausted.")
+            else:
+                print(
+                    f"Page: {page.get('kind')} offset {page.get('offset')}; "
+                    f"next offset: {page.get('next_offset')}."
+                )
     return 0 if result.get("ok") is True else 1
 
 
@@ -15243,6 +15255,240 @@ def command_approval_integrity_overlay(args: argparse.Namespace) -> int:
         approval = result.get("exact_human_approval")
         if isinstance(approval, dict):
             print(f"Exact approval: {approval.get('status') or '-'}")
+    return 0 if result.get("ok") is True else 1
+
+
+def _exact_approval_claims_boundary(root: Path):
+    """v0.4.30: bind the claim directory chain without creating recovery state."""
+
+    return _project_version_update_resume_boundary(root)
+
+
+def _exact_approval_claims_cli_error(
+    args: argparse.Namespace,
+    *,
+    lifecycle_action: str,
+    exc: BaseException | None = None,
+    reason_code: str | None = None,
+) -> int:
+    code = reason_code or getattr(exc, "code", None) or "exact_approval_claim_store_unavailable"
+    return _archive_integrity_cli_error(
+        args,
+        lifecycle_action=lifecycle_action,
+        reason_code=str(code),
+    )
+
+
+def command_exact_approval_claims(args: argparse.Namespace) -> int:
+    """v0.4.30 (letter 163 ⑥): read-only, MAC-verified claim listing."""
+
+    lifecycle_action = "exact_approval_claims_listing"
+    try:
+        archive_root = Path(args.archive_root)
+        result = exact_approval_claims.list_exact_human_approval_claims(
+            archive_root,
+            status=str(args.status),
+            operation=args.operation,
+            max_claims=int(args.max_claims),
+            claims_boundary=lambda: _exact_approval_claims_boundary(archive_root),
+        )
+    except exact_approval_claims.ExactApprovalClaimsError as exc:
+        return _exact_approval_claims_cli_error(args, lifecycle_action=lifecycle_action, exc=exc)
+    except (
+        ExactHumanApprovalError,
+        ExactHumanApprovalWorkflowError,
+        archive_services.ArchiveServiceError,
+        OSError,
+    ):
+        return _exact_approval_claims_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code="exact_approval_claim_store_unavailable",
+        )
+    except Exception:
+        return _exact_approval_claims_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code="exact_approval_claim_key_unavailable",
+        )
+    if args.format == "json":
+        print_json(result)
+    else:
+        counts = result.get("status_counts") or {}
+        print(
+            f"Exact-approval claims: {result.get('claim_count', 0)} listed "
+            f"(filter {result.get('status_filter')}); started {counts.get('started', 0)}, "
+            f"succeeded {counts.get('succeeded', 0)}, failed {counts.get('failed', 0)}; "
+            f"scanned {result.get('claims_scanned', 0)}."
+        )
+        for claim in result.get("claims") or []:
+            print(
+                f"- {claim.get('approval_id')} {claim.get('operation')} {claim.get('status')} "
+                f"{claim.get('started_at')} {claim.get('approval_mechanism')}"
+                + (f" failure {claim.get('failure_code')}" if claim.get("failure_code") else "")
+            )
+        for code in result.get("blocker_codes") or []:
+            print(f"Blocker: {code}")
+        for action in result.get("next_safe_actions") or []:
+            print(f"Next: {action}")
+    return 0 if result.get("ok") is True else 1
+
+
+def command_exact_approval_claim_finalize(args: argparse.Namespace) -> int:
+    """v0.4.30 (letter 163 ⑥): close reviewed started claims through one dialog."""
+
+    lifecycle_action = "exact_approval_claim_finalize"
+    if bool(args.dry_run) == bool(args.approve):
+        return _exact_approval_claims_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code="exact_approval_claim_finalize_execution_mode_invalid",
+        )
+    if args.approve and not (
+        str(args.reviewed_by or "").strip()
+        and str(args.expected_plan_sha256 or "").strip()
+    ):
+        return _exact_approval_claims_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code="exact_approval_claim_finalize_approval_evidence_required",
+        )
+    approval_ids = tuple(
+        str(item).strip().lower() for item in (args.approval_id or [])
+    ) or None
+    selection = {
+        "approval_ids": approval_ids,
+        "all_started": bool(args.all_started),
+        "operation": args.operation,
+        "min_age_minutes": int(args.min_age_minutes),
+    }
+    try:
+        archive_root = Path(args.archive_root)
+        boundary = lambda: _exact_approval_claims_boundary(archive_root)
+        plan = exact_approval_claims.plan_exact_human_approval_claim_finalize(
+            archive_root,
+            claims_boundary=boundary,
+            **selection,
+        )
+        if args.dry_run:
+            result = plan
+        else:
+            if plan.get("ok") is not True or plan.get("blockers"):
+                return _exact_approval_claims_cli_error(
+                    args,
+                    lifecycle_action=lifecycle_action,
+                    reason_code="exact_approval_claim_finalize_plan_blocked",
+                )
+            expected_plan_sha256 = str(args.expected_plan_sha256).strip().lower()
+            if not secrets.compare_digest(
+                expected_plan_sha256, str(plan.get("plan_sha256") or "")
+            ):
+                return _exact_approval_claims_cli_error(
+                    args,
+                    lifecycle_action=lifecycle_action,
+                    reason_code="exact_approval_claim_finalize_plan_mismatch",
+                )
+            reviewer = str(args.reviewed_by).strip()
+            context = ExactHumanApprovalContext(
+                operation=ExactHumanApprovalOperation.exact_approval_claim_finalize,
+                archive_identity_sha256=(
+                    exact_human_approval_archive_identity_sha256(
+                        archive_services.read_archive_id(archive_root)
+                    )
+                ),
+                plan_sha256=str(plan["plan_sha256"]),
+                target_binding_sha256=str(plan["target_binding_sha256"]),
+                reviewer_claim=reviewer,
+                review_binding_codes=tuple(plan["review_binding_codes"]),
+                warning_codes=tuple(plan["warning_codes"]),
+            )
+
+            def _write_finalize(approval_claim) -> dict[str, Any]:
+                return exact_approval_claims.finalize_exact_human_approval_claims(
+                    archive_root,
+                    expected_plan_sha256=expected_plan_sha256,
+                    exact_human_approval_claim=approval_claim,
+                    claims_boundary=boundary,
+                    **selection,
+                )
+
+            result = _execute_exact_human_approved_write(
+                archive_root,
+                context,
+                _write_finalize,
+            )
+    except exact_approval_claims.ExactApprovalClaimsError as exc:
+        return _exact_approval_claims_cli_error(args, lifecycle_action=lifecycle_action, exc=exc)
+    except ExactHumanApprovalWorkflowError as exc:
+        # v0.4.22 contract: the inner fixed cause travels with the envelope.
+        code = getattr(exc, "code", "exact_human_approval_state_unknown")
+        if getattr(args, "format", None) == "json":
+            payload: dict[str, Any] = {
+                "ok": False,
+                "state": "blocked",
+                "lifecycle_action": lifecycle_action,
+                "reason_codes": [code],
+                "private_values_echoed": False,
+            }
+            cause_code = getattr(exc, "cause_code", None)
+            if cause_code:
+                payload["cause_code"] = cause_code
+                payload["cause_stage"] = getattr(exc, "cause_stage", None)
+            if code == "exact_human_approval_state_unknown":
+                payload["next_safe_actions"] = [
+                    "Some claims may already be closed; re-run --dry-run to see "
+                    "the remaining set (the finalize claim itself is listed as started)."
+                ]
+            print_json(payload)
+            return 1
+        return _exact_approval_claims_cli_error(
+            args, lifecycle_action=lifecycle_action, reason_code=code
+        )
+    except (ExactHumanApprovalError, ExactHumanApprovalWindowsError) as exc:
+        return _exact_approval_claims_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code=getattr(exc, "code", "exact_human_approval_state_unknown"),
+        )
+    except (archive_services.ArchiveServiceError, OSError):
+        return _exact_approval_claims_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code="exact_approval_claim_store_unavailable",
+        )
+    except Exception:
+        return _exact_approval_claims_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code="exact_approval_claim_key_unavailable",
+        )
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        if _print_exact_human_reconciliation_notice(result):
+            return 1
+        if result.get("dry_run"):
+            print(
+                "Exact-approval claim finalize dry-run: "
+                + ("ready" if result.get("ok") else "blocked")
+                + f"; selected {result.get('selected_count', 0)} claim(s)."
+            )
+            if result.get("plan_sha256"):
+                print(f"Plan SHA-256: {result['plan_sha256']}")
+            for item in result.get("selected") or []:
+                print(f"- {item.get('approval_id')} {item.get('operation')} {item.get('started_at')}")
+            for code in result.get("blockers") or []:
+                print(f"Blocker: {code}")
+            for code in result.get("warnings") or []:
+                print(f"Warning: {code}")
+        else:
+            print(
+                f"Exact-approval claims closed: {result.get('finalized_count', 0)} "
+                f"({result.get('failure_code')})."
+            )
+        for action in result.get("next_safe_actions") or []:
+            print(f"Next: {action}")
     return 0 if result.get("ok") is True else 1
 
 
@@ -16957,6 +17203,7 @@ def _exact_batch_approval_route(
     items_of: Callable[[dict[str, Any]], Any],
     collection_of: Callable[[dict[str, Any]], TargetCollectionPreview | None],
     printer: Callable[[dict[str, Any]], None],
+    inbox_attention: bool = False,
 ) -> int:
     """Shared v0.4.21 --approve route for reviewed batches.
 
@@ -17051,6 +17298,9 @@ def _exact_batch_approval_route(
             lifecycle_action=lifecycle_action,
             reason_code=f"{lifecycle_action}_workflow_failed_safely",
         )
+    if inbox_attention and result.get("ok"):
+        # v0.4.30 (letter 163 ⑫): once per batch, after the broker returned.
+        result = archive_services.attach_inbox_attention(result, archive_root)
     printer(result)
     return 0 if result.get("ok") else 1
 
@@ -17145,12 +17395,10 @@ def command_zettel_edge_batch(args: argparse.Namespace) -> int:
 
 
 def command_revert_edge(args: argparse.Namespace) -> int:
-    if args.approve and not bool(getattr(args, "exact_local", False)):
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="zettel_edge_revert",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
+    # v0.4.30 (letter 163 ③c): every --approve takes the receipt-bound exact
+    # approval path below; --exact-local is accepted for compatibility only,
+    # so a session permission grant for zettel_edge_revert applies like it
+    # does for zettel-edge and revert-batch.
     try:
         archive_root = Path(args.archive_root)
         if args.approve:
@@ -27719,6 +27967,9 @@ def command_create_draft(args: argparse.Namespace) -> int:
                 "produced; private argument values were not echoed."
             ),
         )
+    if not result.get("dry_run") and result.get("ok", True):
+        # v0.4.30 (letter 163 ⑫): show the backlog the draft just joined.
+        result = archive_services.attach_inbox_attention(result, archive_root)
 
     if args.format == "json":
         print_json(result)
@@ -27765,7 +28016,16 @@ def command_create_draft(args: argparse.Namespace) -> int:
             print(f"Created draft zettel {result['zettel_id']} at {result['path']}")
             for warning in result.get("warnings", []):
                 print(f"Warning: {warning}")
+            _print_inbox_attention_line(result)
     return 0 if result.get("ok", True) else 1
+
+
+def _print_inbox_attention_line(result: dict[str, Any]) -> None:
+    """v0.4.30: one privacy-safe text line for an attached inbox block."""
+
+    attention = result.get("inbox_attention")
+    if isinstance(attention, dict) and attention.get("human_summary"):
+        print(f"Inbox attention: {attention['human_summary']}")
 
 
 def command_inbox_pipeline_audit(args: argparse.Namespace) -> int:
@@ -29554,12 +29814,54 @@ def command_promote(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") is True else 1
 
 
+_MINT_CAUSE_TOKEN_RE = re.compile(r"^[a-z][a-z0-9_]{0,95}$")
+_MINT_CONTENT_FREE_CAUSE_PREFIXES = (
+    "mint_",
+    "expected_source_fidelity_plan_sha256_",
+    "source_fidelity_",
+    "exact_human_approval_",
+    "archive_index_",
+    "zettel_",
+    "draft_",
+)
+
+
+def _mint_content_free_cause(error: BaseException) -> dict[str, str | None]:
+    """Fixed inner cause of a mint failure, never its text (v0.4.30, letter 163 ⑤).
+
+    Mirrors the project-version-update contract: an exact-approval workflow
+    error carries the writer's code-shaped cause and its stage; a bare service
+    error qualifies only when its single argument is itself a fixed token.
+    """
+
+    cause_code = getattr(error, "cause_code", None)
+    cause_stage = getattr(error, "cause_stage", None)
+    if not (isinstance(cause_code, str) and _MINT_CAUSE_TOKEN_RE.fullmatch(cause_code)):
+        cause_code = None
+        cause_stage = None
+        if (
+            type(error).__name__ == "ArchiveServiceError"
+            and len(error.args) == 1
+            and isinstance(error.args[0], str)
+            and _MINT_CAUSE_TOKEN_RE.fullmatch(error.args[0])
+            and error.args[0].startswith(_MINT_CONTENT_FREE_CAUSE_PREFIXES)
+        ):
+            cause_code = error.args[0]
+            cause_stage = "mint_preflight"
+    if cause_code is not None and not cause_code.startswith(_MINT_CONTENT_FREE_CAUSE_PREFIXES):
+        cause_code = None
+        cause_stage = None
+    return {"cause_code": cause_code, "cause_stage": cause_stage if cause_code else None}
+
+
 def _mint_cli_error(
     args: argparse.Namespace,
     *,
     reason_code: str,
     message: str,
     progress_summary: dict[str, object] | None = None,
+    cause: dict[str, str | None] | None = None,
+    next_safe_actions: list[str] | None = None,
 ) -> int:
     if getattr(args, "format", None) == "json":
         result: dict[str, object] = {
@@ -29570,11 +29872,20 @@ def _mint_cli_error(
             "files_written": [],
             "private_values_echoed": False,
         }
+        if cause is not None and cause.get("cause_code"):
+            result["cause_code"] = cause["cause_code"]
+            result["cause_stage"] = cause.get("cause_stage")
+        if next_safe_actions:
+            result["next_safe_actions"] = list(next_safe_actions)
         if progress_summary is not None:
             result["progress_summary"] = progress_summary
         print_json(result)
     else:
         print(message, file=sys.stderr)
+        if cause is not None and cause.get("cause_code"):
+            print(f"cause_code: {cause['cause_code']} (stage {cause.get('cause_stage')})", file=sys.stderr)
+        for action in next_safe_actions or []:
+            print(f"Next: {action}", file=sys.stderr)
     return 1
 
 
@@ -29660,6 +29971,53 @@ def command_mint_zettel(args: argparse.Namespace) -> int:
                     ),
                     progress_summary=reporter.summary(),
                 )
+            # v0.4.30 (letter 163 ⑤): the source-fidelity plan digest is checked
+            # here, before any claim exists, so a missing or stale value ends as
+            # a fixed code and never as a started claim.
+            current_plan = preview.get("current_source_fidelity_plan_sha256")
+            supplied_plan = str(
+                getattr(args, "expected_source_fidelity_plan_sha256", None) or ""
+            ).strip().lower()
+            if isinstance(current_plan, str):
+                if not re.fullmatch(r"[0-9a-f]{64}", supplied_plan):
+                    reporter.finish()
+                    return _mint_cli_error(
+                        args,
+                        reason_code="mint_source_fidelity_plan_sha256_required",
+                        message=(
+                            "This source-fidelity draft needs --expected-source-fidelity-plan-sha256 "
+                            "<current_source_fidelity_plan_sha256 from the dry-run> on approve."
+                        ),
+                        progress_summary=reporter.summary(),
+                        next_safe_actions=[
+                            "Run the same command with --dry-run --format json, copy "
+                            "current_source_fidelity_plan_sha256, and pass it as "
+                            "--expected-source-fidelity-plan-sha256 with --approve."
+                        ],
+                    )
+                if not secrets.compare_digest(supplied_plan, current_plan):
+                    reporter.finish()
+                    return _mint_cli_error(
+                        args,
+                        reason_code="mint_source_fidelity_plan_sha256_mismatch",
+                        message=(
+                            "The supplied source-fidelity plan digest does not match the current "
+                            "draft; rerun --dry-run and use its current value."
+                        ),
+                        progress_summary=reporter.summary(),
+                        next_safe_actions=[
+                            "Rerun --dry-run --format json; the draft or its fidelity evidence changed "
+                            "since the digest you supplied was computed."
+                        ],
+                    )
+            elif supplied_plan and "current_source_fidelity_plan_sha256" in preview:
+                reporter.finish()
+                return _mint_cli_error(
+                    args,
+                    reason_code="mint_source_fidelity_plan_sha256_not_applicable",
+                    message="--expected-source-fidelity-plan-sha256 applies only to source-fidelity drafts.",
+                    progress_summary=reporter.summary(),
+                )
             binding = operation_approval_binding.mint_zet_approval_binding(
                 preview
             )
@@ -29718,12 +30076,26 @@ def command_mint_zettel(args: argparse.Namespace) -> int:
         ExactHumanApprovalWindowsError,
         ExactHumanApprovalWorkflowError,
         OSError,
-    ):
+    ) as exc:
+        # v0.4.30 (letter 163 ⑤): the fixed inner cause and its stage travel with
+        # the safe envelope; free text still does not.
+        cause = _mint_content_free_cause(exc)
         return _mint_cli_error(
             args,
             reason_code="mint_service_failed",
             message="Minting failed safely; private values were not echoed.",
             progress_summary=reporter.summary(),
+            cause=cause,
+            next_safe_actions=(
+                [
+                    "The claim for this attempt stays started for reconciliation; "
+                    "list it with 'archive exact-approval-claims <root> --status started' and, "
+                    "after review, close it with 'archive exact-approval-claim-finalize <root> "
+                    "--approval-id <id> --dry-run'."
+                ]
+                if getattr(exc, "cause_stage", None) == "domain_writer"
+                else None
+            ),
         )
     finally:
         reporter.close()
@@ -29731,6 +30103,10 @@ def command_mint_zettel(args: argparse.Namespace) -> int:
     if getattr(args, "format", None) == "json" and progress_enabled:
         result = dict(result)
         result["progress_summary"] = reporter.summary()
+    if not args.dry_run and result.get("ok", True):
+        # v0.4.30 (letter 163 ⑫): the backlog count travels with the write
+        # result, computed after the broker returned (outside the claim).
+        result = archive_services.attach_inbox_attention(result, archive_root)
 
     if args.dry_run:
         if args.format == "json":
@@ -29760,6 +30136,8 @@ def command_mint_zettel(args: argparse.Namespace) -> int:
             source_fidelity_plan_sha256 = _source_fidelity_plan_sha256_from_result(result)
             if source_fidelity_plan_sha256:
                 print(f"Current source-fidelity plan: {source_fidelity_plan_sha256}")
+            for action in result.get("next_safe_actions") or []:
+                print(f"Next: {action}")
             print("Mint dry-run passed." if result["ok"] else "Mint dry-run blocked.")
         return 0 if result["ok"] else 1
 
@@ -29783,6 +30161,7 @@ def command_mint_zettel(args: argparse.Namespace) -> int:
             print(f"Affirmed by {reviewer}: " + ", ".join(affirmed_ids))
         for action in result.get("next_safe_actions", []):
             print(f"Next: {action}")
+        _print_inbox_attention_line(result)
     return 0 if result.get("ok", True) else 1
 
 
@@ -30109,6 +30488,9 @@ def command_retire_draft(args: argparse.Namespace) -> int:
             reason_code="retire_workflow_failed_safely",
             message="Retire draft failed safely; private values were not echoed.",
         )
+    if not result.get("dry_run") and result.get("ok", True):
+        # v0.4.30 (letter 163 ⑫): the count now excludes the retired draft.
+        result = archive_services.attach_inbox_attention(result, archive_root)
 
     if args.format == "json":
         print_json(result)
@@ -30117,6 +30499,7 @@ def command_retire_draft(args: argparse.Namespace) -> int:
             return 1
         state = "passed" if result.get("ok") else "blocked"
         print(f"Retire draft {state} for {result.get('zettel_id') or result.get('draft_path')}.")
+        _print_inbox_attention_line(result)
         print(f"Draft path: {result.get('draft_path') or '-'}")
         print(f"Canonical path: {result.get('canonical_path') or '-'}")
         print(f"Mint receipt path: {result.get('mint_receipt_path') or '-'}")
@@ -30491,6 +30874,7 @@ def command_mint_zettel_batch(args: argparse.Namespace) -> int:
             items_of=lambda preview: preview.get("items"),
             collection_of=_lifecycle_batch_collection,
             printer=lambda result: _print_lifecycle_batch_result("Mint batch", result, args.format),
+            inbox_attention=True,
         )
     try:
         result = archive_services.mint_zet_batch(
@@ -30548,6 +30932,7 @@ def command_retire_draft_batch(args: argparse.Namespace) -> int:
             items_of=lambda preview: preview.get("items"),
             collection_of=_lifecycle_batch_collection,
             printer=lambda result: _print_lifecycle_batch_result("Retire draft batch", result, args.format),
+            inbox_attention=True,
         )
     try:
         result = archive_services.retire_draft_batch(
@@ -39442,7 +39827,23 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-receipts",
         type=int,
         default=4096,
-        help="Maximum operation receipts to inspect (default: 4096).",
+        help="Maximum operation receipts to inspect (default: 4096; ceiling 10000).",
+    )
+    approval_integrity_audit.add_argument(
+        "--kind",
+        choices=list(approval_integrity.AFFECTED_KINDS),
+        default=None,
+        help=(
+            "v0.4.30: audit one receipt kind as a name-ordered page of "
+            "--max-receipts entries starting at --offset; the result carries a "
+            "page block with next_offset."
+        ),
+    )
+    approval_integrity_audit.add_argument(
+        "--offset",
+        type=int,
+        default=0,
+        help="v0.4.30: page start within --kind (default 0).",
     )
     approval_integrity_audit.add_argument(
         "--format",
@@ -39450,6 +39851,82 @@ def build_parser() -> argparse.ArgumentParser:
         default="text",
         help="Output format.",
     )
+    exact_claims = subcommands.add_parser(
+        "exact-approval-claims",
+        aliases=["approval-claims"],
+        help=(
+            "v0.4.30: list the archive's exact-approval claims (MAC-verified, "
+            "fixed fields only; no reviewer id, no path); read-only."
+        ),
+    )
+    exact_claims.add_argument("archive_root", help="Archive root whose claim store is listed.")
+    exact_claims.add_argument(
+        "--status",
+        choices=list(exact_approval_claims.STATUS_FILTERS),
+        default="started",
+        help="Claim status to list (default: started).",
+    )
+    exact_claims.add_argument(
+        "--operation",
+        choices=sorted(member.value for member in ExactHumanApprovalOperation),
+        default=None,
+        help="Only claims of this operation kind.",
+    )
+    exact_claims.add_argument(
+        "--max-claims",
+        type=int,
+        default=10000,
+        help="Maximum claim files to authenticate (default: 10000).",
+    )
+    exact_claims.add_argument(
+        "--format", choices=["text", "json"], default="text", help="Output format."
+    )
+    exact_claims.set_defaults(func=command_exact_approval_claims)
+
+    claim_finalize = subcommands.add_parser(
+        "exact-approval-claim-finalize",
+        help=(
+            "v0.4.30: close reviewed started exact-approval claims as failed "
+            "(operator_closed_started_claim_after_review) after a receipt scan; "
+            "one native dialog, never a session permission mode."
+        ),
+    )
+    claim_finalize.add_argument("archive_root", help="Archive root whose claims are closed.")
+    claim_finalize.add_argument(
+        "--approval-id",
+        action="append",
+        default=None,
+        help="Claim id to close (repeatable); or use --all-started.",
+    )
+    claim_finalize.add_argument(
+        "--all-started",
+        action="store_true",
+        help="Select every started claim old enough (project_version_update claims are excluded).",
+    )
+    claim_finalize.add_argument(
+        "--operation",
+        choices=sorted(member.value for member in ExactHumanApprovalOperation),
+        default=None,
+        help="Restrict the selection to one operation kind.",
+    )
+    claim_finalize.add_argument(
+        "--min-age-minutes",
+        type=int,
+        default=exact_approval_claims.DEFAULT_MIN_AGE_MINUTES,
+        help=(
+            "Refuse claims younger than this (a writer may still be running); "
+            f"default {exact_approval_claims.DEFAULT_MIN_AGE_MINUTES}; 0 adds a bound warning."
+        ),
+    )
+    claim_finalize.add_argument("--dry-run", action="store_true", help="Plan and scan receipts; write nothing.")
+    claim_finalize.add_argument("--approve", action="store_true", help="Close the planned claims after one native dialog.")
+    claim_finalize.add_argument("--reviewed-by", help="Safe reviewer id required with --approve.")
+    claim_finalize.add_argument("--expected-plan-sha256", help="plan_sha256 from the matching --dry-run.")
+    claim_finalize.add_argument(
+        "--format", choices=["text", "json"], default="text", help="Output format."
+    )
+    claim_finalize.set_defaults(func=command_exact_approval_claim_finalize)
+
     approval_integrity_audit.set_defaults(func=command_approval_integrity_audit)
 
     approval_integrity_guard = subcommands.add_parser(
@@ -47175,19 +47652,14 @@ def build_parser() -> argparse.ArgumentParser:
     revert_edge.add_argument(
         "--exact-local",
         action="store_true",
-        help="Use the native receipt-bound approval path for this one edge revert.",
+        help=(
+            "Accepted for compatibility; since v0.4.30 every revert-edge "
+            "--approve uses the receipt-bound exact approval path."
+        ),
     )
     revert_edge.add_argument("--reviewed-by", help="Safe reviewer id required with --approve.")
     revert_edge.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
-    revert_edge.set_defaults(
-        func=command_revert_edge,
-        _wom_approval_scope={
-            "kind": "argument_flag_any_allowlist",
-            "allowed_flags": ["--exact-local"],
-            "outside_scope_status": "approval_fixed_closed",
-            "outside_scope_reason_code": command_status.COMPOUND_APPROVAL_REASON_CODE,
-        },
-    )
+    revert_edge.set_defaults(func=command_revert_edge)
 
     revert_batch = subcommands.add_parser(
         "revert-batch",
