@@ -119,6 +119,8 @@ def _resolved_session_permission(archive_root, session_permission, context):
     caller presented session refs and a grant existed but was refused
     (missing / mismatched presenter, expiry, legacy shape, route doubt, a
     bound warning that the human must see). None/None is plain manual mode.
+    A caller that resolved the grant itself may pass the ``(grant, reason)``
+    tuple of ``resolve_grant_outcome`` so the reason reaches the result.
     """
 
     from . import work_session_permission as permission
@@ -128,6 +130,10 @@ def _resolved_session_permission(archive_root, session_permission, context):
         if context.operation in permission.ALWAYS_DIALOG_OPERATIONS:
             return None, None
         grant, reason = permission.resolve_grant_outcome_from_environment(archive_root)
+    elif type(session_permission) is tuple and len(session_permission) == 2:
+        grant, reason = session_permission
+        if reason is not None and (type(reason) is not str or reason not in permission.GRANT_REFUSAL_CODES):
+            reason = None
     else:
         grant = session_permission
     if grant is None or type(grant) is not permission.SessionPermissionGrant:
@@ -160,15 +166,17 @@ def _session_presenter_with_key(
         except (TypeError, ValueError):
             digest = None
     seen_count = 0
+    truncated = True
     try:
         from . import exact_approval_claims as claims
 
-        seen, _truncated = claims._presenters_seen_with_key(
+        seen, truncated = claims._presenters_seen_with_key(
             archive_root, key, filesystem_boundary, work_session_ref=grant.work_session_ref,
+            not_before=grant.granted_at,
         )
         seen_count = len(seen - ({digest} if digest is not None else set()))
-    except BaseException:
-        seen_count = 0
+    except Exception:  # noqa: BLE001 - evidence only; interrupts and exits propagate
+        seen_count, truncated = 0, True
     return {
         "schema": SESSION_PRESENTER_SCHEMA,
         "work_session_ref": grant.work_session_ref,
@@ -176,6 +184,7 @@ def _session_presenter_with_key(
         "fingerprint_state": "observed" if digest is not None else "unavailable",
         "process_fingerprint_sha256": digest,
         "presenters_observed_before_this_claim": seen_count,
+        "scan_truncated": bool(truncated),
     }
 
 
@@ -432,6 +441,7 @@ def _attach_session_permission_evidence(
             "fingerprint_state": session_presenter["fingerprint_state"],
             "presenters_observed_before_this_claim": seen,
             "second_presenter_observed": second,
+            "scan_truncated": bool(session_presenter.get("scan_truncated", False)),
             "presenter_values_echoed": False,
         }
         if second:

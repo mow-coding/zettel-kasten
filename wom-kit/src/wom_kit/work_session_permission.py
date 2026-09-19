@@ -273,9 +273,10 @@ class SessionPermissionGrant:
     binding_sha256: str
     mode: str
     operations: tuple[str, ...]
-    # v0.4.34: the presenter hash and the expiry the row was granted with.
+    # v0.4.34: the presenter hash and the time box the row was granted with.
     presenter_sha256: str | None = None
     expires_at: str | None = None
+    granted_at: str | None = None
 
     def permits(self, operation: ExactHumanApprovalOperation) -> bool:
         if type(operation) is not ExactHumanApprovalOperation or operation in ALWAYS_DIALOG_OPERATIONS:
@@ -397,6 +398,7 @@ def resolve_grant_outcome(archive_root, *, client_app_ref, task_route_ref, work_
             binding_sha256=snapshot.binding(work_session_ref).binding_sha256,
             mode=permission["mode"], operations=tuple(permission["operations"]),
             presenter_sha256=permission["presenter_sha256"], expires_at=permission["expires_at"],
+            granted_at=permission["granted_at"],
         ), None
     except Exception:
         return None, "work_session_grant_unavailable"

@@ -230,6 +230,7 @@ def _project_claim(
                 "fingerprint_state": presenter.get("fingerprint_state"),
                 "process_fingerprint_sha256": presenter.get("process_fingerprint_sha256"),
                 "presenters_observed_before_this_claim": presenter.get("presenters_observed_before_this_claim"),
+                "scan_truncated": presenter.get("scan_truncated"),
             }
             if presenter_recorded
             else None
@@ -237,7 +238,8 @@ def _project_claim(
     }
 
 
-PRESENTER_SCAN_LIMIT = 10_000
+PRESENTER_SCAN_LIMIT = 2_000
+_PRESENTER_SCAN_SLACK_SECONDS = 300
 
 
 def _presenters_seen_with_key(
@@ -246,12 +248,15 @@ def _presenters_seen_with_key(
     filesystem_boundary: tuple[Path, dict[str, Any]] | None,
     *,
     work_session_ref: str,
+    not_before: str | None = None,
 ) -> tuple[set[str], bool]:
     """(distinct fingerprint digests recorded for this session, scan_truncated).
 
-    Read-only and bounded: at most PRESENTER_SCAN_LIMIT claims are read, in
-    approval-id order; invalid claims are skipped. Used inside the broker's
-    key scope before a new grant claim is written.
+    Read-only and bounded: only claim files modified since ``not_before``
+    (the grant's ``granted_at``, minus a slack) are opened, newest first, at
+    most PRESENTER_SCAN_LIMIT of them; invalid claims are skipped. A grant
+    claim older than the grant cannot be a presenter of this grant. Used
+    inside the broker's key scope before a new grant claim is written.
     """
 
     if filesystem_boundary is None:
@@ -261,17 +266,56 @@ def _presenters_seen_with_key(
         if not root.joinpath(*Path(CLAIMS_RELATIVE_ROOT).parts).is_dir():
             return set(), False
         with _claims_boundary_default(archive_root)() as bound:
-            return _presenters_seen_with_key(archive_root, key, bound, work_session_ref=work_session_ref)
-    claims, _scanned, _invalid, complete = _enumerate_claims_with_key(
-        archive_root, key, filesystem_boundary, max_claims=PRESENTER_SCAN_LIMIT, clock=_utc_now,
-    )
+            return _presenters_seen_with_key(
+                archive_root, key, bound, work_session_ref=work_session_ref, not_before=not_before,
+            )
+    bound_archive_root, claim_parent_binding = filesystem_boundary
+    claims_root = Path(bound_archive_root).joinpath(*Path(CLAIMS_RELATIVE_ROOT).parts)
+    if claim_parent_binding.get("path") != claims_root:
+        raise _fail("exact_approval_claim_store_unavailable")
+    directory_target = claim_parent_binding.get("descriptor")
+    if type(directory_target) is not int:
+        directory_target = claim_parent_binding.get("path")
+    floor = None
+    if type(not_before) is str:
+        try:
+            floor = _parse_timestamp(not_before).timestamp() - _PRESENTER_SCAN_SLACK_SECONDS
+        except (ExactHumanApprovalError, TypeError, ValueError, OverflowError):
+            floor = None
+    try:
+        with os.scandir(directory_target) as entries:
+            candidates = []
+            for entry in entries:
+                match = _workflow._APPROVAL_CLAIM_FILENAME_RE.fullmatch(entry.name)
+                if match is None:
+                    continue
+                try:
+                    info = entry.stat(follow_symlinks=False)
+                except OSError:
+                    continue
+                if not stat.S_ISREG(info.st_mode):
+                    continue
+                if floor is not None and info.st_mtime < floor:
+                    continue
+                candidates.append((info.st_mtime, match.group(1)))
+    except (OSError, TypeError, ValueError):
+        raise _fail("exact_approval_claim_store_unavailable") from None
+    candidates.sort(reverse=True)
+    truncated = len(candidates) > PRESENTER_SCAN_LIMIT
     seen: set[str] = set()
-    for claim in claims:
-        presenter = claim.get("session_presenter")
-        if (type(presenter) is dict and presenter.get("work_session_ref") == work_session_ref
+    for _mtime, approval_id in candidates[:PRESENTER_SCAN_LIMIT]:
+        try:
+            parsed, _archive_id = _authenticated_claim_document_core(
+                archive_root, approval_id, key,
+                bound_archive_root=bound_archive_root, claim_parent_binding=claim_parent_binding,
+            )
+        except ExactHumanApprovalError:
+            continue
+        presenter = parsed.get("session_presenter")
+        if (isinstance(presenter, Mapping) and presenter.get("work_session_ref") == work_session_ref
                 and type(presenter.get("process_fingerprint_sha256")) is str):
             seen.add(presenter["process_fingerprint_sha256"])
-    return seen, not complete
+    return seen, truncated
 
 
 def _enumerate_claims_with_key(

@@ -114,9 +114,9 @@ SUPERSESSION_RECEIPT_KEYS = {
 COMPOSE_INTENTS = ("create", "revise", "supersede")
 # v0.4.34 (letter 165 [D]): the revise path, announced wherever it is needed.
 REVISE_PATH_NEXT_SAFE_ACTIONS = (
-    "1. archive operator-feedback-record <archive-root> --feedback-id <id> --status draft --intent create "
-    "--approve --reviewed-by <person:...>  (binds the body's feedback_ref; a compose --intent create "
-    "already creates this draft record when none exists)",
+    "1. archive operator-feedback-record <archive-root> --feedback-id <id> --feedback-ref <feedback_ref> "
+    "--status draft --intent create --approve --reviewed-by <person:...>  (binds the body's feedback_ref; "
+    "compose --intent create --create-draft-record does this step for you)",
     "2. archive operator-feedback-body-check <archive-root> --feedback-id <id> --dry-run --format json  "
     "(confirms body, receipt and record binding; its feedback_ref carries the current body SHA-256)",
     "3. archive operator-feedback-compose <archive-root> --request <same-request> --intent revise "
@@ -1966,6 +1966,15 @@ def approve_operator_feedback_body(
             final_receipt is not None
             and _receipt_matches(final_receipt, prepared, reviewer)
         )
+        if final_receipt_persisted:
+            # v0.4.34: say what the persisted receipt carries, not what this
+            # run offered (a replay may have matched an older v0.1 receipt).
+            try:
+                result["exact_human_approval_reference_present"] = _document_envelope(
+                    _parse_json_mapping(final_receipt, "feedback_body_receipt_invalid")
+                ) is not None
+            except _BodyContractError:
+                pass
         if not final_body_persisted or not final_receipt_persisted:
             result.update(
                 {

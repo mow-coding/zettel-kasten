@@ -1774,7 +1774,7 @@ FOREIGN_BLOCK_QUARANTINE_CASE_ALLOWED_KEYS = {
     "trust_state",
 }
 DRAFT_SECRET_VALUE_RE = re.compile(
-    r"(?i)(?:api[_-]?key|secret|token|password|credential|aws_secret_access_key)['\"]?\s*[:=]\s*['\"]?[A-Za-z0-9_./+=:-]{12,}"
+    r"(?i)(?:api[_-]?key|secret|token|password|credential|aws_secret_access_key|wom_work_session_presenter)['\"]?\s*[:=]\s*['\"]?[A-Za-z0-9_./+=:-]{12,}"
     r"|-----BEGIN (?:RSA |DSA |EC |OPENSSH )?PRIVATE KEY-----"
     r"|\bAKIA[0-9A-Z]{16}\b"
     r"|\bghp_[A-Za-z0-9_]{20,}\b"
@@ -37283,7 +37283,7 @@ def create_draft_zettel(
 
     # v0.4.34 (letter 165 [B]): a bare Notion page name or page id in the new
     # body or title is named here, with counts and lines, never the text.
-    draft_legacy_explanation = legacy_identifier_explanation_for(root, body, title=title)
+    draft_legacy_explanation = legacy_identifier_explanation_for(root, normalized_body, title=title)
     draft_quality_check = {
         "warning_explanations": [] if draft_legacy_explanation is None else [draft_legacy_explanation],
         "privacy_guards": {"matched_text_echoed": False},
@@ -49819,7 +49819,9 @@ def mint_zettel_dry_run(
     )
     quality_check["warning_explanations"] = warning_explanations
     quality_check.setdefault("privacy_guards", {})["matched_status_markers_echoed"] = False
-    quality_check["privacy_guards"]["matched_text_echoed"] = False
+    if any(item.get("category") == "legacy_identifier" for item in warning_explanations):
+        # only a flagged plan changes shape; clean plans keep their digest
+        quality_check["privacy_guards"]["matched_text_echoed"] = False
     for explanation in warning_explanations:
         warnings.append(str(explanation["code"]))
 
@@ -53849,6 +53851,13 @@ def mint_zet_batch(
             if dry_result.get("warnings") and not policy.get("allow_warnings"):
                 failed_items.append({**row, "write_status": "failed", "blockers": ["mint warnings require the batch policy to allow warnings."]})
                 continue
+            # v0.4.34 (letter 165 [B]): an allowed item warning that a session
+            # grant must never cover is folded into the batch's bound set.
+            from .legacy_identifier import CODE_MIGRATED_RECORD, CODE_NEW_RECORD
+
+            for code in dry_result.get("warnings", []):
+                if code in {CODE_NEW_RECORD, CODE_MIGRATED_RECORD} and code not in warnings:
+                    warnings.append(code)
             try:
                 item_binding = mint_zet_approval_binding(dry_result)
             except OperationApprovalBindingError:
@@ -144140,7 +144149,11 @@ def source_intake_plan(
     resolved_label = title if isinstance(title, str) and title.strip() else (
         Path(str(local_path)).name if local_path is not None else None
     )
-    if label_legacy_identifier_present(resolved_label):
+    stored_label = (
+        result_body.get("source_metadata", {}).get("label")
+        if isinstance(result_body.get("source_metadata"), dict) else None
+    )
+    if label_legacy_identifier_present(resolved_label) or label_legacy_identifier_present(stored_label):
         warnings.append(CODE_SOURCE_LABEL)
         result_body["legacy_identifier_guidance"] = legacy_identifier_guidance_line(root)
 
@@ -150977,7 +150990,9 @@ def legacy_identifier_explanation_for(
 
     from .legacy_identifier import legacy_identifier_explanation
 
-    migrated = isinstance(frontmatter, dict) and notion_import_frontmatter_is_notion(frontmatter)
+    migrated = isinstance(frontmatter, dict) and str(frontmatter.get("id") or "").strip().lower().startswith(
+        ("zet_notion_", "zet_import_notion_")
+    )
     return legacy_identifier_explanation(
         body, title=title, migrated_record=migrated,
         mapping_available=legacy_identifier_mapping_available(archive_root),

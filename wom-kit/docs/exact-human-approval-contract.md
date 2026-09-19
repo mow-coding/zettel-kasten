@@ -304,15 +304,17 @@ v0.4.34 gets the dialog and says why on its result
 `work_session_presenter_mismatch`, `work_session_grant_expired`,
 `work_session_grant_legacy_shape`, `work_session_grant_unavailable`,
 `work_session_grant_warning_review_required`). The token is a secret of the
-granting conversation's process (`WOM_WORK_SESSION_PRESENTER`, or the MCP
-host's in-process holder, which never shows it to the model); it binds the
-grant to whoever received the approve result — with the CLI transport it is
-visible once in that conversation's transcript — and the claim's presenter
-fingerprint, the expiry and the operator's `recover` route are the guards
-against reuse elsewhere. Each grant claim carries the optional key
+granting conversation's process (`WOM_WORK_SESSION_PRESENTER`; an
+MCP-hosted approve returns it once the same way and also holds it in the
+server process); it binds the grant to whoever received the approve result
+— with either transport it is visible once in that conversation — and the
+claim's presenter fingerprint, the expiry, the operator's `recover` route
+and the draft/intake privacy gates (which refuse a pasted
+`WOM_WORK_SESSION_PRESENTER=` line) are the guards against reuse elsewhere. Each grant claim carries the optional key
 `session_presenter` (the presenter hash, an HMAC'd fingerprint of the first
-non-launcher ancestor process or `unavailable`, and how many other
-presenters used the session before it); results carry
+non-launcher ancestor process or `unavailable`, how many other
+presenters used the session before it, and whether that bounded scan was
+truncated); results carry
 `exact_human_approval.presenter` and warn
 `work_session_second_presenter_observed` when another presenter already used
 the grant. Claims written before v0.4.34 stay immutable and count as

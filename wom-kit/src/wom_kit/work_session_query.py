@@ -72,9 +72,23 @@ def _row(document, kind, reference):
         row["presenter_bound"] = shape == "v2"
         row["permission_granted_at"] = permission["granted_at"] if shape == "v2" else None
         row["permission_expires_at"] = permission["expires_at"] if shape == "v2" else None
-        row["grant_expired"] = permission_rules.permission_expired(permission) if shape == "v2" else None
         row["grant_legacy_shape"] = shape == "legacy"
     return row
+
+
+def _with_expiry(row):
+    """Clock-dependent, so added after the pager digest: never part of a cursor."""
+
+    from . import work_session_permission as permission_rules
+
+    if row.get("kind") != "session":
+        return row
+    expires = row.get("permission_expires_at")
+    expired = None
+    if type(expires) is str:
+        expired = permission_rules.permission_expired({"mode": "limited", "operations": [], "presenter_sha256": "",
+                                                       "granted_at": "", "expires_at": expires})
+    return {**row, "grant_expired": expired}
 
 
 def _base(snapshot):
@@ -113,11 +127,14 @@ def _list(snapshot, *, kind, client_app_ref, workstream_ref, page_size, cursor):
               "excluded_by_filters": len(document[table]) - len(rows)}
     if kind == "session":
         counts["non_manual_session_count"] = sum(1 for row in rows if row["permission_mode"] != "manual")
-        counts["expired_grant_count"] = sum(1 for row in rows if row["grant_expired"] is True)
+        counts["expired_grant_count"] = sum(1 for row in rows if _with_expiry(row)["grant_expired"] is True)
         counts["legacy_grant_count"] = sum(1 for row in rows if row["grant_legacy_shape"])
+    page = pager.page(page_size=page_size, cursor=cursor)
+    if kind == "session" and isinstance(page.get("items"), list):
+        page = {**page, "items": [_with_expiry(item) for item in page["items"]]}
     return {**_base(snapshot), "action": "list", "kind": kind,
             "counts": counts,
-            **pager.page(page_size=page_size, cursor=cursor)}
+            **page}
 
 
 def _inspect(snapshot, *, kind, reference):
@@ -141,7 +158,7 @@ def _inspect(snapshot, *, kind, reference):
             client_app_label_sha256=registry._label_digest(document["apps"][value["client_app_ref"]]["label"]),
             workstream_label_sha256=registry._label_digest(document["workstreams"][value["workstream_ref"]]["label"]),
         ).document()
-    return {**_base(snapshot), "action": "inspect", "kind": kind, "item": row}
+    return {**_base(snapshot), "action": "inspect", "kind": kind, "item": _with_expiry(row)}
 
 
 def query_work_sessions(root, *, action="list", kind="session", reference=None,

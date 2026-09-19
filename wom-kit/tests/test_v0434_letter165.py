@@ -105,6 +105,14 @@ class PresenterBoundGrantTests(_permission_fixture.SessionPermissionModeTests):
         listing = self.call("work-session", "--action", "list", "--kind", "session")
         self.assertEqual(listing["counts"]["non_manual_session_count"], 1)
         self.assertEqual(listing["counts"]["expired_grant_count"], 0)
+        self.assertFalse(listing["items"][0]["grant_expired"])
+        # expiry is computed at page time: a cursor taken before the expiry still pages after it
+        self.establish("v2row-second")
+        first = self.call("work-session", "--action", "list", "--kind", "session", "--page-size", "1")
+        with patch.object(permission, "_clock", lambda: datetime.now(timezone.utc) + timedelta(hours=9)):
+            second = self.call("work-session", "--action", "list", "--kind", "session", "--page-size", "1",
+                               "--cursor", first["pagination"]["next_cursor"])
+            self.assertEqual(second["counts"]["expired_grant_count"], 1)
         # resuming the original decision never re-issues the secret
         resumed = self.call("work-session", "--action", "set-permission-mode", "--resume",
                             *task["refs"], "--work-session-ref", task["session"], request=None)
@@ -181,7 +189,8 @@ class PresenterBoundGrantTests(_permission_fixture.SessionPermissionModeTests):
         summary = granted["exact_human_approval"]
         self.assertEqual(summary["approval_mechanism"], PERMISSION_INTERACTIVE_INTENT_MECHANISM)
         self.assertEqual(summary["presenter"], {"fingerprint_state": "observed", "presenters_observed_before_this_claim": 0,
-                                                "second_presenter_observed": False, "presenter_values_echoed": False})
+                                                "second_presenter_observed": False, "scan_truncated": False,
+                                                "presenter_values_echoed": False})
         claim = self.claim_document(summary["approval_id"])
         presenter = claim["session_presenter"]
         self.assertEqual(presenter["schema"], approval.SESSION_PRESENTER_SCHEMA)
@@ -189,8 +198,19 @@ class PresenterBoundGrantTests(_permission_fixture.SessionPermissionModeTests):
         self.assertEqual(presenter["presenter_sha256"], permission.presenter_sha256(token))
         self.assertRegex(presenter["process_fingerprint_sha256"], r"^sha256:[0-9a-f]{64}$")
         self.assertEqual(claim["status"], "succeeded")
+        self.assertFalse(presenter["scan_truncated"])
         self.assertNotIn("synthetic.exe", json.dumps(claim))
         self.assertNotIn(token, json.dumps(claim))
+        # the explicit-refs (session) route says why too
+        third = self.draft_flags(self.manifested_source(b"session route refusal source\n"), "Session route without the token")
+        self.index()
+        refs_flags = (*task["refs"], "--work-session-ref", task["session"])
+        preview3 = self.draft_call(*refs_flags, *third, "--dry-run")
+        dialogs = self.native.calls
+        with patch.dict(os.environ, {permission.PRESENTER_ENV: "x" * 43}):
+            session_route = self.draft_call(*refs_flags, *third, *self.approve_flags(preview3))
+        self.assertEqual(self.native.calls, dialogs + 1)
+        self.assertEqual(session_route["session_permission_refused"]["reason_code"], "work_session_presenter_mismatch")
 
     def test_second_presenter_is_recorded_and_warned(self) -> None:
         task = self.establish("second")
@@ -218,6 +238,7 @@ class PresenterBoundGrantTests(_permission_fixture.SessionPermissionModeTests):
         rows = [row for row in listing["claims"] if row["approval_mechanism"] == PERMISSION_INTERACTIVE_INTENT_MECHANISM]
         self.assertTrue(all(row["presenter_recorded"] for row in rows))
         self.assertEqual({row["session_presenter"]["work_session_ref"] for row in rows}, {task["session"]})
+        self.assertEqual({row["session_presenter"]["scan_truncated"] for row in rows}, {False})
         self.assertIn("immutable", listing["presenter_evidence_note"])
         # an unavailable fingerprint is recorded as such, never as a refusal
         flags = self.draft_flags(self.manifested_source(b"no fingerprint source\n"), "No fingerprint draft")
@@ -233,10 +254,11 @@ class PresenterBoundGrantTests(_permission_fixture.SessionPermissionModeTests):
         archive_id = "sha256:" + "c" * 64
         good = {"schema": approval.SESSION_PRESENTER_SCHEMA, "work_session_ref": "work_session_" + "d" * 32,
                 "presenter_sha256": "sha256:" + "e" * 64, "fingerprint_state": "observed",
-                "process_fingerprint_sha256": "sha256:" + "f" * 64, "presenters_observed_before_this_claim": 2}
+                "process_fingerprint_sha256": "sha256:" + "f" * 64, "presenters_observed_before_this_claim": 2,
+                "scan_truncated": False}
         self.assertEqual(approval.validate_session_presenter(good), good)
         for broken in ({**good, "fingerprint_state": "unavailable"}, {**good, "presenters_observed_before_this_claim": -1},
-                       {**good, "extra": 1}, {**good, "process_fingerprint_sha256": None}):
+                       {**good, "extra": 1}, {**good, "process_fingerprint_sha256": None}, {**good, "scan_truncated": 1}):
             with self.assertRaises(approval.ExactHumanApprovalError):
                 approval.validate_session_presenter(broken)
         approval.validate_session_presenter({**good, "fingerprint_state": "unavailable", "process_fingerprint_sha256": None})
@@ -279,11 +301,36 @@ class PresenterBoundGrantTests(_permission_fixture.SessionPermissionModeTests):
         self.assertEqual(refused["reason_codes"], ["create_draft_warning_override_required"])
         self.assertEqual(self.native.calls, dialogs)
         self.assertTrue(any("ZET0637" in line for line in refused["next_safe_actions"]))
+        # the explicit-refs (session) route refuses the same way: one document, no dialog, nothing written
+        refs_flags = (*task["refs"], "--work-session-ref", task["session"])
+        session_preview = self.draft_call(*refs_flags, *flags, "--dry-run")
+        with patch.dict(os.environ, self.presenter_env(task)):
+            session_refused = self.draft_call(*refs_flags, *flags, *self.approve_flags(session_preview), ok=False)
+        self.assertEqual(session_refused["reason_codes"], ["create_draft_warning_override_required"])
+        self.assertEqual(self.native.calls, dialogs)
         with patch.dict(os.environ, self.env(task)):
             written = self.draft_call(*flags, *self.approve_flags(preview), "--allow-warnings")
         self.assertEqual(self.native.calls, dialogs + 1)  # the grant did not cover it
         self.assertTrue(written["exact_human_approval"]["live_dialog_shown"])
+        self.assertEqual(written["session_permission_refused"]["reason_code"], "work_session_grant_warning_review_required")
         self.assertEqual(written["quality_check"]["warning_explanations"][0]["code"], "legacy_identifier_in_new_record")
+        claim = self.claim_document(written["exact_human_approval"]["approval_id"])
+        self.assertIn("legacy_identifier_in_new_record", claim["context"]["warning_codes"])
+        self.assertTrue(any(code.startswith("warning_set_") for code in claim["context"]["warning_codes"]))
+        # the pasted-token privacy gate
+        pasted = self.draft_flags(object_id, "A clean title")
+        pasted = tuple("Keep this: WOM_WORK_SESSION_PRESENTER=" + "Q" * 43 if item == "A reviewed summary of the manifested source." else item for item in pasted)
+        blocked = self.draft_call(*pasted, "--dry-run", ok=False)
+        self.assertNotIn("Q" * 43, json.dumps(blocked))
+        # the mint dry-run of the flagged draft explains the same warning
+        mint_out = io.StringIO()
+        with redirect_stdout(mint_out), redirect_stderr(io.StringIO()):
+            mint_code = cli.main(["mint-zet", str(self.root), "--path", written["path"], "--dry-run", "--format", "json"])
+        mint = json.loads(mint_out.getvalue())
+        self.assertIn(mint_code, (0, 1))  # checklist items still need human review; the warning is what matters here
+        self.assertIn("legacy_identifier_in_new_record", mint["warnings"])
+        self.assertTrue(any(item["code"] == "legacy_identifier_in_new_record" for item in mint["quality_check"]["warning_explanations"]))
+        self.assertNotIn("ZET777", json.dumps(mint["quality_check"]))
 
     # ------------------------------------------------------------ surfaces
     def test_attention_block_mcp_holder_and_inventory(self) -> None:
@@ -319,12 +366,11 @@ class PresenterBoundGrantTests(_permission_fixture.SessionPermissionModeTests):
             "client_app_ref": task["app"], "task_route_ref": route_ref, "work_session_ref": session,
             "request": {"reviewer_claim": REVIEWER, "permission_mode": "allow_all", "operations": [], "grant_hours": 1}})
         inner = granted["structuredContent"]["result"]
-        self.assertNotIn("presenter_token", inner)
-        self.assertNotIn("presenter_token_field", granted["structuredContent"])
+        self.assertRegex(inner["presenter_token"], r"^[A-Za-z0-9_-]{43}$")
         self.assertTrue(inner["presenter_token_held_in_process"])
-        self.assertFalse(inner["presenter_token_returned_once"])
+        self.assertTrue(inner["presenter_token_returned_once"])
         held = permission._process_presenter(session)
-        self.assertIsNotNone(held)
+        self.assertEqual(held, inner["presenter_token"])
         self.assertIsNotNone(permission.resolve_grant(self.root, client_app_ref=task["app"], task_route_ref=route_ref,
                                                       work_session_ref=session))
         permission.release_presenter(session)

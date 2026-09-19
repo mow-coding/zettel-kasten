@@ -4114,20 +4114,19 @@ def tool_archive_work_session_manage(arguments: dict[str, Any]) -> dict[str, Any
         **{key: arguments.get(key, False) for key in flags},
         **{key: arguments.get(key) for key in refs}, request=arguments.get("request"), **wait_callbacks)
     if result.get("presenter_token_field") == "result.presenter_token":
-        # v0.4.34 (letter 165 [A]): the MCP host keeps the presenter secret in
-        # this process; the model never sees it and cannot carry it elsewhere.
+        # v0.4.34 (letter 165 [A]): the secret is returned once through this
+        # envelope exactly as the CLI returns it (the writes that consume it
+        # run in the conversation's CLI process, not in this server); it is
+        # also held here for an in-process consumer.
         from .work_session_permission import hold_presenter
 
         inner = dict(result["result"])
-        token = inner.pop("presenter_token")
         try:
-            hold_presenter(str(arguments.get("work_session_ref")), token)
+            hold_presenter(str(arguments.get("work_session_ref")), str(inner.get("presenter_token")))
             inner["presenter_token_held_in_process"] = True
         except Exception:
             inner["presenter_token_held_in_process"] = False
-        inner["presenter_token_returned_once"] = False
         result = {**result, "result": inner}
-        result.pop("presenter_token_field", None)
     if not result["ok"]:
         return {"content": [{"type": "text", "text": "Work-session operation could not be completed."}],
                 "structuredContent": result, "isError": True}

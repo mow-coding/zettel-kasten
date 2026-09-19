@@ -303,7 +303,7 @@ def _authenticated(document: Mapping[str, Any], key: bytes | bytearray) -> dict[
 SESSION_PRESENTER_SCHEMA = "wom-kit/exact-human-approval-presenter/v0.1"
 SESSION_PRESENTER_KEYS = frozenset({
     "schema", "work_session_ref", "presenter_sha256", "fingerprint_state",
-    "process_fingerprint_sha256", "presenters_observed_before_this_claim",
+    "process_fingerprint_sha256", "presenters_observed_before_this_claim", "scan_truncated",
 })
 _WORK_SESSION_REF_RE = re.compile(r"work_session_[0-9a-f]{32}\Z")
 
@@ -320,7 +320,8 @@ def validate_session_presenter(value: Any) -> dict[str, Any]:
             or value.get("fingerprint_state") not in {"observed", "unavailable"}
             or type(value.get("presenters_observed_before_this_claim")) is not int
             or isinstance(value.get("presenters_observed_before_this_claim"), bool)
-            or value["presenters_observed_before_this_claim"] < 0):
+            or value["presenters_observed_before_this_claim"] < 0
+            or type(value.get("scan_truncated")) is not bool):
         raise _fail("exact_human_approval_claim_document_invalid")
     digest = value.get("process_fingerprint_sha256")
     if value["fingerprint_state"] == "observed":

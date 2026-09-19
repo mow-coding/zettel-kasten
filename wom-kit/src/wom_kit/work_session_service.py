@@ -330,10 +330,11 @@ def review_original_task_handoff(root, *, client_app_ref, task_route_ref, work_s
 
 
 _PRESENTER_NEXT_STEP = (
-    "Keep presenter_token only in this conversation's process (WOM_WORK_SESSION_PRESENTER or the "
-    "MCP host's in-process holder); never write it into memory files, notes or another conversation. "
-    "Every WOM body/intake privacy gate refuses a pasted token. Another conversation continues this "
-    "task through work-session handoff/accept (one human decision); the grant expires at expires_at."
+    "Keep presenter_token only in this conversation's process (export WOM_WORK_SESSION_PRESENTER "
+    "next to the three refs); never write it into memory files, notes or another conversation. "
+    "The draft and intake privacy gates refuse a pasted WOM_WORK_SESSION_PRESENTER line. Another "
+    "conversation continues this task through work-session handoff/accept (one human decision); "
+    "the grant expires at expires_at."
 )
 
 

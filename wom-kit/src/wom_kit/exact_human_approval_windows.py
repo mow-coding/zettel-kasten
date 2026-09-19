@@ -432,7 +432,18 @@ def exact_human_approval_warning_codes(
     if len(raw) > _MAX_WARNING_BYTES:
         raise _fail("exact_human_approval_context_invalid")
     digest = hashlib.sha256(raw).hexdigest()
-    return ("warning_set_" + digest[:52],)
+    # v0.4.34 (letter 165 [B]): the fixed codes a session grant must never
+    # cover stay literal next to the digest, so the broker can refuse the
+    # grant; a clean plan keeps its single digest code.
+    literal = sorted(code for code in normalized if code in _GRANT_BLOCKING_WARNING_CODES)
+    return (*literal, "warning_set_" + digest[:52])
+
+
+_GRANT_BLOCKING_WARNING_CODES = frozenset({
+    "legacy_identifier_in_new_record",
+    "legacy_identifier_in_migrated_record",
+    "label_legacy_identifier_review",
+})
 
 
 _OPERATION_LABELS = {

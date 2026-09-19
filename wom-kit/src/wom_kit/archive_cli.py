@@ -12445,12 +12445,15 @@ def _operator_feedback_compose_exact_approval(
         **strict_root_kwargs,
     )
     if not isinstance(plan, dict) or plan.get("ok") is not True or plan.get("blockers"):
-        return plan if isinstance(plan, dict) else {"_cli_error": "feedback_compose_failed"}
+        if isinstance(plan, dict):
+            return {**plan, "dry_run": False, "approved": False, "lifecycle_action": "operator_feedback_body_approve"}
+        return {"_cli_error": "feedback_compose_failed"}
     expected_plan = str(args.expected_plan_sha256 or "").strip().lower()
     plan_sha256 = str(plan.get("plan_sha256") or "")
     feedback_ref = str(plan.get("feedback_ref") or "")
     if (
         not SHA256_RE.fullmatch(plan_sha256)
+        or not SHA256_RE.fullmatch(expected_plan)
         or not secrets.compare_digest(plan_sha256, expected_plan)
         or not feedback_ref.startswith("feedback-body-sha256:")
     ):
@@ -12490,7 +12493,7 @@ def _operator_feedback_compose_exact_approval(
     # its draft record next, in sequence and outside the claim, so
     # `--intent revise` works immediately; without it the five-step path is
     # announced and the existing record sequence stays valid.
-    if intent == "create" and result.get("state") == "written":
+    if intent == "create" and result.get("state") in {"written", "already_written"}:
         feedback_id = str(result.get("feedback_id") or "")
         record: dict[str, Any] = {"record_created": False, "record_path": None, "record_sha256": None,
                                   "skipped_reason": None if bool(getattr(args, "create_draft_record", False)) else "not_requested"}
@@ -12507,9 +12510,10 @@ def _operator_feedback_compose_exact_approval(
                 status="draft", intent="create", dry_run=False, approve=True, reviewed_by=reviewer,
             )
             summary = record_result.get("summary") if isinstance(record_result.get("summary"), dict) else {}
+            receipt = record_result.get("receipt") if isinstance(record_result.get("receipt"), dict) else {}
             if record_result.get("ok") is True:
                 record.update(record_created=True, record_path=summary.get("record_path"),
-                              record_sha256=summary.get("record_sha256"))
+                              record_sha256=receipt.get("record_sha256") or summary.get("record_sha256"))
             else:
                 codes = record_result.get("blocker_codes") if isinstance(record_result.get("blocker_codes"), list) else []
                 record["skipped_reason"] = (
@@ -27895,9 +27899,11 @@ def _command_session_create_draft(
                 return {"_cli_error": ("archive_index_observation_unavailable"
                                        if write_preflight.get("state") == "unavailable"
                                        else archive_services.INDEX_REBUILD_REQUIRED)}
-            legacy_gate = _create_draft_legacy_identifier_gate(args, preview)
-            if legacy_gate is not None:
-                return legacy_gate
+            if (_create_draft_legacy_identifier_flagged(preview)
+                    and not bool(getattr(args, "allow_warnings", False))):
+                # v0.4.34 (letter 165 [B]): refuse outside the held lane so
+                # exactly one document is printed; no dialog was opened.
+                return {"_legacy_gate": preview}
             plan_sha256 = _source_fidelity_plan_sha256_from_result(preview)
             body_sha256 = preview.get("body_sha256")
             expected_plan = str(args.expected_source_fidelity_plan_sha256 or "").strip().lower()
@@ -27960,12 +27966,10 @@ def _command_session_create_draft(
                 claim_succeeded_finalizer=finish,
                 # v0.4.24: the explicit session refs resolve the permission
                 # grant; without a grant the dialog opens as before.
-                # v0.4.34 (letter 165 [B]): a flagged legacy identifier is
-                # never covered by a grant; the human sees that body.
-                session_permission=(
-                    None if _create_draft_legacy_identifier_flagged(preview)
-                    else permission.resolve_grant(archive_root, **refs)
-                ),
+                # v0.4.34 (letter 165 [A]): the refusal reason travels with
+                # the grant so the result says why the dialog opened; a
+                # flagged legacy identifier is refused by the broker itself.
+                session_permission=permission.resolve_grant_outcome(archive_root, **refs),
             )
 
         result = sessions._write(
@@ -27986,6 +27990,8 @@ def _command_session_create_draft(
             message="create-draft could not bind the work session; private values were not echoed.")
     finally:
         reporter.close() if hasattr(reporter, "close") else None
+    if isinstance(result, dict) and "_legacy_gate" in result:
+        return _create_draft_legacy_identifier_gate(args, result["_legacy_gate"])
     if isinstance(result, dict) and "_cli_error" in result:
         return _create_draft_cli_error(args, reason_code=result["_cli_error"],
             message="Draft approval is blocked by its index prerequisite; no approval window was opened.",
@@ -28293,17 +28299,14 @@ def command_create_draft(args: argparse.Namespace) -> int:
                     **create_kwargs,
                 )
 
-            if _create_draft_legacy_identifier_flagged(preview):
-                # v0.4.34 (letter 165 [B]): never under an environment grant.
-                result = _execute_exact_human_approved_write_core(
-                    archive_root, context, _write_ai_draft, session_permission=None,
-                )
-            else:
-                result = _execute_exact_human_approved_write(
-                    archive_root,
-                    context,
-                    _write_ai_draft,
-                )
+            # v0.4.34 (letter 165 [B]): a flagged legacy identifier is a
+            # literal bound warning code, so the broker refuses any grant
+            # with work_session_grant_warning_review_required itself.
+            result = _execute_exact_human_approved_write(
+                archive_root,
+                context,
+                _write_ai_draft,
+            )
         else:
             result = archive_services.create_draft_zettel(
                 archive_root,

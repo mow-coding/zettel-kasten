@@ -25,7 +25,9 @@ This project uses semantic versioning for public compatibility checkpoints.
   `presenter_bound`, `permission_expires_at`, `grant_expired`; `ai-start-here`
   gains the registry-only `session_permission_attention` block and the guidance
   (refs and token stay in the granting conversation; handoff/accept is the
-  route). An MCP host keeps the token in its own process.
+  route). An MCP-hosted approve returns the token once the same way and
+  also holds it in the server process; the draft/intake privacy gates refuse
+  a pasted `WOM_WORK_SESSION_PRESENTER=` line.
 - Beta letter 165 [B]: one legacy-identifier detector (bare Notion `ZET<number>`
   or page id outside a WOM id) warns with counts and lines only on
   `create-draft` (`quality_check.warning_explanations`,

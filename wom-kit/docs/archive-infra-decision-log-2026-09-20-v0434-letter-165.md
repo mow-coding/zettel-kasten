@@ -63,8 +63,12 @@ ledger was read or changed; every fixture is synthetic.
    The secret is returned exactly once in that approve result
    (`presenter_token`, `presenter_token_returned_once`); a resume or
    re-review reports `presenter_token_available: false`. The conversation
-   keeps it in `WOM_WORK_SESSION_PRESENTER`; the MCP host strips it from the
-   model's view into an in-process holder (`presenter_token_held_in_process`).
+   keeps it in `WOM_WORK_SESSION_PRESENTER`; an MCP-hosted approve returns
+   it once through its envelope the same way and also holds it in the
+   server process (`presenter_token_held_in_process`) — the implementation
+   review established that no MCP tool can consume the holder (every exact
+   write through MCP is `exact_human_approval_cli_required`), so a
+   strip-only host would have stranded the grant.
 2. **Resolution with reasons.** `resolve_grant_outcome` returns the grant or
    one fixed code: `work_session_presenter_missing`,
    `work_session_presenter_mismatch`, `work_session_grant_expired`,
@@ -78,15 +82,18 @@ ledger was read or changed; every fixture is synthetic.
 3. **Presenter evidence in the claim.** A grant-mechanism claim carries the
    optional key `session_presenter` (`wom-kit/exact-human-approval-presenter/v0.1`:
    work_session_ref, presenter_sha256, fingerprint_state,
-   process_fingerprint_sha256, presenters_observed_before_this_claim), covered
-   by the MAC; fifteen-key claims stay valid. Results carry
+   process_fingerprint_sha256, presenters_observed_before_this_claim,
+   scan_truncated), covered by the MAC; fifteen-key claims stay valid. Results carry
    `exact_human_approval.presenter` and, when another fingerprint already used
    the session, `exact_human_approval.warnings:
    [work_session_second_presenter_observed]`. The claims listing gains
    `mechanism_counts`, `presenter_unknown_count` and per-row
    `presenter_recorded` / `session_presenter`; claims before v0.4.34 stay
    immutable. Earlier presenters are derived from the authenticated claims
-   already in the store (bounded, `scan_truncated`), never from the registry.
+   already in the store, never from the registry: only claim files modified
+   since the grant's `granted_at` (minus a 5-minute slack) are opened, newest
+   first, at most 2,000 of them, and `scan_truncated` says when that bound
+   was hit (a claim older than the grant cannot be a presenter of it).
 4. **Visibility and guidance.** `work-session` list / inspect rows carry
    `presenter_bound`, `permission_granted_at`, `permission_expires_at`,
    `grant_expired`, `grant_legacy_shape`; the session listing counts
@@ -105,13 +112,16 @@ ledger was read or changed; every fixture is synthetic.
    granting conversation, `recover --approve` from any route of the same app
    (a new claim: the grant is cleared and the old conversation loses
    ownership), or the expiry. A lighter per-session revoke is carried.
-6. **Deviation: warning gate by code, at the caller.** CLI contexts digest
-   their warning set (`warning_set_<hex>`), so a grant cannot inspect literal
-   codes there. The gate is applied where the codes are literal
-   (`GRANT_BLOCKING_WARNING_CODES` in the broker for writers that bind literal
-   codes) and, for `create-draft`, by the CLI passing no grant when the
-   dry-run flagged `legacy_identifier_in_new_record`; `--allow-warnings` is
-   required to approve such a draft at all, and the dialog then opens.
+6. **Warning gate by literal code.** CLI contexts digest their warning set
+   (`warning_set_<hex>`); since the implementation review the three fixed
+   legacy codes stay literal next to that digest
+   (`exact_human_approval_warning_codes`), so the broker refuses any grant
+   with `work_session_grant_warning_review_required` for every CLI writer
+   (create-draft, mint-zet, mint-zet-batch, zet-revision-write,
+   zettel-objet-link) and the result says so; a clean plan keeps its single
+   digest code. `create-draft --approve` additionally refuses before any
+   dialog (`create_draft_warning_override_required`) until `--allow-warnings`
+   is given, on both the environment and the explicit-refs route.
 7. **Legacy identifier detector.** One module, `legacy_identifier`:
    `(?<![A-Za-z0-9_])ZET[0-9]{3,4}(?![0-9A-Za-z])` (case-insensitive) and the
    32-hex / 8-4-4-4-12 page-id forms guarded the same way; v0.4.31-shaped
@@ -153,6 +163,31 @@ ledger was read or changed; every fixture is synthetic.
     names the field to fill (`document_type`, allowed values) or the table(s)
     whose parse review is missing (ordinal, header line, row count; cell text
     never echoed).
+
+## Implementation review (2026-09-20, `wf_2ee314e9-7f4`, 6 reviewers + 4 verifiers, read-only)
+
+Applied before the candidate: the explicit-refs create-draft route crashed
+after the legacy refusal (an int left the held lane; now a sentinel and one
+document); the explicit-refs route now carries `session_permission_refused`
+(the CLI passes `resolve_grant_outcome`'s pair to the broker); the literal
+legacy codes survive the context digest (decision 6) and `mint-zet-batch`
+folds an allowed item's code into the batch set; the verbatim fidelity body
+is scanned as written; the migrated-record downgrade keys on the record id
+prefix only; intake scans the stored source-map / manifest label too; the
+mint `quality_check` shape changes only for flagged plans; the presenter
+scan is bounded newest-first from `granted_at` with `scan_truncated` in the
+claim and the result, and interrupts propagate; `grant_expired` is computed
+at page time so a listing cursor survives the expiry; the draft/intake
+privacy gates refuse a pasted `WOM_WORK_SESSION_PRESENTER=` line and the
+next-step sentence says exactly that; the MCP envelope returns the token
+once (decision 1); compose validates the expected digest shape before
+comparing, reports a blocked approve as an approve, reads the persisted
+receipt for `exact_human_approval_reference_present`, creates the draft
+record on an `already_written` replay too, and the revise-path step 1 names
+`--create-draft-record`. Not changed (recorded): a partial compose after a
+claim-referencing receipt leaves the claim `started` for the standard
+finalize route; the `work-session-permission/v2` schema string is a
+constant of the grant projection, not a new document.
 
 ## Carried to v0.4.35
 
