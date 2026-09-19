@@ -257,6 +257,11 @@
       "status": "pending",
       "target": "v0.4.30",
       "reason": "v0.4.28 OB-01/OB-03 restore writer: exact native approval, always-dialog; session refs not yet exposed"
+    },
+    "object-storage-offload": {
+      "status": "pending",
+      "target": "v0.4.30",
+      "reason": "v0.4.29 OB-02 offload writer: exact native approval, always-dialog; session refs not yet exposed"
     }
   }
 }

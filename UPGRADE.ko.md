@@ -2,6 +2,50 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.4.29 오브제 저장소 비우기 (OB-02)
+
+일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.
+새 외부 CPython 3.12 환경의 실제 `python.exe -m pip`를 사용해 설치된 PEP 610
+metadata에 wheel hash가 남게 합니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0429-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.29/wom_kit-0.4.29-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+새 process에서 정확히 `archive 0.4.29`가 나와야 합니다. wheel을 공개하거나 설치하는
+것만으로 client archive, project runtime, version pin은 바뀌지 않습니다. project
+update는 client가 따로 선택하고 승인합니다.
+
+업데이트 뒤에는 새 명령으로 로컬 용량을 비울 수 있습니다. 단, 돌아오는 길을 먼저 한 번
+확인하세요(`object-storage-restore --verify-only`로 몇 개만 검증하면 업로드가 온전한지
+증명됩니다). 먼저 계획: `archive object-storage-offload <archive-root> --provider-kind
+cloudflare-r2 --store-ref <store> --min-age-days 30 --dry-run --format json`은
+manifest와 inbox의 모든 초안을 훑고 로컬 후보를 해시할 뿐 provider를 부르지 않으며,
+개수와 `plan_sha256`을 냅니다. 제외된 오브제는 이유별로 셉니다(초안이 참조함, 초안의
+원본임, 너무 새것, 너무 작음, WOM 검증 업로드 없음, 로컬 바이트 없음/불일치, 스냅숏 출처).
+그다음 승인: `--endpoint-host`, `--bucket`, `--access-key-id-ref`,
+`--secret-access-key-ref`, `--reviewed-by <id>`, `--expected-manifest-sha256 <plan_sha256>`를
+붙여 `--approve`로 실행하면 승인 창 하나가 모든 오브제를 덮습니다. 오브제마다 그 실행에서
+원격 사본을 내려받아 다시 해시하고, 로컬 파일을 두 번 해시한 뒤에야 핸들에 묶인 삭제로
+지웁니다. manifest에는 `offloaded` 표시가 남고, Doctor는 정보로만 보고하며,
+`object-storage-restore`가 되돌립니다. 원격 사본이 깨졌거나 없으면 그 오브제는
+`review_required`로 끝나고 로컬 파일은 그대로 둡니다. 중단된 실행은
+`--resume-approval-id` / `--resume-execution-sha256`로 이어받되 끝난 오브제를 다시
+내려받지 않습니다. 삭제 단계는 Windows 전용이며, 다른 플랫폼에서는
+`object_storage_offload_platform_unsupported`로 막힙니다.
+
+검토한 project update 한 번 뒤에는 새 process에서 project launcher를 시작해 pin,
+source, launcher, runtime 근거를 확인하세요. 그 client 실행 결과만이 project가
+고쳐졌음을 보여 줍니다.
+
 ## v0.4.28 오브제 저장소 되찾기 (OB-01 / OB-03)
 
 일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.

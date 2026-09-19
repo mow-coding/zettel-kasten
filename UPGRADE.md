@@ -24,6 +24,54 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.4.29 Object-Storage Offload (OB-02)
+
+Install the exact public wheel only after the matching release and asset exist.
+Use a new external CPython 3.12 environment so the real `python.exe -m pip`
+records the wheel hash in installed PEP 610 metadata.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0429-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.29/wom_kit-0.4.29-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+Require exactly `archive 0.4.29` from a new process. Publishing or installing
+the wheel changes no client archive, project runtime, or version pin. A client
+separately chooses and approves any project update.
+
+After the update, free local disk with the new command, but only after you
+have exercised the way back once (`object-storage-restore --verify-only` on a
+few objects proves your uploads are intact). Plan first: `archive
+object-storage-offload <archive-root> --provider-kind cloudflare-r2
+--store-ref <store> --min-age-days 30 --dry-run --format json` scans the
+manifest and every inbox draft, hashes local candidates, calls no provider and
+prints counts and `plan_sha256`; every excluded object is counted by reason
+(referenced by a draft, fidelity source of a draft, too young, too small, no
+WOM-verified upload, bytes absent or conflicting, snapshot provenance). Then
+approve: add `--endpoint-host`, `--bucket`, `--access-key-id-ref`,
+`--secret-access-key-ref`, `--reviewed-by <id>` and
+`--expected-manifest-sha256 <plan_sha256>` with `--approve`; one native dialog
+covers every object. Each object's remote copy is downloaded and re-hashed in
+that run, the local file is re-hashed twice, and only then removed through the
+handle-bound delete; the manifest keeps the row marked `offloaded`, Doctor
+reports it as information, and `object-storage-restore` brings it back. A
+corrupt or absent remote copy ends as `review_required` with the local file
+kept. An interrupted run resumes with `--resume-approval-id` /
+`--resume-execution-sha256` without downloading finished objects again. The
+removal step is Windows-only; elsewhere the plan is blocked with
+`object_storage_offload_platform_unsupported`.
+
+After one reviewed project update, start the project launcher in a new process
+and verify its pin, source, launcher, and runtime evidence. Only that client-run
+result can show that the project was repaired.
+
 ## v0.4.28 Object-Storage Restore (OB-01 / OB-03)
 
 Install the exact public wheel only after the matching release and asset exist.
