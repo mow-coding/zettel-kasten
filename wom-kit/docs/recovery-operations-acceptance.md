@@ -782,3 +782,16 @@ anonymous download and two fresh-venv installations recorded in the
 L165-01 is now installable from the public artifact and stays open for the
 client's own runs; the client receives one reply covering v0.4.32, v0.4.33 and
 v0.4.34 (the letters 164+165 reply draft), sent by the user.
+
+### 2026-09-20 v0.4.35 released (letter 167 hotfix public)
+
+v0.4.35 is public: tag `v0.4.35` on main `5858db1a`, one wheel
+`wom_kit-0.4.35-py3-none-any.whl` (SHA-256
+`a9fe67eef113fdc731357152f22178cf312affc7ead2c3a02652b33a7f7d48ec`),
+candidate CI 14/14 (attempt 1 after one test-only correction: the approve-path test gained the Windows-only skip every approve-path CLI test carries), exact-merge installed verification,
+anonymous download and two fresh-venv installations recorded in the
+[release evidence](../../meeting-minutes/2026-09-20-v0435-release-evidence.md).
+L167-01 is now installable from the public artifact and stays open for the
+client's own run (the v0.4.35 bootstrap, the dry-run naming the rewrite, the
+approved update under `--affirm-origin-main-rewritten`); the letter 167 reply
+draft is sent by the user.
