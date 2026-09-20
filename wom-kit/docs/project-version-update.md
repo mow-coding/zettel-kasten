@@ -10,6 +10,44 @@ locked updater may fetch or write. Direct unbound service calls fail before a
 private project read. Collision preserve-relocate and `project-bytecode-repair`
 approval remain fixed closed.
 
+## v0.4.35 Rewritten Origin Main
+
+The approved fetch is atomic, `--no-tags` and non-forced: `origin/main`
+moves only by fast-forward. When the configured origin has rewritten its
+`main` history (as the public repository did on 2026-09-20 to purge private
+identifiers), that fetch is rejected. Since v0.4.35 the blocked result says
+so instead of "tag missing": `fetch.rejection_kind` is one of
+`non_fast_forward`, `remote_unreachable`, `target_tag_missing_on_remote`,
+`ref_update_rejected`, with `remote_reachable`, `target_tag_on_remote`,
+`origin_main_before_fetch`, `origin_main_remote_sha` and
+`origin_main_rewritten`. The diagnosis reads the remote once (`ls-remote`)
+and checks ancestry against the objects the rejected fetch left behind, or
+against the exact tag fetched into a private probe ref that is removed
+again; it never writes `refs/tags` or `refs/remotes`. Git's stderr is never
+captured or echoed; commit ids are public.
+
+To accept the rewrite, rerun the dry-run and approve with
+`--affirm-origin-main-rewritten` next to `--reviewed-by` and
+`--affirm-external-writers-quiescent`:
+
+```powershell
+& <exact-target-bootstrap> project-version-update <project-or-archive-root> `
+  --target <tag> --dry-run --affirm-origin-main-rewritten --format json
+& <exact-target-bootstrap> project-version-update <project-or-archive-root> `
+  --target <tag> --approve --reviewed-by <actor> `
+  --affirm-external-writers-quiescent --affirm-origin-main-rewritten --format json
+```
+
+That one fetch uses `+refs/heads/main:refs/remotes/origin/main`; the tag
+refspec is never forced. The dry-run and the result report
+`fetch.main_ref_forced_update_affirmed`, the result reports
+`origin_main_before_fetch` / `origin_main_after_fetch` and
+`origin_main_rewrite_accepted`, the warning `origin_main_rewrite_affirmed`
+is bound into the approval, and every later verification (annotated tag,
+ancestry from the new `origin/main`, source versions, pins, receipt) is
+unchanged. Without the affirmation a rewritten `main` is refused, and the
+blocker names the flag.
+
 ## v0.4.19 Runtime And Preparation Truth
 
 Every updater preflight and approved preparation check now distinguishes four

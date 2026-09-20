@@ -179,7 +179,7 @@
     },
     "operator-feedback-compose": {
       "status": "pending",
-      "target": "v0.4.35",
+      "target": "v0.4.36",
       "reason": "v0.4.34 routes --approve through the exact approval broker (operator_feedback_body_write, grantable through the environment refs); explicit session refs are pending; the emergency lane under version-update.lock stays session-free"
     },
     "operator-feedback-record": {
@@ -256,22 +256,22 @@
     },
     "object-storage-restore": {
       "status": "pending",
-      "target": "v0.4.35",
+      "target": "v0.4.36",
       "reason": "v0.4.28 OB-01/OB-03 restore writer: exact native approval, always-dialog; session refs not yet exposed"
     },
     "object-storage-offload": {
       "status": "pending",
-      "target": "v0.4.35",
+      "target": "v0.4.36",
       "reason": "v0.4.29 OB-02 offload writer: exact native approval, always-dialog; session refs not yet exposed"
     },
     "exact-approval-claim-finalize": {
       "status": "pending",
-      "target": "v0.4.35",
+      "target": "v0.4.36",
       "reason": "v0.4.30 letter-163 claim-store repair writer: exact native approval, always-dialog (never grantable); session refs not exposed by design"
     },
     "object-storage-upload": {
       "status": "pending",
-      "target": "v0.4.35",
+      "target": "v0.4.36",
       "reason": "v0.4.33 letter-164 upload writer reopened as preservation PUT + adoption projection: exact native approval, always-dialog; session refs not yet exposed"
     }
   }

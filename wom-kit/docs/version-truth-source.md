@@ -1,6 +1,8 @@
 # WOM-kit Version Truth Source
 
-Status: v0.4.34 presenter-bound grants, letter-165, and session-owned writes
+Status: v0.4.35 rewritten-origin hotfix, letter-167, and session-owned writes
+
+Previous checkpoint: Status: v0.4.34 presenter-bound grants, letter-165, and session-owned writes
 
 Previous checkpoint: Status: v0.4.33 upload reopened, letter-164 first half, and session-owned writes
 
@@ -28,7 +30,8 @@ Previous checkpoint: Status: v0.4.22 project-update failure truth, started-claim
 
 Previous checkpoint: Status: v0.4.21 reopened writers, one-approval intake chain, and session-owned writes
 
-Current checkpoint: Status: v0.4.34 presenter-bound grants with installed-wheel hash evidence
+Current checkpoint: Status: v0.4.35 rewritten-origin hotfix with installed-wheel hash evidence
+Previous checkpoint: Status: v0.4.34 presenter-bound grants with installed-wheel hash evidence
 Previous checkpoint: Status: v0.4.33 upload reopened with installed-wheel hash evidence
 Previous checkpoint: Status: v0.4.32 letter-164 first half with installed-wheel hash evidence
 Previous checkpoint: Status: v0.4.31 letter-163 remainder with installed-wheel hash evidence
@@ -93,22 +96,22 @@ or runtime workflow. This page defines the safe order for checking them.
 
 ## Current Public Tool
 
-The v0.4.34 URL is a conditional release-artifact contract. Use it only after
+The v0.4.35 URL is a conditional release-artifact contract. Use it only after
 the matching public GitHub Release exists and lists the exact wheel:
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0434-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0435-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.34/wom_kit-0.4.34-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.35/wom_kit-0.4.35-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-Require exactly `archive 0.4.34` from a new process. The external CPython 3.12
+Require exactly `archive 0.4.35` from a new process. The external CPython 3.12
 environment and exact real `python.exe -m pip` retain the wheel SHA-256 in the
 installed PEP 610 metadata. A user-scoped tool environment without that archive
 hash is not project-updater supply evidence. A bootstrap install alone changes
