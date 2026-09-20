@@ -811,3 +811,18 @@ L167-01 is now installable from the public artifact and stays open for the
 client's own run (the v0.4.35 bootstrap, the dry-run naming the rewrite, the
 approved update under `--affirm-origin-main-rewritten`); the letter 167 reply
 draft is sent by the user.
+
+### 2026-09-21 v0.4.36 released (session grants, upload diagnostics, feedback archival)
+
+v0.4.36 is public: tag `v0.4.36` on merge `a1cce66d`, one wheel
+`wom_kit-0.4.36-py3-none-any.whl`, 3340372 bytes, SHA-256
+`df925a87dc45cab4f228726b91ba9f481797049ae4291ebca77dc1dfa0f99941`.
+Candidate CI passed 14/14. Exact-tag Windows verification used the unmodified
+checker and preserved this wheel; the earlier local timeout remains failed.
+Anonymous public download matched. The [release evidence](../../meeting-minutes/2026-09-21-v0436-release-evidence.md)
+records source, artifact and installation checks with their actual boundaries.
+L168-01 through L168-05 stay open for the customer's own run. Publication does
+not establish that a customer upload succeeded or that all session-granted
+operations completed without dialogs. New project/session-close feedback is
+separate follow-up, and no future feature version is promised. The reply file
+is delivered to the user for sending.
