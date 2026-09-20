@@ -61,7 +61,7 @@ class SessionQueryTests(unittest.TestCase):
         code, result = self.cli()
         self.assertEqual(code, 0)
         self.assertEqual(result["items"], [])
-        self.assertEqual(result["counts"], {"registry_kind_total": 0, "selected": 0, "excluded_by_filters": 0})
+        self.assertEqual(result["counts"], {"registry_kind_total": 0, "selected": 0, "excluded_by_filters": 0, "non_manual_session_count": 0, "expired_grant_count": 0, "legacy_grant_count": 0})
         self.assertFalse(result["artifact_attribution_evaluated"])
         self.assertEqual(before, self.files())
         self.assertFalse(self.store.path.exists())
@@ -112,7 +112,7 @@ class SessionQueryTests(unittest.TestCase):
         other, = self.transition("register-app", label="PRIVATE_SECOND_APP")
         self.transition("create", client_app_ref=other, label="PRIVATE_SECOND_TASK")
         result = query.query_work_sessions(self.root, client_app_ref=app, workstream_ref=stream)
-        self.assertEqual(result["counts"], {"registry_kind_total": 2, "selected": 1, "excluded_by_filters": 1})
+        self.assertEqual(result["counts"], {"registry_kind_total": 2, "selected": 1, "excluded_by_filters": 1, "non_manual_session_count": 0, "expired_grant_count": 0, "legacy_grant_count": 0})
         self.assertEqual(result["items"][0]["ref"], session)
         with self.assertRaisesRegex(query.WorkSessionQueryError, "work_session_query_not_found"):
             query.query_work_sessions(self.root, client_app_ref="client_app_" + "f" * 32)

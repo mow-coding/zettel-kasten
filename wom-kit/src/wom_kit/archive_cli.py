@@ -12501,7 +12501,7 @@ def _operator_feedback_compose_exact_approval(
             result["draft_record"] = record
             result["next_safe_actions"] = [
                 *[item for item in result.get("next_safe_actions", []) if isinstance(item, str)],
-                *api.REVISE_PATH_NEXT_SAFE_ACTIONS,
+                *getattr(api, "REVISE_PATH_NEXT_SAFE_ACTIONS", ()),
             ]
             return result
         try:
@@ -12525,7 +12525,7 @@ def _operator_feedback_compose_exact_approval(
         result["draft_record"] = record
     result["next_safe_actions"] = [
         *[item for item in result.get("next_safe_actions", []) if isinstance(item, str)],
-        *api.REVISE_PATH_NEXT_SAFE_ACTIONS,
+        *getattr(api, "REVISE_PATH_NEXT_SAFE_ACTIONS", ()),
     ]
     return result
 

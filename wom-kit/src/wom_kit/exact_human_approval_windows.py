@@ -571,7 +571,7 @@ _OPERATION_QUESTIONS = {
         "로컬 오브제 바이트를 등록된 저장소에 올리고, 같은 실행에서 원격 사본을 다시 내려받아 검증한 뒤 manifest에 wom_uploaded 위치를 기록할까요?"
     ),
     ExactHumanApprovalOperation.operator_feedback_body_write: (
-        "검토한 여섯 항목 피드백 본문을 ops/feedback/letters 아래에 기록하고 본문 영수증을 남길까요? (제목과 본문은 이 창에 표시하지 않습니다)"
+        "검토한 여섯 항목 피드백 본문(제목과 본문은 이 창에 표시하지 않습니다)을 ops/feedback/letters 아래에 기록하고 본문 영수증을 남길까요?"
     ),
     ExactHumanApprovalOperation.exact_approval_claim_finalize: (
         "영수증 어디에도 흔적이 없는, 검토가 끝난 started 승인 클레임들을 실패로 닫을까요?"
