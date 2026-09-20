@@ -77,7 +77,7 @@ whole-archive backup.
 
 `object-storage-upload` is the composition of the two v0.4 writers that
 already existed: the preservation PUT and the formal-adoption projection,
-under one native dialog (`object_storage_bytes_upload`, always a dialog, never
+under one native dialog or, since v0.4.36, the session grant (`object_storage_bytes_upload`; until v0.4.35 always a dialog, never
 grantable to a session permission mode).
 
 Plan (`--dry-run`): the writer line comes first (`writer_state`
@@ -263,8 +263,8 @@ object (OB-03).
 - Dry-run. Scans the manifest once, hashes local candidates, calls no
   provider, reads no credential value, writes nothing, and echoes counts and
   `plan_sha256` only (no object ids, keys or paths).
-- Approve. One native dialog (`오브제 원격 바이트 되찾기`, always-dialog,
-  never grantable to a session permission mode) covers the whole plan with the
+- Approve. One native dialog (`오브제 원격 바이트 되찾기`; grantable to a
+  session permission mode since v0.4.36) covers the whole plan with the
   count-first target list. Credential values are read only inside the
   approved write through the same live-transport seam as preservation. For
   each object the transport issues one signed `GetObject` and streams the body
@@ -327,7 +327,7 @@ remote object is never deleted; `object-storage-restore` brings the bytes back.
   delete disposition), which is Windows-only by design; a plan is inspectable
   everywhere but `object_storage_offload_platform_unsupported` blocks approval
   elsewhere.
-- Approve: one native dialog (`오브제 로컬 바이트 비우기`, always-dialog, never
+- Approve: one native dialog (`오브제 로컬 바이트 비우기`; grantable since v0.4.36, until then never
   grantable to a session permission mode). Per object, in order: local
   re-hash; `HeadObject` then the full `GetObject` re-hash through the existing
   remote-query adapter (no sink, no local write); a second local re-hash and

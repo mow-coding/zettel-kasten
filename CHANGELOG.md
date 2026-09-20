@@ -6,6 +6,34 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.36 - 2026-09-21
+
+- Beta letter 168 ⑥ and the 2026-09-17 decision restored: a session grant
+  opens no dialog for any operation kind (`always_dialog_operations` is empty;
+  update, remote storage, recovery, deletion, session control, finalize and
+  archival included); the only dialog-only action is `set-permission-mode`
+  itself (`dialog_only_actions`); the allow_all dialog line names the scope.
+- Beta letter 168 ① (requests 1-3): the upload writer's cause travels end to
+  end (`cause_code`, `cause_stage`, `effects_state`, `progress_summary`,
+  `--progress-log`); the manifest-index authority and the credential refs are
+  refused before the dialog (`manifest_index_authority`,
+  `credential_refs_present`, `object_storage_upload_credential_ref_unresolved`);
+  a failure before the first checkpoint closes its claim
+  (`exact_human_approval_writer_refused`); `registered_store_refs` on
+  `store_setup_missing`.
+- Beta letters 164 ⑧ / 168 request 8: `operator-feedback-archive` moves
+  delivered letters and their body receipts to an operator-designated folder
+  outside the archive and leaves a content-free `archived` stub; body-check
+  reports `archived_stub`, the ledger counts `archived`.
+- Beta letter 168 ③④ and request 9: finalize re-scans only when the receipt
+  inventory fingerprint changed; `set-permission-mode --dry-run` accepts the
+  approve request and names the allowed keys on refusal; compose creates the
+  draft record by default and the revise path names the body ref.
+- Inventory 61 approval-available, 59 fixed-closed; the coverage manifest
+  routes the broker writers through the environment grant.
+- Carried to v0.4.37: `max_writes`, revoke, select-all, reviewed re-PUT, 8b,
+  the `index` duration field.
+
 ## v0.4.35 - 2026-09-20
 
 - Beta letter 167 hotfix: after the 2026-09-20 public-history rewrite a

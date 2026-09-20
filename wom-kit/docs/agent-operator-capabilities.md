@@ -1,7 +1,22 @@
 # Agent Operator Capabilities Manifest
 
-Status: v0.4.35 rewritten-origin hotfix, letter-167, and writer-session coverage gate
+Status: v0.4.36 no-dialog grants, letter-168, and writer-session coverage gate
 
+v0.4.36 adds one command path: `operator-feedback-archive` (approval-available,
+grantable) moves delivered / acknowledged / resolved feedback letters and
+their body receipts to an operator-designated folder outside the archive and
+leaves a content-free `archived` stub (beta letters 164 ⑧ / 168 request 8),
+so the inventory is 61 approval-available and 59 fixed-closed. v0.4.36 also
+restores the 2026-09-17 decision on permission modes: no operation kind keeps
+its own dialog under a grant (`always_dialog_operations` is empty; the grant
+action `set-permission-mode` is the only dialog-only action), the upload
+writer names its cause (`cause_code`, `cause_stage`, `effects_state`,
+`--progress-log`) and refuses the manifest-index authority and unresolved
+credential refs before the dialog, a failure before the first checkpoint
+closes its claim (`exact_human_approval_writer_refused`), finalize re-scans
+only when the receipt inventory fingerprint changed, the permission preview
+accepts the approve request, and compose creates the draft record by default
+(letter 168).
 v0.4.35 adds no command path and moves no count: `project-version-update`
 gains `--affirm-origin-main-rewritten` and, on a failed fetch,
 `fetch.rejection_kind` with the remote's tag/main observation (beta letter
@@ -31,12 +46,12 @@ no command path: `create-draft` names the runtime-identification options,
 the mint dry-run gains two bound edge-target warnings, and edge,
 revert-edge and intake-chain dry-runs announce `index_precheck`.
 v0.4.29 adds one command path, `object-storage-offload` (alias
-`objet-storage-offload`, approval-available, always-dialog): local objet
+`objet-storage-offload`, approval-available; grantable since v0.4.36): local objet
 bytes are removed only after a same-run full-GET remote proof, two local
 re-hashes and every retention predicate; the manifest keeps the row marked
 `offloaded` and `object-storage-restore` reverses it. v0.4.28 adds one
 command path, `object-storage-restore` (alias `objet-storage-restore`,
-approval-available, always-dialog): WOM-verified remote objet bytes are
+approval-available; grantable since v0.4.36): WOM-verified remote objet bytes are
 downloaded once, kept only when size and sha256 reproduce the object id,
 placed create-only and receipted; `--verify-only` records the proof without
 local writes. v0.4.27 adds no command path: usage refusals of `project-version-update`
@@ -188,17 +203,17 @@ field remain `history_not_audited`. Inventory, shared capability availability,
 and command help consume the same content-free history. Current availability
 continues to be parser-derived; history does not grant execution authority.
 
-For the current v0.4.35 working-tree parser, the inventory snapshot is:
+For the current v0.4.36 working-tree parser, the inventory snapshot is:
 
 ```text
-canonical executable command paths: 321
+canonical executable command paths: 322
 alias invocation paths:              262
-all invocation paths:                583
-approval_available:                   60
+all invocation paths:                584
+approval_available:                   61
 approval_fixed_closed:                59
 approval_not_exposed:                202
 conditional approval paths:            10
-dry_run_exposed:                     277
+dry_run_exposed:                     278
 unmatched fixed-close entries:         0
 ```
 

@@ -173,8 +173,9 @@ and does not infer success, failure, or cancellation, automatically retry, or
 delete that evidence. A full authenticated terminal handoff and terminal
 cleanup outcome reconstruction remain a v0.4.16 follow-up.
 
-The current parser-derived inventory is 60 approval-available, 59 fixed-closed,
-and 202 not-exposed paths (v0.4.33 reopened `object-storage-upload`). v0.4.21 added `source-intake-chain` (the
+The current parser-derived inventory is 61 approval-available, 59 fixed-closed,
+and 202 not-exposed paths (v0.4.36 added `operator-feedback-archive`; v0.4.33
+reopened `object-storage-upload`). v0.4.21 added `source-intake-chain` (the
 record → selection → capture intake of one staged original under one exact
 approval; each step re-verifies the chain claim before it writes, and the
 exact-operation receipts of the record and selection steps bind that claim's
@@ -281,16 +282,22 @@ the session was paused, handed off, completed or recovered in the meantime
 task-dialog mechanism. Such a claim is not a human-presence proof for that
 write; it is the session decision's authority applied to one exact plan,
 and results say so (`exact_human_approval.approval_mechanism`,
-`live_dialog_shown: false`). Project updates, remote providers, the
-session lifecycle, repairs and overrides cannot be granted in any mode;
-credential writers use the Windows credential native path and are
-unaffected. Dry-run still never opens a window and never issues authority.
+`live_dialog_shown: false`). Until v0.4.35 an implementer's exclusion list
+kept eighteen kinds (project update, remote providers, the session
+lifecycle, repairs, overrides) behind the dialog in every mode; the user
+had decided otherwise on 2026-09-17 and v0.4.36 (beta letter 168 ⑥)
+restores that decision — see the v0.4.36 paragraph below. Credential
+writers use the Windows credential native path and are unaffected.
+Dry-run still never opens a window and never issues authority.
 Since v0.4.32 `set-permission-mode --dry-run` is that dry-run made useful:
 mode `permission_mode_preview` returns `would_set`, the fixed
 `permission_modes`, `grantable_operations` and `always_dialog_operations`
-lists, or the refusal code with its positional detail, reading no session
-state and echoing no value, so a valid grant request can be composed before
-the one dialog is opened.
+lists (the latter empty since v0.4.36, with `dialog_only_actions` naming the
+grant action), or the refusal code with its positional detail, reading no
+session state and echoing no value, so a valid grant request can be
+composed before the one dialog is opened; since v0.4.36 the preview also
+accepts the approve request as is (`reviewer_claim` ignored) and a refused
+shape names `required_keys` / `optional_keys`.
 
 Since v0.4.34 (beta letter 165) a `limited` / `allow_all` grant is
 presenter-bound and time-boxed. The approve mints a random presenter secret
@@ -321,6 +328,19 @@ the grant. Claims written before v0.4.34 stay immutable and count as
 `presenter_unknown_count` in the listing. The refs and the token stay in the
 granting conversation; another conversation continues a task through
 handoff / accept, never by reusing them.
+
+Since v0.4.36 (beta letter 168 ⑥; the 2026-09-17 decision restored) a grant
+means what the desktop apps mean by it: `allow_all` covers every operation
+kind — project update, remote storage, recovery, deletion, session control,
+claim finalization, feedback archival included — and `limited` covers the
+kinds chosen at grant time, with no kind keeping a dialog of its own. The
+one action the mode never removes is the grant itself
+(`work-session --action set-permission-mode --approve`), because a grant
+cannot mint, extend or replace itself: that is the single switch the human
+flips, and its allow_all line says what it covers. The grant also stands in
+for an explicit original re-review. Everything else is unchanged: the same
+one-use claim, the presenter binding and the time box, the revocation
+routes, and the claim's record of the mechanism.
 
 ## One-use claim and durable linkage
 
@@ -373,8 +393,8 @@ timestamps, failure code, approval mechanism, context digest and bound codes
 (never the reviewer id, the archive id or a path); and
 `exact-approval-claim-finalize` closes reviewed started claims as `failed`
 with `operator_closed_started_claim_after_review` through the claim's own
-compare-and-swap finalizer, always behind a native dialog (never grantable to
-a session permission mode). The plan refuses a claim younger than
+compare-and-swap finalizer, behind a native dialog or (since v0.4.36) the
+session grant. The plan refuses a claim younger than
 `--min-age-minutes` (default 30; 0 is a bound warning) because a writer may
 still be running, a claim that any receipt JSON under `receipts/` or the
 version-update receipts names (that write happened; audit it instead), and a

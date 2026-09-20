@@ -24,6 +24,54 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.4.36 Beta Letter 168: Grants Without Dialogs, Upload Cause, Delivered-Letter Archival
+
+Install the exact public wheel only after the matching release and asset exist.
+Use a new external CPython 3.12 environment so the real `python.exe -m pip`
+records the wheel hash in installed PEP 610 metadata.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0436-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.36/wom_kit-0.4.36-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+Require exactly `archive 0.4.36` from a new process. Publishing or installing
+the wheel changes no client archive, project runtime, or version pin. A client
+separately chooses and approves any project update.
+
+After the update a session grant means no dialog: grant once with
+`work-session --action set-permission-mode --approve` (`allow_all`, or
+`limited` with the kinds you choose; `grant_hours`), keep the presenter token
+in that conversation, and the update, the upload, restore, offload, finalize
+and archival run without a dialog there. The one dialog the mode never
+removes is the grant itself. The dry-run now accepts the same request you
+pass to approve.
+
+For the upload, read the dry-run's `manifest_index_authority` (run
+`archive index <root>` if it says `rebuild_required`) and
+`credential_refs_present` (define the environment variables in the shell
+that runs `--approve`); a failure now names `cause_code` and, when nothing
+was written, closes its claim (`exact_human_approval_writer_refused`).
+`--progress-log <file>` keeps every progress event.
+
+To move delivered letters out of the archive:
+`archive operator-feedback-archive <root> --destination <parent of
+archive>/ops-feedback-archive --dry-run --format json`, then the same with
+`--approve --reviewed-by <person:...> --expected-plan-sha256 <plan_sha256>`.
+Each record keeps a content-free `archived` stub; `operator-feedback-body-check`
+reports it as `archived_stub`.
+
+After one reviewed project update, start the project launcher in a new process
+and verify its pin, source, launcher, and runtime evidence. Only that client-run
+result can show that the project was repaired.
+
 ## v0.4.35 Beta Letter 167: The Updater And A Rewritten Origin Main
 
 Install the exact public wheel only after the matching release and asset exist.

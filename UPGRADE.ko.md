@@ -2,6 +2,49 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.4.36 베타 편지 168: 창 없는 승인 모드, 업로드 원인 코드, 전달 완료 편지 정리
+
+일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.
+새 외부 CPython 3.12 환경의 실제 `python.exe -m pip`를 사용해 설치된 PEP 610
+metadata에 wheel hash가 남게 합니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0436-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.36/wom_kit-0.4.36-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+새 process에서 정확히 `archive 0.4.36`가 나와야 합니다. wheel을 공개하거나 설치하는
+것만으로 client archive, project runtime, version pin은 바뀌지 않습니다. project
+update는 client가 따로 선택하고 승인합니다.
+
+업데이트 뒤에는 세션 승인 모드가 곧 「창 없음」입니다. `work-session --action
+set-permission-mode --approve`로 한 번 승인하면(`allow_all`, 또는 원하는 종류만 고른
+`limited`; `grant_hours`) 그 대화에서는 업데이트·업로드·되찾기·비우기·finalize·편지 정리가
+창 없이 돌아갑니다. 모드가 절대 없애지 않는 창은 승인 모드를 켜는 그 한 번뿐입니다.
+dry-run은 이제 approve에 넣는 요청을 그대로 받습니다.
+
+업로드는 dry-run의 `manifest_index_authority`(`rebuild_required`면 `archive index <root>`)와
+`credential_refs_present`(`--approve`를 돌리는 셸에 환경변수 정의)를 먼저 읽으세요. 실패하면
+이제 `cause_code`가 적히고, 아무것도 안 썼으면 클레임이 닫힙니다
+(`exact_human_approval_writer_refused`). `--progress-log <파일>`이 진행 이벤트를 전부 남깁니다.
+
+전달 완료 편지를 아카이브 밖으로 옮기려면 `archive operator-feedback-archive <root>
+--destination <아카이브의 부모>/ops-feedback-archive --dry-run --format json` 뒤 같은 명령에
+`--approve --reviewed-by <person:...> --expected-plan-sha256 <plan_sha256>`을 붙입니다. 레코드마다
+내용 없는 `archived` 흔적이 남고, `operator-feedback-body-check`는 그것을 `archived_stub`로
+보고합니다.
+
+검토한 project update 한 번 뒤에는 새 process에서 project launcher를 시작해 pin,
+source, launcher, runtime 근거를 확인하세요. 그 client 실행 결과만이 project가
+고쳐졌음을 보여 줍니다.
+
 ## v0.4.35 베타 편지 167: 업데이터와 다시 써진 원격 main
 
 일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.

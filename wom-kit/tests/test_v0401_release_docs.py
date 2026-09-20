@@ -139,15 +139,15 @@ class V0401ReleaseDocsTests(unittest.TestCase):
         # read-only exact-approval-claims (one alias) and the always-dialog
         # exact-approval-claim-finalize writer, and makes revert-edge --approve
         # unconditional (one conditional scope fewer).
-        self.assertEqual(counts["canonical_executable_command_count"], 321)
+        self.assertEqual(counts["canonical_executable_command_count"], 322)  # v0.4.36: operator-feedback-archive
         self.assertEqual(counts["alias_invocation_path_count"], 262)
-        self.assertEqual(counts["invocation_path_count"], 583)
+        self.assertEqual(counts["invocation_path_count"], 584)
         # v0.4.33 reopened object-storage-upload (one path moves from fixed-closed to available).
-        self.assertEqual(counts["approval_available_command_count"], 60)
+        self.assertEqual(counts["approval_available_command_count"], 61)  # v0.4.36: operator-feedback-archive
         self.assertEqual(counts["approval_fixed_closed_command_count"], 59)
         self.assertEqual(counts["approval_not_exposed_command_count"], 202)
         self.assertEqual(counts["conditional_approval_command_count"], 10)
-        self.assertEqual(counts["dry_run_exposed_command_count"], 277)
+        self.assertEqual(counts["dry_run_exposed_command_count"], 278)
         self.assertEqual(counts["unmatched_fixed_closed_command_count"], 0)
         by_path = {
             row["canonical_path"]: row for row in inventory["commands"]
