@@ -203,6 +203,9 @@ class ExactHumanApprovalWorkflowError(RuntimeError):
         "exact_human_approval_operation_failed",
         "exact_human_approval_state_unknown",
         "exact_human_approval_permission_revoked",
+        # v0.4.36 (letter 168 request 2): the writer proved it wrote nothing
+        # durable; the claim is finalized as failed with the writer's code.
+        "exact_human_approval_writer_refused",
     }
 
     def __init__(
@@ -249,12 +252,24 @@ def _content_free_cause_code(cause: BaseException | None) -> str | None:
             "ProjectUpdateTransactionError",
             "ProjectRuntimeError",
             "ExactHumanApprovalError",
+            # v0.4.36 (beta letter 168 ①): the object-storage writers and
+            # the exact-operation runner construct with exactly one
+            # _CODES-validated string; their code was dropped here since
+            # v0.4.22 while the mint / finalize writers kept theirs.
+            "ObjectStorageUploadError",
+            "ObjectStoragePreservationError",
+            "ObjectStorageRestoreError",
+            "ExactOperationManifestError",
         }
         or len(cause.args) != 1
         or type(cause.args[0]) is not str
         or _CAUSE_CODE_RE.fullmatch(cause.args[0]) is None
     ):
         return None
+    # the runner's re-typed error may carry the adapter's own fixed code
+    inner = getattr(cause, "cause_code", None)
+    if type(inner) is str and _CAUSE_CODE_RE.fullmatch(inner) is not None:
+        return inner
     return cause.args[0]
 
 
@@ -389,6 +404,25 @@ def _run_started_claim_writer(
             # ``started`` for reconciliation.  v0.4.22: the writer's own
             # fixed reason code (never its text) travels as ``cause_code``
             # so the operator can see which gate stopped the write.
+            # v0.4.36 (letter 168 request 2): a writer that raised with
+            # ``effects == "none"`` proved that no durable write happened
+            # (a gate before its first checkpoint); its claim is finalized
+            # as failed with the fixed cause so nothing stays ``started``.
+            if getattr(failure, "effects", None) == "none":
+                refusal = _content_free_cause_code(failure) or "domain_writer_refused_before_effects"
+                try:
+                    claim.finalize_failed(refusal)
+                except BaseException:
+                    raise _fail(
+                        "exact_human_approval_state_unknown",
+                        cause=failure,
+                        cause_stage="key_or_claim",
+                    ) from None
+                raise _fail(
+                    "exact_human_approval_writer_refused",
+                    cause=failure,
+                    cause_stage="domain_writer",
+                ) from None
             raise _fail(
                 "exact_human_approval_state_unknown",
                 cause=failure,

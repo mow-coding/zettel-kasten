@@ -136,10 +136,18 @@ class ObjectStorageUploadError(RuntimeError):
         "object_storage_upload_setup_evidence_missing",
         "object_storage_upload_setup_evidence_mismatch",
         "archive_index_rebuild_required",
+        # v0.4.36 (beta letter 168 ①): the two gates the dry-run never
+        # checked are refused before the dialog with their own codes.
+        "object_storage_upload_credential_ref_unresolved",
     }
 
     def __init__(self, code: str) -> None:
         self.code = code if code in self._CODES else "object_storage_upload_plan_invalid"
+        # v0.4.36: set to "none" by the writer when the failure provably
+        # preceded its first durable write; the broker then finalizes the
+        # claim as failed instead of leaving it started.
+        self.effects: str | None = None
+        self.cause_code: str | None = None
         super().__init__(self.code)
 
     def __repr__(self) -> str:
@@ -415,7 +423,13 @@ class ObjectStorageUploadPlan:
             "review_required": ["object_storage_upload_review_required"],
         }[state]
         next_safe_actions: list[str] = []
-        if state == "writer_unavailable":
+        if state == "writer_unavailable" and self.writer_unavailable_reason == "store_setup_missing":
+            # v0.4.36 (beta letter 168 ②): the registration may exist under
+            # another label; say so instead of "register the store".
+            next_safe_actions.append(
+                "No store registration matches this --store-ref. The registered labels are the setup registration receipt's account_ref values (registered_store_refs below); rerun with one of them, or register this label first (archive object-storage --dry-run / --approve)."
+            )
+        elif state == "writer_unavailable":
             next_safe_actions.append(
                 "Register the store first (archive object-storage --dry-run / --approve) and use a provider kind with a live transport (cloudflare-r2 or generic-s3)."
             )
@@ -461,6 +475,13 @@ class ObjectStorageUploadPlan:
             "provider_calls_in_plan": 0,
             "provider_api_called": False,
             "credential_values_read": False,
+            # v0.4.36 (beta letter 168 ①②): the writer's post-dialog gates
+            # and the registered labels, readable before any approval.
+            "manifest_index_authority": manifest_index_authority_state(self),
+            "registered_store_refs": (
+                registered_store_refs(self.archive_root, provider_kind=self.provider_kind)
+                if state == "writer_unavailable" else None
+            ),
             "object_bytes_hashed": self.manifest_scanned,
             "writes_performed": False,
             "remote_delete_on_revert_supported": False,
@@ -1469,6 +1490,44 @@ def _require_manifest_index_authority(plan: ObjectStorageUploadPlan) -> None:
         raise _fail("archive_index_rebuild_required") from None
 
 
+def manifest_index_authority_state(plan: ObjectStorageUploadPlan) -> str:
+    """v0.4.36 (beta letter 168 ①): the gate the writer applied only after the
+    dialog, now readable by the dry-run and checked by approve before it.
+    ``current`` / ``rebuild_required`` / ``not_applicable`` (nothing to write)."""
+
+    if not plan.specs or plan.manifest is None:
+        return "not_applicable"
+    try:
+        _require_manifest_index_authority(plan)
+    except ObjectStorageUploadError:
+        return "rebuild_required"
+    return "current"
+
+
+def registered_store_refs(archive_root: Path | str, *, provider_kind: str | None = None) -> list[str]:
+    """v0.4.36 (beta letter 168 ②): the store labels the setup registration
+    knows, so a ``store_setup_missing`` result can say which label to use
+    instead of "register the store". Labels are the operator's own bindings;
+    no credential value is read. Never raises."""
+
+    try:
+        root = archive_services.require_existing_archive_root(archive_root)
+        document, _raw = object_storage_setup_registration._provider_document(root)
+    except Exception:
+        return []
+    provider = str(provider_kind or "").strip().lower() or None
+    labels: list[str] = []
+    for binding in document.get("bindings") or []:
+        if not isinstance(binding, dict) or binding.get("provider") != "object_storage":
+            continue
+        if provider is not None and binding.get("provider_kind") != provider:
+            continue
+        label = object_storage_setup_registration._binding_account_ref(binding)
+        if label and archive_services.safe_object_storage_ref(label) and label not in labels:
+            labels.append(label)
+    return sorted(labels)
+
+
 # --- exact operation adapters ------------------------------------------------------
 
 
@@ -1848,12 +1907,15 @@ def _apply_with_store(
     reviewed_by: str,
     resume: bool,
     progress_hook: Callable[[ExactOperationProgress], None] | None,
+    _runner_entered: list[bool] | None = None,
 ) -> dict[str, Any]:
     if plan.manifest is None:
         raise _fail("object_storage_upload_no_writes")
     _require_manifest_index_authority(plan)
     writer = _Writer(plan, transport, reviewed_by=reviewed_by)
     verifier = _Verifier(plan, writer.query, writer.ledger)
+    if _runner_entered is not None:
+        _runner_entered[0] = True
     core = apply_exact_operation(
         plan.manifest,
         payloads=_Payloads(plan),
@@ -1922,26 +1984,40 @@ def _apply_core(
 ) -> dict[str, Any]:
     if type(plan) is not ObjectStorageUploadPlan or plan.manifest is None:
         raise _fail("object_storage_upload_no_writes")
-    current = _fresh_revalidated(plan, progress_hook=progress_hook)
-    authority = _assert_approved(current, claim, context)
-    with exact_operation_writer_lock(current.archive_root) as writer_lock:
-        _persist_control(current)
-        checkpoints = FileExactOperationCheckpointStore(current.archive_root, writer_lock=writer_lock)
-        try:
-            transport = transport_factory()
-        except Exception:
-            raise _fail("object_storage_upload_remote_unavailable") from None
-        if transport is None:
-            raise _fail("object_storage_upload_remote_unavailable")
-        return _apply_with_store(
-            current,
-            authority,
-            transport,
-            checkpoints,
-            reviewed_by=reviewed_by,
-            resume=resume,
-            progress_hook=progress_hook,
-        )
+    # v0.4.36 (beta letter 168 ①): everything before the exact runner's first
+    # checkpoint (re-plan, approval binding, lock, control document,
+    # transport, index authority, ledger) writes nothing durable to the
+    # archive; a failure there is marked so the broker can close the claim.
+    runner_entered = [False]
+    try:
+        current = _fresh_revalidated(plan, progress_hook=progress_hook)
+        authority = _assert_approved(current, claim, context)
+        with exact_operation_writer_lock(current.archive_root) as writer_lock:
+            _persist_control(current)
+            checkpoints = FileExactOperationCheckpointStore(current.archive_root, writer_lock=writer_lock)
+            try:
+                transport = transport_factory()
+            except Exception:
+                raise _fail("object_storage_upload_remote_unavailable") from None
+            if transport is None:
+                raise _fail("object_storage_upload_remote_unavailable")
+            return _apply_with_store(
+                current,
+                authority,
+                transport,
+                checkpoints,
+                reviewed_by=reviewed_by,
+                resume=resume,
+                progress_hook=progress_hook,
+                _runner_entered=runner_entered,
+            )
+    except (ObjectStorageUploadError, ExactOperationManifestError, preservation.ObjectStoragePreservationError) as failure:
+        if not resume and not runner_entered[0] and getattr(failure, "effects", None) is None:
+            try:
+                failure.effects = "none"
+            except Exception:
+                pass
+        raise
 
 
 def execute_object_storage_upload(

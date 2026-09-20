@@ -18044,35 +18044,138 @@ def command_object_storage_upload_verify(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
-def _object_storage_upload_cli_error(args: argparse.Namespace, reason_code: str) -> int:
+_OBJECT_STORAGE_UPLOAD_CAUSE_PREFIXES = (
+    "object_storage_upload_", "object_storage_preservation_", "object_storage_restore_",
+    "exact_operation_", "exact_human_approval_", "archive_index_", "domain_writer_",
+)
+
+
+def _object_storage_upload_content_free_cause(exc: BaseException) -> dict[str, Any] | None:
+    """v0.4.36 (beta letter 168 ①): the fixed inner code and stage the broker
+    attached (mirror of the mint path), or the writer's own code when it was
+    raised before any dialog. Free text never qualifies."""
+
+    def _token(value: Any) -> str | None:
+        return (
+            value
+            if type(value) is str
+            and re.fullmatch(r"[a-z][a-z0-9_]{0,95}", value)
+            and value.startswith(_OBJECT_STORAGE_UPLOAD_CAUSE_PREFIXES)
+            else None
+        )
+
+    cause_code = _token(getattr(exc, "cause_code", None))
+    if cause_code is not None:
+        stage = getattr(exc, "cause_stage", None)
+        return {"cause_code": cause_code, "cause_stage": stage if type(stage) is str else None}
+    if isinstance(exc, (object_storage_upload_exact.ObjectStorageUploadError, ExactOperationManifestError)):
+        own = _token(getattr(exc, "code", None))
+        if own is not None:
+            return {"cause_code": own, "cause_stage": "upload_preflight"}
+    return None
+
+
+_OBJECT_STORAGE_UPLOAD_STARTED_CLAIM_ACTIONS = [
+    "The claim for this attempt stays started for reconciliation: list it with 'archive exact-approval-claims <root> --status started --operation object_storage_bytes_upload --format json' and, after review, close it with 'archive exact-approval-claim-finalize <root> --approval-id <id> --dry-run' then --approve.",
+    "No receipt and no manifest row was written; the private control document under profiles/local/exact-operations/manifests may exist and is reused by the next approve of the same plan.",
+]
+_OBJECT_STORAGE_UPLOAD_REFUSED_ACTIONS = [
+    "The writer refused before its first durable write and its claim is closed as failed with cause_code; fix the named gate (for example 'archive index <root>' for archive_index_rebuild_required, or define the credential environment variables in this shell) and rerun --dry-run, then --approve.",
+]
+
+
+def _object_storage_upload_cli_error(
+    args: argparse.Namespace,
+    reason_code: str,
+    *,
+    cause: Mapping[str, Any] | None = None,
+    next_safe_actions: Iterable[str] | None = None,
+    effects_state: str | None = None,
+    progress_summary: Mapping[str, Any] | None = None,
+) -> int:
     return _exact_human_approval_cli_error(
         args,
         lifecycle_action="object_storage_bytes_upload",
         reason_code=reason_code,
+        cause=cause,
+        next_safe_actions=next_safe_actions,
+        effects_state=effects_state,
+        progress_summary=progress_summary,
     )
+
+
+class _ObjectStorageUploadProgressSummary:
+    """v0.4.36 (beta letter 168 ①): the last stage the run reached, for the
+    failure envelope (mirror of the mint progress summary); counts only."""
+
+    def __init__(self) -> None:
+        self.started = time.monotonic()
+        self.last: dict[str, Any] | None = None
+        self.events = 0
+
+    def note(self, stage: str, message: str, current: int | None, total: int | None) -> None:
+        self.events += 1
+        self.last = {
+            "stage": str(stage), "message": str(message)[:40],
+            "current": int(current) if current is not None else None,
+            "total": int(total) if total is not None else None,
+            "elapsed_seconds": round(time.monotonic() - self.started, 1),
+        }
+
+    def document(self) -> dict[str, Any] | None:
+        if self.last is None:
+            return None
+        return {"last_event": dict(self.last), "event_count": self.events,
+                "elapsed_seconds": round(time.monotonic() - self.started, 1)}
 
 
 def _object_storage_upload_progress_hooks(
     args: argparse.Namespace,
+    summary: "_ObjectStorageUploadProgressSummary | None" = None,
 ) -> tuple[ProgressCallback | None, Callable[[ExactOperationProgress], None] | None]:
+    progress_log = getattr(args, "progress_log", None)
     stage_progress = _make_stage_progress_callback(
         bool(getattr(args, "progress", False)),
         label="object-storage-upload",
         detail="aggregate",
+        progress_log_path=str(progress_log) if progress_log else None,
     )
-    if stage_progress is None:
+    if stage_progress is None and summary is None:
         return None, None
+
+    def stage_hook(stage: str, message: str, current: int | None, total: int | None) -> None:
+        if summary is not None:
+            summary.note(stage, message, current, total)
+        if stage_progress is not None:
+            try:
+                stage_progress(stage, message, current, total)
+            except Exception:
+                pass  # an observational hook never fails the writer
 
     def exact_progress(event: ExactOperationProgress) -> None:
         document = event.public_document()
-        stage_progress(
+        stage_hook(
             "exact-operation-" + str(document["stage"]),
             str(document["mode"]),
             int(document["completed_items"]),
             int(document["total_items"]),
         )
 
-    return stage_progress, exact_progress
+    return stage_hook, exact_progress
+
+
+def _object_storage_upload_credential_refs_present(args: argparse.Namespace) -> bool | None:
+    """v0.4.36 (beta letter 168 ①): for env: refs, whether the variables exist in
+    this process (no value is read); None when a ref is not an env ref."""
+
+    present = True
+    for name in ("access_key_id_ref", "secret_access_key_ref"):
+        ref = str(getattr(args, name, None) or "").strip()
+        if not ref.startswith("env:"):
+            return None
+        variable = ref[len("env:"):]
+        present = present and bool(variable) and variable in os.environ and bool(os.environ.get(variable))
+    return present
 
 
 def command_object_storage_upload(args: argparse.Namespace) -> int:
@@ -18108,7 +18211,8 @@ def command_object_storage_upload(args: argparse.Namespace) -> int:
         not reviewer or re.fullmatch(r"sha256:[0-9a-f]{64}", expected_manifest_sha256) is None
     ):
         return _object_storage_upload_cli_error(args, "object_storage_upload_approval_required")
-    plan_progress, exact_progress = _object_storage_upload_progress_hooks(args)
+    progress_summary = _ObjectStorageUploadProgressSummary()
+    plan_progress, exact_progress = _object_storage_upload_progress_hooks(args, progress_summary)
     try:
         if resume_requested:
             plan = object_storage_upload_exact.load_object_storage_upload_plan(
@@ -18126,6 +18230,18 @@ def command_object_storage_upload(args: argparse.Namespace) -> int:
             )
         if args.dry_run:
             result = plan.public_document()
+            # v0.4.36 (beta letter 168 ①): env-ref presence, no value read.
+            result["credential_refs_present"] = _object_storage_upload_credential_refs_present(args)
+            if result.get("manifest_index_authority") == "rebuild_required":
+                result["next_safe_actions"] = [
+                    "The archive index is not current for this manifest: run 'archive index <root>' before --approve (the approve refuses before the dialog with archive_index_rebuild_required).",
+                    *result.get("next_safe_actions", []),
+                ]
+            if result["credential_refs_present"] is False:
+                result["next_safe_actions"] = [
+                    "A credential environment variable named by --access-key-id-ref / --secret-access-key-ref is not set in this shell; define it before --approve (the approve refuses before the dialog with object_storage_upload_credential_ref_unresolved).",
+                    *result.get("next_safe_actions", []),
+                ]
         else:
             if plan.manifest is None or not secrets.compare_digest(
                 plan.manifest.manifest_sha256, expected_manifest_sha256
@@ -18136,6 +18252,14 @@ def command_object_storage_upload(args: argparse.Namespace) -> int:
                     if plan.writer_state != "available"
                     else "object_storage_upload_plan_changed",
                 )
+            # v0.4.36 (beta letter 168 ①): the two gates the writer applied
+            # only after the dialog are refused before it, with their codes.
+            if object_storage_upload_exact.manifest_index_authority_state(plan) == "rebuild_required":
+                return _object_storage_upload_cli_error(
+                    args, "archive_index_rebuild_required",
+                    cause={"cause_code": "archive_index_rebuild_required", "cause_stage": "upload_preflight"},
+                    next_safe_actions=["Run 'archive index <root>' and rerun --dry-run, then --approve; no dialog was opened and no claim was written."],
+                )
             transport_factory = _object_storage_live_transport_factory(
                 args,
                 invalid=lambda: object_storage_upload_exact.ObjectStorageUploadError(
@@ -18145,6 +18269,16 @@ def command_object_storage_upload(args: argparse.Namespace) -> int:
                     "object_storage_upload_remote_unavailable"
                 ),
             )
+            if not resume_requested:
+                try:
+                    prepared_transport = transport_factory()
+                except object_storage_upload_exact.ObjectStorageUploadError:
+                    return _object_storage_upload_cli_error(
+                        args, "object_storage_upload_credential_ref_unresolved",
+                        cause={"cause_code": "object_storage_upload_credential_ref_unresolved", "cause_stage": "upload_preflight"},
+                        next_safe_actions=["A credential ref could not be resolved in this process (an env: variable is unset or empty, or the provider transport is unavailable); no dialog was opened and no claim was written. Define the variables in this shell and rerun."],
+                    )
+                transport_factory = lambda: prepared_transport  # noqa: E731 - one resolved transport for the approved write
             if resume_requested:
                 result = object_storage_upload_exact.resume_object_storage_upload(
                     plan,
@@ -18162,22 +18296,39 @@ def command_object_storage_upload(args: argparse.Namespace) -> int:
                     progress_hook=exact_progress,
                 )
     except object_storage_upload_exact.ObjectStorageUploadError as exc:
-        return _object_storage_upload_cli_error(args, exc.code)
+        return _object_storage_upload_cli_error(
+            args, exc.code, cause=_object_storage_upload_content_free_cause(exc),
+            progress_summary=progress_summary.document(),
+        )
     except object_storage_preservation.ObjectStoragePreservationError as exc:
         code = (
             "object_storage_upload_remote_unavailable"
             if "remote" in exc.code
             else "object_storage_upload_plan_invalid"
         )
-        return _object_storage_upload_cli_error(args, code)
+        return _object_storage_upload_cli_error(
+            args, code, cause={"cause_code": exc.code, "cause_stage": "upload_preflight"},
+            progress_summary=progress_summary.document(),
+        )
     except (
         ExactHumanApprovalError,
         ExactHumanApprovalWindowsError,
         ExactHumanApprovalWorkflowError,
         ExactOperationManifestError,
     ) as exc:
+        # v0.4.36 (beta letter 168 ①): the inner fixed cause and the honest
+        # effects state travel with the envelope (mirror of the mint path).
+        code = str(getattr(exc, "code", "object_storage_upload_remote_unavailable"))
+        cause = _object_storage_upload_content_free_cause(exc)
+        if code == "exact_human_approval_state_unknown":
+            effects, actions = "unknown", _OBJECT_STORAGE_UPLOAD_STARTED_CLAIM_ACTIONS
+        elif code == "exact_human_approval_writer_refused":
+            effects, actions = "refused_before_effects", _OBJECT_STORAGE_UPLOAD_REFUSED_ACTIONS
+        else:
+            effects, actions = None, None
         return _object_storage_upload_cli_error(
-            args, str(getattr(exc, "code", "object_storage_upload_remote_unavailable"))
+            args, code, cause=cause, next_safe_actions=actions, effects_state=effects,
+            progress_summary=progress_summary.document(),
         )
     print_object_storage_upload_result(result, args.format)
     return 0 if result.get("ok", False) else 1
@@ -27472,6 +27623,10 @@ def _exact_human_approval_cli_error(
     lifecycle_action: str,
     reason_code: str,
     preflight_blockers: Any = None,
+    cause: Mapping[str, Any] | None = None,
+    next_safe_actions: Iterable[str] | None = None,
+    effects_state: str | None = None,
+    progress_summary: Mapping[str, Any] | None = None,
 ) -> int:
     """Emit only a fixed code after an approval-boundary failure.
 
@@ -27505,9 +27660,24 @@ def _exact_human_approval_cli_error(
                 "reason_codes": [safe_reason],
                 "blockers": blockers,
                 "exit_code": 1,
-                "effects_state": "none",
+                # v0.4.36 (beta letter 168 ①): a caller that knows the claim
+                # stayed started says so instead of the untrue "none".
+                "effects_state": (
+                    effects_state
+                    if effects_state in {"none", "unknown", "refused_before_effects"}
+                    else "none"
+                ),
                 "files_written": [],
                 "private_values_echoed": False,
+                # v0.4.22 contract (mint, finalize) extended to every caller
+                # that passes its cause: the inner fixed code and stage.
+                **(
+                    {"cause_code": cause["cause_code"], "cause_stage": cause.get("cause_stage")}
+                    if cause and cause.get("cause_code")
+                    else {}
+                ),
+                **({"next_safe_actions": list(next_safe_actions)} if next_safe_actions else {}),
+                **({"progress_summary": dict(progress_summary)} if progress_summary else {}),
             }
         )
     elif safe_reason == "exact_human_approval_cancelled":
@@ -27541,6 +27711,8 @@ def _exact_human_approval_cli_error(
             "inspect the local approval claim before retrying.",
             file=sys.stderr,
         )
+        if cause and cause.get("cause_code"):
+            print(f"cause_code: {cause['cause_code']} (stage {cause.get('cause_stage')})", file=sys.stderr)
     return 1
 
 
@@ -40776,6 +40948,7 @@ def build_parser() -> argparse.ArgumentParser:
     object_storage_upload.add_argument("--resume-execution-sha256", help="Resume the exact checkpoint execution bound to --resume-approval-id.")
     object_storage_upload.add_argument("--reviewed-by", help="Safe reviewer id required when --approve is used.")
     object_storage_upload.add_argument("--progress", action="store_true", help="Stream planning and per-object progress to stderr; stdout keeps the final result.")
+    object_storage_upload.add_argument("--progress-log", help="v0.4.36: write the full progress event stream (every suppressed revalidation and preflight publish) to a new JSONL file outside the archive root.")
     object_storage_upload.add_argument(
         "--dry-run",
         action="store_true",

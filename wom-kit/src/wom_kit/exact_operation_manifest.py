@@ -120,14 +120,35 @@ class ExactOperationManifestError(RuntimeError):
         self.code = (
             code if code in self._CODES else "exact_operation_manifest_invalid"
         )
+        # v0.4.36 (beta letter 168 ①): the adapter's own fixed code, when the
+        # runner re-typed it, and whether the failure provably preceded the
+        # first durable write (``effects == "none"``).
+        self.cause_code: str | None = None
+        self.effects: str | None = None
         super().__init__(self.code)
 
     def __repr__(self) -> str:
         return f"ExactOperationManifestError({self.code!r})"
 
 
-def _fail(code: str) -> ExactOperationManifestError:
-    return ExactOperationManifestError(code)
+_ADAPTER_CODE_RE = re.compile(r"[a-z][a-z0-9_]{0,95}\Z")
+
+
+def _fail(
+    code: str, *, cause: BaseException | None = None
+) -> ExactOperationManifestError:
+    error = ExactOperationManifestError(code)
+    if cause is not None:
+        inner = getattr(cause, "cause_code", None)
+        if not (type(inner) is str and _ADAPTER_CODE_RE.fullmatch(inner)):
+            inner = getattr(cause, "code", None)
+        if not (type(inner) is str and _ADAPTER_CODE_RE.fullmatch(inner)):
+            inner = cause.args[0] if len(cause.args) == 1 and type(cause.args[0]) is str else None
+        if type(inner) is str and _ADAPTER_CODE_RE.fullmatch(inner) and inner != code:
+            error.cause_code = inner
+        if getattr(cause, "effects", None) == "none":
+            error.effects = "none"
+    return error
 
 
 def _canonical_json_bytes(value: Any) -> bytes:
@@ -2365,8 +2386,8 @@ def _validate_payloads(
                         state=state,
                         heartbeat=heartbeat,
                     )
-                except Exception:
-                    raise _fail("exact_operation_payload_mismatch") from None
+                except Exception as failure:
+                    raise _fail("exact_operation_payload_mismatch", cause=failure) from None
                 if not hmac.compare_digest(hash_field_value(value), expected):
                     raise _fail("exact_operation_payload_mismatch")
 
@@ -2398,8 +2419,8 @@ def _read_hash(
         return hash_field_value(value)
     except ExactOperationManifestError:
         raise
-    except Exception:
-        raise _fail("exact_operation_independent_verify_failed") from None
+    except Exception as failure:
+        raise _fail("exact_operation_independent_verify_failed", cause=failure) from None
 
 
 def _checkpoint_item_state_sha256(
@@ -3484,33 +3505,41 @@ def _run_exact_operation(
             total_fields,
         )
     )
-    checkpoint_state = _load_checkpoint_state(
-        manifest,
-        mode=mode,
-        execution_sha256=execution_sha256,
-        selection=selection,
-        checkpoint_store=checkpoint_store,
-        heartbeat=publisher.heartbeat,
-        approval_authority=approval_authority,
-    )
-    if checkpoint_state.rows and not resume:
-        raise _fail("exact_operation_resume_required")
-    if resume and not checkpoint_state.rows:
-        raise _fail("exact_operation_resume_checkpoint_missing")
+    # v0.4.36 (beta letter 168 ①): every failure up to the end of the
+    # preflight precedes the first checkpoint row and the first write of
+    # this execution; a fresh (non-resume) execution proves no effects.
+    try:
+        checkpoint_state = _load_checkpoint_state(
+            manifest,
+            mode=mode,
+            execution_sha256=execution_sha256,
+            selection=selection,
+            checkpoint_store=checkpoint_store,
+            heartbeat=publisher.heartbeat,
+            approval_authority=approval_authority,
+        )
+        if checkpoint_state.rows and not resume:
+            raise _fail("exact_operation_resume_required")
+        if resume and not checkpoint_state.rows:
+            raise _fail("exact_operation_resume_checkpoint_missing")
 
-    _validate_payloads(
-        selection,
-        payloads,
-        heartbeat=publisher.heartbeat,
-    )
-    _preflight_target_states(
-        selection,
-        mode=mode,
-        verifier=verifier,
-        checkpoint_state=checkpoint_state,
-        resume=resume,
-        heartbeat=publisher.heartbeat,
-    )
+        _validate_payloads(
+            selection,
+            payloads,
+            heartbeat=publisher.heartbeat,
+        )
+        _preflight_target_states(
+            selection,
+            mode=mode,
+            verifier=verifier,
+            checkpoint_state=checkpoint_state,
+            resume=resume,
+            heartbeat=publisher.heartbeat,
+        )
+    except ExactOperationManifestError as failure:
+        if not resume and failure.effects is None:
+            failure.effects = "none"
+        raise
     publisher.publish(
         ExactOperationProgress(
             manifest.manifest_sha256,
@@ -3601,8 +3630,8 @@ def _run_exact_operation(
                         value=value,
                         heartbeat=publisher.heartbeat,
                     )
-                except Exception:
-                    raise _fail("exact_operation_write_failed") from None
+                except Exception as failure:
+                    raise _fail("exact_operation_write_failed", cause=failure) from None
                 written_fields += 1
                 if not hmac.compare_digest(
                     _read_hash(
