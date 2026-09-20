@@ -10,28 +10,32 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.4.32 GitHub Release, when present, uses the self-contained wheel
+The exact v0.4.33 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0432-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0433-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.32/wom_kit-0.4.32-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.33/wom_kit-0.4.33-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-Run the version check in a new process and require exactly `archive 0.4.32`.
+Run the version check in a new process and require exactly `archive 0.4.33`.
 The dedicated external CPython 3.12 environment and exact real
 `python.exe -m pip` path retain the wheel SHA-256 required by the updater. A
 user-scoped `uv tool` environment whose installed metadata omits that archive
 hash is not project-updater supply evidence. Installing the bootstrap does not
 silently update a project-local WOM-kit source mirror or its pin.
+
+v0.4.33 reopens `object-storage-upload` (details in the paragraph below the
+v0.4.30 entry): one dialog, create-only PUT at the content-addressed key,
+same-run full-GET proof, one manifest projection, execution receipts.
 
 v0.4.32 answers the first half of beta letter 164: the claim-finalize
 receipt scan reads bytes and separates oversize from unreadable; an
@@ -55,11 +59,15 @@ receipt scan behind one dialog; the approval-integrity audit pages per
 receipt kind; approved draft writes carry `inbox_attention`; `revert-edge`
 works without `--exact-local` and on inbox drafts.
 
-Boundary stated at the client's request (beta letter 164): the
-`object-storage-upload` writer is fixed closed in the v0.4 line, so
-`object-storage-restore` and `object-storage-offload` apply only to objets
-that WOM uploaded under v0.3 (`wom_uploaded` manifest locations). Reopening
-the upload writer under the exact approval contract is the v0.4.33 design.
+v0.4.33 reopens `object-storage-upload` under the exact approval contract
+(beta letter 164 ①③④): the writer line comes first in the plan, every
+manifest object is classified with counts only, a create-only PUT at the
+content-addressed key is followed by a same-run full-GET proof, one manifest
+projection adds the `wom_uploaded` locations, and the v0.3-shaped execution
+receipts are written after it; an existing remote copy is never overwritten,
+a differing one is `review_required`, and the remote object is never
+deleted. `object-storage-restore` and `object-storage-offload` therefore
+apply to v0.3 uploads and v0.4.33 uploads alike.
 
 v0.4.29 adds `object-storage-offload`: local objet bytes are removed only
 after a same-run full-GET remote proof, two local re-hashes and every

@@ -97,7 +97,6 @@ COMPOUND_APPROVAL_FIXED_CLOSED_COMMANDS = frozenset(
         "notion-objet-link-convert",
         "notion-page-recovery",
         "notion-recover",
-        "object-storage-upload",
         "object-storage-upload-evidence",
         "object-storage-wom-location-reconcile",
         "objet-capture-enable",
@@ -147,6 +146,8 @@ EXACT_APPROVAL_REOPENED_WRITERS = frozenset({
     "revert-batch",
     "zet-revision-write",
     "zet-revision-restore-write",
+    # v0.4.33 (letter 164 ①): live upload reopened as preservation PUT + adoption projection.
+    "object-storage-upload",
 })
 
 # Public parser and dispatch exposure was audited at v0.3.320 and its explicit

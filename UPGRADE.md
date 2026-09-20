@@ -24,6 +24,57 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.4.33 Beta Letter 164 ①③④: `object-storage-upload` Reopened
+
+Install the exact public wheel only after the matching release and asset exist.
+Use a new external CPython 3.12 environment so the real `python.exe -m pip`
+records the wheel hash in installed PEP 610 metadata.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0433-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.33/wom_kit-0.4.33-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+Require exactly `archive 0.4.33` from a new process. Publishing or installing
+the wheel changes no client archive, project runtime, or version pin. A client
+separately chooses and approves any project update.
+
+After the update, `object-storage-upload --approve` works again. Run the
+dry-run first: it reports the writer line before anything else
+(`writer_state: unavailable` with `provider_unsupported`, `store_setup_missing`
+or `store_ref_invalid` means the store must be registered or a supported
+provider kind chosen), then a classification of every manifest object as
+counts (`excluded_byte_external_count`, `excluded_already_uploaded_count`,
+`excluded_already_preserved_count`, `excluded_offloaded_count`,
+`local_absent_count`, `local_size_conflict_count`, `candidate_count`). If a
+manifest row claims local bytes that are absent or the wrong size the plan is
+refused with `local_bytes_missing`; rerun with `--local-bytes-only` to upload
+the objects whose bytes are present, or restore the missing bytes first.
+`--max-objects N` now plans the first N candidates instead of refusing. Then
+`--approve --reviewed-by <id> --expected-manifest-sha256 <plan_sha256>` with
+the endpoint, bucket and credential refs opens one dialog for the whole plan;
+per object the writer re-hashes the local file, queries the remote key with a
+whole-object GET, skips a `verified_match` without a PUT, marks differing
+remote bytes `review_required` without touching them, and only PUTs an absent
+key (create-only), re-hashes the upload and records a private ledger row;
+after the objects one manifest projection adds the `wom_uploaded` locations
+and the execution receipts are written. A transport failure leaves no receipt
+and is resumed with `--resume-approval-id` / `--resume-execution-sha256`. The
+v0.3 flags `--force-reupload`, `--skip-uploaded`, `--key-strategy`,
+`--key-prefix`, `--key-append-extension` and the multipart overrides no longer
+exist. Restore and offload accept the new uploads unchanged.
+
+After one reviewed project update, start the project launcher in a new process
+and verify its pin, source, launcher, and runtime evidence. Only that client-run
+result can show that the project was repaired.
+
 ## v0.4.32 Beta Letter 164 First Half: Finalize Scanner, Probe Kinds, Git Backup Attention, Permission Preview
 
 Install the exact public wheel only after the matching release and asset exist.

@@ -6,6 +6,38 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.33 - 2026-09-20
+
+- Beta letter 164 ①③④: `object-storage-upload` reopened under the exact
+  approval contract as the composition of the v0.4.13 preservation PUT and the
+  formal-adoption manifest projection. Dry-run reports `writer_state` first
+  (`provider_unsupported` / `store_setup_missing` / ... before any manifest
+  read), classifies every manifest object with counts only
+  (`excluded_byte_external_count`, `excluded_already_uploaded_count`,
+  `excluded_already_preserved_count`, `excluded_offloaded_count`,
+  `local_absent_count`, `local_size_conflict_count`, ...), hashes only the
+  candidates and never calls the provider; `--local-bytes-only` proceeds with
+  the objects whose bytes are present (the default refuses with
+  `local_bytes_missing`); `--max-objects` bounds the plan. Approve opens one
+  dialog (`object_storage_bytes_upload`, always a dialog): per object a local
+  re-hash, a whole-object remote query at the content-addressed key, a
+  create-only PUT only when absent, a full-GET re-hash and a private ledger
+  row; then one manifest projection adding the `wom_uploaded` locations under
+  the manifest-index authority and the v0.3-shaped execution receipts. An
+  existing remote copy is never overwritten (`review_required` on differing
+  bytes), the remote object is never deleted, there is no tier gate and no
+  `--force-reupload`.
+- Inventory: 60 approval-available, 59 fixed-closed paths; the coverage
+  manifest gains the upload row and the restore / offload / claim-finalize
+  session-ref targets move to v0.4.34.
+- After the 2026-09-20 public-history rewrite, tests that name a pre-rewrite
+  commit verify through `docs/evidence/history-rewrite-2026-09-20-commit-map.json`
+  and the sealed-member privacy gate matches six-grams by SHA-256.
+- Carried to v0.4.34: session refs for the four always-dialog writers, the
+  select-all group for `git-backup-reconcile-plan`, a reviewed re-PUT
+  operation, delivered-feedback archival (⑧), same-generation index
+  participation (8b).
+
 ## v0.4.32 - 2026-09-19
 
 - Beta letter 164, first half. `exact-approval-claim-finalize` scans every

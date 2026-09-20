@@ -173,8 +173,8 @@ and does not infer success, failure, or cancellation, automatically retry, or
 delete that evidence. A full authenticated terminal handoff and terminal
 cleanup outcome reconstruction remain a v0.4.16 follow-up.
 
-The current parser-derived inventory is 59 approval-available, 60 fixed-closed,
-and 202 not-exposed paths. v0.4.21 added `source-intake-chain` (the
+The current parser-derived inventory is 60 approval-available, 59 fixed-closed,
+and 202 not-exposed paths (v0.4.33 reopened `object-storage-upload`). v0.4.21 added `source-intake-chain` (the
 record → selection → capture intake of one staged original under one exact
 approval; each step re-verifies the chain claim before it writes, and the
 exact-operation receipts of the record and selection steps bind that claim's
@@ -190,7 +190,7 @@ approved pair, or its exact target digest is an approved target while only
 review context drifted, or its stable identity is approved and the batch
 has verified that the only change to its source since the dialog was the
 batch's own earlier write.
-The fixed-closed set includes 59 compound-approval
+The fixed-closed set includes 58 compound-approval
 migrations and the separately unsupported `operation-control` cancel writer,
 whose reason is `operation_cancel_not_supported`. Its status, wait, and
 recovery-plan actions remain read-only and available with `--dry-run`.
