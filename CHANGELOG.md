@@ -6,6 +6,21 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.35 - 2026-09-20
+
+- Beta letter 167 hotfix: after the 2026-09-20 public-history rewrite a
+  source mirror cannot fast-forward `origin/main`, so `project-version-update`
+  refused with "fetch failed / tag missing". A failed fetch now carries
+  `fetch.rejection_kind` (`non_fast_forward` / `remote_unreachable` /
+  `target_tag_missing_on_remote` / `ref_update_rejected`), `remote_reachable`,
+  `target_tag_on_remote`, `origin_main_before_fetch`, `origin_main_remote_sha`
+  and `origin_main_rewritten` (one `ls-remote` read plus an ancestry check;
+  no stderr captured, no ref written), and `--affirm-origin-main-rewritten`
+  lets the one approved fetch replace `refs/remotes/origin/main` (tag ref
+  never forced; before/after ids reported; bound warning
+  `origin_main_rewrite_affirmed`).
+- Carried to v0.4.36: the letter-165 reply's v0.4.35 list.
+
 ## v0.4.34 - 2026-09-20
 
 - Beta letter 165 [A]: a `limited` / `allow_all` session grant is presenter-bound

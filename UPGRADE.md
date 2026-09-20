@@ -24,6 +24,43 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.4.35 Beta Letter 167: The Updater And A Rewritten Origin Main
+
+Install the exact public wheel only after the matching release and asset exist.
+Use a new external CPython 3.12 environment so the real `python.exe -m pip`
+records the wheel hash in installed PEP 610 metadata.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0435-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.35/wom_kit-0.4.35-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+Require exactly `archive 0.4.35` from a new process. Publishing or installing
+the wheel changes no client archive, project runtime, or version pin. A client
+separately chooses and approves any project update.
+
+If your project's source mirror last fetched the public `main` before
+2026-09-20, the ordinary update is refused after the fetch with
+`fetch.rejection_kind: non_fast_forward` and `fetch.origin_main_rewritten:
+true` (the public history was rewritten that day to purge private
+identifiers). Run the dry-run and the approve from the v0.4.35 bootstrap with
+`--affirm-origin-main-rewritten` next to `--reviewed-by` and
+`--affirm-external-writers-quiescent`; that one fetch replaces
+`refs/remotes/origin/main` (the tag ref is never forced), the result reports
+the before and after commit ids, and every later verification is unchanged.
+v0.4.35 carries v0.4.32, v0.4.33 and v0.4.34.
+
+After one reviewed project update, start the project launcher in a new process
+and verify its pin, source, launcher, and runtime evidence. Only that client-run
+result can show that the project was repaired.
+
 ## v0.4.34 Beta Letter 165: Presenter-Bound Grants, Legacy Identifiers, Compose Under Exact Approval
 
 Install the exact public wheel only after the matching release and asset exist.

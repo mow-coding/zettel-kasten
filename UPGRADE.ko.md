@@ -2,6 +2,40 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.4.35 베타 편지 167: 업데이터와 다시 써진 원격 main
+
+일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.
+새 외부 CPython 3.12 환경의 실제 `python.exe -m pip`를 사용해 설치된 PEP 610
+metadata에 wheel hash가 남게 합니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0435-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.35/wom_kit-0.4.35-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+새 process에서 정확히 `archive 0.4.35`가 나와야 합니다. wheel을 공개하거나 설치하는
+것만으로 client archive, project runtime, version pin은 바뀌지 않습니다. project
+update는 client가 따로 선택하고 승인합니다.
+
+프로젝트의 소스 미러가 2026-09-20 이전의 공개 `main`을 마지막으로 받아 두었다면, 보통의
+업데이트는 fetch 뒤 `fetch.rejection_kind: non_fast_forward`, `fetch.origin_main_rewritten:
+true`로 거절됩니다(그날 개인 식별자를 지우기 위해 공개 히스토리를 다시 썼습니다). v0.4.35
+bootstrap에서 dry-run과 approve를 `--reviewed-by`, `--affirm-external-writers-quiescent` 옆에
+`--affirm-origin-main-rewritten`을 붙여 돌리세요. 그 한 번의 fetch가
+`refs/remotes/origin/main`을 바꾸고(태그 ref는 절대 강제하지 않음), 결과에 바꾸기 전·후 커밋 id가
+적히며, 그 뒤의 검증은 모두 그대로입니다. v0.4.35에는 v0.4.32·v0.4.33·v0.4.34가 들어 있습니다.
+
+검토한 project update 한 번 뒤에는 새 process에서 project launcher를 시작해 pin,
+source, launcher, runtime 근거를 확인하세요. 그 client 실행 결과만이 project가
+고쳐졌음을 보여 줍니다.
+
 ## v0.4.34 베타 편지 165: 제시 토큰에 묶인 승인 모드, 옛 식별자 경고, 정확 승인 아래의 피드백 본문
 
 일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.

@@ -1,10 +1,15 @@
 ﻿# WOM-kit Capability Matrix
 
-Status: v0.4.34 presenter-bound grants, letter-165, and session-owned writes truth
+Status: v0.4.35 rewritten-origin hotfix, letter-167, and session-owned writes truth
 Date: 2026-09-04
-Version: v0.4.34 implementation and release scope
+Version: v0.4.35 implementation and release scope
 
-The current v0.4.34 working tree answers beta letter 165: a session grant is
+The current v0.4.35 working tree is the beta letter 167 hotfix: after the
+2026-09-20 public-history rewrite `project-version-update` diagnoses a
+refused fetch (`fetch.rejection_kind`, the remote's tag and main
+observation, `origin_main_rewritten`) and accepts a rewritten origin main
+only under `--affirm-origin-main-rewritten`; no command path or count
+moves. The v0.4.34 tree answers beta letter 165: a session grant is
 presenter-bound and time-boxed (the secret returned once, fixed refusal
 codes on the result, presenter evidence in every grant claim, a
 second-presenter warning, the registry-only `session_permission_attention`

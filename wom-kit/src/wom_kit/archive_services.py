@@ -112994,6 +112994,121 @@ def _wom_kit_project_update_git(
     return True, output
 
 
+WOM_KIT_PROJECT_UPDATE_FETCH_REJECTION_KINDS = (
+    "non_fast_forward",
+    "remote_unreachable",
+    "target_tag_missing_on_remote",
+    "ref_update_rejected",
+)
+
+
+def _wom_kit_project_update_fetch_diagnosis(
+    mirror_path: Path,
+    target_tag: str,
+    *,
+    origin_main_local_sha: str | None,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
+) -> dict[str, Any]:
+    """v0.4.35 (beta letter 167): say WHY the atomic fetch was rejected.
+
+    Git writes its rejection to stderr, which the bounded runner never
+    captures; the fixed kind is derived from exit codes only: one
+    ``ls-remote`` read (is the remote reachable, is the tag there, what is
+    its ``main``), then the exact target tag alone fetched into the mirror
+    (the ref the approved fetch would have written anyway) and an ancestry
+    check of the local ``origin/main`` against the tag commit. A local
+    ``origin/main`` that is not an ancestor of the tag commit means the
+    remote history was rewritten (non-fast-forward). No stderr, URL, path or
+    credential value reaches the result; commit ids are public.
+    """
+
+    diagnosis: dict[str, Any] = {
+        "rejection_kind": "ref_update_rejected",
+        "remote_reachable": False,
+        "target_tag_on_remote": None,
+        "origin_main_local_sha": origin_main_local_sha,
+        "origin_main_remote_sha": None,
+        "origin_main_rewritten": None,
+        "target_tag_fetched_alone": False,
+        "raw_git_stderr_echoed": False,
+    }
+    ok, listing = _wom_kit_project_update_git(
+        mirror_path,
+        ["ls-remote", "--refs", "origin", "refs/heads/main", f"refs/tags/{target_tag}"],
+        timeout_seconds=60,
+        allow_transport_environment=True,
+        runner=runner,
+        transport=True,
+    )
+    if not ok:
+        diagnosis["rejection_kind"] = "remote_unreachable"
+        return diagnosis
+    diagnosis["remote_reachable"] = True
+    remote_main = None
+    tag_on_remote = False
+    for line in listing.splitlines():
+        parts = line.strip().split("\t")
+        if len(parts) != 2:
+            continue
+        sha, ref = parts
+        if re.fullmatch(r"[0-9a-f]{40,64}", sha) is None:
+            continue
+        if ref == "refs/heads/main":
+            remote_main = sha
+        elif ref == f"refs/tags/{target_tag}":
+            tag_on_remote = True
+    diagnosis["target_tag_on_remote"] = tag_on_remote
+    diagnosis["origin_main_remote_sha"] = remote_main
+    if not tag_on_remote:
+        diagnosis["rejection_kind"] = "target_tag_missing_on_remote"
+        return diagnosis
+    if not origin_main_local_sha or remote_main is None:
+        return diagnosis
+    # The rejected atomic fetch usually left the remote's objects in the
+    # store; when it did not, the exact tag is fetched into a private probe
+    # ref (never refs/tags, so the dry-run's local-tag view is unchanged)
+    # and the probe ref is removed again.
+    probe_ref = f"refs/wom-kit/probe/{target_tag}"
+    comparison_commit = remote_main
+    have_remote_main, have_code, _ = _wom_kit_project_update_git_observation(
+        mirror_path, ["cat-file", "-e", f"{remote_main}^{{commit}}"], runner=runner,
+    )
+    probe_written = False
+    if not (have_remote_main and have_code == 0):
+        tag_ok, _ = _wom_kit_project_update_git(
+            mirror_path,
+            [
+                "fetch", "--atomic", "--quiet", "--no-tags", "--no-recurse-submodules",
+                "--no-auto-maintenance", "--no-write-fetch-head", "origin",
+                f"+refs/tags/{target_tag}:{probe_ref}",
+            ],
+            timeout_seconds=180,
+            allow_transport_environment=True,
+            runner=runner,
+            transport=True,
+        )
+        diagnosis["target_tag_fetched_alone"] = bool(tag_ok)
+        if not tag_ok:
+            return diagnosis
+        probe_written = True
+        comparison_commit = f"{probe_ref}^{{commit}}"
+    try:
+        ancestor_available, ancestor_code, _ = _wom_kit_project_update_git_observation(
+            mirror_path,
+            ["merge-base", "--is-ancestor", origin_main_local_sha, comparison_commit],
+            runner=runner,
+        )
+        if ancestor_available and ancestor_code == 1:
+            diagnosis["origin_main_rewritten"] = True
+            diagnosis["rejection_kind"] = "non_fast_forward"
+        elif ancestor_available and ancestor_code == 0:
+            diagnosis["origin_main_rewritten"] = False
+    finally:
+        if probe_written:
+            _wom_kit_project_update_git(mirror_path, ["update-ref", "-d", probe_ref], runner=runner)
+    return diagnosis
+
+
 def _wom_kit_project_update_git_legacy_read_only(
     mirror_path: Path,
     args: list[str],
@@ -117029,6 +117144,9 @@ WOM_KIT_PROJECT_UPDATE_MATERIALIZATION_BLOCKER = (
 WOM_KIT_PROJECT_UPDATE_MATERIALIZATION_BLOCKER_CODE = (
     "project_version_update_materialization_conflict"
 )
+WOM_KIT_PROJECT_UPDATE_ORIGIN_MAIN_REWRITTEN_BLOCKER = (
+    "The configured origin rewrote its main history (non-fast-forward); rerun --dry-run and approve with --affirm-origin-main-rewritten after review."
+)
 WOM_KIT_PROJECT_UPDATE_SOURCE_DRIFT_BLOCKER = (
     "The project source mirror changed immediately before materialization; "
     "no source or pin mutation was attempted."
@@ -120845,6 +120963,7 @@ def wom_kit_project_version_update(
     expected_exact_approval_target_binding_sha256: str | None = None,
     exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
     progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
+    accept_origin_main_rewrite: bool = False,
 ) -> dict[str, Any]:
     if type(dry_run) is not bool or type(approve) is not bool:
         return _compound_exact_human_approval_blocked(
@@ -120876,6 +120995,7 @@ def wom_kit_project_version_update(
             approve=False,
             reviewed_by=reviewed_by,
             affirm_external_writers_quiescent=False,
+            accept_origin_main_rewrite=bool(accept_origin_main_rewrite),
             progress_callback=progress_callback,
         )
     return _compound_exact_human_approval_blocked(
@@ -120892,6 +121012,7 @@ def _wom_kit_project_version_update_live_approval_transaction(
     approval_executor: Callable[..., Mapping[str, Any]],
     progress_callback: Callable[[str, str, int | None, int | None], None]
     | None = None,
+    accept_origin_main_rewrite: bool = False,
     _expected_approval_root: Path | None = None,
     _expected_archive_id: str | None = None,
 ) -> dict[str, Any]:
@@ -120931,6 +121052,7 @@ def _wom_kit_project_version_update_live_approval_transaction(
             approve=True,
             reviewed_by=reviewer,
             affirm_external_writers_quiescent=True,
+            accept_origin_main_rewrite=bool(accept_origin_main_rewrite),
             approval_executor=approval_executor,
             progress_callback=progress_callback,
             _expected_approval_root=_expected_approval_root,
@@ -136999,6 +137121,7 @@ def _wom_kit_project_version_update_legacy_core_generator(
     approve: bool = False,
     reviewed_by: str | None = None,
     affirm_external_writers_quiescent: bool = False,
+    accept_origin_main_rewrite: bool = False,
     operation_exact_human_approval: Mapping[str, Any] | None = None,
     prepare_exact_approval: bool = False,
     progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
@@ -138073,6 +138196,13 @@ def _wom_kit_project_version_update_legacy_core_generator(
     warnings.extend(project_runtime_plan_warnings)
     fetch_attempted = False
     fetch_succeeded = False
+    # v0.4.35 (beta letter 167): the rewritten-origin diagnosis and acceptance.
+    accept_origin_main_rewrite = bool(accept_origin_main_rewrite)
+    fetch_diagnosis: dict[str, Any] | None = None
+    origin_main_before_fetch: str | None = None
+    origin_main_after_fetch: str | None = None
+    if accept_origin_main_rewrite:
+        warnings.append("origin_main_rewrite_affirmed")
     source_checkout_changed = False
     runtime_source_rematerialization_attempted = False
     runtime_source_rematerialization_succeeded: bool | None = None
@@ -138262,6 +138392,12 @@ def _wom_kit_project_version_update_legacy_core_generator(
                 if "project_runtime_exact_public_wheel_required" in blockers
                 else
                 [
+                    "The configured origin rewrote its main history (the local origin/main is not an ancestor of the target tag); the exact tag exists on the remote. Review fetch.origin_main_before_fetch and fetch.origin_main_remote_sha.",
+                    "Rerun project-version-update --dry-run, then approve with --affirm-origin-main-rewritten (with --reviewed-by and --affirm-external-writers-quiescent) to let this one fetch replace refs/remotes/origin/main; the tag ref is never forced and the approval binds the affirmation.",
+                ]
+                if WOM_KIT_PROJECT_UPDATE_ORIGIN_MAIN_REWRITTEN_BLOCKER in blockers
+                else
+                [
                     "Keep the newly changed source bytes in place and do not reuse the prior approval.",
                     "Pause editors and sync, backup, and other Git processes, then rerun project-version-update in --dry-run mode before a separate approval.",
                 ]
@@ -138308,9 +138444,16 @@ def _wom_kit_project_version_update_legacy_core_generator(
             ]
         else:
             next_actions = [
-                "Review this preview, then rerun with --approve --reviewed-by <actor> --affirm-external-writers-quiescent.",
+                "Review this preview, then rerun with --approve --reviewed-by <actor> --affirm-external-writers-quiescent"
+                + (" --affirm-origin-main-rewritten" if accept_origin_main_rewrite else "")
+                + ".",
                 "Pass that affirmation only after editors and sync, backup, and other Git processes are paused for the complete transaction.",
-                "Approval will fetch and verify the exact tag before changing the source mirror or pins.",
+                "Approval will fetch and verify the exact tag before changing the source mirror or pins."
+                + (
+                    " With --affirm-origin-main-rewritten the fetch may replace refs/remotes/origin/main with a rewritten remote main; the before/after commit ids are reported and the tag ref is never forced."
+                    if accept_origin_main_rewrite
+                    else " If the remote main history was rewritten, the fetch is refused and the result names it (fetch.rejection_kind: non_fast_forward)."
+                ),
             ]
         payload = {
             "ok": not blockers
@@ -138401,6 +138544,32 @@ def _wom_kit_project_version_update_legacy_core_generator(
                 "exact_target_tag_only": True,
                 "attempted": fetch_attempted,
                 "succeeded": fetch_succeeded,
+                # v0.4.35 (beta letter 167): the rewritten-origin contract.
+                "main_ref_forced_update_affirmed": accept_origin_main_rewrite,
+                "origin_main_before_fetch": origin_main_before_fetch,
+                "origin_main_after_fetch": origin_main_after_fetch,
+                "origin_main_rewrite_accepted": bool(
+                    accept_origin_main_rewrite
+                    and fetch_succeeded
+                    and origin_main_before_fetch is not None
+                    and origin_main_after_fetch is not None
+                    and origin_main_before_fetch != origin_main_after_fetch
+                ),
+                "rejection_kind": (
+                    fetch_diagnosis.get("rejection_kind") if fetch_diagnosis is not None else None
+                ),
+                "remote_reachable": (
+                    fetch_diagnosis.get("remote_reachable") if fetch_diagnosis is not None else None
+                ),
+                "target_tag_on_remote": (
+                    fetch_diagnosis.get("target_tag_on_remote") if fetch_diagnosis is not None else None
+                ),
+                "origin_main_remote_sha": (
+                    fetch_diagnosis.get("origin_main_remote_sha") if fetch_diagnosis is not None else None
+                ),
+                "origin_main_rewritten": (
+                    fetch_diagnosis.get("origin_main_rewritten") if fetch_diagnosis is not None else None
+                ),
                 "git_transport_called": fetch_attempted,
                 "network_may_have_been_called": fetch_attempted,
                 "fetched_refs_may_remain_after_result": fetch_succeeded,
@@ -139166,6 +139335,12 @@ def _wom_kit_project_version_update_legacy_core_generator(
             release_current_lock_or_raise("blocked")
             return result_payload("blocked")
         fetch_attempted = True
+        before_ok, before_sha = _wom_kit_project_update_git(
+            mirror_path,
+            ["rev-parse", "--verify", "refs/remotes/origin/main"],
+            runner=git_runner,
+        )
+        origin_main_before_fetch = before_sha.strip() if before_ok and before_sha.strip() else None
         fetch_ok, _ = _wom_kit_project_update_git(
             mirror_path,
             [
@@ -139177,7 +139352,11 @@ def _wom_kit_project_version_update_legacy_core_generator(
                 "--no-auto-maintenance",
                 "--no-write-fetch-head",
                 "origin",
-                "refs/heads/main:refs/remotes/origin/main",
+                # v0.4.35 (beta letter 167): only an operator affirmation lets a
+                # rewritten remote main replace the tracking ref; the tag ref
+                # is never forced.
+                ("+" if accept_origin_main_rewrite else "")
+                + "refs/heads/main:refs/remotes/origin/main",
                 f"refs/tags/{target_tag}:refs/tags/{target_tag}",
             ],
             timeout_seconds=180,
@@ -139186,6 +139365,20 @@ def _wom_kit_project_version_update_legacy_core_generator(
             transport=True,
         )
         fetch_succeeded = fetch_ok
+        if fetch_ok:
+            after_ok, after_sha = _wom_kit_project_update_git(
+                mirror_path,
+                ["rev-parse", "--verify", "refs/remotes/origin/main"],
+                runner=git_runner,
+            )
+            origin_main_after_fetch = after_sha.strip() if after_ok and after_sha.strip() else None
+        else:
+            fetch_diagnosis = _wom_kit_project_update_fetch_diagnosis(
+                mirror_path,
+                target_tag,
+                origin_main_local_sha=origin_main_before_fetch,
+                runner=git_runner,
+            )
         post_fetch_config_matches = bool(
             wom_kit_project_update_git_config_trust_digest(
                 mirror_path,
@@ -139204,6 +139397,8 @@ def _wom_kit_project_version_update_legacy_core_generator(
         )
         if not fetch_ok:
             blockers.append("The atomic configured-origin fetch failed; no source checkout or pin write was attempted.")
+            if fetch_diagnosis is not None and fetch_diagnosis.get("origin_main_rewritten") is True:
+                blockers.append(WOM_KIT_PROJECT_UPDATE_ORIGIN_MAIN_REWRITTEN_BLOCKER)
             release_current_lock_or_raise("blocked")
             return result_payload("blocked")
         if (
@@ -141668,6 +141863,7 @@ def _wom_kit_project_version_update_legacy_core(
     approve: bool = False,
     reviewed_by: str | None = None,
     affirm_external_writers_quiescent: bool = False,
+    accept_origin_main_rewrite: bool = False,
     operation_exact_human_approval: Mapping[str, Any] | None = None,
     approval_executor: Callable[..., Mapping[str, Any]]
     | None = None,
@@ -141709,6 +141905,7 @@ def _wom_kit_project_version_update_legacy_core(
         affirm_external_writers_quiescent=(
             affirm_external_writers_quiescent
         ),
+        accept_origin_main_rewrite=accept_origin_main_rewrite,
         operation_exact_human_approval=operation_exact_human_approval,
         prepare_exact_approval=approval_executor is not None,
         progress_callback=safe_progress_callback,

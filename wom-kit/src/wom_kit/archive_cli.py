@@ -11411,6 +11411,9 @@ def _command_project_version_update_core(
                                 _execute_project_version_update_approval
                             ),
                             progress_callback=progress_callback,
+                            accept_origin_main_rewrite=bool(
+                                getattr(args, "affirm_origin_main_rewritten", False)
+                            ),
                             _expected_approval_root=approval_root,
                             _expected_archive_id=held_archive_id,
                         )
@@ -11425,6 +11428,9 @@ def _command_project_version_update_core(
                 approve=False,
                 reviewed_by=args.reviewed_by,
                 progress_callback=progress_callback,
+                accept_origin_main_rewrite=bool(
+                    getattr(args, "affirm_origin_main_rewritten", False)
+                ),
             )
     except _ProjectVersionUpdateCleanupUnknownPreflight as completed_preflight:
         result = completed_preflight.result
@@ -38765,6 +38771,16 @@ def build_parser() -> argparse.ArgumentParser:
             "Required with --approve or --resume: affirm that editors and "
             "sync, backup, and other Git writers are paused for the complete "
             "transaction."
+        ),
+    )
+    project_version_update.add_argument(
+        "--affirm-origin-main-rewritten",
+        action="store_true",
+        help=(
+            "v0.4.35: with --approve, let this one fetch replace refs/remotes/origin/main when the "
+            "configured origin rewrote its main history (a blocked approve reports "
+            "fetch.rejection_kind non_fast_forward). The tag ref is never forced; the before/after "
+            "commit ids are reported and the affirmation is bound into the approval."
         ),
     )
     project_version_update.add_argument(
