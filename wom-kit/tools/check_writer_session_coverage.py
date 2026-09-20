@@ -21,6 +21,7 @@ from pathlib import Path
 KIT_ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = KIT_ROOT / "docs" / "writer-session-coverage.json"
 SESSION_OPTIONS = ("--client-app-ref", "--task-route-ref")
+ENVIRONMENT_ROUTE = "environment"  # v0.4.36: the broker's WOM_* environment refs
 STATUSES = ("session_integrated", "pending", "legacy_exception")
 
 
@@ -72,13 +73,20 @@ def check(manifest_path: Path = MANIFEST) -> tuple[list[str], dict[str, int]]:
         exposes = any(option in options.get(path, []) for option in SESSION_OPTIONS)
         if status == "session_integrated":
             route = row.get("route", path)
-            route_exposes = any(option in options.get(route, []) for option in SESSION_OPTIONS)
+            # v0.4.36 (letter 168 ⑥): a writer whose --approve goes through the
+            # exact approval broker resolves the session grant from the process
+            # environment refs (WOM_CLIENT_APP_REF / WOM_TASK_ROUTE_REF /
+            # WOM_WORK_SESSION_REF); every operation kind is grantable, so the
+            # route "environment" is a real integration, not a flag on the path.
+            route_exposes = route == ENVIRONMENT_ROUTE or any(
+                option in options.get(route, []) for option in SESSION_OPTIONS
+            )
             if not route_exposes:
                 problems.append(f"{path}: session_integrated but {route} exposes no session refs")
             if route != path:
                 counts["session_integrated"] -= 1
                 counts["routed"] = counts.get("routed", 0) + 1
-                if paths.get(route, {}).get("status") != "session_integrated":
+                if route != ENVIRONMENT_ROUTE and paths.get(route, {}).get("status") != "session_integrated":
                     problems.append(f"{path}: route {route} is not itself session_integrated")
             evidence = row.get("evidence")
             if not isinstance(evidence, list) or not evidence:

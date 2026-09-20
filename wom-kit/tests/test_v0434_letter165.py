@@ -496,7 +496,10 @@ class FeedbackComposeExactApprovalTests(unittest.TestCase):
         stale = self.compose("--approve", "--expected-plan-sha256", "0" * 64, "--reviewed-by", REVIEWER, ok=False)
         self.assertEqual(stale["reason_codes"], ["feedback_compose_plan_changed"])
         self.assertEqual(self.native.calls, 0)
-        created = self.compose("--approve", "--expected-plan-sha256", preview["plan_sha256"], "--reviewed-by", REVIEWER)
+        # v0.4.36 (letter 168 request 9): the draft record is created by default; this
+        # test keeps the manual five-step path under --no-create-draft-record.
+        created = self.compose("--approve", "--expected-plan-sha256", preview["plan_sha256"], "--reviewed-by", REVIEWER,
+                               "--no-create-draft-record")
         self.assertEqual(self.native.calls, 1)
         context = self.native.contexts[0] if hasattr(self.native, "contexts") else None
         self.assertEqual(created["state"], "written")
@@ -520,7 +523,8 @@ class FeedbackComposeExactApprovalTests(unittest.TestCase):
         self.assertTrue(check["receipt_persisted"])
         self.assertEqual(len(check["next_safe_actions"]), 5)
         # an idempotent replay of the same approval matches the existing receipt without a second claim
-        replay = self.compose("--approve", "--expected-plan-sha256", preview["plan_sha256"], "--reviewed-by", REVIEWER)
+        replay = self.compose("--approve", "--expected-plan-sha256", preview["plan_sha256"], "--reviewed-by", REVIEWER,
+                              "--no-create-draft-record")
         self.assertEqual(self.native.calls, 2)
         self.assertTrue(replay["ok"], replay)
         self.assertEqual(replay["exact_human_approval"]["status"], "succeeded")

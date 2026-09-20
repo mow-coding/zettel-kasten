@@ -169,8 +169,8 @@
     {
       "source": "schemas/exact-human-approval-claim-finalize-receipt-v0.1.schema.json",
       "packaged": "schemas/exact-human-approval-claim-finalize-receipt-v0.1.schema.json",
-      "bytes": 3756,
-      "sha256": "0296d7e2759d69da67fc1f1d9b6ff239542b6ba49059203a1e71bf76e8504b95"
+      "bytes": 4052,
+      "sha256": "30c67c9d8ab90d85f4679259b00994da40e7afde24d81471db57bbef9db0ad8c"
     },
     {
       "source": "schemas/exact-human-approval-link-receipt-v0.1.schema.json",

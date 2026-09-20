@@ -115,8 +115,10 @@ COMPOSE_INTENTS = ("create", "revise", "supersede")
 # v0.4.34 (letter 165 [D]): the revise path, announced wherever it is needed.
 REVISE_PATH_NEXT_SAFE_ACTIONS = (
     "1. archive operator-feedback-record <archive-root> --feedback-id <id> --feedback-ref <feedback_ref> "
-    "--status draft --intent create --approve --reviewed-by <person:...>  (binds the body's feedback_ref; "
-    "compose --intent create --create-draft-record does this step for you)",
+    "--status draft --intent create --approve --reviewed-by <person:...>  (--feedback-ref must be EXACTLY the "
+    "body's feedback_ref 'feedback-body-sha256:<sha>' shown on this result, or body-check says "
+    "feedback_record_binding_mismatch; compose --intent create does this step for you unless "
+    "--no-create-draft-record is passed)",
     "2. archive operator-feedback-body-check <archive-root> --feedback-id <id> --dry-run --format json  "
     "(confirms body, receipt and record binding; its feedback_ref carries the current body SHA-256)",
     "3. archive operator-feedback-compose <archive-root> --request <same-request> --intent revise "
@@ -2266,6 +2268,22 @@ def check_operator_feedback_body(
             invalid_code="feedback_body_unsafe_or_invalid",
         )
     except _BodyContractError as exc:
+        if exc.code == "feedback_body_missing":
+            # v0.4.36 (letters 164 ⑧ / 168 request 8): an archived record keeps
+            # a content-free stub; the check recognises it instead of failing.
+            from . import operator_feedback_archive as _archive
+
+            stub = _archive.archived_stub(root, feedback_id)
+            if stub is not None:
+                result.update({
+                    "ok": True, "state": "archived_stub",
+                    "feedback_ref": f"feedback-body-sha256:{stub['body_sha256']}",
+                    "body_utf8_bytes": stub["body_utf8_bytes"], "body_persisted": False,
+                    "receipt_persisted": False,
+                    "record_binding": {"record_present": True, "feedback_ref_bound": True, "archived_stub": True},
+                    "archived": dict(stub), "blockers": [], "next_safe_actions": [],
+                })
+                return result
         result["blockers"] = [exc.code]
         return result
     except Exception:

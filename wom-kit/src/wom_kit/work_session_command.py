@@ -84,9 +84,11 @@ def dispatch_work_session_management(root, *, action, dry_run=False, approve=Fal
         "permission_mode_preview": {"permission_mode", "operations"},
     }.get(mode, set())
     # v0.4.34 (letter 165 [A]): the grant request may carry its time box.
+    # v0.4.36 (letter 168 ④): the preview accepts the approve request as is
+    # (reviewer_claim is ignored, never echoed) so one request serves both.
     optional_request = {
         "set-permission-mode": {"grant_hours"},
-        "permission_mode_preview": {"grant_hours"},
+        "permission_mode_preview": {"grant_hours", "reviewer_claim"},
     }.get(mode, set())
     value = {} if request is None else request
     needs_session = mode.startswith("claim_") or mode in {
@@ -98,7 +100,11 @@ def dispatch_work_session_management(root, *, action, dry_run=False, approve=Fal
     }
     if (type(value) is not dict or any(type(key) is not str for key in value)
             or not required_request <= set(value) <= (required_request | optional_request)):
-        return management_failure("work_session_request_invalid")
+        # v0.4.36 (letter 168 ④): a refused request shape names the allowed
+        # keys (fixed names only; no request value is echoed).
+        return management_failure("work_session_request_invalid", detail={
+            "required_keys": sorted(required_request), "optional_keys": sorted(optional_request),
+        } if required_request or optional_request else None)
     if ((action == "handoff" and type(target_app_ref) is not str)
             or (action != "handoff" and target_app_ref is not None)):
         return management_failure("work_session_request_invalid")

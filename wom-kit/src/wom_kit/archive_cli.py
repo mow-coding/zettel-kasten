@@ -12536,6 +12536,113 @@ def _operator_feedback_compose_exact_approval(
     return result
 
 
+_FEEDBACK_ARCHIVE_REVIEW_CODES = ("destination_digest_reviewed", "plan_digest_reviewed")
+
+
+def _operator_feedback_archive_error(args: argparse.Namespace, reason_code: str, *, next_safe_actions=None) -> int:
+    if getattr(args, "format", None) == "json":
+        payload = {
+            "schema": "wom-kit/cli-error/v0.1", "ok": False, "state": "blocked",
+            "command": "operator-feedback-archive", "lifecycle_action": "operator_feedback_archive",
+            "reason_codes": [reason_code], "blockers": [reason_code], "effects_state": "none",
+            "private_values_echoed": False, "local_paths_echoed": False,
+        }
+        if next_safe_actions:
+            payload["next_safe_actions"] = list(next_safe_actions)
+        print_json(payload)
+    else:
+        print(f"operator-feedback-archive blocked: {reason_code}", file=sys.stderr)
+    return 1
+
+
+def command_operator_feedback_archive(args: argparse.Namespace) -> int:
+    """v0.4.36 (letters 164 ⑧ / 168 request 8): move delivered letters out of the archive.
+
+    Dry-run plans (counts, ids, digests; the destination path is never echoed).
+    Approve runs the move under the exact approval broker as the grantable kind
+    ``operator_feedback_archive``: copy → byte verification → content-free stub
+    record → removal, one id at a time, then one archive receipt.
+    """
+
+    from . import operator_feedback_archive as archival
+
+    if bool(args.dry_run) == bool(args.approve):
+        return _operator_feedback_archive_error(args, "feedback_archive_exactly_one_action_required")
+    archive_root = Path(args.archive_root)
+    statuses = tuple(args.status) if getattr(args, "status", None) else None
+    feedback_ids = tuple(args.feedback_id) if getattr(args, "feedback_id", None) else None
+    try:
+        plan = archival.plan_operator_feedback_archive(
+            archive_root, destination=args.destination, statuses=statuses, feedback_ids=feedback_ids,
+        )
+    except archival.OperatorFeedbackArchiveError as exc:
+        return _operator_feedback_archive_error(args, exc.code)
+    except (archive_services.ArchiveServiceError, OSError, ValueError):
+        return _operator_feedback_archive_error(args, "feedback_archive_plan_failed")
+    if args.dry_run:
+        if args.format == "json":
+            print_json(plan)
+        else:
+            print("Operator feedback archival plan.")
+            print(f"State: {plan.get('state')}")
+            print(f"Records to archive: {plan.get('item_count', 0)} ({plan.get('status_counts')})")
+            print(f"Plan sha256: {plan.get('plan_sha256')}")
+            for line in plan.get("blockers", []):
+                print(f"BLOCKED: {line}")
+        return 0 if plan.get("ok") else 1
+    reviewer = str(getattr(args, "reviewed_by", None) or "").strip()
+    if _windows_reviewer_claim_re().fullmatch(reviewer) is None:
+        return _operator_feedback_archive_error(args, "feedback_archive_reviewer_claim_invalid")
+    expected = str(getattr(args, "expected_plan_sha256", None) or "").strip().lower()
+    if not plan.get("ok"):
+        return _operator_feedback_archive_error(
+            args, str((plan.get("blockers") or ["feedback_archive_plan_failed"])[0]),
+            next_safe_actions=plan.get("next_safe_actions"),
+        )
+    if not SHA256_RE.fullmatch(expected) or not secrets.compare_digest(str(plan["plan_sha256"]), expected):
+        return _operator_feedback_archive_error(
+            args, "feedback_archive_plan_changed",
+            next_safe_actions=["Rerun --dry-run and pass its plan_sha256 as --expected-plan-sha256."],
+        )
+    context = _exact_human_approval_context(
+        archive_root,
+        operation=ExactHumanApprovalOperation.operator_feedback_archive,
+        plan_sha256=plan["plan_sha256"],
+        target_binding_sha256=plan["destination_sha256"],
+        reviewer_claim=reviewer,
+        review_binding_codes=_FEEDBACK_ARCHIVE_REVIEW_CODES,
+        warnings=[],
+    )
+
+    def _write(approval_claim) -> dict[str, Any]:
+        return archival.approve_operator_feedback_archive(
+            archive_root, destination=args.destination, expected_plan_sha256=expected, reviewed_by=reviewer,
+            statuses=statuses, feedback_ids=feedback_ids, exact_human_approval_claim=approval_claim,
+        )
+
+    try:
+        result = _execute_exact_human_approved_write(archive_root, context, _write)
+    except (ExactHumanApprovalError, ExactHumanApprovalWindowsError, ExactHumanApprovalWorkflowError) as exc:
+        code = str(getattr(exc, "code", "exact_human_approval_state_unknown"))
+        cause_code = getattr(exc, "cause_code", None)
+        cause = (
+            {"cause_code": cause_code, "cause_stage": getattr(exc, "cause_stage", None)}
+            if type(cause_code) is str and cause_code.startswith(("feedback_archive_", "exact_human_approval_"))
+            else None
+        )
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action="operator_feedback_archive", reason_code=code, cause=cause,
+            effects_state=("refused_before_effects" if code == "exact_human_approval_writer_refused"
+                           else "unknown" if code == "exact_human_approval_state_unknown" else None),
+        )
+    if args.format == "json":
+        print_json(result)
+    else:
+        print("Operator feedback archival.")
+        print(f"State: {result.get('state')}; archived {result.get('archived_count', 0)} of {result.get('planned_count', 0)}")
+    return 0 if result.get("ok") else 1
+
+
 def command_operator_feedback_body_check(args: argparse.Namespace) -> int:
     if not args.dry_run:
         return _operator_feedback_body_error(
@@ -39180,14 +39287,37 @@ def build_parser() -> argparse.ArgumentParser:
         help="Exact plan digest required for approval.",
     )
     operator_feedback_compose.add_argument("--reviewed-by", help="Reviewer id required for approval (v0.4.34: person:<id> or human:<id>; the write opens the exact approval dialog).")
-    operator_feedback_compose.add_argument("--create-draft-record", action="store_true",
+    # v0.4.36 (letter 168 request 9): the draft record is created by default;
+    # --no-create-draft-record restores the five-step manual path.
+    operator_feedback_compose.add_argument("--create-draft-record", dest="create_draft_record", action="store_true", default=True,
                                            help="v0.4.34: after a created body, also create its draft metadata record "
-                                                "(status draft, intent create) in sequence, so --intent revise works next.")
+                                                "(status draft, intent create) in sequence, so --intent revise works next. "
+                                                "v0.4.36: this is the default.")
+    operator_feedback_compose.add_argument("--no-create-draft-record", dest="create_draft_record", action="store_false",
+                                           help="v0.4.36: do not create the draft record; the five-step revise path is announced instead.")
     operator_feedback_compose.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     operator_feedback_compose.set_defaults(
         func=command_operator_feedback_compose,
         _wom_project_runtime_effect="append_only_emergency_feedback",
     )
+
+    operator_feedback_archive = subcommands.add_parser(
+        "operator-feedback-archive",
+        help="v0.4.36: move delivered / acknowledged / resolved feedback letters and their body receipts to an operator-designated folder outside the archive, leaving a content-free stub record.",
+    )
+    operator_feedback_archive.add_argument("archive_root", help="Archive root whose delivered letters leave.")
+    operator_feedback_archive.add_argument("--destination", required=True,
+                                           help="Absolute folder OUTSIDE the archive root (for example a sibling folder next to it); created on approve; the path is never echoed, only its SHA-256.")
+    operator_feedback_archive.add_argument("--status", action="append", choices=["delivered", "acknowledged", "resolved"],
+                                           help="Limit to these statuses (default: all three).")
+    operator_feedback_archive.add_argument("--feedback-id", action="append", help="Limit to these feedback ids (repeatable).")
+    operator_feedback_archive_action = operator_feedback_archive.add_mutually_exclusive_group(required=True)
+    operator_feedback_archive_action.add_argument("--dry-run", action="store_true", help="Plan only; write nothing.")
+    operator_feedback_archive_action.add_argument("--approve", action="store_true", help="Approve the exact reviewed plan (one dialog, or the session grant).")
+    operator_feedback_archive.add_argument("--expected-plan-sha256", help="Exact plan digest from --dry-run, required for approval.")
+    operator_feedback_archive.add_argument("--reviewed-by", help="Reviewer id required for approval (person:<id> or human:<id>).")
+    operator_feedback_archive.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    operator_feedback_archive.set_defaults(func=command_operator_feedback_archive)
 
     operator_feedback_body_check = subcommands.add_parser(
         "operator-feedback-body-check",
