@@ -747,3 +747,15 @@ anonymous download and two fresh-venv installations recorded in the
 L164-01 is now installable from the public artifact and stays open for the
 client's own runs; the client receives one reply covering v0.4.31 and
 v0.4.32 (the letter-164 reply draft), sent by the user.
+
+### 2026-09-20 v0.4.33 released (upload writer reopened public)
+
+v0.4.33 is public: tag `v0.4.33` on main `088cceae`, one wheel
+`wom_kit-0.4.33-py3-none-any.whl` (SHA-256
+`f08a56b3861a103b1cf1ec0cbd2a3bfb1d271669621d23a22007626baf7914cb`),
+candidate CI 14/14 (first attempt, no reruns), exact-merge installed verification,
+anonymous download and two fresh-venv installations recorded in the
+[release evidence](../../meeting-minutes/2026-09-20-v0433-release-evidence.md).
+L164-02 is now installable from the public artifact and stays open for the
+client's own runs; the client receives one reply covering v0.4.32, v0.4.33 and
+v0.4.34 (the letters 164+165 reply draft), sent by the user.
