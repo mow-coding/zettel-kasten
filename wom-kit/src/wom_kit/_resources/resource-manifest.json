@@ -1,6 +1,6 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.4.35",
+  "version": "0.4.36",
   "source_of_truth": "wom-kit source resource directories",
   "file_count": 173,
   "files": [
@@ -169,8 +169,8 @@
     {
       "source": "schemas/exact-human-approval-claim-finalize-receipt-v0.1.schema.json",
       "packaged": "schemas/exact-human-approval-claim-finalize-receipt-v0.1.schema.json",
-      "bytes": 3756,
-      "sha256": "0296d7e2759d69da67fc1f1d9b6ff239542b6ba49059203a1e71bf76e8504b95"
+      "bytes": 4052,
+      "sha256": "30c67c9d8ab90d85f4679259b00994da40e7afde24d81471db57bbef9db0ad8c"
     },
     {
       "source": "schemas/exact-human-approval-link-receipt-v0.1.schema.json",
@@ -1037,10 +1037,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.4.35.md",
-      "packaged": "release-notes/v0.4.35.md",
-      "bytes": 4529,
-      "sha256": "d7bb977ade6cdbd2374b1478b52a6c2f9db6af8027dc8674f16701cfc67f38fd"
+      "source": "docs/releases/v0.4.36.md",
+      "packaged": "release-notes/v0.4.36.md",
+      "bytes": 7499,
+      "sha256": "d472f73af3e763b704ea4ec4eb2aeac142ad0b78091fb2c983b4b03ce612b926"
     }
   ]
 }

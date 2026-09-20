@@ -178,9 +178,13 @@
       "reason": "bootstrap: the updater must run before a working session system exists (decision 6)"
     },
     "operator-feedback-compose": {
-      "status": "pending",
-      "target": "v0.4.36",
-      "reason": "v0.4.34 routes --approve through the exact approval broker (operator_feedback_body_write, grantable through the environment refs); explicit session refs are pending; the emergency lane under version-update.lock stays session-free"
+      "status": "session_integrated",
+      "route": "environment",
+      "reason": "v0.4.34 routes --approve through the exact approval broker (operator_feedback_body_write); v0.4.36 (letter 168 ⑥): the grant is resolved from the environment refs and every kind is grantable; the emergency lane under version-update.lock stays session-free",
+      "evidence": [
+        "test_v0434_letter165",
+        "test_v0436_letter168"
+      ]
     },
     "operator-feedback-record": {
       "status": "legacy_exception",
@@ -255,24 +259,48 @@
       "reason": "local IMAP evidence; the unavailable IMAP provider writers stay closed"
     },
     "object-storage-restore": {
-      "status": "pending",
-      "target": "v0.4.36",
-      "reason": "v0.4.28 OB-01/OB-03 restore writer: exact native approval, always-dialog; session refs not yet exposed"
+      "status": "session_integrated",
+      "route": "environment",
+      "reason": "v0.4.28 OB-01/OB-03 restore writer under the exact approval broker; v0.4.36 (letter 168 ⑥): grantable, grant resolved from the environment refs",
+      "evidence": [
+        "test_v0428_object_storage_restore",
+        "test_v0436_letter168"
+      ]
     },
     "object-storage-offload": {
-      "status": "pending",
-      "target": "v0.4.36",
-      "reason": "v0.4.29 OB-02 offload writer: exact native approval, always-dialog; session refs not yet exposed"
+      "status": "session_integrated",
+      "route": "environment",
+      "reason": "v0.4.29 OB-02 offload writer under the exact approval broker; v0.4.36 (letter 168 ⑥): grantable, grant resolved from the environment refs",
+      "evidence": [
+        "test_v0429_object_storage_offload",
+        "test_v0436_letter168"
+      ]
     },
     "exact-approval-claim-finalize": {
-      "status": "pending",
-      "target": "v0.4.36",
-      "reason": "v0.4.30 letter-163 claim-store repair writer: exact native approval, always-dialog (never grantable); session refs not exposed by design"
+      "status": "session_integrated",
+      "route": "environment",
+      "reason": "v0.4.30 letter-163 claim-store repair writer under the exact approval broker; v0.4.36 (letter 168 ⑥): grantable, grant resolved from the environment refs",
+      "evidence": [
+        "test_v0430_exact_approval_claims",
+        "test_v0436_letter168"
+      ]
     },
     "object-storage-upload": {
-      "status": "pending",
-      "target": "v0.4.36",
-      "reason": "v0.4.33 letter-164 upload writer reopened as preservation PUT + adoption projection: exact native approval, always-dialog; session refs not yet exposed"
+      "status": "session_integrated",
+      "route": "environment",
+      "reason": "v0.4.33 letter-164 upload writer (preservation PUT + adoption projection) under the exact approval broker; v0.4.36 (letter 168 ⑥): grantable, grant resolved from the environment refs",
+      "evidence": [
+        "test_v0433_object_storage_upload",
+        "test_v0436_letter168"
+      ]
+    },
+    "operator-feedback-archive": {
+      "status": "session_integrated",
+      "route": "environment",
+      "reason": "v0.4.36 (letters 164 ⑧ / 168 request 8): delivered-feedback archival under the exact approval broker (operator_feedback_archive, grantable; grant resolved from the environment refs)",
+      "evidence": [
+        "test_v0436_letter168"
+      ]
     }
   }
 }

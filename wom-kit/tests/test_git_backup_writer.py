@@ -581,7 +581,16 @@ class GitBackupWriterTests(unittest.TestCase):
                     native=_Native(drift),
                     key_provider=_KeyProvider(),
                 )
-        self.assertEqual(blocked.exception.code, "exact_human_approval_state_unknown")
+        self.assertEqual(blocked.exception.code, "exact_human_approval_writer_refused")
+        self.assertEqual(blocked.exception.cause_stage, "domain_writer")
+        self.assertEqual(blocked.exception.cause_code, "exact_operation_target_state_drifted")
+        claims = [
+            json.loads(path.read_text(encoding="utf-8"))
+            for path in (self.root / "profiles/local/exact-human-approvals/claims").glob("approval_*.json")
+        ]
+        self.assertEqual(len(claims), 1)
+        self.assertEqual(claims[0]["status"], "failed")
+        self.assertEqual(claims[0]["failure_code"], "exact_operation_target_state_drifted")
         self.assertFalse([command for command in git_commands if "add" in command])
         self.assertEqual(self.git(self.root, "rev-parse", "HEAD").stdout.strip(), self.initial_head)
         self.assertEqual(

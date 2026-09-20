@@ -35,7 +35,7 @@ wom-kit/docs/releases/에만 쌓고, baseline 사다리와 tag 목록을 여기�
 v0.4.21
 ```
 
-이전 공개 기준: v0.4.34.
+이전 공개 기준: v0.4.35.
 
 전체 릴리스 이력은 [CHANGELOG.md](CHANGELOG.md)와 [wom-kit/docs/releases/](wom-kit/docs/releases/)를 보세요.
 
@@ -55,13 +55,13 @@ Roadmap 요약: `v0.1.x`는 아이디어/프로토콜 언어 라인, `v0.2.x`는
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0435-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0436-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.35/wom_kit-0.4.35-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.36/wom_kit-0.4.36-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
@@ -107,6 +107,7 @@ archive runtime-skill-install --dry-run --format json
 - v0.4.16은 cleanup 전에 인증된 project-update 결과를 durable terminal handoff로 보존하고 transaction cleanup·owned-resource close·Git-runner close·durable output handoff·attention을 각각 정직하게 보고합니다. 불변 journal과 `active` -> `display-pending` -> `consumed` 상태는 이미 결속된 동일 output을 재사용해 writer 재실행 없이 같은 결과를 at-least-once로 표시합니다. consumed는 이력이며 acknowledgement는 사람이나 AI가 stdout을 실제로 봤다는 증거가 아닙니다. 완전한 legacy cleanup tombstone만 exact 검증 뒤 복구하고, proof-only 상태는 과거 성공을 주장하지 않으며, 일부·malformed residue는 계속 fail-closed입니다. 표준 `python -m wom_kit.archive_cli` 실행은 세 core module을 receipt byte와 대조하고 경로·해시 없는 진단만 냅니다. create-only feedback lane은 runtime mismatch도 다루며, product vocabulary는 단어만으로 secret 오탐되지 않되 실제 credential shape는 계속 fail-closed입니다. caller input과 body를 safety 검사로 읽었는지도 별도 필드에 정확히 표시합니다. 공개·설치만으로 client archive는 바뀌지 않으며 project update는 client가 별도로 선택합니다. [v0.4.16 릴리스 노트](wom-kit/docs/releases/v0.4.16.md)를 보세요.
 - v0.4.17은 fresh project-update dry-run과 approval이 같은 read-only terminal-cleanup preflight를 사용하게 합니다. WOM이 만든 exact preapproval-abort 이력은 identifier 없는 `--resume`으로 보내고, project-domain writer나 source·runtime·pin·archive content를 바꾸지 않은 채 plan에 결속된 비공개 control evidence만 canonical proof 이력으로 정리합니다. 사람은 artifact 개수·해시·내부 ID를 확인하지 않습니다. 알려진 cleanup gate는 고정된 privacy-safe reason code와 실제 다음 행동을 반환하며, 일부·변경·모호·혼합·unsafe residue는 계속 fail-closed이고 손으로 고치면 안 됩니다. 공개·설치만으로 client archive는 바뀌지 않으며 client가 복구와 한 번의 검토된 project update를 별도로 선택합니다. [v0.4.17 릴리스 노트](wom-kit/docs/releases/v0.4.17.md)를 보세요.
 - v0.4.18은 project가 다른 버전으로 넘어간 뒤에도 자기 cleanup을 끝내지 못한 채 남은 완료된 project-update 원본 하나를 마무리합니다. dry-run·approval·identifier 없는 `--resume`이 그 directory를 같은 방식으로 분류하고, resume은 archive에서 원래 승인 claim을 다시 인증한 뒤 그 비공개 control directory만 canonical proof 하나로 정리하며, 과거 성공을 주장하지 않고 새 approval 권한도 만들지 않습니다. live pin이 아직 일치하면 v0.4.16 재생 계약이 그대로 적용되고 같은 정리가 fallback이 됩니다. redacted 실패 산출물은 이제 고정된 내부 reason code 하나를 담을 수 있고, `marker.json`은 lifecycle 기록이 아니라 identity anchor로 문서화됩니다. 공개·설치만으로 client archive는 바뀌지 않습니다. [v0.4.18 릴리스 노트](wom-kit/docs/releases/v0.4.18.md)를 보세요.
+- v0.4.36은 베타 편지 168에 답하고 2026-09-17 결정을 되살립니다: 세션 승인 모드가 어떤 작업에도 창을 띄우지 않고(모드를 켜는 창 하나만 남음), 업로드 writer가 원인 코드를 끝까지 알리며 승인 전에 두 관문을 먼저 거르고, 첫 쓰기 전 실패는 클레임을 닫으며, `operator-feedback-archive`가 전달 완료 편지를 흔적만 남기고 아카이브 밖으로 옮기고, finalize는 영수증이 바뀌었을 때만 다시 스캔하며, 승인 미리보기가 approve 요청을 그대로 받고, compose가 draft 레코드를 기본으로 만듭니다.
 - v0.4.35(핫픽스, 베타 편지 167): 2026-09-20 공개 히스토리 재작성 뒤 `project-version-update`가 거절된 fetch의 이유를 알리고(`fetch.rejection_kind`, `target_tag_on_remote`, `origin_main_rewritten`) 다시 써진 원격 main은 `--affirm-origin-main-rewritten` 아래에서만 받습니다.
 - v0.4.34는 베타 편지 165에 답합니다: 세션 승인 모드가 제시 토큰과 시간 상자에 묶이고(`presenter_token` 한 번 반환, `grant_hours`, 결과의 고정 거절 코드, 승인 클레임마다 제시자 근거, `ai-start-here`의 `session_permission_attention`), 옛 식별자 감지기 하나가 모든 새 레코드 표면에서 경고하며(`create-draft`의 `--allow-warnings`, 승인 모드는 대신 승인하지 않음), `operator-feedback-compose --approve`가 승인 창을 열고 영수증이 클레임을 가리키며, 수정 경로가 안내되고, 개정 계획 경고가 스스로를 설명합니다.
 - v0.4.33은 `object-storage-upload`를 정확 승인 계약 아래 다시 엽니다(베타 편지 164 ①③④; 아래 줄 참고). 명령 목록은 이제 승인 가능 60 / 고정 닫힘 59입니다.
@@ -454,7 +455,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
-v0.4.35 (현재 checkpoint)
+v0.4.36 (현재 checkpoint)
 ```
 
 `v0.2.5` 이후의 공개 릴리스에는 compatibility checkpoint tag가 붙습니다. 전체

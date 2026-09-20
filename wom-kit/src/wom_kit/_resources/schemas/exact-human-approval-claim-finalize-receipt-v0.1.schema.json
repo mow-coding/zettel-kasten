@@ -80,6 +80,10 @@
           "type": "integer",
           "minimum": 0
         },
+        "scan_method": {
+          "description": "v0.4.36 (beta letter 168 3): byte_stream_search, or fingerprint_matched_plan when the receipt inventory fingerprint bound into the plan was unchanged at the swap.",
+          "enum": ["byte_stream_search", "fingerprint_matched_plan"]
+        },
         "reference_found": {
           "const": false
         },

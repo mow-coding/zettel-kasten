@@ -68,9 +68,10 @@ EMPTY_ALLOWLIST_SHA256 = (
     "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
 )
 
-CLI_COUNT = 584
+# v0.4.36 adds only operator-feedback-archive to the previous pinned CLI paths.
+CLI_COUNT = 585
 CLI_CANONICAL_SHA256 = (
-    "3ea0cce306bd5792056d067cd31ebb86001dac1ba2fc2236f552dad90fde007e"
+    "122ecd69ce64e80ca5f484a3a4dc00b26ca52c0b9c3ef8835ea6248fff09ccb8"
 )
 MCP_COUNT = 137
 MCP_CANONICAL_SHA256 = (
@@ -82,7 +83,7 @@ DB_SOURCE_CANONICAL_SHA256 = (
 )
 RESOURCE_ADDITIONS = frozenset(
     {
-        "release-notes/v0.4.35.md",
+        "release-notes/v0.4.36.md",
         "schemas/agent-instruction-policy-v0.1.schema.json",
         "schemas/approval-handoff-v0.1.schema.json",
         "schemas/approval-integrity-audit-result-v0.1.schema.json",
@@ -1156,6 +1157,7 @@ class PrivateObjetMetadataIndexPrivacyGateTests(unittest.TestCase):
         self.assertEqual(len(cli), CLI_COUNT)
         self.assertEqual(_canonical_sha256(cli), CLI_CANONICAL_SHA256)
         self.assertIn(["objet-source-metadata-write"], cli)
+        self.assertIn(["operator-feedback-archive"], cli)
 
         mcp = _current_mcp_rows()
         self.assertEqual(len(mcp), MCP_COUNT)
@@ -1197,7 +1199,7 @@ class PrivateObjetMetadataIndexPrivacyGateTests(unittest.TestCase):
             manifest["schema"],
             "wom-kit/package-resource-manifest/v0.1",
         )
-        self.assertEqual(manifest["version"], "0.4.35")
+        self.assertEqual(manifest["version"], "0.4.36")
         self.assertEqual(manifest["file_count"], len(manifest["files"]))
         current_paths = {row["packaged"] for row in manifest["files"]}
         self.assertEqual(

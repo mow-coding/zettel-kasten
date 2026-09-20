@@ -656,7 +656,96 @@ def scan_receipt_references(
     }
 
 
+def evidence_inventory_fingerprint(root: Path) -> dict[str, Any]:
+    """v0.4.36 (beta letter 168 ③): a cheap digest of the receipt inventory.
+
+    The same roots and filters as ``scan_receipt_references``, but only
+    (relative path, size, mtime_ns) per ``*.json`` regular file: seconds,
+    not minutes. Bound into the finalize plan digest, it lets the approve
+    skip the byte-stream re-scan when nothing under the roots changed since
+    the dry-run; any new, removed or rewritten receipt changes it.
+    """
+
+    rows: list[list[Any]] = []
+    complete = True
+    for parts in EVIDENCE_SCAN_ROOTS:
+        base = root.joinpath(*parts)
+        try:
+            base_info = os.lstat(base)
+        except OSError:
+            continue
+        if _is_reparse(base_info) or not stat.S_ISDIR(base_info.st_mode):
+            continue
+        for current, directories, files in os.walk(base):
+            current_path = Path(current)
+            kept: list[str] = []
+            for name in sorted(directories):
+                try:
+                    info = os.lstat(current_path / name)
+                except OSError:
+                    complete = False
+                    continue
+                if _is_reparse(info) or not stat.S_ISDIR(info.st_mode):
+                    continue
+                kept.append(name)
+            directories[:] = kept
+            for name in sorted(files):
+                if not name.endswith(".json"):
+                    continue
+                path = current_path / name
+                try:
+                    info = os.lstat(path)
+                except OSError:
+                    complete = False
+                    continue
+                if _is_reparse(info) or not stat.S_ISREG(info.st_mode):
+                    continue
+                try:
+                    relative = path.relative_to(root).as_posix()
+                except ValueError:
+                    relative = name
+                rows.append([relative, int(info.st_size), int(getattr(info, "st_mtime_ns", 0))])
+                if len(rows) > _MAX_EVIDENCE_FILES:
+                    complete = False
+                    break
+            if not complete and len(rows) > _MAX_EVIDENCE_FILES:
+                break
+    rows.sort()
+    digest = hashlib.sha256(
+        json.dumps(rows, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return {"sha256": "sha256:" + digest, "file_count": len(rows), "complete": complete}
+
+
 # ---------------------------------------------------------------- finalize plan
+
+
+def _finalize_plan_basis(
+    *, archive_id: str, min_age_minutes: int, warnings: list[str], selected: list[dict[str, Any]],
+    fingerprint: Mapping[str, Any], evidence_clean: bool,
+) -> dict[str, Any]:
+    """The digest basis: the selection, the receipt inventory fingerprint and whether the scan was clean."""
+
+    return {
+        "schema": FINALIZE_PLAN_SCHEMA_VERSION,
+        "archive_identity_sha256": exact_human_approval_archive_identity_sha256(archive_id),
+        "failure_code": FINALIZE_FAILURE_CODE,
+        "min_age_minutes": min_age_minutes,
+        "warnings": list(warnings),
+        "claims": [
+            {
+                "approval_id": item["approval_id"],
+                "context_sha256": item["context_sha256"],
+                "operation": item["operation"],
+                "started_at": item["started_at"],
+                "backfill": item["backfill"],
+            }
+            for item in selected
+        ],
+        # v0.4.36 (letter 168 ③)
+        "evidence_inventory_fingerprint": str(fingerprint["sha256"]),
+        "evidence_clean": bool(evidence_clean),
+    }
 
 
 def _finalize_receipt_relative(approval_id: str) -> str:
@@ -697,6 +786,7 @@ def plan_exact_human_approval_claim_finalize(
     key_provider: Any | None = None,
     claims_boundary: Callable[[], AbstractContextManager[Any]] | None = None,
     clock: Callable[[], datetime] = _utc_now,
+    trusted_plan_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Select started claims to close and prove no receipt references them.
 
@@ -778,7 +868,31 @@ def plan_exact_human_approval_claim_finalize(
     if any(item["operation"] not in RECEIPTED_OPERATIONS for item in selected):
         warnings.append("exact_approval_claim_write_evidence_receipts_only")
 
-    evidence = scan_receipt_references(
+    # v0.4.36 (beta letter 168 ③): the receipt inventory fingerprint is part
+    # of the plan digest. When the caller trusts a digest (the approve
+    # writer with the reviewed plan) and the digest computed from the same
+    # selection, the current fingerprint and a CLEAN scan equals it, the
+    # dry-run's byte-stream scan stands and is not repeated.
+    fingerprint = evidence_inventory_fingerprint(root)
+    trusted_clean = False
+    if trusted_plan_sha256 is not None and selected and fingerprint["complete"]:
+        candidate = _finalize_plan_basis(
+            archive_id=archive_id, min_age_minutes=min_age_minutes, warnings=sorted(set(warnings)),
+            selected=selected, fingerprint=fingerprint, evidence_clean=True,
+        )
+        trusted_clean = hmac.compare_digest(_sha256_of(_PLAN_DOMAIN, candidate), str(trusted_plan_sha256))
+    evidence = {
+        "scan_roots": ["/".join(parts) for parts in EVIDENCE_SCAN_ROOTS],
+        "scan_method": "fingerprint_matched_plan",
+        "files_scanned": fingerprint["file_count"],
+        "unreadable_file_count": 0,
+        "unreadable_receipt_paths": [],
+        "oversize_skipped_count": 0,
+        "oversize_skipped_receipt_paths": [],
+        "oversize_ceiling_bytes": _MAX_EVIDENCE_FILE_BYTES,
+        "complete": True,
+        "referenced": {},
+    } if trusted_clean else scan_receipt_references(
         root, {str(item["approval_id"]) for item in selected}
     ) if selected else {
         "scan_roots": ["/".join(parts) for parts in EVIDENCE_SCAN_ROOTS],
@@ -805,23 +919,10 @@ def plan_exact_human_approval_claim_finalize(
     blockers = sorted(set(blockers))
     warnings = sorted(set(warnings))
     archive_identity_sha256 = exact_human_approval_archive_identity_sha256(archive_id)
-    plan_basis = {
-        "schema": FINALIZE_PLAN_SCHEMA_VERSION,
-        "archive_identity_sha256": archive_identity_sha256,
-        "failure_code": FINALIZE_FAILURE_CODE,
-        "min_age_minutes": min_age_minutes,
-        "warnings": warnings,
-        "claims": [
-            {
-                "approval_id": item["approval_id"],
-                "context_sha256": item["context_sha256"],
-                "operation": item["operation"],
-                "started_at": item["started_at"],
-                "backfill": item["backfill"],
-            }
-            for item in selected
-        ],
-    }
+    plan_basis = _finalize_plan_basis(
+        archive_id=archive_id, min_age_minutes=min_age_minutes, warnings=warnings, selected=selected,
+        fingerprint=fingerprint, evidence_clean=(evidence["complete"] and not referenced_count),
+    )
     target_basis = {
         "claims": [
             {"approval_id": item["approval_id"], "context_sha256": item["context_sha256"]}
@@ -895,6 +996,11 @@ def plan_exact_human_approval_claim_finalize(
         "backfill_count": sum(1 for item in selected if item["backfill"]),
         "skipped_too_recent_count": skipped_too_recent,
         "excluded_project_version_update_count": excluded_project_version_update,
+        # v0.4.36 (letter 168 ③): the approve repeats the scan only when this
+        # fingerprint changed; otherwise it takes seconds after the dialog.
+        "evidence_inventory_fingerprint": fingerprint["sha256"],
+        "evidence_inventory_file_count": fingerprint["file_count"],
+        "approve_rescans_receipts": "only_when_the_inventory_fingerprint_changed",
         "write_evidence": {
             "scan_roots": evidence["scan_roots"],
             "scan_method": evidence.get("scan_method", "byte_stream_search"),
@@ -1045,6 +1151,9 @@ def finalize_exact_human_approval_claims(
             key_provider=key_provider,
             claims_boundary=claims_boundary,
             clock=clock,
+            # v0.4.36 (letter 168 ③): the reviewed digest lets the plan
+            # skip the byte-stream scan when the inventory is unchanged.
+            trusted_plan_sha256=expected_plan_sha256,
         )
         if plan["ok"] is not True or plan["blockers"]:
             raise archive_services.ArchiveServiceError("exact_approval_claim_finalize_plan_blocked")
@@ -1082,14 +1191,22 @@ def finalize_exact_human_approval_claims(
             if boundary is None:
                 raise _fail("exact_approval_claim_store_unavailable")
             bound_root, parent_binding = boundary
-            # Re-scan once more inside the lock, right before the first swap: a
+            # Re-check once more inside the lock, right before the first swap: a
             # receipt written since the dry-run means that write happened and
-            # its claim must stay started.
-            recheck = scan_receipt_references(
-                root, {str(item["approval_id"]) for item in selected}
-            )
-            if not recheck["complete"] or recheck["referenced"]:
-                raise _fail("exact_approval_claim_finalize_claim_invalid")
+            # its claim must stay started. v0.4.36 (letter 168 ③): the check
+            # is the inventory fingerprint bound into the plan; only a changed
+            # inventory triggers the byte-stream scan again.
+            current = evidence_inventory_fingerprint(root)
+            if not current["complete"] or current["sha256"] != plan["evidence_inventory_fingerprint"]:
+                recheck = scan_receipt_references(
+                    root, {str(item["approval_id"]) for item in selected}
+                )
+                if not recheck["complete"] or recheck["referenced"]:
+                    raise _fail("exact_approval_claim_finalize_claim_invalid")
+                recheck_method = "byte_stream_search"
+            else:
+                recheck = {"scan_roots": plan["write_evidence"]["scan_roots"], "files_scanned": current["file_count"]}
+                recheck_method = "fingerprint_matched_plan"
             for item in selected:
                 approval_id = str(item["approval_id"])
                 expected_context = digests.get(approval_id)
@@ -1129,6 +1246,7 @@ def finalize_exact_human_approval_claims(
                     "write_evidence": {
                         "kind": "receipts_only",
                         "scan_roots": recheck["scan_roots"],
+                        "scan_method": recheck_method,
                         "files_scanned": recheck["files_scanned"],
                         "reference_found": False,
                         "complete": True,

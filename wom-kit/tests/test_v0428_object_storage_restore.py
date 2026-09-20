@@ -495,9 +495,9 @@ def _run(plan, transport, *, resume=False):
 
 
 class RestorePlanTests(unittest.TestCase):
-    def test_kind_is_registered_and_always_dialog(self):
+    def test_kind_is_registered_and_grantable_since_v0436(self):
         kind = ExactHumanApprovalOperation.object_storage_bytes_restore
-        self.assertIn(kind, ALWAYS_DIALOG_OPERATIONS)
+        self.assertNotIn(kind, ALWAYS_DIALOG_OPERATIONS)  # v0.4.36 (letter 168 ⑥): grantable
         self.assertEqual(windows._OPERATION_LABELS[kind], "오브제 원격 바이트 되찾기")
         self.assertTrue(windows._OPERATION_QUESTIONS[kind].endswith("까요?"))
         self.assertIn("덮어쓰지 않고", windows._OPERATION_SUMMARIES[kind])

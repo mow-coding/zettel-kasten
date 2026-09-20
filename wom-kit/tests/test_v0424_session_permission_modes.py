@@ -156,21 +156,24 @@ class SessionPermissionModeTests(unittest.TestCase):
         self.assertEqual(self.inspect(task)["permission_mode"], "manual")
         self.assertNotIn("permission", registry.RegistrySnapshot.__dict__)  # no accidental class-level field
 
-    def test_always_dialog_operations_are_never_grantable(self) -> None:
+    def test_every_operation_kind_is_grantable_and_only_the_grant_action_keeps_its_dialog(self) -> None:
+        # v0.4.36 (letter 168 ⑥): the 2026-09-17 decision — allow_all means no dialog.
         task = self.establish("refuse")
-        refused = self.set_mode(task, "limited", ["project_version_update"], ok=False)
+        granted = self.set_mode(task, "limited", ["project_version_update"])
+        self.assertTrue(granted["ok"], granted)
+        self.assertEqual(self.inspect(task)["permission_mode"], "limited")
+        refused = self.set_mode(task, "limited", ["not_an_operation"], ok=False)
         self.assertEqual(refused["reason_code"], "work_session_permission_operation_not_grantable")
-        self.assertEqual(self.inspect(task)["permission_mode"], "manual")
         with self.assertRaises(permission.WorkSessionPermissionError):
             permission.normalize_grant("allow_all", ["create_draft"])
         grant = permission.SessionPermissionGrant(
             client_app_ref=task["app"], task_route_ref=task["route"], work_session_ref=task["session"],
             claim_ref="claim_" + "a" * 32, binding_sha256="sha256:" + "b" * 64, mode="allow_all", operations=())
-        for member in permission.ALWAYS_DIALOG_OPERATIONS:
-            self.assertFalse(grant.permits(member), member)
-        self.assertTrue(grant.permits(ExactHumanApprovalOperation.create_draft))
-        self.assertEqual(len(permission.ALWAYS_DIALOG_OPERATIONS) + len(permission.GRANTABLE_OPERATIONS),
-                         len(ExactHumanApprovalOperation))
+        for member in ExactHumanApprovalOperation:
+            self.assertTrue(grant.permits(member), member)
+        self.assertEqual(permission.ALWAYS_DIALOG_OPERATIONS, frozenset())
+        self.assertEqual(len(permission.GRANTABLE_OPERATIONS), len(ExactHumanApprovalOperation))
+        self.assertEqual(permission.DIALOG_ONLY_ACTIONS, ("set-permission-mode",))
 
     # ------------------------------------------------------------ writes under a grant
     def test_permitted_write_skips_the_dialog_and_its_claim_records_the_mechanism(self) -> None:
@@ -273,14 +276,28 @@ class SessionPermissionModeTests(unittest.TestCase):
                 native=native, key_provider=self.key, session_permission=grant)
         self.assertEqual(native.calls, 0)
         self.assertEqual(outcome["exact_human_approval"]["approval_mechanism"], PERMISSION_INTERACTIVE_INTENT_MECHANISM)
-        # an always-dialog operation ignores the grant even in allow_all
+        # v0.4.36 (letter 168 ⑥): a formerly always-dialog kind (the project
+        # update) is covered by allow_all like every other kind
         update_context = ExactHumanApprovalContext(
             operation=ExactHumanApprovalOperation.project_version_update,
             archive_identity_sha256=context.archive_identity_sha256,
             plan_sha256="sha256:" + "3" * 64, target_binding_sha256="sha256:" + "4" * 64,
             reviewer_claim=REVIEWER, review_binding_codes=("body_digest_reviewed",), warning_codes=())
+        with patch.dict(os.environ, self.presenter_env(task)):
+            covered = broker._execute_exact_human_approved_write_core(
+                self.root, update_context, lambda claim: {"ok": True, "files_written": []},
+                native=native, key_provider=self.key, session_permission=grant)
+        self.assertEqual(native.calls, 0)
+        self.assertEqual(covered["exact_human_approval"]["approval_mechanism"], PERMISSION_INTERACTIVE_INTENT_MECHANISM)
+        # the grant action itself is the one dialog the mode never removes
+        grant_context = ExactHumanApprovalContext(
+            operation=ExactHumanApprovalOperation.work_session,
+            archive_identity_sha256=context.archive_identity_sha256,
+            plan_sha256="sha256:" + "5" * 64, target_binding_sha256="sha256:" + "6" * 64,
+            reviewer_claim=REVIEWER, review_binding_codes=("body_digest_reviewed",),
+            warning_codes=(permission.GRANT_ACTION_WARNING_CODE,))
         broker._execute_exact_human_approved_write_core(
-            self.root, update_context, lambda claim: {"ok": True, "files_written": []},
+            self.root, grant_context, lambda claim: {"ok": True, "files_written": []},
             native=native, key_provider=self.key, session_permission=grant)
         self.assertEqual(native.calls, 1)
 

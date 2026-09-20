@@ -126,9 +126,11 @@ def _resolved_session_permission(archive_root, session_permission, context):
     from . import work_session_permission as permission
 
     reason = None
+    # v0.4.36 (letter 168 ⑥): no operation kind keeps its own dialog; only
+    # the grant action itself does (a grant cannot mint or extend itself).
+    if permission.grant_self_service_refused(context):
+        return None, None
     if session_permission is _UNSET_SESSION_PERMISSION:
-        if context.operation in permission.ALWAYS_DIALOG_OPERATIONS:
-            return None, None
         grant, reason = permission.resolve_grant_outcome_from_environment(archive_root)
     elif type(session_permission) is tuple and len(session_permission) == 2:
         grant, reason = session_permission
@@ -201,6 +203,9 @@ class ExactHumanApprovalWorkflowError(RuntimeError):
         "exact_human_approval_operation_failed",
         "exact_human_approval_state_unknown",
         "exact_human_approval_permission_revoked",
+        # v0.4.36 (letter 168 request 2): the writer proved it wrote nothing
+        # durable; the claim is finalized as failed with the writer's code.
+        "exact_human_approval_writer_refused",
     }
 
     def __init__(
@@ -247,12 +252,24 @@ def _content_free_cause_code(cause: BaseException | None) -> str | None:
             "ProjectUpdateTransactionError",
             "ProjectRuntimeError",
             "ExactHumanApprovalError",
+            # v0.4.36 (beta letter 168 ①): the object-storage writers and
+            # the exact-operation runner construct with exactly one
+            # _CODES-validated string; their code was dropped here since
+            # v0.4.22 while the mint / finalize writers kept theirs.
+            "ObjectStorageUploadError",
+            "ObjectStoragePreservationError",
+            "ObjectStorageRestoreError",
+            "ExactOperationManifestError",
         }
         or len(cause.args) != 1
         or type(cause.args[0]) is not str
         or _CAUSE_CODE_RE.fullmatch(cause.args[0]) is None
     ):
         return None
+    # the runner's re-typed error may carry the adapter's own fixed code
+    inner = getattr(cause, "cause_code", None)
+    if type(inner) is str and _CAUSE_CODE_RE.fullmatch(inner) is not None:
+        return inner
     return cause.args[0]
 
 
@@ -387,6 +404,25 @@ def _run_started_claim_writer(
             # ``started`` for reconciliation.  v0.4.22: the writer's own
             # fixed reason code (never its text) travels as ``cause_code``
             # so the operator can see which gate stopped the write.
+            # v0.4.36 (letter 168 request 2): a writer that raised with
+            # ``effects == "none"`` proved that no durable write happened
+            # (a gate before its first checkpoint); its claim is finalized
+            # as failed with the fixed cause so nothing stays ``started``.
+            if getattr(failure, "effects", None) == "none":
+                refusal = _content_free_cause_code(failure) or "domain_writer_refused_before_effects"
+                try:
+                    claim.finalize_failed(refusal)
+                except BaseException:
+                    raise _fail(
+                        "exact_human_approval_state_unknown",
+                        cause=failure,
+                        cause_stage="key_or_claim",
+                    ) from None
+                raise _fail(
+                    "exact_human_approval_writer_refused",
+                    cause=failure,
+                    cause_stage="domain_writer",
+                ) from None
             raise _fail(
                 "exact_human_approval_state_unknown",
                 cause=failure,
@@ -578,10 +614,10 @@ def _execute_exact_human_approved_write_with_review_kind_core(
             "observe_target_binding": observe_target_binding,
         }
     interactive_intent_mechanism = CURRENT_INTERACTIVE_INTENT_MECHANISM
-    grant, grant_refusal = (
-        _resolved_session_permission(archive_root, session_permission, context)
-        if review_kind is _ExactHumanApprovalReviewKind.fresh
-        else (None, None)
+    # v0.4.36: the grant also stands in for an explicit original re-review;
+    # the same-key absence observation below is unchanged.
+    grant, grant_refusal = _resolved_session_permission(
+        archive_root, session_permission, context
     )
     fingerprint_basis = None
     if grant is not None:

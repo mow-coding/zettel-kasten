@@ -10,28 +10,37 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.4.35 GitHub Release, when present, uses the self-contained wheel
+The exact v0.4.36 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0435-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0436-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.35/wom_kit-0.4.35-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.36/wom_kit-0.4.36-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-Run the version check in a new process and require exactly `archive 0.4.35`.
+Run the version check in a new process and require exactly `archive 0.4.36`.
 The dedicated external CPython 3.12 environment and exact real
 `python.exe -m pip` path retain the wheel SHA-256 required by the updater. A
 user-scoped `uv tool` environment whose installed metadata omits that archive
 hash is not project-updater supply evidence. Installing the bootstrap does not
 silently update a project-local WOM-kit source mirror or its pin.
+
+v0.4.36 answers beta letter 168: a session grant opens no dialog for any
+operation kind (the 2026-09-17 decision restored; the grant itself is the
+only dialog-only action), the upload writer names its cause and refuses the
+manifest-index authority and unresolved credential refs before the dialog, a
+failure before the first checkpoint closes its claim, `operator-feedback-archive`
+moves delivered letters out of the archive leaving a content-free stub,
+finalize re-scans only when the receipts changed, the permission preview
+accepts the approve request, and compose creates the draft record by default.
 
 v0.4.35 (hotfix, beta letter 167): `project-version-update` diagnoses a
 refused fetch (`fetch.rejection_kind`, `target_tag_on_remote`,

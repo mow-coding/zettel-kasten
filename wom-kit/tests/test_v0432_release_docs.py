@@ -13,9 +13,9 @@ ROOT = Path(__file__).resolve().parents[2]
 KIT = ROOT / "wom-kit"
 RESOURCE_ROOT = KIT / "src" / "wom_kit" / "_resources"
 RELEASE = KIT / "docs" / "releases" / "v0.4.32.md"
-CURRENT_RELEASE = KIT / "docs" / "releases" / "v0.4.35.md"
-PACKAGED_RELEASE = RESOURCE_ROOT / "release-notes" / "v0.4.35.md"
-LOCK = KIT / "project-runtime-supply-lock-v0.4.35.json"
+CURRENT_RELEASE = KIT / "docs" / "releases" / "v0.4.36.md"
+PACKAGED_RELEASE = RESOURCE_ROOT / "release-notes" / "v0.4.36.md"
+LOCK = KIT / "project-runtime-supply-lock-v0.4.36.json"
 BOOTSTRAP_DOCUMENTS = (
     ROOT / "README.md",
     ROOT / "README.ko.md",
@@ -53,45 +53,45 @@ CURRENT_PUBLIC_DOCUMENTS = (
 
 class V0432ReleaseDocsTests(unittest.TestCase):
     def test_current_version_surfaces_are_exact(self) -> None:
-        self.assertEqual(__version__, "0.4.35")
-        self.assertIn('version = "0.4.35"', (KIT / "pyproject.toml").read_text(encoding="utf-8"))
+        self.assertEqual(__version__, "0.4.36")
+        self.assertIn('version = "0.4.36"', (KIT / "pyproject.toml").read_text(encoding="utf-8"))
         for shim in (KIT / "src" / "wom_kit" / "__init__.py", ROOT / "wom_kit" / "__init__.py"):
-            self.assertIn('__version__ = "0.4.35"', shim.read_text(encoding="utf-8"))
+            self.assertIn('__version__ = "0.4.36"', shim.read_text(encoding="utf-8"))
         citation = (ROOT / "CITATION.cff").read_text(encoding="utf-8")
-        self.assertIn('version: "0.4.35"', citation)
+        self.assertIn('version: "0.4.36"', citation)
         self.assertRegex(citation, r'date-released: "2026-09-(19|2[0-9])"')
         versioning = (ROOT / "VERSIONING.md").read_text(encoding="utf-8")
-        self.assertIn("Current public baseline:\n\n```text\nv0.4.35", versioning)
-        self.assertIn("Previous public baseline:\n\n```text\nv0.4.34", versioning)
-        self.assertIn("Previous public baseline: v0.4.34.", (ROOT / "README.md").read_text(encoding="utf-8"))
-        self.assertIn("v0.4.35 (현재 checkpoint)", (ROOT / "README.ko.md").read_text(encoding="utf-8"))
+        self.assertIn("Current public baseline:\n\n```text\nv0.4.36", versioning)
+        self.assertIn("Previous public baseline:\n\n```text\nv0.4.35", versioning)
+        self.assertIn("Previous public baseline: v0.4.35.", (ROOT / "README.md").read_text(encoding="utf-8"))
+        self.assertIn("v0.4.36 (현재 checkpoint)", (ROOT / "README.ko.md").read_text(encoding="utf-8"))
 
     def test_supply_lock_and_policy_are_exact(self) -> None:
         current = LOCK.read_bytes()
         previous = (KIT / "project-runtime-supply-lock-v0.4.32.json").read_bytes()
-        self.assertEqual(previous.replace(b'"target_tag": "v0.4.32"', b'"target_tag": "v0.4.35"'), current)
+        self.assertEqual(previous.replace(b'"target_tag": "v0.4.32"', b'"target_tag": "v0.4.36"'), current)
         policy = json.loads((KIT / "project-runtime-policy.json").read_text(encoding="utf-8"))
-        self.assertEqual(policy["supply_lock"], "wom-kit/project-runtime-supply-lock-v0.4.35.json")
+        self.assertEqual(policy["supply_lock"], "wom-kit/project-runtime-supply-lock-v0.4.36.json")
         self.assertEqual(policy["supply_lock_sha256"], "sha256:" + hashlib.sha256(current).hexdigest())
 
     def test_current_release_is_the_only_packaged_note(self) -> None:
         self.assertEqual(CURRENT_RELEASE.read_bytes(), PACKAGED_RELEASE.read_bytes())
-        self.assertEqual(sorted(path.name for path in PACKAGED_RELEASE.parent.iterdir()), ["v0.4.35.md"])
+        self.assertEqual(sorted(path.name for path in PACKAGED_RELEASE.parent.iterdir()), ["v0.4.36.md"])
         manifest = json.loads((RESOURCE_ROOT / "resource-manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(manifest["version"], "0.4.35")
+        self.assertEqual(manifest["version"], "0.4.36")
         packaged_paths = {row["packaged"] for row in manifest["files"]}
-        self.assertIn("release-notes/v0.4.35.md", packaged_paths)
+        self.assertIn("release-notes/v0.4.36.md", packaged_paths)
         self.assertNotIn("release-notes/v0.4.32.md", packaged_paths)
         self.assertTrue((KIT / "docs" / "releases" / "v0.4.32.md").is_file())
 
-    def test_current_install_guides_use_exact_v0435_bootstrap(self) -> None:
+    def test_current_install_guides_use_exact_v0436_bootstrap(self) -> None:
         for path in BOOTSTRAP_DOCUMENTS:
             document = path.read_text(encoding="utf-8")
             with self.subTest(path=path):
                 self.assertIn('$womBootstrapNonce = [guid]::NewGuid().ToString("N")', document)
-                self.assertIn('$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\\bootstrap-v0435-$womBootstrapNonce"', document)
+                self.assertIn('$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\\bootstrap-v0436-$womBootstrapNonce"', document)
                 self.assertRegex(document, re.escape("& $womBootstrapPython") + r"\s+-m\s+pip\s+install\b")
-                self.assertIn("wom_kit-0.4.35-py3-none-any.whl", document)
+                self.assertIn("wom_kit-0.4.36-py3-none-any.whl", document)
                 if path.name.startswith("UPGRADE"):
                     continue  # upgrade guides keep every historical section
                 self.assertNotIn("bootstrap-v0432-", document)
@@ -124,21 +124,21 @@ class V0432ReleaseDocsTests(unittest.TestCase):
     def test_current_docs_use_v0433_status_without_erasing_v0432_history(self) -> None:
         expected = {
             KIT / "docs" / "agent-operator-capabilities.md":
-                "Status: v0.4.35 rewritten-origin hotfix, letter-167, and writer-session coverage gate",
+                "Status: v0.4.36 no-dialog grants, letter-168, and writer-session coverage gate",
             KIT / "docs" / "capability-matrix.md":
-                "Version: v0.4.35 implementation and release scope",
+                "Version: v0.4.36 implementation and release scope",
             KIT / "docs" / "runtime-canonical-entrypoints.md":
-                "Status: v0.4.35 rewritten-origin hotfix, letter-167, and session-owned writes truth",
+                "Status: v0.4.36 no-dialog grants, letter-168, and session-owned writes truth",
             KIT / "docs" / "version-truth-source.md":
-                "Status: v0.4.35 rewritten-origin hotfix, letter-167, and session-owned writes",
+                "Status: v0.4.36 no-dialog grants, letter-168, and session-owned writes",
             KIT / "docs" / "python-tool-install.md":
-                "Status: v0.4.35 conditional GitHub wheel contract; rewritten-origin hotfix; letter-167",
+                "Status: v0.4.36 conditional GitHub wheel contract; no-dialog grants; letter-168",
         }
         for path, phrase in expected.items():
             document = path.read_text(encoding="utf-8")
             with self.subTest(path=path):
                 self.assertIn(phrase, document)
-                self.assertIn("v0.4.34", document)
+                self.assertIn("v0.4.35", document)
 
     def test_release_surfaces_are_documented(self) -> None:
         contract = (KIT / "docs" / "exact-human-approval-contract.md").read_text(encoding="utf-8")
@@ -159,8 +159,8 @@ class V0432ReleaseDocsTests(unittest.TestCase):
         self.assertIn("## Questions for the client", decision_log)
         coverage = json.loads((KIT / "docs" / "writer-session-coverage.json").read_text(encoding="utf-8"))
         for row in ("object-storage-restore", "object-storage-offload", "exact-approval-claim-finalize"):
-            self.assertEqual(coverage["paths"][row]["status"], "pending")
-            self.assertEqual(coverage["paths"][row]["target"], "v0.4.36")  # moved by v0.4.34, then v0.4.35
+            self.assertEqual(coverage["paths"][row]["status"], "session_integrated")  # v0.4.36: environment route
+            self.assertEqual(coverage["paths"][row]["route"], "environment")
         for guide in (ROOT / "UPGRADE.md", ROOT / "UPGRADE.ko.md"):
             document = guide.read_text(encoding="utf-8")
             with self.subTest(guide=guide):
@@ -173,10 +173,10 @@ class V0432ReleaseDocsTests(unittest.TestCase):
         routed = sum(1 for row in manifest["paths"].values() if row.get("route"))
         # v0.4.23 integrated create-draft (LR-06a); v0.4.24 through v0.4.27 and v0.4.31/v0.4.32 change no writer;
         # v0.4.28 restore, v0.4.29 offload, v0.4.30 claim finalize and v0.4.33 upload are pending (target v0.4.34).
-        self.assertEqual(len(statuses), 60)  # v0.4.33: object-storage-upload row
+        self.assertEqual(len(statuses), 61)  # v0.4.36: operator-feedback-archive row
         self.assertEqual(statuses.count("session_integrated") - routed, 6)
-        self.assertEqual(routed, 1)
-        self.assertEqual(statuses.count("pending"), 34)  # v0.4.34: operator-feedback-compose moved to pending
+        self.assertEqual(routed, 7)  # v0.4.36: five rows and the archival row route through the environment grant
+        self.assertEqual(statuses.count("pending"), 29)  # v0.4.36: five rows integrated through the environment route
         self.assertEqual(statuses.count("legacy_exception"), 19)
         self.assertEqual(manifest["paths"]["create-draft"]["status"], "session_integrated")
 
