@@ -1,10 +1,18 @@
 ﻿# WOM-kit Capability Matrix
 
-Status: v0.4.33 upload reopened, letter-164 first half, and session-owned writes truth
+Status: v0.4.34 presenter-bound grants, letter-165, and session-owned writes truth
 Date: 2026-09-04
-Version: v0.4.33 implementation and release scope
+Version: v0.4.34 implementation and release scope
 
-The current v0.4.33 working tree reopens `object-storage-upload` under the
+The current v0.4.34 working tree answers beta letter 165: a session grant is
+presenter-bound and time-boxed (the secret returned once, fixed refusal
+codes on the result, presenter evidence in every grant claim, a
+second-presenter warning, the registry-only `session_permission_attention`
+block), one legacy-identifier detector warns on every new-record surface
+and is never covered by a grant, `operator-feedback-compose --approve` asks
+the exact approval dialog and its receipt names the claim, the revise path
+is announced, and revision-plan warnings explain themselves. The v0.4.33
+tree reopens `object-storage-upload` under the
 exact approval contract (beta letter 164 ①③④): the writer line comes
 first, every manifest object is classified with counts, a create-only PUT
 at the content-addressed key is followed by a same-run full-GET proof, one

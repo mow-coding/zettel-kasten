@@ -1,6 +1,8 @@
 # Runtime Canonical Entry Points
 
-Status: v0.4.33 upload reopened, letter-164 first half, and session-owned writes truth
+Status: v0.4.34 presenter-bound grants, letter-165, and session-owned writes truth
+
+Previous checkpoint: Status: v0.4.33 upload reopened, letter-164 first half, and session-owned writes truth
 
 Previous checkpoint: Status: v0.4.32 letter-164 first half, letter-163 remainder, and session-owned writes truth
 
@@ -369,23 +371,23 @@ documented plans, previews, and audits remain available; a closed approval still
 `compound_exact_human_approval_binding_required`. `project-version-update`
 itself is separately reopened with an exact target/tag/source/rollback binding.
 
-When an updater bootstrap is needed and the exact public v0.4.33 GitHub Release
+When an updater bootstrap is needed and the exact public v0.4.34 GitHub Release
 wheel has been independently confirmed, use a dedicated external CPython 3.12
 environment:
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0433-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0434-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.33/wom_kit-0.4.33-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.34/wom_kit-0.4.34-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-Require exactly `archive 0.4.33` from a new process. This does not update the
+Require exactly `archive 0.4.34` from a new process. This does not update the
 project-local WOM-kit source mirror or change a project pin. Those effects
 require the separate reviewed `project-version-update` plan and native
 approval, or its authenticated same-context resume after interruption.

@@ -12,8 +12,7 @@ from wom_kit import __version__
 ROOT = Path(__file__).resolve().parents[2]
 KIT = ROOT / "wom-kit"
 RESOURCE_ROOT = KIT / "src" / "wom_kit" / "_resources"
-RELEASE = KIT / "docs" / "releases" / "v0.4.32.md"
-CURRENT_RELEASE = KIT / "docs" / "releases" / "v0.4.34.md"
+RELEASE = KIT / "docs" / "releases" / "v0.4.34.md"
 PACKAGED_RELEASE = RESOURCE_ROOT / "release-notes" / "v0.4.34.md"
 LOCK = KIT / "project-runtime-supply-lock-v0.4.34.json"
 BOOTSTRAP_DOCUMENTS = (
@@ -45,13 +44,14 @@ CURRENT_PUBLIC_DOCUMENTS = (
     KIT / "docs" / "recovery-operations-acceptance.md",
     KIT / "docs" / "exact-human-approval-contract.md",
     KIT / "docs" / "writer-session-coverage.json",
-    KIT / "docs" / "archive-infra-decision-log-2026-09-19-v0432-letter-164.md",
-    ROOT / "meeting-minutes" / "2026-09-19-v0432-letter-164.md",
+    KIT / "docs" / "archive-infra-decision-log-2026-09-20-v0434-letter-165.md",
+    ROOT / "meeting-minutes" / "2026-09-20-v0434-letter-165.md",
+    KIT / "docs" / "ai-response-concept-guide.md",
     RELEASE,
 )
 
 
-class V0432ReleaseDocsTests(unittest.TestCase):
+class V0434ReleaseDocsTests(unittest.TestCase):
     def test_current_version_surfaces_are_exact(self) -> None:
         self.assertEqual(__version__, "0.4.34")
         self.assertIn('version = "0.4.34"', (KIT / "pyproject.toml").read_text(encoding="utf-8"))
@@ -59,7 +59,7 @@ class V0432ReleaseDocsTests(unittest.TestCase):
             self.assertIn('__version__ = "0.4.34"', shim.read_text(encoding="utf-8"))
         citation = (ROOT / "CITATION.cff").read_text(encoding="utf-8")
         self.assertIn('version: "0.4.34"', citation)
-        self.assertRegex(citation, r'date-released: "2026-09-(19|2[0-9])"')
+        self.assertRegex(citation, r'date-released: "2026-09-(2[0-9])"')
         versioning = (ROOT / "VERSIONING.md").read_text(encoding="utf-8")
         self.assertIn("Current public baseline:\n\n```text\nv0.4.34", versioning)
         self.assertIn("Previous public baseline:\n\n```text\nv0.4.33", versioning)
@@ -68,21 +68,21 @@ class V0432ReleaseDocsTests(unittest.TestCase):
 
     def test_supply_lock_and_policy_are_exact(self) -> None:
         current = LOCK.read_bytes()
-        previous = (KIT / "project-runtime-supply-lock-v0.4.32.json").read_bytes()
-        self.assertEqual(previous.replace(b'"target_tag": "v0.4.32"', b'"target_tag": "v0.4.34"'), current)
+        previous = (KIT / "project-runtime-supply-lock-v0.4.33.json").read_bytes()
+        self.assertEqual(previous.replace(b'"target_tag": "v0.4.33"', b'"target_tag": "v0.4.34"'), current)
         policy = json.loads((KIT / "project-runtime-policy.json").read_text(encoding="utf-8"))
         self.assertEqual(policy["supply_lock"], "wom-kit/project-runtime-supply-lock-v0.4.34.json")
         self.assertEqual(policy["supply_lock_sha256"], "sha256:" + hashlib.sha256(current).hexdigest())
 
     def test_current_release_is_the_only_packaged_note(self) -> None:
-        self.assertEqual(CURRENT_RELEASE.read_bytes(), PACKAGED_RELEASE.read_bytes())
+        self.assertEqual(RELEASE.read_bytes(), PACKAGED_RELEASE.read_bytes())
         self.assertEqual(sorted(path.name for path in PACKAGED_RELEASE.parent.iterdir()), ["v0.4.34.md"])
         manifest = json.loads((RESOURCE_ROOT / "resource-manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["version"], "0.4.34")
         packaged_paths = {row["packaged"] for row in manifest["files"]}
         self.assertIn("release-notes/v0.4.34.md", packaged_paths)
-        self.assertNotIn("release-notes/v0.4.32.md", packaged_paths)
-        self.assertTrue((KIT / "docs" / "releases" / "v0.4.32.md").is_file())
+        self.assertNotIn("release-notes/v0.4.33.md", packaged_paths)
+        self.assertTrue((KIT / "docs" / "releases" / "v0.4.33.md").is_file())
 
     def test_current_install_guides_use_exact_v0434_bootstrap(self) -> None:
         for path in BOOTSTRAP_DOCUMENTS:
@@ -94,34 +94,35 @@ class V0432ReleaseDocsTests(unittest.TestCase):
                 self.assertIn("wom_kit-0.4.34-py3-none-any.whl", document)
                 if path.name.startswith("UPGRADE"):
                     continue  # upgrade guides keep every historical section
-                self.assertNotIn("bootstrap-v0432-", document)
+                self.assertNotIn("bootstrap-v0433-", document)
 
-    def test_release_describes_v0432_contract(self) -> None:
+    def test_release_describes_v0434_contract(self) -> None:
         flat = " ".join(RELEASE.read_text(encoding="utf-8").split()).casefold()
         for required in (
-            "byte_stream_search",
-            "oversize_skipped_count",
-            "unreadable_receipt_paths",
-            "probe_budget_exhausted",
-            "output_cap_exceeded",
-            "git_transaction_snapshot",
-            "git_backup_attention",
-            "wom-kit/git-backup-attention/v1",
-            "uncommitted_change_count",
-            "remote_tip_age_days",
-            "paths_branches_or_messages_echoed",
-            "local_repository_attention",
-            "permission_mode_preview",
-            "wom-kit/work-session-permission-preview/v1",
-            "always_dialog_operations",
-            "carried to v0.4.33",
+            "presenter_token",
+            "grant_hours",
+            "work_session_presenter_missing",
+            "work_session_grant_expired",
+            "work_session_grant_legacy_shape",
+            "session_presenter",
+            "work_session_second_presenter_observed",
+            "session_permission_attention",
+            "legacy_identifier_in_new_record",
+            "create_draft_warning_override_required",
+            "--allow-warnings",
+            "operator_feedback_body_write",
+            "exact_human_approval_reference_present",
+            "--create-draft-record",
+            "warning_explanations",
+            "60 approval-available and 59 fixed-closed",
+            "carried to v0.4.35",
             "publishing or installing this release does not read or modify a client archive",
             "client-run result and a new-process verification",
         ):
             with self.subTest(required=required):
                 self.assertIn(required.casefold(), flat)
 
-    def test_current_docs_use_v0433_status_without_erasing_v0432_history(self) -> None:
+    def test_current_docs_use_v0434_status_without_erasing_v0432_history(self) -> None:
         expected = {
             KIT / "docs" / "agent-operator-capabilities.md":
                 "Status: v0.4.34 presenter-bound grants, letter-165, and writer-session coverage gate",
@@ -141,42 +142,49 @@ class V0432ReleaseDocsTests(unittest.TestCase):
                 self.assertIn("v0.4.33", document)
 
     def test_release_surfaces_are_documented(self) -> None:
-        contract = (KIT / "docs" / "exact-human-approval-contract.md").read_text(encoding="utf-8")
-        self.assertIn("byte_stream_search", contract)
-        self.assertIn("`detail.probes`", contract)
-        self.assertIn("`permission_mode_preview`", contract)
+        approval = " ".join((KIT / "docs" / "exact-human-approval-contract.md").read_text(encoding="utf-8").split())
+        for phrase in ("presenter-bound and time-boxed", "`presenter_token`", "work_session_presenter_mismatch",
+                       "`session_presenter`", "work_session_second_presenter_observed", "60 approval-available, 59 fixed-closed"):
+            self.assertIn(phrase, approval)
         start_here = (KIT / "docs" / "ai-start-here.md").read_text(encoding="utf-8")
-        self.assertIn("`git_backup_attention`", start_here)
-        self.assertIn("Git Backup Attention", start_here)
-        evidence = (KIT / "docs" / "backup-evidence-status.md").read_text(encoding="utf-8")
-        self.assertIn("`local_repository_attention`", evidence)
+        self.assertIn("`session_permission_attention`", start_here)
+        self.assertIn("Session Permission Attention", start_here)
+        capabilities = (KIT / "docs" / "agent-operator-capabilities.md").read_text(encoding="utf-8")
+        self.assertIn("operator_feedback_body_write", capabilities)
+        self.assertIn("create_draft_warning_override_required", capabilities)
+        guide = (KIT / "docs" / "ai-response-concept-guide.md").read_text(encoding="utf-8")
+        self.assertIn("| `presenter_token` | 제시 토큰 |", guide)
+        self.assertIn("| `legacy_identifier` | 옛 식별자 |", guide)
         register = (KIT / "docs" / "recovery-operations-acceptance.md").read_text(encoding="utf-8")
-        self.assertIn("| L164-01 | v0.4.32 |", register)
-        self.assertIn("**development verified in v0.4.32**", register)
-        self.assertIn("### 2026-09-19 v0.4.32 letter 164 first half implemented", register)
-        decision_log = (KIT / "docs" / "archive-infra-decision-log-2026-09-19-v0432-letter-164.md").read_text(encoding="utf-8")
-        self.assertIn("## Triage of letter 164", decision_log)
-        self.assertIn("## Questions for the client", decision_log)
+        self.assertIn("| L165-01 | v0.4.34 |", register)
+        self.assertIn("**development verified in v0.4.34**", register)
+        self.assertIn("### 2026-09-20 v0.4.34 letter 165 implemented", register)
+        decision_log = (KIT / "docs" / "archive-infra-decision-log-2026-09-20-v0434-letter-165.md").read_text(encoding="utf-8")
+        self.assertIn("## What the review established", decision_log)
+        self.assertIn("Deviation: no route-less revoke action", decision_log)
+        self.assertIn("## Carried to v0.4.35", decision_log)
         coverage = json.loads((KIT / "docs" / "writer-session-coverage.json").read_text(encoding="utf-8"))
-        for row in ("object-storage-restore", "object-storage-offload", "exact-approval-claim-finalize"):
+        self.assertEqual(coverage["paths"]["operator-feedback-compose"]["status"], "pending")
+        self.assertEqual(coverage["paths"]["operator-feedback-compose"]["target"], "v0.4.35")
+        for row in ("object-storage-restore", "object-storage-offload", "exact-approval-claim-finalize", "object-storage-upload"):
             self.assertEqual(coverage["paths"][row]["status"], "pending")
-            self.assertEqual(coverage["paths"][row]["target"], "v0.4.35")  # moved by v0.4.34
-        for guide in (ROOT / "UPGRADE.md", ROOT / "UPGRADE.ko.md"):
-            document = guide.read_text(encoding="utf-8")
-            with self.subTest(guide=guide):
-                self.assertIn("git_backup_attention", document)
-                self.assertIn("oversize_skipped", document)
+            self.assertEqual(coverage["paths"][row]["target"], "v0.4.35")
+        for guide_path in (ROOT / "UPGRADE.md", ROOT / "UPGRADE.ko.md"):
+            document = guide_path.read_text(encoding="utf-8")
+            with self.subTest(guide=guide_path):
+                self.assertIn("presenter_token", document)
+                self.assertIn("--allow-warnings", document)
 
     def test_coverage_manifest_matches_release_claim(self) -> None:
         manifest = json.loads((KIT / "docs" / "writer-session-coverage.json").read_text(encoding="utf-8"))
         statuses = [row["status"] for row in manifest["paths"].values()]
         routed = sum(1 for row in manifest["paths"].values() if row.get("route"))
-        # v0.4.23 integrated create-draft (LR-06a); v0.4.24 through v0.4.27 and v0.4.31/v0.4.32 change no writer;
-        # v0.4.28 restore, v0.4.29 offload, v0.4.30 claim finalize and v0.4.33 upload are pending (target v0.4.34).
-        self.assertEqual(len(statuses), 60)  # v0.4.33: object-storage-upload row
+        # v0.4.23 integrated create-draft (LR-06a); v0.4.24 through v0.4.27, v0.4.31 and v0.4.33 change no writer;
+        # v0.4.28 restore, v0.4.29 offload, v0.4.30 claim finalize and v0.4.34 upload are pending (target v0.4.34).
+        self.assertEqual(len(statuses), 60)  # v0.4.33: object-storage-upload row; v0.4.34 adds none
         self.assertEqual(statuses.count("session_integrated") - routed, 6)
         self.assertEqual(routed, 1)
-        self.assertEqual(statuses.count("pending"), 34)  # v0.4.34: operator-feedback-compose moved to pending
+        self.assertEqual(statuses.count("pending"), 34)  # v0.4.34: operator-feedback-compose
         self.assertEqual(statuses.count("legacy_exception"), 19)
         self.assertEqual(manifest["paths"]["create-draft"]["status"], "session_integrated")
 

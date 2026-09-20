@@ -24,6 +24,66 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.4.34 Beta Letter 165: Presenter-Bound Grants, Legacy Identifiers, Compose Under Exact Approval
+
+Install the exact public wheel only after the matching release and asset exist.
+Use a new external CPython 3.12 environment so the real `python.exe -m pip`
+records the wheel hash in installed PEP 610 metadata.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0434-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.34/wom_kit-0.4.34-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+Require exactly `archive 0.4.34` from a new process. Publishing or installing
+the wheel changes no client archive, project runtime, or version pin. A client
+separately chooses and approves any project update.
+
+After the update, every existing `limited` / `allow_all` session grant asks
+the dialog again (`session_permission_refused.reason_code:
+work_session_grant_legacy_shape`) until `work-session --action
+set-permission-mode --approve` is run once more. The new approve returns
+`presenter_token` exactly once: keep it only in that conversation's process
+(`WOM_WORK_SESSION_PRESENTER`) next to the three refs; never write it into a
+memory file, a note or another conversation — another conversation continues
+a task through `handoff` / `accept`. The grant expires after `grant_hours`
+(1..24, default 8; the dialog shows the box), and a write that presents the
+refs without the secret, with the wrong one or after the expiry opens the
+dialog and says why on its result. Each grant claim records which presenter
+used it; a result warns `work_session_second_presenter_observed` when another
+presenter already used the session, and `ai-start-here` shows open grants
+under `session_permission_attention`. To revoke: `set-permission-mode manual`
+in the granting conversation, or `recover --approve` from any route of the
+same app.
+
+A `create-draft` whose body or title carries a bare Notion `ZET` number or
+page id now warns `legacy_identifier_in_new_record` in `--dry-run`
+(`quality_check.warning_explanations`: counts and line numbers only) and
+`--approve` refuses with `create_draft_warning_override_required` until you
+add `--allow-warnings` after reviewing it; a session grant never covers such
+a draft. `mint-zet`, `zet-revision-plan`, `zettel-objet-link` and
+`source-intake` dry-runs warn the same way. Reference a migrated zet by its
+full WOM id (for example `zet_notion_db3_ZET0637`) or its title.
+
+`operator-feedback-compose --approve` now opens the exact approval dialog and
+requires a `person:` / `human:` reviewer (`--expected-plan-sha256` is checked
+before the dialog); its receipt is v0.2 and names the claim. Existing v0.1
+receipts stay valid. To revise a body, follow the five steps the result lists
+(record draft → body-check → compose `--intent revise
+--expected-body-sha256` → record update → body-check), or pass
+`--create-draft-record` on the create so the draft record exists at once.
+
+After one reviewed project update, start the project launcher in a new process
+and verify its pin, source, launcher, and runtime evidence. Only that client-run
+result can show that the project was repaired.
+
 ## v0.4.33 Beta Letter 164 ①③④: `object-storage-upload` Reopened
 
 Install the exact public wheel only after the matching release and asset exist.

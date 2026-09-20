@@ -15,7 +15,7 @@ from collections import Counter
 TARGET_COLLECTION_PAGE_SIZE = 20
 _SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 _KINDS = {"zet": "zet", "draft": "초안", "objet": "오브제", "client_app": "앱", "workstream": "작업",
-          "permission_mode": "승인 방식", "operation": "작업 종류"}
+          "permission_mode": "승인 방식", "operation": "작업 종류", "grant_box": "유효 범위"}
 
 
 def _safe_text(value: object) -> str | None:

@@ -379,7 +379,9 @@ class V03312CliContractTests(unittest.TestCase):
 
         def plan(root: Path, request: str, **kwargs: object) -> dict[str, object]:
             calls.append(("plan", root, request, kwargs))
-            return {"ok": True, "state": "planned"}
+            # v0.4.34: the approve re-plans and binds the plan and body digests before its dialog.
+            return {"ok": True, "state": "planned", "blockers": [], "plan_sha256": "a" * 64,
+                    "feedback_ref": "feedback-body-sha256:" + "b" * 64}
 
         def approve(root: Path, request: str, **kwargs: object) -> dict[str, object]:
             calls.append(("approve", root, request, kwargs))
@@ -394,7 +396,12 @@ class V03312CliContractTests(unittest.TestCase):
             approve_operator_feedback_body=approve,
             check_operator_feedback_body=check,
         )
-        with patch.object(archive_cli, "_operator_feedback_body_api", return_value=api):
+        def exact_write(root, context, writer, **_kwargs):
+            # v0.4.34: the body write runs under the exact approval broker; the dialog is not part of this contract.
+            assert context.operation.value == "operator_feedback_body_write"
+            return {**writer(None), "exact_human_approval": {"approval_mechanism": "synthetic", "status": "succeeded"}}
+
+        with patch.object(archive_cli, "_operator_feedback_body_api", return_value=api),                 patch.object(archive_cli, "_execute_exact_human_approved_write", side_effect=exact_write),                 patch.object(archive_cli.archive_services, "read_archive_id", return_value="archive:test:v03312"):
             plan_code, _, _ = self.run_cli_split(
                 [
                     "operator-feedback-compose",
@@ -436,11 +443,13 @@ class V03312CliContractTests(unittest.TestCase):
         self.assertEqual((plan_code, approve_code, check_code), (0, 0, 0))
         self.assertEqual(calls[0][0], "plan")
         self.assertEqual(calls[0][3]["intent"], "create")
-        self.assertEqual(calls[1][0], "approve")
-        self.assertEqual(calls[1][3]["expected_plan_sha256"], "a" * 64)
-        self.assertEqual(calls[1][3]["reviewed_by"], "person:reviewer")
-        self.assertEqual(calls[1][3]["intent"], "create")
-        self.assertEqual(calls[2][0], "check")
+        # v0.4.34: the approve re-plans before its dialog, then runs the writer.
+        self.assertEqual(calls[1][0], "plan")
+        self.assertEqual(calls[2][0], "approve")
+        self.assertEqual(calls[2][3]["expected_plan_sha256"], "a" * 64)
+        self.assertEqual(calls[2][3]["reviewed_by"], "person:reviewer")
+        self.assertEqual(calls[2][3]["intent"], "create")
+        self.assertEqual(calls[3][0], "check")
 
     def test_operator_feedback_late_import_resolves_public_api(self) -> None:
         api = archive_cli._operator_feedback_body_api()

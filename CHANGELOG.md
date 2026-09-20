@@ -6,6 +6,59 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.34 - 2026-09-20
+
+- Beta letter 165 [A]: a `limited` / `allow_all` session grant is presenter-bound
+  and time-boxed. `set-permission-mode --approve` mints a presenter secret before
+  its dialog (the reviewed plan binds `presenter_sha256`, `granted_at`,
+  `expires_at`; request key `grant_hours` 1..24, default 8; the dialog shows the
+  box) and returns it once as `presenter_token`; a write that presents the three
+  refs without the secret, after the expiry, or under a pre-v0.4.34 grant gets
+  the dialog and `session_permission_refused` (`work_session_presenter_missing`,
+  `work_session_presenter_mismatch`, `work_session_grant_expired`,
+  `work_session_grant_legacy_shape`, `work_session_grant_unavailable`,
+  `work_session_grant_warning_review_required`). Grant claims carry
+  `session_presenter` (HMAC'd process fingerprint, earlier presenter count);
+  results carry `exact_human_approval.presenter` and warn
+  `work_session_second_presenter_observed`; `exact-approval-claims` lists
+  `mechanism_counts` / `presenter_unknown_count`; `work-session` rows show
+  `presenter_bound`, `permission_expires_at`, `grant_expired`; `ai-start-here`
+  gains the registry-only `session_permission_attention` block and the guidance
+  (refs and token stay in the granting conversation; handoff/accept is the
+  route). An MCP-hosted approve returns the token once the same way and
+  also holds it in the server process; the draft/intake privacy gates refuse
+  a pasted `WOM_WORK_SESSION_PRESENTER=` line.
+- Beta letter 165 [B]: one legacy-identifier detector (bare Notion `ZET<number>`
+  or page id outside a WOM id) warns with counts and lines only on
+  `create-draft` (`quality_check.warning_explanations`,
+  `legacy_identifier_in_new_record`; `--approve` needs `--allow-warnings`,
+  refusal `create_draft_warning_override_required`; never under a grant),
+  `mint-zet`, `zet-revision-plan` (the write binds the plan's warnings),
+  `zettel-objet-link` (`label_legacy_identifier_review`) and `source-intake`
+  (`legacy_identifier_in_source_label`); migrated records get
+  `legacy_identifier_in_migrated_record`; the guidance names the full WOM id.
+- Beta letter 165 [C]/[D]: `operator-feedback-compose --approve` opens the exact
+  approval dialog (operation `operator_feedback_body_write`, grantable; `person:`
+  / `human:` reviewer; `feedback_compose_plan_changed` /
+  `feedback_compose_reviewer_claim_invalid` before any dialog); receipts become
+  v0.2 with an `exact_human_approval` envelope (v0.1 stays valid;
+  `operator-feedback-body-check` reports `exact_human_approval_reference_present`);
+  the emergency lane keeps its text-flag path; the five-step revise path is
+  announced on every compose result and on the body check;
+  `--create-draft-record` creates the draft record in sequence.
+- Beta letter 165 [E]: `zet-revision-plan` `quality_review.warning_explanations`
+  names the field (`document_type`) or the table(s) (ordinal, header line, row
+  count) behind `document_type_missing`, `table_row_mapping_missing` and
+  `table_structure_review_missing`.
+- Inventory unchanged (60 approval-available, 59 fixed-closed); the coverage
+  manifest moves `operator-feedback-compose` to pending and the restore /
+  offload / claim-finalize / upload session-ref targets to v0.4.35.
+- Carried to v0.4.35: `max_writes` with a per-grant use ledger, per-session and
+  bulk revoke, session refs for the always-dialog writers and compose, the
+  select-all group for `git-backup-reconcile-plan`, a reviewed re-PUT,
+  delivered-feedback archival (letter 164 ⑧), same-generation index
+  participation (8b).
+
 ## v0.4.33 - 2026-09-20
 
 - Beta letter 164 ①③④: `object-storage-upload` reopened under the exact

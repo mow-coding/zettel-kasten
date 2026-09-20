@@ -329,16 +329,34 @@ def review_original_task_handoff(root, *, client_app_ref, task_route_ref, work_s
     return _safe_call(run)
 
 
+_PRESENTER_NEXT_STEP = (
+    "Keep presenter_token only in this conversation's process (export WOM_WORK_SESSION_PRESENTER "
+    "next to the three refs); never write it into memory files, notes or another conversation. "
+    "The draft and intake privacy gates refuse a pasted WOM_WORK_SESSION_PRESENTER line. Another "
+    "conversation continues this task through work-session handoff/accept (one human decision); "
+    "the grant expires at expires_at."
+)
+
+
 def set_permission_mode(root, *, client_app_ref, task_route_ref, work_session_ref,
                         original_resume, reviewer_claim=None, permission_mode=None, operations=None,
-                        cancel_requested=lambda: False, progress=lambda _event: None):
-    """v0.4.24: one human decision sets manual / limited / allow_all on the claimed session."""
+                        grant_hours=None, cancel_requested=lambda: False, progress=lambda _event: None):
+    """v0.4.24: one human decision sets manual / limited / allow_all on the claimed session.
+
+    v0.4.34 (letter 165 [A]): a limited / allow_all grant is minted with a
+    presenter secret and a time box before the dialog, so the reviewed plan
+    binds the presenter hash and the expiry. The secret is returned once in
+    the fresh approve result and is never stored; a resume of the original
+    decision reports ``presenter_token_available: false``.
+    """
     def run():
         if type(original_resume) is not bool:
             raise WorkSessionServiceError()
         _refs(client_app_ref, task_route_ref, work_session_ref, require_session=True)
+        token = None
         if original_resume:
-            if reviewer_claim is not None or permission_mode is not None or operations is not None:
+            if (reviewer_claim is not None or permission_mode is not None or operations is not None
+                    or grant_hours is not None):
                 raise WorkSessionServiceError("work_session_task_context_mismatch")
             grant = None
         else:
@@ -346,17 +364,34 @@ def set_permission_mode(root, *, client_app_ref, task_route_ref, work_session_re
                     or native_approval._REVIEWER_CLAIM_RE.fullmatch(reviewer_claim) is None):
                 raise WorkSessionServiceError()
             grant = permission_mode_module.normalize_grant(permission_mode, operations)
+            hours = permission_mode_module.normalize_grant_hours(grant_hours)
+            if grant is not None:
+                token, digest = permission_mode_module.mint_presenter()
+                grant = permission_mode_module.bind_grant(grant, presenter_sha256=digest, grant_hours=hours)
         resolved = _root(root)
-        return _write(resolved, cancel_requested=cancel_requested, progress=progress,
+        result = _write(resolved, cancel_requested=cancel_requested, progress=progress,
             run=lambda held: permission_facade._set_permission_mode_held(
                 resolved, held=held, client_app_ref=client_app_ref, task_route_ref=task_route_ref,
                 work_session_ref=work_session_ref, permission=grant,
                 original_resume=original_resume, reviewer_claim=reviewer_claim))
+        if type(result) is dict and result.get("ok") is True:
+            if token is not None and result.get("original_operation_already_completed") is not True:
+                result = {**result, "presenter_token": token, "presenter_token_returned_once": True,
+                          "presenter_token_is_secret": True, "presenter_token_available": True,
+                          "next_safe_actions": [*result.get("next_safe_actions", []), _PRESENTER_NEXT_STEP]}
+            else:
+                result = {**result, "presenter_token_available": False,
+                          "next_safe_actions": [*result.get("next_safe_actions", []), (
+                              "The presenter token was returned only by the original approve result; "
+                              "run set-permission-mode --approve again to mint a new grant."
+                              if result.get("permission_mode") != permission_mode_module.MODE_MANUAL
+                              else "Manual mode has no presenter token.")]}
+        return result
     return _safe_call(run)
 
 
 def preview_permission_mode(root, *, client_app_ref, task_route_ref, work_session_ref,
-                            permission_mode=None, operations=None):
+                            permission_mode=None, operations=None, grant_hours=None):
     """v0.4.32 (letter 164 ⑦): validate a grant request without a dialog or a write.
 
     Pure: the refs are shape-checked, the request is normalized exactly as
@@ -379,10 +414,14 @@ def preview_permission_mode(root, *, client_app_ref, task_route_ref, work_sessio
             "permission_modes": list(permission_mode_module.MODES),
             "grantable_operations": grantable,
             "always_dialog_operations": always_dialog,
+            "grant_hours_default": permission_mode_module.GRANT_HOURS_DEFAULT,
+            "grant_hours_max": permission_mode_module.GRANT_HOURS_MAX,
+            "presenter_bound": True,
             "private_values_echoed": False,
         }
         try:
             grant = permission_mode_module.normalize_grant(permission_mode, operations)
+            hours = permission_mode_module.normalize_grant_hours(grant_hours)
         except permission_mode_module.WorkSessionPermissionError as error:
             failure = {**base, "ok": False, "reason_code": error.code}
             if type(getattr(error, "detail", None)) is dict and error.detail:
@@ -396,9 +435,15 @@ def preview_permission_mode(root, *, client_app_ref, task_route_ref, work_sessio
                 if grant is None
                 else {"mode": grant["mode"], "operations": list(grant["operations"])}
             ),
+            # v0.4.34: the time box and the presenter binding the approve would mint.
+            "would_box": (
+                None if grant is None
+                else {"grant_hours": hours, "expires_at_relative": True, "presenter_token_returned_once": True}
+            ),
             "next_safe_actions": [
                 "Re-run with --approve and the same --request-stdin (plus reviewer_claim) "
                 "on the claimed session; one native dialog sets the mode.",
+                *([] if grant is None else [_PRESENTER_NEXT_STEP]),
             ],
         }
     return _safe_call(run)
@@ -410,10 +455,14 @@ def review_original_permission_mode(root, *, client_app_ref, task_route_ref, wor
     def run():
         _refs(client_app_ref, task_route_ref, work_session_ref, require_session=True)
         resolved = _root(root)
-        return _write(resolved, cancel_requested=cancel_requested, progress=progress,
+        result = _write(resolved, cancel_requested=cancel_requested, progress=progress,
             run=lambda held: permission_facade._review_original_permission_mode_held(
                 resolved, held=held, client_app_ref=client_app_ref, task_route_ref=task_route_ref,
                 work_session_ref=work_session_ref))
+        if type(result) is dict and result.get("ok") is True:
+            # v0.4.34: a re-review never re-issues the secret.
+            result = {**result, "presenter_token_available": False}
+        return result
     return _safe_call(run)
 
 

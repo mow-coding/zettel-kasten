@@ -63,7 +63,32 @@ def _row(document, kind, reference):
         permission = value.get("permission")
         row["permission_mode"] = "manual" if permission is None else permission["mode"]
         row["permitted_operations"] = [] if permission is None else list(permission["operations"])
+        # v0.4.34 (letter 165 [A]): the time box and whether the grant is
+        # presenter-bound; a pre-v0.4.34 row shows presenter_bound false and
+        # resolves to the dialog until the grant is set again.
+        from . import work_session_permission as permission_rules
+
+        shape = permission_rules.permission_shape(permission)
+        row["presenter_bound"] = shape == "v2"
+        row["permission_granted_at"] = permission["granted_at"] if shape == "v2" else None
+        row["permission_expires_at"] = permission["expires_at"] if shape == "v2" else None
+        row["grant_legacy_shape"] = shape == "legacy"
     return row
+
+
+def _with_expiry(row):
+    """Clock-dependent, so added after the pager digest: never part of a cursor."""
+
+    from . import work_session_permission as permission_rules
+
+    if row.get("kind") != "session":
+        return row
+    expires = row.get("permission_expires_at")
+    expired = None
+    if type(expires) is str:
+        expired = permission_rules.permission_expired({"mode": "limited", "operations": [], "presenter_sha256": "",
+                                                       "granted_at": "", "expires_at": expires})
+    return {**row, "grant_expired": expired}
 
 
 def _base(snapshot):
@@ -98,10 +123,18 @@ def _list(snapshot, *, kind, client_app_ref, workstream_ref, page_size, cursor):
     query = {"schema": QUERY_SCHEMA, "action": "list", "kind": kind,
              "client_app_ref": client_app_ref, "workstream_ref": workstream_ref}
     pager = SnapshotPager.build(rows, generation_sha256=snapshot.sha256, query_sha256=content_sha256(query))
+    counts = {"registry_kind_total": len(document[table]), "selected": len(rows),
+              "excluded_by_filters": len(document[table]) - len(rows)}
+    if kind == "session":
+        counts["non_manual_session_count"] = sum(1 for row in rows if row["permission_mode"] != "manual")
+        counts["expired_grant_count"] = sum(1 for row in rows if _with_expiry(row)["grant_expired"] is True)
+        counts["legacy_grant_count"] = sum(1 for row in rows if row["grant_legacy_shape"])
+    page = pager.page(page_size=page_size, cursor=cursor)
+    if kind == "session" and isinstance(page.get("items"), list):
+        page = {**page, "items": [_with_expiry(item) for item in page["items"]]}
     return {**_base(snapshot), "action": "list", "kind": kind,
-            "counts": {"registry_kind_total": len(document[table]), "selected": len(rows),
-                       "excluded_by_filters": len(document[table]) - len(rows)},
-            **pager.page(page_size=page_size, cursor=cursor)}
+            "counts": counts,
+            **page}
 
 
 def _inspect(snapshot, *, kind, reference):
@@ -125,7 +158,7 @@ def _inspect(snapshot, *, kind, reference):
             client_app_label_sha256=registry._label_digest(document["apps"][value["client_app_ref"]]["label"]),
             workstream_label_sha256=registry._label_digest(document["workstreams"][value["workstream_ref"]]["label"]),
         ).document()
-    return {**_base(snapshot), "action": "inspect", "kind": kind, "item": row}
+    return {**_base(snapshot), "action": "inspect", "kind": kind, "item": _with_expiry(row)}
 
 
 def query_work_sessions(root, *, action="list", kind="session", reference=None,

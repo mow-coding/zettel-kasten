@@ -129,6 +129,9 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                     "properties": {
                         "label": {"type": "string"},
                         "reviewer_claim": {"type": "string"},
+                        "permission_mode": {"type": "string", "enum": ["manual", "limited", "allow_all"]},
+                        "operations": {"type": "array", "items": {"type": "string"}},
+                        "grant_hours": {"type": "integer", "minimum": 1, "maximum": 24},
                         "selection": {
                             "type": "object", "additionalProperties": False,
                             "properties": {key: {"type": "string"} for key in
@@ -4110,6 +4113,20 @@ def tool_archive_work_session_manage(arguments: dict[str, Any]) -> dict[str, Any
     result = dispatch_work_session_management(archive_root, action=arguments["action"],
         **{key: arguments.get(key, False) for key in flags},
         **{key: arguments.get(key) for key in refs}, request=arguments.get("request"), **wait_callbacks)
+    if result.get("presenter_token_field") == "result.presenter_token":
+        # v0.4.34 (letter 165 [A]): the secret is returned once through this
+        # envelope exactly as the CLI returns it (the writes that consume it
+        # run in the conversation's CLI process, not in this server); it is
+        # also held here for an in-process consumer.
+        from .work_session_permission import hold_presenter
+
+        inner = dict(result["result"])
+        try:
+            hold_presenter(str(arguments.get("work_session_ref")), str(inner.get("presenter_token")))
+            inner["presenter_token_held_in_process"] = True
+        except Exception:
+            inner["presenter_token_held_in_process"] = False
+        result = {**result, "result": inner}
     if not result["ok"]:
         return {"content": [{"type": "text", "text": "Work-session operation could not be completed."}],
                 "structuredContent": result, "isError": True}

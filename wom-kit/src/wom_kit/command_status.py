@@ -148,6 +148,9 @@ EXACT_APPROVAL_REOPENED_WRITERS = frozenset({
     "zet-revision-restore-write",
     # v0.4.33 (letter 164 ①): live upload reopened as preservation PUT + adoption projection.
     "object-storage-upload",
+    # v0.4.34 (letter 165 [C]): the feedback body write asks the dialog; the
+    # emergency lane under version-update.lock keeps the text-flag path.
+    "operator-feedback-compose",
 })
 
 # Public parser and dispatch exposure was audited at v0.3.320 and its explicit

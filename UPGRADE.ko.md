@@ -2,6 +2,61 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.4.34 베타 편지 165: 제시 토큰에 묶인 승인 모드, 옛 식별자 경고, 정확 승인 아래의 피드백 본문
+
+일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.
+새 외부 CPython 3.12 환경의 실제 `python.exe -m pip`를 사용해 설치된 PEP 610
+metadata에 wheel hash가 남게 합니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0434-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.34/wom_kit-0.4.34-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+새 process에서 정확히 `archive 0.4.34`가 나와야 합니다. wheel을 공개하거나 설치하는
+것만으로 client archive, project runtime, version pin은 바뀌지 않습니다. project
+update는 client가 따로 선택하고 승인합니다.
+
+업데이트 뒤에는 기존의 `limited` / `allow_all` 세션 승인 모드가 모두 다시 승인 창을
+띄웁니다(`session_permission_refused.reason_code: work_session_grant_legacy_shape`).
+`work-session --action set-permission-mode --approve`를 한 번 더 돌리면 새 승인은
+`presenter_token`을 딱 한 번 돌려줍니다. 이 토큰은 세 개의 참조와 함께 그 대화의
+process 안에만(`WOM_WORK_SESSION_PRESENTER`) 두세요. 메모리 파일이나 노트, 다른 대화에
+절대 적지 마세요. 다른 대화가 같은 일을 이어가려면 `handoff` / `accept`를 씁니다. 승인은
+`grant_hours`(1~24, 기본 8; 승인 창에 표시)가 지나면 끝나고, 토큰 없이·틀린 토큰으로·만료
+뒤에 참조만 내밀면 창이 뜨고 결과에 이유가 적힙니다. 승인 모드로 쓴 클레임마다 어느
+제시자가 썼는지 남고, 다른 제시자가 이미 그 세션을 썼으면 결과에
+`work_session_second_presenter_observed` 경고가 붙으며, `ai-start-here`가
+`session_permission_attention`으로 열려 있는 승인을 보여 줍니다. 취소하려면 승인을 준
+대화에서 `set-permission-mode manual`을, 또는 같은 앱의 아무 경로에서 `recover --approve`를
+쓰세요.
+
+본문이나 제목에 노션의 옛 `ZET` 번호나 페이지 id가 그대로 들어간 `create-draft`는 이제
+`--dry-run`에서 `legacy_identifier_in_new_record`를 경고하고
+(`quality_check.warning_explanations`: 개수와 줄 번호만), `--approve`는 검토 뒤
+`--allow-warnings`를 붙이기 전까지 `create_draft_warning_override_required`로 거절합니다.
+세션 승인 모드는 이런 초안을 절대 대신 승인하지 않습니다. `mint-zet`, `zet-revision-plan`,
+`zettel-objet-link`, `source-intake`의 dry-run도 같은 경고를 냅니다. 옮겨 온 zet은 전체 WOM
+id(예: `zet_notion_db3_ZET0637`)나 제목으로 가리키세요.
+
+`operator-feedback-compose --approve`는 이제 정확 승인 창을 열고 `person:` / `human:`
+검토자를 요구합니다(`--expected-plan-sha256`은 창이 뜨기 전에 확인). 영수증은 v0.2가 되어
+클레임을 가리키며, 기존 v0.1 영수증은 그대로 유효합니다. 본문을 고치려면 결과가 알려 주는
+다섯 단계(레코드 draft → body-check → compose `--intent revise --expected-body-sha256` →
+레코드 update → body-check)를 따르거나, 처음 만들 때 `--create-draft-record`를 붙여 draft
+레코드를 바로 만드세요.
+
+검토한 project update 한 번 뒤에는 새 process에서 project launcher를 시작해 pin,
+source, launcher, runtime 근거를 확인하세요. 그 client 실행 결과만이 project가
+고쳐졌음을 보여 줍니다.
+
 ## v0.4.33 베타 편지 164 ①③④: `object-storage-upload` 다시 열림
 
 일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.

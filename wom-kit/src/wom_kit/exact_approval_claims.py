@@ -198,6 +198,8 @@ def _project_claim(
     except (ExactHumanApprovalError, TypeError, ValueError):
         age_minutes = None
     operation = context.get("operation")
+    presenter = parsed.get("session_presenter")
+    presenter_recorded = isinstance(presenter, Mapping)
     return {
         "approval_id": parsed.get("approval_id"),
         "operation": operation if type(operation) is str else None,
@@ -220,7 +222,100 @@ def _project_claim(
         "context_sha256": parsed.get("context_sha256"),
         "review_binding_codes": _string_codes(context.get("review_binding_codes")),
         "warning_codes": _string_codes(context.get("warning_codes")),
+        # v0.4.34 (letter 165 [A]): which presenter used a session grant.
+        "presenter_recorded": presenter_recorded,
+        "session_presenter": (
+            {
+                "work_session_ref": presenter.get("work_session_ref"),
+                "fingerprint_state": presenter.get("fingerprint_state"),
+                "process_fingerprint_sha256": presenter.get("process_fingerprint_sha256"),
+                "presenters_observed_before_this_claim": presenter.get("presenters_observed_before_this_claim"),
+                "scan_truncated": presenter.get("scan_truncated"),
+            }
+            if presenter_recorded
+            else None
+        ),
     }
+
+
+PRESENTER_SCAN_LIMIT = 2_000
+_PRESENTER_SCAN_SLACK_SECONDS = 300
+
+
+def _presenters_seen_with_key(
+    archive_root: Path | str,
+    key: memoryview,
+    filesystem_boundary: tuple[Path, dict[str, Any]] | None,
+    *,
+    work_session_ref: str,
+    not_before: str | None = None,
+) -> tuple[set[str], bool]:
+    """(distinct fingerprint digests recorded for this session, scan_truncated).
+
+    Read-only and bounded: only claim files modified since ``not_before``
+    (the grant's ``granted_at``, minus a slack) are opened, newest first, at
+    most PRESENTER_SCAN_LIMIT of them; invalid claims are skipped. A grant
+    claim older than the grant cannot be a presenter of this grant. Used
+    inside the broker's key scope before a new grant claim is written.
+    """
+
+    if filesystem_boundary is None:
+        # A writer without its own filesystem boundary (the plain CLI route)
+        # still gets the bounded read-only claim-store binding.
+        root, _archive_id = _archive_identity(archive_root)
+        if not root.joinpath(*Path(CLAIMS_RELATIVE_ROOT).parts).is_dir():
+            return set(), False
+        with _claims_boundary_default(archive_root)() as bound:
+            return _presenters_seen_with_key(
+                archive_root, key, bound, work_session_ref=work_session_ref, not_before=not_before,
+            )
+    bound_archive_root, claim_parent_binding = filesystem_boundary
+    claims_root = Path(bound_archive_root).joinpath(*Path(CLAIMS_RELATIVE_ROOT).parts)
+    if claim_parent_binding.get("path") != claims_root:
+        raise _fail("exact_approval_claim_store_unavailable")
+    directory_target = claim_parent_binding.get("descriptor")
+    if type(directory_target) is not int:
+        directory_target = claim_parent_binding.get("path")
+    floor = None
+    if type(not_before) is str:
+        try:
+            floor = _parse_timestamp(not_before).timestamp() - _PRESENTER_SCAN_SLACK_SECONDS
+        except (ExactHumanApprovalError, TypeError, ValueError, OverflowError):
+            floor = None
+    try:
+        with os.scandir(directory_target) as entries:
+            candidates = []
+            for entry in entries:
+                match = _workflow._APPROVAL_CLAIM_FILENAME_RE.fullmatch(entry.name)
+                if match is None:
+                    continue
+                try:
+                    info = entry.stat(follow_symlinks=False)
+                except OSError:
+                    continue
+                if not stat.S_ISREG(info.st_mode):
+                    continue
+                if floor is not None and info.st_mtime < floor:
+                    continue
+                candidates.append((info.st_mtime, match.group(1)))
+    except (OSError, TypeError, ValueError):
+        raise _fail("exact_approval_claim_store_unavailable") from None
+    candidates.sort(reverse=True)
+    truncated = len(candidates) > PRESENTER_SCAN_LIMIT
+    seen: set[str] = set()
+    for _mtime, approval_id in candidates[:PRESENTER_SCAN_LIMIT]:
+        try:
+            parsed, _archive_id = _authenticated_claim_document_core(
+                archive_root, approval_id, key,
+                bound_archive_root=bound_archive_root, claim_parent_binding=claim_parent_binding,
+            )
+        except ExactHumanApprovalError:
+            continue
+        presenter = parsed.get("session_presenter")
+        if (isinstance(presenter, Mapping) and presenter.get("work_session_ref") == work_session_ref
+                and type(presenter.get("process_fingerprint_sha256")) is str):
+            seen.add(presenter["process_fingerprint_sha256"])
+    return seen, truncated
 
 
 def _enumerate_claims_with_key(
@@ -354,6 +449,8 @@ def list_exact_human_approval_claims(
         )
     status_counts = {"started": 0, "succeeded": 0, "failed": 0}
     started_operation_counts: dict[str, int] = {}
+    mechanism_counts: dict[str, int] = {}
+    presenter_unknown_count = 0
     for claim in claims:
         if claim["status"] in status_counts:
             status_counts[claim["status"]] += 1
@@ -361,6 +458,11 @@ def list_exact_human_approval_claims(
             started_operation_counts[claim["operation"]] = (
                 started_operation_counts.get(claim["operation"], 0) + 1
             )
+        mechanism = claim.get("approval_mechanism")
+        if type(mechanism) is str:
+            mechanism_counts[mechanism] = mechanism_counts.get(mechanism, 0) + 1
+            if mechanism == "work_session_permission_mode" and not claim.get("presenter_recorded"):
+                presenter_unknown_count += 1
     selected = [
         claim
         for claim in claims
@@ -400,6 +502,13 @@ def list_exact_human_approval_claims(
         "claim_count": len(selected),
         "status_counts": status_counts,
         "started_operation_counts": dict(sorted(started_operation_counts.items())),
+        # v0.4.34 (letter 165 [A]): how each claim was decided, and how many
+        # grant claims predate presenter evidence (they stay immutable).
+        "mechanism_counts": dict(sorted(mechanism_counts.items())),
+        "presenter_unknown_count": presenter_unknown_count,
+        "presenter_evidence_note": (
+            "claims before v0.4.34 stay immutable; presenter evidence starts with the next grant"
+        ),
         "claims": selected,
         "blocker_codes": blocker_codes,
         "next_safe_actions": next_safe_actions,

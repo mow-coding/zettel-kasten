@@ -12312,32 +12312,45 @@ def command_operator_feedback_compose(args: argparse.Namespace) -> int:
                 ),
                 **strict_root_kwargs,
             )
-        else:
+        elif bool(getattr(args, "_wom_project_update_recovery_emergency_lane", False)):
+            # The emergency lane under version-update.lock keeps the v0.4.15
+            # text-flag path: no dialog, no claim, a v0.1 receipt.
             result = api.approve_operator_feedback_body(
                 Path(args.archive_root),
                 args.request,
                 expected_plan_sha256=args.expected_plan_sha256,
                 reviewed_by=args.reviewed_by,
                 intent=getattr(args, "intent", "create"),
-                expected_body_sha256=getattr(
-                    args,
-                    "expected_body_sha256",
-                    None,
-                ),
-                supersedes_feedback_id=getattr(
-                    args,
-                    "supersedes_feedback_id",
-                    None,
-                ),
+                expected_body_sha256=getattr(args, "expected_body_sha256", None),
+                supersedes_feedback_id=getattr(args, "supersedes_feedback_id", None),
                 **strict_root_kwargs,
             )
+            if isinstance(result, dict):
+                result = {**result, "approval_mechanism": "emergency_text_flag", "claim_created": False}
+        else:
+            # v0.4.34 (letter 165 [C]): the body write asks the dialog (or a
+            # session grant naming operator_feedback_body_write); the claim's
+            # reference is written into the receipt.
+            result = _operator_feedback_compose_exact_approval(args, api, strict_root_kwargs)
         if not isinstance(result, dict):
             raise TypeError("operator_feedback_body_result_invalid")
+    except (ExactHumanApprovalError, ExactHumanApprovalWindowsError, ExactHumanApprovalWorkflowError) as exc:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="operator_feedback_body_write",
+            reason_code=getattr(exc, "code", "exact_human_approval_state_unknown"),
+        )
     except Exception:
         return _operator_feedback_body_error(
             args,
             command="operator-feedback-compose",
             reason_code="feedback_compose_failed",
+        )
+    if isinstance(result, dict) and "_cli_error" in result:
+        return _operator_feedback_body_error(
+            args,
+            command="operator-feedback-compose",
+            reason_code=str(result["_cli_error"]),
         )
 
     if bool(
@@ -12402,6 +12415,119 @@ def command_operator_feedback_compose(args: argparse.Namespace) -> int:
             for blocker in result["blockers"]:
                 print(f"- {blocker}")
     return 0 if result.get("ok", True) else 1
+
+
+_FEEDBACK_COMPOSE_REVIEW_CODES = ("body_digest_reviewed", "plan_digest_reviewed", "request_digest_reviewed")
+
+
+def _windows_reviewer_claim_re():
+    from . import exact_human_approval_windows as _windows
+
+    return _windows._REVIEWER_CLAIM_RE
+
+
+def _operator_feedback_compose_exact_approval(
+    args: argparse.Namespace, api: Any, strict_root_kwargs: dict[str, Any]
+) -> dict[str, Any]:
+    """Plan → context → one dialog/claim → body write → (create) draft record."""
+
+    archive_root = Path(args.archive_root)
+    intent = getattr(args, "intent", "create") or "create"
+    reviewer = str(args.reviewed_by or "").strip()
+    if _windows_reviewer_claim_re().fullmatch(reviewer) is None:
+        return {"_cli_error": "feedback_compose_reviewer_claim_invalid"}
+    plan = api.plan_operator_feedback_body(
+        archive_root,
+        args.request,
+        intent=intent,
+        expected_body_sha256=getattr(args, "expected_body_sha256", None),
+        supersedes_feedback_id=getattr(args, "supersedes_feedback_id", None),
+        **strict_root_kwargs,
+    )
+    if not isinstance(plan, dict) or plan.get("ok") is not True or plan.get("blockers"):
+        if isinstance(plan, dict):
+            return {**plan, "dry_run": False, "approved": False, "lifecycle_action": "operator_feedback_body_approve"}
+        return {"_cli_error": "feedback_compose_failed"}
+    expected_plan = str(args.expected_plan_sha256 or "").strip().lower()
+    plan_sha256 = str(plan.get("plan_sha256") or "")
+    feedback_ref = str(plan.get("feedback_ref") or "")
+    if (
+        not SHA256_RE.fullmatch(plan_sha256)
+        or not SHA256_RE.fullmatch(expected_plan)
+        or not secrets.compare_digest(plan_sha256, expected_plan)
+        or not feedback_ref.startswith("feedback-body-sha256:")
+    ):
+        return {"_cli_error": "feedback_compose_plan_changed"}
+    warnings = {
+        "revise": ["feedback_body_revision"],
+        "supersede": ["feedback_body_supersession"],
+    }.get(intent, [])
+    context = _exact_human_approval_context(
+        archive_root,
+        operation=ExactHumanApprovalOperation.operator_feedback_body_write,
+        plan_sha256=plan_sha256,
+        target_binding_sha256=feedback_ref.rsplit(":", 1)[-1],
+        reviewer_claim=reviewer,
+        review_binding_codes=_FEEDBACK_COMPOSE_REVIEW_CODES,
+        warnings=warnings,
+    )
+
+    def _write_body(approval_claim) -> dict[str, Any]:
+        return api.approve_operator_feedback_body(
+            archive_root,
+            args.request,
+            expected_plan_sha256=expected_plan,
+            reviewed_by=reviewer,
+            intent=intent,
+            expected_body_sha256=getattr(args, "expected_body_sha256", None),
+            supersedes_feedback_id=getattr(args, "supersedes_feedback_id", None),
+            exact_human_approval_claim=approval_claim,
+            **strict_root_kwargs,
+        )
+
+    result = _execute_exact_human_approved_write(archive_root, context, _write_body)
+    if not isinstance(result, dict) or result.get("ok") is not True:
+        return result
+    result = {**result, "approval_mechanism": (result.get("exact_human_approval") or {}).get("approval_mechanism")}
+    # v0.4.34 (letter 165 [D]): with --create-draft-record a created body gets
+    # its draft record next, in sequence and outside the claim, so
+    # `--intent revise` works immediately; without it the five-step path is
+    # announced and the existing record sequence stays valid.
+    if intent == "create" and result.get("state") in {"written", "already_written"}:
+        feedback_id = str(result.get("feedback_id") or "")
+        record: dict[str, Any] = {"record_created": False, "record_path": None, "record_sha256": None,
+                                  "skipped_reason": None if bool(getattr(args, "create_draft_record", False)) else "not_requested"}
+        if record["skipped_reason"] == "not_requested":
+            result["draft_record"] = record
+            result["next_safe_actions"] = [
+                *[item for item in result.get("next_safe_actions", []) if isinstance(item, str)],
+                *getattr(api, "REVISE_PATH_NEXT_SAFE_ACTIONS", ()),
+            ]
+            return result
+        try:
+            record_result = archive_services.operator_feedback_record(
+                archive_root, feedback_id=feedback_id, feedback_ref=feedback_ref,
+                status="draft", intent="create", dry_run=False, approve=True, reviewed_by=reviewer,
+            )
+            summary = record_result.get("summary") if isinstance(record_result.get("summary"), dict) else {}
+            receipt = record_result.get("receipt") if isinstance(record_result.get("receipt"), dict) else {}
+            if record_result.get("ok") is True:
+                record.update(record_created=True, record_path=summary.get("record_path"),
+                              record_sha256=receipt.get("record_sha256") or summary.get("record_sha256"))
+            else:
+                codes = record_result.get("blocker_codes") if isinstance(record_result.get("blocker_codes"), list) else []
+                record["skipped_reason"] = (
+                    "feedback_record_exists" if "feedback_record_exists" in codes
+                    else (str(codes[0]) if codes else "feedback_record_create_blocked")
+                )
+        except Exception:  # noqa: BLE001 - the body write already succeeded; report, never raise
+            record["skipped_reason"] = "feedback_record_create_failed"
+        result["draft_record"] = record
+    result["next_safe_actions"] = [
+        *[item for item in result.get("next_safe_actions", []) if isinstance(item, str)],
+        *getattr(api, "REVISE_PATH_NEXT_SAFE_ACTIONS", ()),
+    ]
+    return result
 
 
 def command_operator_feedback_body_check(args: argparse.Namespace) -> int:
@@ -13759,6 +13885,11 @@ def render_ai_start_here_markdown(result: dict[str, Any]) -> str:
         if isinstance(result.get("git_backup_attention"), dict)
         else {}
     )
+    session_permission_attention = (
+        result.get("session_permission_attention")
+        if isinstance(result.get("session_permission_attention"), dict)
+        else {}
+    )
 
     lines = [
         "# WOM AI Start Here",
@@ -13786,6 +13917,12 @@ def render_ai_start_here_markdown(result: dict[str, Any]) -> str:
         "",
         f"- {git_backup_attention.get('human_summary') or 'Git backup attention was not reported.'}",
         f"- Detailed check: `{git_backup_attention.get('next_command') or 'archive git-backup-plan <archive-root> --dry-run --format json'}`",
+        "",
+        "## Session Permission Attention",
+        "",
+        f"- {session_permission_attention.get('human_summary') or 'Session permission attention was not reported.'}",
+        f"- Detailed check: `{session_permission_attention.get('next_command') or 'archive work-session <archive-root> --action list --kind session --format json'}`",
+        f"- {session_permission_attention.get('guidance') or archive_services.SESSION_PERMISSION_GUIDANCE}",
         "",
         "## Read First",
         "",
@@ -27671,6 +27808,38 @@ def command_facet_vocabulary(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def _create_draft_legacy_identifier_flagged(preview: Any) -> bool:
+    """v0.4.34 (letter 165 [B]): did the dry-run name a bare legacy identifier?"""
+
+    from .legacy_identifier import CODE_NEW_RECORD
+
+    warnings = preview.get("warnings") if isinstance(preview, dict) else None
+    return isinstance(warnings, list) and CODE_NEW_RECORD in warnings
+
+
+def _create_draft_legacy_identifier_gate(args: argparse.Namespace, preview: Any) -> int | None:
+    """Refuse the approve before any dialog unless the human overrode the warning."""
+
+    if not _create_draft_legacy_identifier_flagged(preview) or bool(getattr(args, "allow_warnings", False)):
+        return None
+    from .legacy_identifier import GUIDANCE
+
+    return _create_draft_cli_error(
+        args,
+        reason_code="create_draft_warning_override_required",
+        message=(
+            "The draft body or title carries a bare legacy identifier (a Notion ZET number or page "
+            "id); no approval window was opened."
+        ),
+        next_safe_actions=[
+            GUIDANCE,
+            "Re-run --dry-run and read quality_check.warning_explanations (counts and body lines only); "
+            "fix the body, or re-run --approve with --allow-warnings after a human reviewed it "
+            "(the dialog then opens; a session grant never covers this write).",
+        ],
+    )
+
+
 def _create_draft_ai_provenance_scope(args: argparse.Namespace) -> bool:
     """Share the service-owned argument classification with discovery/dispatch."""
 
@@ -27730,6 +27899,11 @@ def _command_session_create_draft(
                 return {"_cli_error": ("archive_index_observation_unavailable"
                                        if write_preflight.get("state") == "unavailable"
                                        else archive_services.INDEX_REBUILD_REQUIRED)}
+            if (_create_draft_legacy_identifier_flagged(preview)
+                    and not bool(getattr(args, "allow_warnings", False))):
+                # v0.4.34 (letter 165 [B]): refuse outside the held lane so
+                # exactly one document is printed; no dialog was opened.
+                return {"_legacy_gate": preview}
             plan_sha256 = _source_fidelity_plan_sha256_from_result(preview)
             body_sha256 = preview.get("body_sha256")
             expected_plan = str(args.expected_source_fidelity_plan_sha256 or "").strip().lower()
@@ -27792,7 +27966,10 @@ def _command_session_create_draft(
                 claim_succeeded_finalizer=finish,
                 # v0.4.24: the explicit session refs resolve the permission
                 # grant; without a grant the dialog opens as before.
-                session_permission=permission.resolve_grant(archive_root, **refs),
+                # v0.4.34 (letter 165 [A]): the refusal reason travels with
+                # the grant so the result says why the dialog opened; a
+                # flagged legacy identifier is refused by the broker itself.
+                session_permission=permission.resolve_grant_outcome(archive_root, **refs),
             )
 
         result = sessions._write(
@@ -27813,6 +27990,8 @@ def _command_session_create_draft(
             message="create-draft could not bind the work session; private values were not echoed.")
     finally:
         reporter.close() if hasattr(reporter, "close") else None
+    if isinstance(result, dict) and "_legacy_gate" in result:
+        return _create_draft_legacy_identifier_gate(args, result["_legacy_gate"])
     if isinstance(result, dict) and "_cli_error" in result:
         return _create_draft_cli_error(args, reason_code=result["_cli_error"],
             message="Draft approval is blocked by its index prerequisite; no approval window was opened.",
@@ -28049,6 +28228,9 @@ def command_create_draft(args: argparse.Namespace) -> int:
                         if unavailable else list(archive_services.INDEX_REBUILD_NEXT_SAFE_ACTIONS)
                     ),
                 )
+            legacy_gate = _create_draft_legacy_identifier_gate(args, preview)
+            if legacy_gate is not None:
+                return legacy_gate
             plan_sha256 = _source_fidelity_plan_sha256_from_result(
                 preview
             )
@@ -28117,6 +28299,9 @@ def command_create_draft(args: argparse.Namespace) -> int:
                     **create_kwargs,
                 )
 
+            # v0.4.34 (letter 165 [B]): a flagged legacy identifier is a
+            # literal bound warning code, so the broker refuses any grant
+            # with work_session_grant_warning_review_required itself.
             result = _execute_exact_human_approved_write(
                 archive_root,
                 context,
@@ -38806,7 +38991,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--expected-plan-sha256",
         help="Exact plan digest required for approval.",
     )
-    operator_feedback_compose.add_argument("--reviewed-by", help="Reviewer id required for approval.")
+    operator_feedback_compose.add_argument("--reviewed-by", help="Reviewer id required for approval (v0.4.34: person:<id> or human:<id>; the write opens the exact approval dialog).")
+    operator_feedback_compose.add_argument("--create-draft-record", action="store_true",
+                                           help="v0.4.34: after a created body, also create its draft metadata record "
+                                                "(status draft, intent create) in sequence, so --intent revise works next.")
     operator_feedback_compose.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     operator_feedback_compose.set_defaults(
         func=command_operator_feedback_compose,
@@ -45208,6 +45396,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     create_draft.add_argument("--expected-body-sha256", help="Expected SHA-256 of the normalized draft body.")
     create_draft.add_argument("--draft-approved-by", help="Human actor approving inbox draft creation.")
+    create_draft.add_argument("--allow-warnings", action="store_true",
+                              help="v0.4.34: approve a draft whose dry-run flagged a bare legacy identifier "
+                                   "(legacy_identifier_in_new_record) after a human reviewed it; the dialog still opens.")
     create_draft.add_argument(
         "--source-fidelity",
         choices=sorted(archive_services.SOURCE_FIDELITY_MODES),
@@ -49585,7 +49776,16 @@ def build_parser() -> argparse.ArgumentParser:
                      "{reviewer_claim, permission_mode: manual|limited|allow_all, operations: [...]}: the listed "
                      "operation kinds then run without a dialog until the session is paused, handed off or "
                      "completed; project updates and credential writes always ask. Each write still publishes "
-                     "its own one-use claim, and that claim records the permission mechanism."),
+                     "its own one-use claim, and that claim records the permission mechanism. "
+                     "v0.4.34: a limited/allow_all grant is presenter-bound and time-boxed (request key "
+                     "grant_hours, 1..24, default 8): the approve result returns presenter_token exactly once; "
+                     "keep it only in this conversation's process (WOM_WORK_SESSION_PRESENTER), never in memory "
+                     "files or another conversation. A write that presents the refs without the token, after "
+                     "expires_at, or under a grant made before v0.4.34 gets the dialog and a session_permission_refused "
+                     "code. Each grant claim records a presenter fingerprint digest and how many other presenters "
+                     "used the session before it (work_session_second_presenter_observed). Another conversation "
+                     "continues a task through handoff/accept; the operator revokes a grant with set-permission-mode "
+                     "manual in the granting conversation or recover --approve from any route of the same app."),
     )
     work_session.add_argument("archive_root", help="Archive root.")
     work_session.add_argument("--action", choices=["list", "inspect", "register-app", "request-init", "create", "claim", "pause", "resume", "complete", "handoff", "accept", "recover", "set-permission-mode"], default="list")
