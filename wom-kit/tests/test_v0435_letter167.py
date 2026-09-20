@@ -85,6 +85,10 @@ class RewrittenOriginUpdateTests(unittest.TestCase):
             code, stdout, stderr = self.run_cli_split(command)
         return code, stdout, stderr, approval_started, prepared_plans
 
+    @unittest.skipUnless(
+        _cli_fixture.WINDOWS_PROJECT_RUNTIME,
+        "the production runtime supply is Windows CPython 3.12 (the approve path is Windows-only)",
+    )
     def test_rewritten_origin_main_is_named_and_accepted_only_under_the_affirmation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_root = Path(tmp)
