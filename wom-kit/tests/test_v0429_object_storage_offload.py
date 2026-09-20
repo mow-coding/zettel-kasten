@@ -246,9 +246,9 @@ def _write_draft(root: Path, name: str, body: str, *, frontmatter_extra: str = "
 
 
 class OffloadPlanTests(unittest.TestCase):
-    def test_kind_is_registered_and_always_dialog(self):
+    def test_kind_is_registered_and_grantable_since_v0436(self):
         kind = ExactHumanApprovalOperation.object_storage_bytes_offload
-        self.assertIn(kind, ALWAYS_DIALOG_OPERATIONS)
+        self.assertNotIn(kind, ALWAYS_DIALOG_OPERATIONS)  # v0.4.36 (letter 168 ⑥): grantable
         self.assertEqual(windows._OPERATION_LABELS[kind], "오브제 로컬 바이트 비우기")
         self.assertTrue(windows._OPERATION_QUESTIONS[kind].endswith("까요?"))
         self.assertIn("삭제하지 않습니다", windows._OPERATION_SUMMARIES[kind])

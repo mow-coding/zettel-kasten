@@ -209,8 +209,10 @@ class V0432PermissionPreviewTests(unittest.TestCase):
         self.assertTrue(result["native_approval_required_for_write"])
         self.assertEqual(result["would_set"], {"mode": "limited", "operations": ["create_draft"]})
         self.assertIn("create_draft", result["grantable_operations"])
-        self.assertTrue(result["always_dialog_operations"])
-        self.assertFalse(set(result["grantable_operations"]) & set(result["always_dialog_operations"]))
+        self.assertEqual(result["always_dialog_operations"], [])  # v0.4.36 (letter 168 ⑥)
+        self.assertEqual(result["dialog_only_actions"], ["set-permission-mode"])
+        from wom_kit.exact_human_approval_windows import ExactHumanApprovalOperation
+        self.assertEqual(len(result["grantable_operations"]), len(ExactHumanApprovalOperation))
         self.assertEqual(result["permission_modes"], ["manual", "limited", "allow_all"])
 
     def test_preview_names_the_refusal_without_a_dialog(self) -> None:

@@ -414,6 +414,10 @@ def preview_permission_mode(root, *, client_app_ref, task_route_ref, work_sessio
             "permission_modes": list(permission_mode_module.MODES),
             "grantable_operations": grantable,
             "always_dialog_operations": always_dialog,
+            # v0.4.36 (letter 168 ⑥): the set above is empty; the only
+            # dialog the mode never removes is the grant action itself.
+            "dialog_only_actions": list(permission_mode_module.DIALOG_ONLY_ACTIONS),
+            "dialog_only_reason": permission_mode_module.DIALOG_ONLY_REASON,
             "grant_hours_default": permission_mode_module.GRANT_HOURS_DEFAULT,
             "grant_hours_max": permission_mode_module.GRANT_HOURS_MAX,
             "presenter_bound": True,

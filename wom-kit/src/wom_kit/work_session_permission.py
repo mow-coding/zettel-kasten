@@ -79,26 +79,18 @@ GRANT_BLOCKING_WARNING_CODES = frozenset({
 })
 _clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
 
-ALWAYS_DIALOG_OPERATIONS = frozenset({
-    ExactHumanApprovalOperation.project_version_update,
-    ExactHumanApprovalOperation.git_backup,
-    ExactHumanApprovalOperation.notion_property_backfill,
-    ExactHumanApprovalOperation.notion_property_backfill_revert,
-    ExactHumanApprovalOperation.object_storage_setup_registration,
-    ExactHumanApprovalOperation.object_storage_bytes_preservation,
-    ExactHumanApprovalOperation.object_storage_formal_adoption,
-    ExactHumanApprovalOperation.object_storage_bytes_restore,
-    ExactHumanApprovalOperation.object_storage_bytes_offload,
-    ExactHumanApprovalOperation.object_storage_bytes_upload,
-    ExactHumanApprovalOperation.exact_approval_claim_finalize,
-    ExactHumanApprovalOperation.work_session,
-    ExactHumanApprovalOperation.integrity_repair,
-    ExactHumanApprovalOperation.duplicate_object_reconcile,
-    ExactHumanApprovalOperation.local_recovery,
-    ExactHumanApprovalOperation.local_recovery_revert,
-    ExactHumanApprovalOperation.warning_override,
-    ExactHumanApprovalOperation.human_artifact_lifecycle,
-})
+# v0.4.36 (beta letter 168 ⑥): the 2026-09-17 decision restored. A session
+# grant works like the desktop apps' "allow all": no operation kind keeps
+# its own dialog. The v0.4.24 always-dialog set (update, remote storage,
+# recovery, deletion, session control) was an implementer's exclusion the
+# user never approved; it is empty now and kept only as a name. The one
+# dialog-only ACTION is the grant itself (set-permission-mode): a grant
+# cannot mint, extend or replace itself, exactly as the desktop apps ask
+# once when the switch is flipped.
+ALWAYS_DIALOG_OPERATIONS: frozenset[ExactHumanApprovalOperation] = frozenset()
+GRANT_ACTION_WARNING_CODE = "work_session_set_permission_mode"
+DIALOG_ONLY_ACTIONS = ("set-permission-mode",)
+DIALOG_ONLY_REASON = "a grant cannot mint, extend or replace itself; the human flips the switch"
 GRANTABLE_OPERATIONS = frozenset(
     member for member in ExactHumanApprovalOperation if member not in ALWAYS_DIALOG_OPERATIONS
 )
@@ -257,7 +249,8 @@ def normalize_grant(permission_mode: Any, operations: Any) -> dict[str, Any] | N
                 "work_session_permission_operation_not_grantable",
                 detail={"rejected_operation_index": index,
                         "grantable_operations": sorted(values),
-                        "always_dialog_operations": sorted(member.value for member in ALWAYS_DIALOG_OPERATIONS)},
+                        "always_dialog_operations": sorted(member.value for member in ALWAYS_DIALOG_OPERATIONS),
+                        "dialog_only_actions": list(DIALOG_ONLY_ACTIONS)},
             )
     return {"mode": MODE_LIMITED, "operations": sorted(set(operations))}
 
@@ -280,7 +273,7 @@ class SessionPermissionGrant:
 
     def permits(self, operation: ExactHumanApprovalOperation) -> bool:
         if type(operation) is not ExactHumanApprovalOperation or operation in ALWAYS_DIALOG_OPERATIONS:
-            return False
+            return False  # the set is empty since v0.4.36; kept for a future policy hook
         if self.mode == MODE_ALLOW_ALL:
             return True
         return self.mode == MODE_LIMITED and operation.value in self.operations
@@ -300,7 +293,7 @@ def preview_items(*, archive_identity_sha256: str, permission: dict[str, Any] | 
     mode = MODE_MANUAL if permission is None else permission["mode"]
     labels = {MODE_MANUAL: "수동 승인 (모든 쓰기마다 승인 창)",
               MODE_LIMITED: "제한 승인 (아래 작업 종류만 승인 창 없이)",
-              MODE_ALLOW_ALL: "전체 허용 (프로젝트 업데이트·자격증명 제외, 승인 창 없이)"}
+              MODE_ALLOW_ALL: "전체 허용 (업데이트·원격 저장소·복구·삭제·세션 조작 포함, 이 대화에서는 승인 창 없음)"}
     items = [TargetCollectionItem(
         identity_sha256=registry._digest({"archive": archive_identity_sha256, "kind": "permission_mode", "mode": mode}),
         kind="permission_mode", title=labels[mode],
@@ -325,6 +318,15 @@ def preview_items(*, archive_identity_sha256: str, permission: dict[str, Any] | 
             kind="grant_box", title=f"유효 시간 {hours}시간 · 이 대화(제시 토큰)에만 적용",
         ))
     return items
+
+
+def grant_self_service_refused(context: Any) -> bool:
+    """v0.4.36: the grant action itself always opens the dialog, whatever the mode."""
+
+    return (
+        getattr(context, "operation", None) is ExactHumanApprovalOperation.work_session
+        and GRANT_ACTION_WARNING_CODE in tuple(getattr(context, "warning_codes", ()) or ())
+    )
 
 
 def _current_context() -> dict[str, str] | None:

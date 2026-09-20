@@ -69,7 +69,8 @@ class PermissionRefusalDetailTests(unittest.TestCase):
         self.assertEqual(error.code, "work_session_permission_operation_not_grantable")
         self.assertEqual(error.detail["rejected_operation_index"], 1)
         self.assertIn("draft_discard", error.detail["grantable_operations"])
-        self.assertIn("project_version_update", error.detail["always_dialog_operations"])
+        self.assertEqual(error.detail["always_dialog_operations"], [])  # v0.4.36: no kind keeps its dialog
+        self.assertEqual(error.detail["dialog_only_actions"], ["set-permission-mode"])
         self.assertNotIn("discard_draft", json.dumps(error.detail))  # the refused value is not echoed
         self.assertEqual(len(error.detail["grantable_operations"]), len(permission.GRANTABLE_OPERATIONS))
 

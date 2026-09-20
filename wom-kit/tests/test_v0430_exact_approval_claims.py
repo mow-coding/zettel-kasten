@@ -367,10 +367,10 @@ class FinalizeWriterTests(_ClaimStoreCase):
 
 
 class OperationKindTests(unittest.TestCase):
-    def test_finalize_is_always_a_dialog_with_korean_copy(self) -> None:
+    def test_finalize_is_grantable_since_v0436_with_korean_copy(self) -> None:
         kind = ExactHumanApprovalOperation.exact_approval_claim_finalize
-        self.assertIn(kind, work_session_permission.ALWAYS_DIALOG_OPERATIONS)
-        self.assertNotIn(kind, work_session_permission.GRANTABLE_OPERATIONS)
+        self.assertNotIn(kind, work_session_permission.ALWAYS_DIALOG_OPERATIONS)  # v0.4.36: grantable
+        self.assertIn(kind, work_session_permission.GRANTABLE_OPERATIONS)
         self.assertTrue(_OPERATION_QUESTIONS[kind].endswith("까요?"))
         self.assertIn("클레임", _OPERATION_LABELS[kind])
 

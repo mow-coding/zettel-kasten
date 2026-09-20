@@ -126,9 +126,11 @@ def _resolved_session_permission(archive_root, session_permission, context):
     from . import work_session_permission as permission
 
     reason = None
+    # v0.4.36 (letter 168 ⑥): no operation kind keeps its own dialog; only
+    # the grant action itself does (a grant cannot mint or extend itself).
+    if permission.grant_self_service_refused(context):
+        return None, None
     if session_permission is _UNSET_SESSION_PERMISSION:
-        if context.operation in permission.ALWAYS_DIALOG_OPERATIONS:
-            return None, None
         grant, reason = permission.resolve_grant_outcome_from_environment(archive_root)
     elif type(session_permission) is tuple and len(session_permission) == 2:
         grant, reason = session_permission
@@ -578,10 +580,10 @@ def _execute_exact_human_approved_write_with_review_kind_core(
             "observe_target_binding": observe_target_binding,
         }
     interactive_intent_mechanism = CURRENT_INTERACTIVE_INTENT_MECHANISM
-    grant, grant_refusal = (
-        _resolved_session_permission(archive_root, session_permission, context)
-        if review_kind is _ExactHumanApprovalReviewKind.fresh
-        else (None, None)
+    # v0.4.36: the grant also stands in for an explicit original re-review;
+    # the same-key absence observation below is unchanged.
+    grant, grant_refusal = _resolved_session_permission(
+        archive_root, session_permission, context
     )
     fingerprint_basis = None
     if grant is not None:

@@ -105,10 +105,10 @@ class UploadPlanTests(unittest.TestCase):
         self.archive = _Archive()
         self.addCleanup(self.archive.close)
 
-    def test_kind_is_registered_always_dialog_and_reopened(self) -> None:
+    def test_kind_is_registered_grantable_and_reopened(self) -> None:
         kind = ExactHumanApprovalOperation.object_storage_bytes_upload
-        self.assertIn(kind, ALWAYS_DIALOG_OPERATIONS)
-        self.assertNotIn(kind, GRANTABLE_OPERATIONS)
+        self.assertNotIn(kind, ALWAYS_DIALOG_OPERATIONS)  # v0.4.36 (letter 168 ⑥): grantable
+        self.assertIn(kind, GRANTABLE_OPERATIONS)
         for table in (windows._OPERATION_LABELS, windows._OPERATION_QUESTIONS, windows._OPERATION_SUMMARIES, windows._OPERATION_APPROVE_BUTTONS):
             self.assertIn(kind, table)
         self.assertTrue(windows._OPERATION_QUESTIONS[kind].endswith("까요?"))
