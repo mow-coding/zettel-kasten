@@ -126,7 +126,6 @@ occurrences; one pre-rewrite commit (the old v0.3.170 tag target) still
 resolves anonymously by its commit id and its old file still shows the account
 folder name once, so the strings stay reachable by anyone holding an old
 commit id until GitHub's own garbage collection. The user decided that this is
-acceptable and that the support request drafted in
-[2026-09-20-github-support-request-draft.md](2026-09-20-github-support-request-draft.md)
-is not to be sent. A GitHub Support form had been opened in the user's browser
+acceptable and that the support request drafted that morning (a local,
+untracked draft in the minutes folder) is not to be sent. A GitHub Support form had been opened in the user's browser
 to prepare it; nothing was entered or submitted, and the tab was closed.
