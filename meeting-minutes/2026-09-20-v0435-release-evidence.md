@@ -114,3 +114,19 @@ before and after ids. The letter 167 reply draft explains the cause (the
 public-history rewrite), points the client at v0.4.35 and lists the two
 commands; the user sends it. The v0.4.35 list of the letters 164+165 reply
 is carried to v0.4.36.
+
+## Decision (2026-09-20 ~21:20 KST): no GitHub Support purge request
+
+After the release the user asked what exactly the public-history rewrite had
+removed. Answer given: two strings only — the user's Windows account folder
+name (inside absolute paths in decision logs and minutes) and the client's
+identifier (reviewer id, workspace folder name, prose mentions); no password,
+token, key or credential. Checked read-only: the current history holds 0
+occurrences; one pre-rewrite commit (the old v0.3.170 tag target) still
+resolves anonymously by its commit id and its old file still shows the account
+folder name once, so the strings stay reachable by anyone holding an old
+commit id until GitHub's own garbage collection. The user decided that this is
+acceptable and that the support request drafted in
+[2026-09-20-github-support-request-draft.md](2026-09-20-github-support-request-draft.md)
+is not to be sent. A GitHub Support form had been opened in the user's browser
+to prepare it; nothing was entered or submitted, and the tab was closed.
