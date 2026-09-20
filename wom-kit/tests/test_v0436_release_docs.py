@@ -115,7 +115,7 @@ class V0436ReleaseDocsTests(unittest.TestCase):
             "required_keys",
             "--no-create-draft-record",
             "61 approval-available, 59 fixed-closed",
-            "carried to v0.4.37",
+            "follow-up backlog (version not committed)",
             "publishing or installing this release does not read or modify a client archive",
             "client-run result and a new-process verification",
         ):

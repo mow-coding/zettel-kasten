@@ -5820,6 +5820,14 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertIn("feedback_ref_rebind_forbidden", rebind["blocker_codes"])
 
     def test_operator_feedback_draft_revision_rebinds_same_record_vertically(self) -> None:
+        self._assert_operator_feedback_draft_revision_rebinds_same_record(auto_create_record=True)
+
+    def test_operator_feedback_manual_draft_revision_rebinds_same_record_vertically(self) -> None:
+        self._assert_operator_feedback_draft_revision_rebinds_same_record(auto_create_record=False)
+
+    def _assert_operator_feedback_draft_revision_rebinds_same_record(
+        self, *, auto_create_record: bool,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
             feedback_id = "synthetic_feedback_draft_revision_144"
@@ -5854,6 +5862,8 @@ class ArchiveCliTests(unittest.TestCase):
                 "--format",
                 "json",
             ]
+            if not auto_create_record:
+                compose_base.append("--no-create-draft-record")
             initial_preview_code, initial_preview_output = self.run_cli(
                 [*compose_base, "--dry-run"]
             )
@@ -5894,7 +5904,13 @@ class ArchiveCliTests(unittest.TestCase):
                     "person:synthetic-reviewer",
                 ]
             )
-            self.assertEqual(create_record_code, 0, create_record_output)
+            if auto_create_record:
+                self.assertTrue(initial["draft_record"]["record_created"], initial)
+                self.assertEqual(create_record_code, 1, create_record_output)
+                self.assertIn("feedback_record_exists", json.loads(create_record_output)["blocker_codes"])
+            else:
+                self.assertEqual(initial["draft_record"]["skipped_reason"], "not_requested")
+                self.assertEqual(create_record_code, 0, create_record_output)
 
             request["sections"]["observed_failure"] = (
                 "The corrected synthetic fact is now confirmed before delivery."

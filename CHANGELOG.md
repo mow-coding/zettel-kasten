@@ -31,7 +31,7 @@ This project uses semantic versioning for public compatibility checkpoints.
   draft record by default and the revise path names the body ref.
 - Inventory 61 approval-available, 59 fixed-closed; the coverage manifest
   routes the broker writers through the environment grant.
-- Carried to v0.4.37: `max_writes`, revoke, select-all, reviewed re-PUT, 8b,
+- Follow-up backlog (version not committed): `max_writes`, revoke, select-all, reviewed re-PUT, 8b,
   the `index` duration field.
 
 ## v0.4.35 - 2026-09-20

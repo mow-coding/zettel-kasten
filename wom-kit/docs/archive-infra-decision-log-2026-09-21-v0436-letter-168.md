@@ -121,3 +121,9 @@ project-update context; the full Windows updater transaction under a grant
 is the client's run to confirm. `max_writes`, per-session / bulk revoke,
 select-all for `git-backup-reconcile-plan`, a reviewed re-PUT and 8b move to
 v0.4.37.
+
+## Later scope correction — 2026-09-21
+
+The user prioritized development-process improvements next. The previous
+paragraph's v0.4.37 functional target is superseded: those items remain
+backlog, with no committed release version until implemented and verified.
