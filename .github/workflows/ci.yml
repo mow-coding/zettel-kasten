@@ -436,6 +436,23 @@ jobs:
           path: ${{ runner.temp }}/focused-result.json
           if-no-files-found: error
 
+  delivery:
+    name: Delivery tools ${{ matrix.os }}
+    needs: [classify, gate]
+    if: needs.classify.outputs.lane == 'delivery_tools'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Verify publisher and exact CI scope
+        run: python -B -m unittest wom-kit.tests.test_beta_delivery_evidence wom-kit.tests.test_ci_change_policy wom-kit.tests.test_incremental_ci -v
+
   required:
     name: Required CI
     if: always()
@@ -447,6 +464,7 @@ jobs:
       - link_index_scale
       - installed_wheel
       - focused
+      - delivery
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

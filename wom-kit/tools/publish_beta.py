@@ -22,6 +22,16 @@ def artifact_row(path: Path) -> dict:
             "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
 
 
+def find_release(repo: str, tag: str) -> dict | None:
+    # The public by-tag endpoint can return 404 for an authenticated draft.
+    # The authenticated list includes drafts; retain its immutable numeric ID.
+    pages = json.loads(run("gh", "api", "--paginate", "--slurp", f"repos/{repo}/releases?per_page=100"))
+    matches = [release for page in pages for release in page if release['tag_name'] == tag]
+    if len(matches) > 1:
+        raise ValueError('ambiguous_release_identity')
+    return matches[0] if matches else None
+
+
 def validate_inputs(source: dict, proof: dict, check: dict, wheel: Path) -> dict:
     version = source.get("version", "")
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+b[1-9][0-9]*", version):
@@ -89,12 +99,14 @@ def publish(repo: str, directory: Path) -> dict:
         run("git", "tag", "-a", tag, "-m", f"WOM opt-in beta {tag}", commit)
         run("git", "push", "origin", f"refs/tags/{tag}")
     # Listing is read-only and distinguishes absence from authentication/network errors.
-    releases = json.loads(run("gh", "api", "--paginate", "--slurp", f"repos/{repo}/releases?per_page=100"))
-    matches = [r for page in releases for r in page if r["tag_name"] == tag]
-    if not matches:
+    release = find_release(repo, tag)
+    if release is None:
         run("gh", "release", "create", tag, "--repo", repo, "--verify-tag", "--draft",
             "--prerelease", "--latest=false", "--title", f"WOM {tag} beta", "--notes-file", str(notes))
-    release = json.loads(run("gh", "api", f"repos/{repo}/releases/tags/{tag}"))
+        release = find_release(repo, tag)
+    if release is None:
+        raise ValueError('created_draft_not_found')
+    release = json.loads(run("gh", "api", f"repos/{repo}/releases/{release['id']}"))
     if not release["prerelease"]:
         raise ValueError("existing_release_is_not_beta")
     assets = {a["name"]: a for a in release["assets"]}

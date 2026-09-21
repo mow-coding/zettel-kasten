@@ -11,6 +11,20 @@ spec.loader.exec_module(policy)
 
 
 class CIChangePolicyTests(unittest.TestCase):
+    def test_publisher_scope_cannot_hide_product_or_workflow_input_changes(self):
+        paths=['wom-kit/tools/publish_beta.py', 'wom-kit/tests/test_beta_delivery_evidence.py']
+        self.assertEqual(policy.classify(paths, event='pull_request'), 'delivery_tools')
+        self.assertEqual(policy.classify(paths+['wom-kit/src/wom_kit/archive_cli.py'], event='pull_request'), 'full')
+        workflow='name: CI\njobs:\n'+''.join(f'  {name}:\n    run: original\n' for name in
+            ('gate','tests','doctor_scale','link_index_scale','installed_wheel','focused'))
+        self.assertTrue(policy.delivery_contract_unchanged(workflow,workflow+'  delivery:\n    run: new\n'))
+        self.assertFalse(policy.delivery_contract_unchanged(workflow,workflow.replace('original','changed',1)))
+        self.assertFalse(policy.delivery_contract_unchanged(workflow,workflow.replace('name: CI','name: other')))
+        results={name:{'result':'skipped'} for name in (*policy.HEAVY_JOBS,'focused')}
+        results.update({name:{'result':'success'} for name in ('classify','gate','delivery')})
+        self.assertEqual(policy.check_results('delivery_tools',results),[])
+        self.assertIn('delivery',policy.check_results('delivery_tools',{**results,'delivery':{'result':'failure'}}))
+
     def test_only_explicit_development_docs_are_light(self):
         paths = ["CONTRIBUTING.md", "wom-kit/docs/development/README.md", "meeting-minutes/synthetic-evidence.md"]
         self.assertEqual(policy.classify(paths, event="pull_request"), "docs")
@@ -25,6 +39,7 @@ class CIChangePolicyTests(unittest.TestCase):
     def test_documentation_skips_are_exact_not_blanket_success(self):
         results = {name: {"result": "skipped"} for name in policy.HEAVY_JOBS}
         results["focused"] = {"result": "skipped"}
+        results["delivery"] = {"result": "skipped"}
         results.update({"classify": {"result": "success"}, "gate": {"result": "success"}})
         self.assertEqual(policy.check_results("docs", results), [])
         for name in results:
@@ -38,6 +53,7 @@ class CIChangePolicyTests(unittest.TestCase):
     def test_full_requires_every_job_and_rejects_unknown_lane(self):
         results = {name: {"result": "success"} for name in ["classify", "gate", *policy.HEAVY_JOBS]}
         results["focused"] = {"result": "skipped"}
+        results["delivery"] = {"result": "skipped"}
         self.assertEqual(policy.check_results("full", results), [])
         self.assertEqual(policy.check_results("", results), ["invalid_lane"])
         self.assertTrue(policy.check_results("full", {}))
@@ -46,6 +62,7 @@ class CIChangePolicyTests(unittest.TestCase):
     def test_incremental_requires_focused_success_and_no_unplanned_heavy_run(self):
         results = {name: {"result": "skipped"} for name in policy.HEAVY_JOBS}
         results.update({name: {"result": "success"} for name in ("classify", "gate", "focused")})
+        results["delivery"] = {"result": "skipped"}
         self.assertEqual(policy.check_results("incremental", results), [])
         for state in ("failure", "cancelled", "skipped"):
             self.assertIn("focused", policy.check_results("incremental", {**results, "focused": {"result": state}}))
