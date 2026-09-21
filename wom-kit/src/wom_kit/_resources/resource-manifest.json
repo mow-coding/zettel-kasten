@@ -1045,8 +1045,8 @@
     {
       "source": "docs/releases/v0.4.37.md",
       "packaged": "release-notes/v0.4.37.md",
-      "bytes": 3214,
-      "sha256": "472a49dae7b03eb54b205ec6e0c31197f17049377672874b163a4309f19cb048"
+      "bytes": 3158,
+      "sha256": "5c426a841607bc61bca854ca714fc61bc1c14c8d5f7185801144898573def758"
     }
   ]
 }
