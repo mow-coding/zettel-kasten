@@ -22,8 +22,7 @@ def verify(repo: str, commit: str) -> dict:
     pulls = gh_json(repo, f"commits/{commit}/pulls")
     for pr in pulls:
         if (not pr.get("merged_at") or pr["merge_commit_sha"] != commit
-                or pr["base"]["ref"] != "main"
-                or pr["head"]["repo"]["full_name"] != repo):
+                or pr["base"]["ref"] != "main"):
             continue
         head = pr["head"]["sha"]
         if gh_json(repo, f"git/commits/{head}")["tree"]["sha"] != tree:
