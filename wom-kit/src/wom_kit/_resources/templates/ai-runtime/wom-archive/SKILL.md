@@ -5,7 +5,7 @@ description: Safely inspect and update a local WOM archive. Use for context reco
 
 # WOM Archive
 
-The archive is durable memory; chat is temporary.
+Archives preserve memory.
 
 ## Start Every Session
 
@@ -141,6 +141,7 @@ Do not preload every reference.
 - Run `backup-evidence --dry-run` before backup claims. Configuration, local
   commit, declared label, generated index, and historical receipt do not prove
   current remote completion.
+- Storage scope/delegation: [storage-scope.md](references/storage-scope.md).
 - Do not hand-edit canonical zets, receipts, generated indexes, or managed
   profile state. If evidence is incomplete, stale, contradictory, or
   interrupted, stop at the last verified boundary and state what is unknown.

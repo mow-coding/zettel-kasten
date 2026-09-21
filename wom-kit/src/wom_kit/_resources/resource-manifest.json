@@ -1,8 +1,8 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.4.36",
+  "version": "0.4.37",
   "source_of_truth": "wom-kit source resource directories",
-  "file_count": 173,
+  "file_count": 174,
   "files": [
     {
       "source": "schemas/activity-group-membership-receipt.schema.json",
@@ -469,14 +469,14 @@
     {
       "source": "schemas/project-runtime-receipt-v0.1.schema.json",
       "packaged": "schemas/project-runtime-receipt-v0.1.schema.json",
-      "bytes": 3806,
-      "sha256": "917c013535b8b11000c543ae0b00b20fe93d4631bf805d9d93f812f2a5f66999"
+      "bytes": 3874,
+      "sha256": "9f75acd199d9a3950d4dd74d5a59ec963966a6bff7a787eed47eebe6ca6715c6"
     },
     {
       "source": "schemas/project-runtime-receipt-v0.2.schema.json",
       "packaged": "schemas/project-runtime-receipt-v0.2.schema.json",
-      "bytes": 4035,
-      "sha256": "ba429f395525bb2b54d4ef975d9392121821cdf7ea13eb6756bb26ca0bdf1af5"
+      "bytes": 4103,
+      "sha256": "ec6f83d582f9a18d78132aea9a03d2b9cb6170b0937f03681d063a5dd8588f2a"
     },
     {
       "source": "schemas/project-version-update-receipt-v0.2.schema.json",
@@ -493,8 +493,8 @@
     {
       "source": "schemas/project-version-update-receipt-v0.4.schema.json",
       "packaged": "schemas/project-version-update-receipt-v0.4.schema.json",
-      "bytes": 10387,
-      "sha256": "e1dab0363bc93307520dcf54dbdbb6be874186817b479267846be5bafa4d165d"
+      "bytes": 10489,
+      "sha256": "d018f3d93846949161fb1010ea503bf4cca284dd9efdedaafe05b553f2f0d594"
     },
     {
       "source": "schemas/project-version-update-receipt.schema.json",
@@ -745,8 +745,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/SKILL.md",
       "packaged": "templates/ai-runtime/wom-archive/SKILL.md",
-      "bytes": 11523,
-      "sha256": "838c18aa7c530d659bb9889172f2319345c3b5fef8cc801e571b47241f8c0b10"
+      "bytes": 11576,
+      "sha256": "9e23f286b0fc3fef066aa4e43177d808bb9b5a9c767b33a46bd2c2719677418b"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
@@ -783,6 +783,12 @@
       "packaged": "templates/ai-runtime/wom-archive/references/startup-and-update.md",
       "bytes": 9260,
       "sha256": "d5f3d069de42d6c6179c56720937904fadecfb2dc0c3d00bf2d3130c628dfb67"
+    },
+    {
+      "source": "templates/ai-runtime/wom-archive/references/storage-scope.md",
+      "packaged": "templates/ai-runtime/wom-archive/references/storage-scope.md",
+      "bytes": 967,
+      "sha256": "0ad1138d62fe09f34a298fa6db846e19c54ad2028a12120c0f29fe037edb488e"
     },
     {
       "source": "templates/company/AGENTS.md",
@@ -1037,10 +1043,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.4.36.md",
-      "packaged": "release-notes/v0.4.36.md",
-      "bytes": 7499,
-      "sha256": "d472f73af3e763b704ea4ec4eb2aeac142ad0b78091fb2c983b4b03ce612b926"
+      "source": "docs/releases/v0.4.37.md",
+      "packaged": "release-notes/v0.4.37.md",
+      "bytes": 3158,
+      "sha256": "5c426a841607bc61bca854ca714fc61bc1c14c8d5f7185801144898573def758"
     }
   ]
 }

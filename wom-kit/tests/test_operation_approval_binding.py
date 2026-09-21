@@ -616,6 +616,20 @@ class OperationApprovalBindingTests(unittest.TestCase):
             "would_change": ["logical project mirror and pins"],
         }
 
+    def test_beta_runtime_binding_preserves_schema_and_dependency_contracts(self):
+        plan = self.durable_project_update_plan()
+        def convert(value):
+            if isinstance(value, dict):
+                return {key: item if key == "schema" else convert(item) for key, item in value.items()}
+            if isinstance(value, list):
+                return [convert(item) for item in value]
+            if isinstance(value, str):
+                return value.replace("0.4.3", "0.4.38b1")
+            return value
+        beta = convert(plan)
+        binding = project_version_update_approval_binding(beta)
+        self.assertIs(binding.operation, ExactHumanApprovalOperation.project_version_update)
+
     def test_project_version_update_binding_covers_durable_exact_preparation(
         self,
     ) -> None:

@@ -1,5 +1,9 @@
 ﻿# WOM-kit Capability Matrix
 
+Version: v0.4.37 implementation and release scope
+
+Status: v0.4.37 session-scoped storage and explicit delegation; [scope contract](object-storage-session-scope.md).
+
 Status: v0.4.36 no-dialog grants, letter-168, and session-owned writes truth
 Date: 2026-09-04
 Version: v0.4.36 implementation and release scope

@@ -5,6 +5,8 @@ fake native dialog and patches the transport resolver inside the live seam.
 """
 from __future__ import annotations
 
+from wom_kit.object_storage_scope import ObjectScope
+
 import hashlib
 import io
 import json
@@ -94,6 +96,8 @@ class _Archive:
         restore_fixture._write_rows(self.root, rows)
 
     def plan(self, **kwargs):
+        if "only" not in kwargs:
+            kwargs.setdefault("scope", ObjectScope("all_sessions"))
         return upload.plan_object_storage_upload(self.root, provider_kind=PROVIDER, store_ref=STORE, **kwargs)
 
     def rows(self) -> dict[str, dict]:
@@ -119,9 +123,9 @@ class UploadPlanTests(unittest.TestCase):
     def test_writer_line_comes_before_any_manifest_read(self) -> None:
         self.archive.write([self.archive.local(b"never read")])
         with patch.object(preservation, "_read_manifest_groups", side_effect=AssertionError("manifest read")):
-            unsupported = upload.plan_object_storage_upload(self.archive.root, provider_kind="aws-s3", store_ref=STORE)
-            missing = upload.plan_object_storage_upload(self.archive.root, provider_kind=PROVIDER, store_ref="storage:account:none")
-            bad_ref = upload.plan_object_storage_upload(self.archive.root, provider_kind=PROVIDER, store_ref="not/a/label")
+            unsupported = upload.plan_object_storage_upload(self.archive.root, provider_kind="aws-s3", store_ref=STORE, scope=ObjectScope("all_sessions"))
+            missing = upload.plan_object_storage_upload(self.archive.root, provider_kind=PROVIDER, store_ref="storage:account:none", scope=ObjectScope("all_sessions"))
+            bad_ref = upload.plan_object_storage_upload(self.archive.root, provider_kind=PROVIDER, store_ref="not/a/label", scope=ObjectScope("all_sessions"))
         for plan, reason in ((unsupported, "provider_unsupported"), (missing, "store_setup_missing"), (bad_ref, "store_ref_invalid")):
             document = plan.public_document()
             self.assertEqual(plan.writer_state, "unavailable")
@@ -390,7 +394,7 @@ class UploadCliTests(unittest.TestCase):
 
     def base_args(self) -> list[str]:
         return [
-            "object-storage-upload", str(self.archive.root),
+            "object-storage-upload", "--all-sessions", str(self.archive.root),
             "--provider-kind", PROVIDER, "--store-ref", STORE,
             "--endpoint-host", "acct.r2.cloudflarestorage.com", "--bucket", "private-bucket",
             "--access-key-id-ref", "env:WOM_TEST_UPLOAD_AK", "--secret-access-key-ref", "env:WOM_TEST_UPLOAD_SK",
@@ -442,13 +446,13 @@ class UploadCliTests(unittest.TestCase):
         self.assertFalse((self.archive.root / archive_services.OBJECT_STORAGE_EXECUTIONS_DIR).exists())
 
     def test_writer_unavailable_dry_run_reports_the_line_first_and_approve_refuses(self) -> None:
-        code, preview = self.run_cli("object-storage-upload", str(self.archive.root), "--provider-kind", "aws-s3", "--store-ref", STORE, "--dry-run")
+        code, preview = self.run_cli("object-storage-upload", "--all-sessions", str(self.archive.root), "--provider-kind", "aws-s3", "--store-ref", STORE, "--dry-run")
         self.assertEqual(code, 1, preview)
         self.assertEqual(preview["state"], "writer_unavailable")
         self.assertEqual(preview["writer_unavailable_reason"], "provider_unsupported")
         self.assertFalse(preview["manifest_scanned"])
         code, refused = self.run_cli(
-            "object-storage-upload", str(self.archive.root), "--provider-kind", "aws-s3", "--store-ref", STORE,
+            "object-storage-upload", "--all-sessions", str(self.archive.root), "--provider-kind", "aws-s3", "--store-ref", STORE,
             "--endpoint-host", "acct.r2.cloudflarestorage.com", "--bucket", "private-bucket",
             "--access-key-id-ref", "env:WOM_TEST_UPLOAD_AK", "--secret-access-key-ref", "env:WOM_TEST_UPLOAD_SK",
             "--approve", "--reviewed-by", REVIEWER, "--expected-manifest-sha256", "sha256:" + "0" * 64,

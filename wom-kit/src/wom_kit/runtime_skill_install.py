@@ -15,7 +15,7 @@ import uuid
 
 from . import __version__
 from .resource_paths import runtime_resource_root
-from .version_policy import stable_version_value
+from .version_policy import release_version_value
 
 
 SKILL_NAME = "wom-archive"
@@ -326,7 +326,7 @@ def _inspect_target(
 
     file_rows = validate_manifest_files(manifest.get("files"))
     raw_installed_version = manifest.get("package_version")
-    installed_version = stable_version_value(
+    installed_version = release_version_value(
         raw_installed_version
         if isinstance(raw_installed_version, str)
         else None

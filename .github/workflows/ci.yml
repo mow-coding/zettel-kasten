@@ -1,9 +1,8 @@
 name: CI
 
-# Pull requests run every established test across the supported platform
-# matrix. Main and annotated release-tag pushes reuse that required candidate
-# evidence and run the fast release/resource gate without repeating the same
-# long test matrix.
+# Development-only documentation uses a short, explicitly classified lane.
+# Runtime, packaging, policy, unknown changes and manual validation retain the
+# full platform matrix. Required CI validates expected omissions explicitly.
 
 on:
   push:
@@ -15,9 +14,10 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -27,6 +27,38 @@ env:
   PYTHONDONTWRITEBYTECODE: '1'
 
 jobs:
+  classify:
+    name: Classify exact change
+    runs-on: ubuntu-latest
+    outputs:
+      lane: ${{ steps.plan.outputs.lane }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Test classification and failure aggregation
+        run: |
+          python -m unittest discover -s wom-kit/tests -p test_ci_change_policy.py -v
+          python -m unittest discover -s wom-kit/tests -p test_incremental_ci.py -v
+      - name: Classify exact base and head
+        id: plan
+        env:
+          CI_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CI_PR_NUMBER: ${{ github.event.pull_request.number }}
+          CI_PLAN_PATH: ${{ runner.temp }}/incremental-plan.json
+          GH_TOKEN: ${{ github.token }}
+        run: python wom-kit/tools/ci_change_policy.py
+      - uses: actions/upload-artifact@v7
+        if: steps.plan.outputs.lane == 'incremental'
+        with:
+          name: incremental-plan
+          path: ${{ runner.temp }}/incremental-plan.json
+          if-no-files-found: error
+
   gate:
     name: Release readiness gate
     runs-on: ubuntu-latest
@@ -38,9 +70,9 @@ jobs:
         with:
           python-version: '3.12'
 
-      # Install the same runtime dependency surface declared for the CLI.
-      - name: Install runtime dependencies
-        run: python -m pip install --disable-pip-version-check -r wom-kit/cli/requirements.txt
+      # Documentation contracts validate JSON schemas as well as runtime data.
+      - name: Install runtime and documentation-check dependencies
+        run: python -m pip install --disable-pip-version-check -r wom-kit/cli/requirements.txt -r wom-kit/requirements-test.txt
 
       # Same four hygiene checkers the local pre-release gate runs:
       # public links, Korean product language, public privacy, runtime skill.
@@ -50,9 +82,17 @@ jobs:
       - name: Packaged resource synchronization
         run: python wom-kit/tools/sync_package_resources.py --check
 
+      - name: Version and published documentation contracts
+        env:
+          PYTHONPATH: wom-kit/src
+        run: |
+          python -m unittest discover -s wom-kit/tests -p '*release_docs.py' -q
+          python -m unittest discover -s wom-kit/tests -p test_artifact_primacy_docs.py -q
+
   tests:
     name: Tests ${{ matrix.os }} py${{ matrix.python-version }} shard ${{ matrix.shard_index }}/${{ matrix.shard_count }}
-    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    needs: [classify, gate]
+    if: needs.classify.outputs.lane == 'full'
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.timeout-minutes }}
     env:
@@ -197,7 +237,8 @@ jobs:
 
   doctor_scale:
     name: Doctor ${{ matrix.profile }} scale gate (Ubuntu py3.12)
-    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    needs: [classify, gate]
+    if: needs.classify.outputs.lane == 'full'
     runs-on: ubuntu-latest
     # Includes synthetic fixture generation and cleanup; the measured operational
     # Doctor budget remains 180 seconds for both profiles.
@@ -242,7 +283,8 @@ jobs:
 
   link_index_scale:
     name: Link-index regression scale gate (Windows py3.12)
-    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    needs: [classify, gate]
+    if: needs.classify.outputs.lane == 'full'
     runs-on: windows-latest
     timeout-minutes: 10
     env:
@@ -292,7 +334,8 @@ jobs:
 
   installed_wheel:
     name: Installed public entrypoints and workflow gate (Windows py3.12)
-    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    needs: [classify, gate]
+    if: needs.classify.outputs.lane == 'full'
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
@@ -311,7 +354,33 @@ jobs:
       # temporary environment with PYTHONPATH removed, and tests fresh-process
       # public entrypoints, native-broker boundaries, and synthetic workflows.
       - name: Exercise the actual installed candidate
-        run: python -B wom-kit/tools/check_wheel_install.py --format json
+        shell: pwsh
+        env:
+          CANDIDATE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+          WORKFLOW_COMMIT: ${{ github.workflow_sha }}
+        run: |
+          $output = Join-Path $env:RUNNER_TEMP "installed-wheel"
+          New-Item -ItemType Directory -Force -Path $output | Out-Null
+          python -B wom-kit/tools/check_wheel_install.py --format json --wheel-output-dir $output > "$output/wheel-check.json"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          @'
+          import hashlib, json, os, pathlib, platform, subprocess
+          output = pathlib.Path(os.environ['RUNNER_TEMP']) / 'installed-wheel'
+          report = json.loads((output / 'wheel-check.json').read_text(encoding='utf-8-sig'))
+          wheel = output / report['wheel_filename']
+          digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
+          assert report['ok'] is True and report['wheel_sha256'] == digest
+          git = lambda ref: subprocess.check_output(['git', 'rev-parse', ref], text=True).strip()
+          proof = {'schema':'wom-kit/installed-wheel-artifact/v1',
+                   'source_commit':git('HEAD'), 'source_tree':git('HEAD^{tree}'),
+                   'candidate_commit':os.environ['CANDIDATE_COMMIT'],
+                   'workflow_commit':os.environ['WORKFLOW_COMMIT'],
+                   'run_id':os.environ['GITHUB_RUN_ID'], 'attempt':os.environ['GITHUB_RUN_ATTEMPT'],
+                   'python':platform.python_version(), 'platform':platform.system(),
+                   'wheel':{'name':wheel.name,'size_bytes':wheel.stat().st_size,'sha256':digest}}
+          (output / 'source-proof.json').write_text(json.dumps(proof, indent=2)+'\n', encoding='utf-8')
+          '@ | python -
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
       - name: Assert installed tests left the worktree clean
         shell: pwsh
@@ -323,27 +392,76 @@ jobs:
             exit 1
           }
 
+      - name: Preserve verified wheel bytes and source proof for release reuse
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: installed-wheel-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/installed-wheel/
+          if-no-files-found: error
+
+  focused:
+    name: Focused regression ${{ matrix.os }} py${{ matrix.python }}
+    needs: [classify, gate]
+    if: needs.classify.outputs.lane == 'incremental'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: ubuntu-latest, python: '3.10'}
+          - {os: ubuntu-latest, python: '3.12'}
+          - {os: windows-latest, python: '3.12'}
+    env:
+      PYTHONPATH: wom-kit/src
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install unchanged runtime and test dependencies
+        run: python -m pip install --disable-pip-version-check -r wom-kit/cli/requirements.txt -r wom-kit/requirements-test.txt
+      - name: Retrieve exact input and baseline evidence
+        run: gh run download "${{ github.run_id }}" --repo "${{ github.repository }}" --name incremental-plan --dir "${{ runner.temp }}"
+      - name: Revalidate changed assertions and unfinished pytest coverage
+        run: python -B wom-kit/tools/run_focused_tests.py --plan "${{ runner.temp }}/incremental-plan.json" --output "${{ runner.temp }}/focused-result.json"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: focused-${{ matrix.os }}-${{ matrix.python }}
+          path: ${{ runner.temp }}/focused-result.json
+          if-no-files-found: error
+
   required:
     name: Required CI
-    if: always() && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch')
+    if: always()
     needs:
+      - classify
       - gate
       - tests
       - doctor_scale
       - link_index_scale
       - installed_wheel
+      - focused
     runs-on: ubuntu-latest
     steps:
-      - name: Require every gate and test shard
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Require the exact planned results
         env:
-          GATE_RESULT: ${{ needs.gate.result }}
-          TESTS_RESULT: ${{ needs.tests.result }}
-          DOCTOR_SCALE_RESULT: ${{ needs.doctor_scale.result }}
-          LINK_INDEX_SCALE_RESULT: ${{ needs.link_index_scale.result }}
-          INSTALLED_WHEEL_RESULT: ${{ needs.installed_wheel.result }}
-        run: |
-          test "$GATE_RESULT" = "success"
-          test "$TESTS_RESULT" = "success"
-          test "$DOCTOR_SCALE_RESULT" = "success"
-          test "$LINK_INDEX_SCALE_RESULT" = "success"
-          test "$INSTALLED_WHEEL_RESULT" = "success"
+          CI_LANE: ${{ needs.classify.outputs.lane }}
+          CI_NEEDS_JSON: ${{ toJSON(needs) }}
+        run: python wom-kit/tools/ci_change_policy.py --verify-results --output "${{ runner.temp }}/ci-result.json"
+      - name: Preserve the actual plan and results, including failure
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-result-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-result.json
+          if-no-files-found: error

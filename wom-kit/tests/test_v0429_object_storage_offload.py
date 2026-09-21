@@ -8,6 +8,8 @@ Part 2 (below): the offload writer itself.
 """
 from __future__ import annotations
 
+from wom_kit.object_storage_scope import ObjectScope
+
 import hashlib
 import io
 import json
@@ -295,7 +297,7 @@ class OffloadPlanTests(unittest.TestCase):
             )
             _write_draft(root, "draft-fidelity", "Body without a token.", frontmatter_extra=f"source_fidelity:\n  creation_plan_sha256: {plan_sha}\n")
 
-            plan = offload.plan_object_storage_offload(root, provider_kind=PROVIDER, store_ref=STORE, min_age_days=7, min_size_bytes=10)
+            plan = offload.plan_object_storage_offload(root, provider_kind=PROVIDER, store_ref=STORE, min_age_days=7, min_size_bytes=10, scope=ObjectScope("all_sessions"))
             document = plan.public_document()
             if os.name == "nt":
                 self.assertTrue(document["ok"], document)
@@ -352,7 +354,7 @@ class OffloadPlanTests(unittest.TestCase):
             self.assertEqual(only_preserved.public_document()["bytes_preserved_receipt_only_count"], 1)
             self.assertTrue(restore.plan_object_storage_restore(root, provider_kind=PROVIDER, store_ref=STORE, only=preserved_digest, mode=restore.MODE_VERIFY_ONLY).specs)
             with self.assertRaises(offload.ObjectStorageOffloadError):
-                offload.plan_object_storage_offload(root, provider_kind=PROVIDER, store_ref=STORE, min_age_days=0, min_size_bytes=0, max_objects=1)
+                offload.plan_object_storage_offload(root, provider_kind=PROVIDER, store_ref=STORE, min_age_days=0, min_size_bytes=0, max_objects=1, scope=ObjectScope("all_sessions"))
 
     def test_unreadable_fidelity_receipt_blocks_the_whole_plan(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -361,7 +363,7 @@ class OffloadPlanTests(unittest.TestCase):
             restore_tests._write_rows(root, [_aged_row(raw)])
             restore_tests._write_local(root, raw)
             _write_draft(root, "draft-broken", "Body.", frontmatter_extra="source_fidelity:\n  creation_plan_sha256: sha256:" + "7" * 64 + "\n")
-            plan = offload.plan_object_storage_offload(root, provider_kind=PROVIDER, store_ref=STORE, min_age_days=0)
+            plan = offload.plan_object_storage_offload(root, provider_kind=PROVIDER, store_ref=STORE, min_age_days=0, scope=ObjectScope("all_sessions"))
             document = plan.public_document()
             self.assertFalse(document["ok"])
             self.assertEqual(document["state"], "blocked")
@@ -388,7 +390,7 @@ class OffloadExecutionTests(unittest.TestCase):
             # setup evidence for the fake archive store
             plan = None
             with patch.object(restore, "_require_setup_evidence", lambda *a, **k: None):
-                plan = offload.plan_object_storage_offload(root, provider_kind=PROVIDER, store_ref=STORE, min_age_days=0)
+                plan = offload.plan_object_storage_offload(root, provider_kind=PROVIDER, store_ref=STORE, min_age_days=0, scope=ObjectScope("all_sessions"))
                 self.assertEqual(len(plan.specs), 2)
                 self.assertEqual(len(plan.manifest.items), 3)
                 transport = _ProofTransport(_objects_for(plan, {"a": first, "b": second}))
@@ -437,7 +439,7 @@ class OffloadExecutionTests(unittest.TestCase):
             self.assertEqual(lane["offloaded_local_location_object_count"], 2)
             # and the way back: v0.4.28 restore reactivates the rows
             with patch.object(restore, "_require_setup_evidence", lambda *a, **k: None):
-                back = restore.plan_object_storage_restore(root, provider_kind=PROVIDER, store_ref=STORE)
+                back = restore.plan_object_storage_restore(root, provider_kind=PROVIDER, store_ref=STORE, scope=ObjectScope("all_sessions"))
                 self.assertEqual(back.public_document()["local_location_reactivate_count"], 2)
                 restored = restore_tests._run(back, restore_tests._MemoryTransport({spec.remote_key: raw for spec, raw in zip(back.specs, sorted([first, second], key=lambda b: "sha256:" + hashlib.sha256(b).hexdigest()))}))
             self.assertTrue(restored["ok"], restored)
@@ -461,7 +463,7 @@ class OffloadExecutionTests(unittest.TestCase):
             restore_tests._write_rows(root, [_aged_row(corrupt), _aged_row(absent), _aged_row(good)])
             for raw in (corrupt, absent, good):
                 restore_tests._write_local(root, raw)
-            plan = offload.plan_object_storage_offload(root, provider_kind=PROVIDER, store_ref=STORE, min_age_days=0)
+            plan = offload.plan_object_storage_offload(root, provider_kind=PROVIDER, store_ref=STORE, min_age_days=0, scope=ObjectScope("all_sessions"))
             by_id = {spec.object_id: spec for spec in plan.specs}
             objects = {
                 by_id["sha256:" + hashlib.sha256(corrupt).hexdigest()].remote_key: b"REMOTE copy is corrupt",
@@ -492,7 +494,7 @@ class OffloadExecutionTests(unittest.TestCase):
             raw = b"unlinked then crashed"
             restore_tests._write_rows(root, [_aged_row(raw)])
             restore_tests._write_local(root, raw)
-            plan = offload.plan_object_storage_offload(root, provider_kind=PROVIDER, store_ref=STORE, min_age_days=0)
+            plan = offload.plan_object_storage_offload(root, provider_kind=PROVIDER, store_ref=STORE, min_age_days=0, scope=ObjectScope("all_sessions"))
             transport = _ProofTransport(_objects_for(plan, {"a": raw}))
             with patch.object(offload, "_create_receipt", side_effect=RuntimeError("crash after unlink")):
                 with self.assertRaises(ExactOperationManifestError):
@@ -516,7 +518,7 @@ class OffloadExecutionTests(unittest.TestCase):
             raw = b"proved under an abandoned approval"
             restore_tests._write_rows(root, [_aged_row(raw)])
             restore_tests._write_local(root, raw)
-            plan = offload.plan_object_storage_offload(root, provider_kind=PROVIDER, store_ref=STORE, min_age_days=0)
+            plan = offload.plan_object_storage_offload(root, provider_kind=PROVIDER, store_ref=STORE, min_age_days=0, scope=ObjectScope("all_sessions"))
             spec = plan.specs[0]
             foreign_execution = "sha256:" + "e" * 64
             identity = offload._file_identity(restore_tests._dest(root, raw))
@@ -539,7 +541,7 @@ class OffloadExecutionTests(unittest.TestCase):
             raw = b"torn marker survivor"
             restore_tests._write_rows(root, [_aged_row(raw)])
             restore_tests._write_local(root, raw)
-            plan = offload.plan_object_storage_offload(root, provider_kind=PROVIDER, store_ref=STORE, min_age_days=0)
+            plan = offload.plan_object_storage_offload(root, provider_kind=PROVIDER, store_ref=STORE, min_age_days=0, scope=ObjectScope("all_sessions"))
             transport = _ProofTransport(_objects_for(plan, {"a": raw}))
             with exact_operation_writer_lock(root) as lock:
                 offload._persist_control(plan)
@@ -562,7 +564,7 @@ class OffloadExecutionTests(unittest.TestCase):
             raw = b"re-materialised by a capture"
             restore_tests._write_rows(root, [_aged_row(raw)])
             restore_tests._write_local(root, raw)
-            plan = offload.plan_object_storage_offload(root, provider_kind=PROVIDER, store_ref=STORE, min_age_days=0)
+            plan = offload.plan_object_storage_offload(root, provider_kind=PROVIDER, store_ref=STORE, min_age_days=0, scope=ObjectScope("all_sessions"))
             transport = _ProofTransport(_objects_for(plan, {"a": raw}))
             real_apply = offload._apply_manifest_batch
 
@@ -586,7 +588,7 @@ class OffloadExecutionTests(unittest.TestCase):
             raw = b"someone deleted the file by hand"
             restore_tests._write_rows(root, [_aged_row(raw)])
             restore_tests._write_local(root, raw)
-            plan = offload.plan_object_storage_offload(root, provider_kind=PROVIDER, store_ref=STORE, min_age_days=0)
+            plan = offload.plan_object_storage_offload(root, provider_kind=PROVIDER, store_ref=STORE, min_age_days=0, scope=ObjectScope("all_sessions"))
             restore_tests._dest(root, raw).unlink()
             transport = _ProofTransport(_objects_for(plan, {"a": raw}))
             with self.assertRaises(ExactOperationManifestError):
@@ -604,7 +606,7 @@ class OffloadExecutionTests(unittest.TestCase):
             restore_tests._write_rows(root, [_aged_row(first), _aged_row(second)])
             for raw in (first, second):
                 restore_tests._write_local(root, raw)
-            plan = offload.plan_object_storage_offload(root, provider_kind=PROVIDER, store_ref=STORE, min_age_days=0)
+            plan = offload.plan_object_storage_offload(root, provider_kind=PROVIDER, store_ref=STORE, min_age_days=0, scope=ObjectScope("all_sessions"))
             order = sorted([first, second], key=lambda b: "sha256:" + hashlib.sha256(b).hexdigest())
 
             class _StallSecond(_ProofTransport):
@@ -664,7 +666,7 @@ class OffloadCliTests(unittest.TestCase):
 
     def base_args(self) -> list[str]:
         return [
-            "object-storage-offload", str(self.root),
+            "object-storage-offload", "--all-sessions", str(self.root),
             "--provider-kind", PROVIDER, "--store-ref", STORE, "--min-age-days", "0",
             "--endpoint-host", "acct.r2.cloudflarestorage.com", "--bucket", "private-bucket",
             "--access-key-id-ref", "env:WOM_TEST_OFFLOAD_AK", "--secret-access-key-ref", "env:WOM_TEST_OFFLOAD_SK",

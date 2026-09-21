@@ -358,7 +358,8 @@ class V0412LinkIndexBenchmarkTests(unittest.TestCase):
         self.assertIn("--wheel", workflow)
         self.assertIn("--profile full", workflow)
         self.assertIn("- link_index_scale", workflow)
-        self.assertIn("LINK_INDEX_SCALE_RESULT", workflow)
+        self.assertIn("CI_NEEDS_JSON", workflow)
+        self.assertIn("ci_change_policy.py --verify-results", workflow)
         attributes = (ROOT / ".gitattributes").read_text(encoding="utf-8")
         self.assertIn(
             "wom-kit/tools/benchmark_v0412_link_index.py text eol=lf",

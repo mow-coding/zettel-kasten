@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 from .exact_operation_manifest import ExactOperationManifest
+from .version_policy import RELEASE_VERSION_TAG_RE, release_version_value
 from .exact_human_approval import (
     REFERENCE_SCHEMA_VERSION,
     exact_human_approval_archive_identity_sha256,
@@ -43,9 +44,6 @@ _ZETTEL_OBJET_CONTROL_SHA256 = "sha256:" + hashlib.sha256(
     b"wom-kit/zettel-objet-link-lock/v0.1\n"
 ).hexdigest()
 _APPROVAL_ID_RE = re.compile(r"^approval_[0-9a-f]{32}$")
-_STABLE_VERSION_TAG_RE = re.compile(
-    r"^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$"
-)
 _STABLE_VERSION_RE = re.compile(
     r"^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$"
 )
@@ -376,7 +374,8 @@ def _runtime_artifact_row(
         or type(distribution) is not str
         or _RUNTIME_DISTRIBUTION_RE.fullmatch(distribution) is None
         or type(version) is not str
-        or _STABLE_VERSION_RE.fullmatch(version) is None
+        or (role == "dependency" and _STABLE_VERSION_RE.fullmatch(version) is None)
+        or (role == "runtime" and release_version_value(version) != version)
         or type(file_name) is not str
         or _RUNTIME_WHEEL_FILE_RE.fullmatch(file_name) is None
         or type(size_bytes) is not int
@@ -1994,9 +1993,9 @@ def project_version_update_approval_binding(
     source_head = source.get("head_commit_before")
     if (
         type(target_tag) is not str
-        or _STABLE_VERSION_TAG_RE.fullmatch(target_tag) is None
+        or RELEASE_VERSION_TAG_RE.fullmatch(target_tag) is None
         or type(target_version) is not str
-        or _STABLE_VERSION_RE.fullmatch(target_version) is None
+        or release_version_value(target_version) != target_version
         or target_tag != f"v{target_version}"
         or type(source_head) is not str
         or re.fullmatch(r"[0-9a-f]{40,64}", source_head) is None
