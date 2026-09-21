@@ -745,8 +745,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/SKILL.md",
       "packaged": "templates/ai-runtime/wom-archive/SKILL.md",
-      "bytes": 11886,
-      "sha256": "e9b5bdf3a2daa409ba0ea14493e01addb597129576de78bedd0efcb7ffac0c35"
+      "bytes": 11691,
+      "sha256": "58e3e47a64bd7f7a69cfcace69813fa127b05b4973445d3ba8c58e92475f8702"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
@@ -787,8 +787,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/storage-scope.md",
       "packaged": "templates/ai-runtime/wom-archive/references/storage-scope.md",
-      "bytes": 981,
-      "sha256": "9525aa33a901a8308377a5e7421f7a43290fe00ed857a1f54edaaa52c2f15563"
+      "bytes": 967,
+      "sha256": "0ad1138d62fe09f34a298fa6db846e19c54ad2028a12120c0f29fe037edb488e"
     },
     {
       "source": "templates/company/AGENTS.md",
