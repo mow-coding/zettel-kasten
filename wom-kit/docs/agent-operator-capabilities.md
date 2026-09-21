@@ -1,5 +1,7 @@
 # Agent Operator Capabilities Manifest
 
+Current release: v0.4.37 session-scoped storage and explicit delegation; [scope contract](object-storage-session-scope.md).
+
 Status: v0.4.36 no-dialog grants, letter-168, and writer-session coverage gate
 
 v0.4.36 adds one command path: `operator-feedback-archive` (approval-available,

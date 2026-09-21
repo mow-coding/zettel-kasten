@@ -24,6 +24,24 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.4.37 Session-scoped storage
+
+Use the exact public wheel only after its release exists. Default storage selection is now session-scoped. Delegate another session or an exact list explicitly. Preserve the original interrupted upload receipts and use the documented abandonment path before starting a narrower plan.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0437-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.37/wom_kit-0.4.37-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+[Scope and recovery guide](wom-kit/docs/object-storage-session-scope.md).
+
 ## v0.4.36 Beta Letter 168: Grants Without Dialogs, Upload Cause, Delivered-Letter Archival
 
 Install the exact public wheel only after the matching release and asset exist.

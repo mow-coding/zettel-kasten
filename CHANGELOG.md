@@ -6,6 +6,12 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.37 - 2026-09-21
+
+- Default upload, restore and offload to the current session capture scope; support explicit delegated-session, object-list and all-session selection.
+- Bind the selection to the retained exact plan and preserve effects when abandoning a partial upload before a narrower replacement plan.
+- Distinguish object count from the final manifest projection step. No change to allow_all approval behavior.
+
 ## v0.4.36 - 2026-09-21
 
 - Beta letter 168 ⑥ and the 2026-09-17 decision restored: a session grant

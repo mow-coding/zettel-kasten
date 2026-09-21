@@ -1,5 +1,10 @@
 """Synthetic session selection, delegated lists and interrupted storage work."""
 import io
+import sys
+from pathlib import Path
+
+# Support both direct unittest discovery and CI package-qualified loading.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import json
 import os
 import unittest

@@ -2,6 +2,24 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.4.37 현재 세션 범위와 명시적 위임
+
+정확한 공개 릴리스와 설치 파일이 나온 뒤 설치하세요. 기본 정리 범위는 현재 세션입니다. 다른 세션이나 정확한 목록도 명시적으로 맡길 수 있습니다. 중단된 업로드의 기존 영수증은 보존하고, 안내된 포기 절차 후 좁힌 새 계획을 만드세요.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0437-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.37/wom_kit-0.4.37-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+[Scope and recovery guide](wom-kit/docs/object-storage-session-scope.md).
+
 ## v0.4.36 베타 편지 168: 창 없는 승인 모드, 업로드 원인 코드, 전달 완료 편지 정리
 
 일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.

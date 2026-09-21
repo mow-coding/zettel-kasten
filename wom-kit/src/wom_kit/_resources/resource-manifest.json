@@ -1,6 +1,6 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.4.36",
+  "version": "0.4.37",
   "source_of_truth": "wom-kit source resource directories",
   "file_count": 174,
   "files": [
@@ -745,8 +745,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/SKILL.md",
       "packaged": "templates/ai-runtime/wom-archive/SKILL.md",
-      "bytes": 11691,
-      "sha256": "58e3e47a64bd7f7a69cfcace69813fa127b05b4973445d3ba8c58e92475f8702"
+      "bytes": 11576,
+      "sha256": "9e23f286b0fc3fef066aa4e43177d808bb9b5a9c767b33a46bd2c2719677418b"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
@@ -1043,10 +1043,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.4.36.md",
-      "packaged": "release-notes/v0.4.36.md",
-      "bytes": 7499,
-      "sha256": "d472f73af3e763b704ea4ec4eb2aeac142ad0b78091fb2c983b4b03ce612b926"
+      "source": "docs/releases/v0.4.37.md",
+      "packaged": "release-notes/v0.4.37.md",
+      "bytes": 3034,
+      "sha256": "dda63dfc1ba35aea238b332a8d8c7dde21563f2d9440f45200bf10b1464ed52f"
     }
   ]
 }
