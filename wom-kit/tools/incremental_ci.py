@@ -220,11 +220,23 @@ def api(repo: str, endpoint: str, *, raw=False):
     return value.decode('utf-8') if raw else json.loads(value)
 
 
+def same_pr_run(repo: str, run: dict, head: str, pr_number: int) -> bool:
+    if any(p['number'] == pr_number for p in run['pull_requests']):
+        return True
+    # GitHub can clear run.pull_requests after the merged branch is deleted.
+    # The immutable PR head and retained commit list still bind its history.
+    pr = api(repo, f'pulls/{pr_number}')
+    if not pr.get('merged') or pr['head']['sha'] != head:
+        return False
+    commits = api(repo, f'pulls/{pr_number}/commits?per_page=100')
+    return run['head_sha'] in {commit['sha'] for commit in commits}
+
+
 def baseline_plan(repo: str, run_id: int, head: str, pr_number: int) -> dict:
     run = api(repo, f'actions/runs/{run_id}')
     if (run['event'] != 'pull_request' or run['status'] != 'completed'
             or run['conclusion'] not in {'success', 'failure'}
-            or not any(p['number'] == pr_number for p in run['pull_requests'])):
+            or not same_pr_run(repo, run, head, pr_number)):
         raise ValueError('not_completed_same_pr_baseline')
     age = (datetime.now(timezone.utc) - datetime.fromisoformat(run['created_at'].replace('Z', '+00:00'))).total_seconds()
     if not 0 <= age <= 86400:

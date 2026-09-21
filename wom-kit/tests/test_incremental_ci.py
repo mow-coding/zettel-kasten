@@ -23,6 +23,16 @@ class Example(unittest.TestCase):
 
 
 class IncrementalCITests(unittest.TestCase):
+    def test_merged_deleted_branch_keeps_binding_through_pr_commits(self):
+        run={'pull_requests': [], 'head_sha':'baseline'}
+        pr={'merged':True,'head':{'sha':'candidate'}}
+        with patch.object(ci,'api',side_effect=[pr,[{'sha':'baseline'},{'sha':'candidate'}]]):
+            self.assertTrue(ci.same_pr_run('synthetic/example',run,'candidate',17))
+        with patch.object(ci,'api',side_effect=[pr,[{'sha':'unrelated'}]]):
+            self.assertFalse(ci.same_pr_run('synthetic/example',run,'candidate',17))
+        with patch.object(ci,'api',return_value=pr):
+            self.assertFalse(ci.same_pr_run('synthetic/example',run,'different_candidate',17))
+
     def test_new_gh_raw_log_escape_guard_is_retried_without_changing_bytes(self):
         guarded = subprocess.CompletedProcess([], 1, b'', b'pass --allow-escape-sequences to output it anyway')
         raw = b'log with \x1b[0m colors\n'

@@ -15,6 +15,7 @@ HEAVY_JOBS = ("tests", "doctor_scale", "link_index_scale", "installed_wheel")
 DELIVERY_FILES = frozenset({
     'wom-kit/tools/publish_beta.py', 'wom-kit/tests/test_beta_delivery_evidence.py',
     'wom-kit/tools/ci_change_policy.py', 'wom-kit/tests/test_ci_change_policy.py',
+    'wom-kit/tools/incremental_ci.py', 'wom-kit/tests/test_incremental_ci.py',
     '.github/workflows/ci.yml',
 })
 SHA = re.compile(r"[0-9a-f]{40}\Z")

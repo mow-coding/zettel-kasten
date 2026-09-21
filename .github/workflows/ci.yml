@@ -451,7 +451,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Verify publisher and exact CI scope
-        run: python -B -m unittest wom-kit.tests.test_beta_delivery_evidence wom-kit.tests.test_ci_change_policy -v
+        run: python -B -m unittest wom-kit.tests.test_beta_delivery_evidence wom-kit.tests.test_ci_change_policy wom-kit.tests.test_incremental_ci -v
 
   required:
     name: Required CI
