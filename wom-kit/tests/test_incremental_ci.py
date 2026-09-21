@@ -67,6 +67,8 @@ class IncrementalCITests(unittest.TestCase):
             with self.assertRaises(ValueError): ci.validate_jobs(changed, [], lambda _: '')
         with self.assertRaises(ValueError): ci.validate_jobs(jobs[:-1], [], lambda _: '')
         with self.assertRaises(ValueError): ci.validate_jobs(jobs + jobs[:1], [], lambda _: '')
+        with self.assertRaises(ValueError):
+            ci.validate_jobs(jobs + [dict(jobs[0], name='Unknown extra check')], [], lambda _: '')
         bad[-1]['steps'][0]['name'] = 'Install dependencies'
         with self.assertRaises(ValueError): ci.validate_jobs(bad, [], lambda _: log)
 

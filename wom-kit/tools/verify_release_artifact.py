@@ -88,6 +88,8 @@ if __name__ == "__main__":
     if pr["state"] != "MERGED":
         raise ValueError("merged_pr_required")
     merge = pr["mergeCommit"]["oid"]
+    if output('git', 'rev-parse', merge + '^{tree}') != output('git', 'rev-parse', pr['headRefOid'] + '^{tree}'):
+        raise ValueError('candidate_merge_tree_mismatch')
     if output("git", "cat-file", "-t", "refs/tags/" + args.tag) != "tag":
         raise ValueError("annotated_tag_required")
     if output("git", "rev-parse", "refs/tags/" + args.tag + "^{commit}") != merge:

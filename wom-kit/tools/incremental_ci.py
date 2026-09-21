@@ -179,7 +179,8 @@ def failed_tests(log: str) -> set[str]:
 def validate_jobs(jobs: list[dict], targets: list[str], load_log) -> dict:
     by_name = {j['name']: j for j in jobs}
     required = {'Release readiness gate', 'Classify exact change', INSTALLED_JOB, *SCALE_JOBS, *TEST_JOBS}
-    if len(by_name) != len(jobs) or not required.issubset(by_name):
+    if (len(by_name) != len(jobs) or not required.issubset(by_name)
+            or set(by_name) - required - {'Required CI'}):
         raise ValueError('incomplete_full_baseline')
     observed = {}
     for name in required:
