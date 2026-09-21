@@ -25,6 +25,8 @@ receipt, control, sink and manifest-projection machinery.
 
 from __future__ import annotations
 
+from .object_storage_scope import ObjectScope, ObjectStorageScopeError, resolve_scope, validate_scope
+
 import hashlib
 import hmac
 import json
@@ -376,7 +378,7 @@ def _manifest_source_token(specs: Sequence[OffloadSpec]) -> bytes:
     )
 
 
-def _manifest_for_specs(archive_id: str, specs: Sequence[OffloadSpec]) -> ExactOperationManifest | None:
+def _manifest_for_specs(archive_id: str, specs: Sequence[OffloadSpec], scope: ObjectScope | None = None) -> ExactOperationManifest | None:
     items: list[ExactOperationItem] = []
     for ordinal, spec in enumerate(specs):
         items.append(
@@ -423,6 +425,7 @@ def _manifest_for_specs(archive_id: str, specs: Sequence[OffloadSpec]) -> ExactO
         operation=OPERATION,
         archive_identity_sha256=exact_human_approval_archive_identity_sha256(archive_id),
         items=items,
+        operation_evidence=scope.evidence(len(specs)) if scope is not None else None,
     )
 
 
@@ -441,6 +444,7 @@ class ObjectStorageOffloadPlan:
     counts: Mapping[str, int]
     blockers: tuple[str, ...] = ()
     selected_only: str | None = None
+    scope: ObjectScope | None = None
     loaded_from_control: bool = False
 
     @property
@@ -479,6 +483,7 @@ class ObjectStorageOffloadPlan:
             )
         return {
             "schema_version": PLAN_SCHEMA,
+            **(self.scope.summary(int(self.counts.get("unique_object_count") or 0)) if self.scope else {"scope_kind": "legacy_all_sessions"}),
             "ok": self.approveable,
             "state": state,
             "reason_codes": reason,
@@ -528,6 +533,7 @@ def _build_plan(
     provider_kind: str,
     store_ref: str,
     only: str | None,
+    scope: ObjectScope | None,
     max_objects: int | None,
     min_age_days: int,
     min_size_bytes: int,
@@ -557,6 +563,7 @@ def _build_plan(
     except preservation.ObjectStoragePreservationError:
         raise _fail("object_storage_offload_plan_invalid") from None
     inventory_sha256 = restore._source_inventory_sha256(rows)
+    scope = validate_scope(root, scope, groups, only)
     if progress is not None:
         progress("offload-retention", "scanning drafts", None, None)
     retention = _draft_retention_evidence(root)
@@ -606,6 +613,8 @@ def _build_plan(
     if selected_only is not None and selected_only not in groups:
         counts["selected_object_not_found_count"] = 1
     for object_id in sorted(groups):
+        if not scope.includes(object_id, destructive=True):
+            continue
         if selected_only is not None and object_id != selected_only:
             continue
         group = groups[object_id]
@@ -725,7 +734,7 @@ def _build_plan(
         )
     if max_objects is not None and len(specs) > max_objects:
         raise _fail("object_storage_offload_plan_invalid")
-    manifest = _manifest_for_specs(archive_id, specs) if not blockers else None
+    manifest = _manifest_for_specs(archive_id, specs, scope=scope) if not blockers else None
     return ObjectStorageOffloadPlan(
         archive_root=root,
         archive_id=archive_id,
@@ -740,6 +749,7 @@ def _build_plan(
         counts=counts,
         blockers=tuple(blockers),
         selected_only=selected_only,
+        scope=scope,
     )
 
 
@@ -749,6 +759,7 @@ def plan_object_storage_offload(
     provider_kind: str = "cloudflare-r2",
     store_ref: str,
     only: str | None = None,
+    scope: ObjectScope | None = None,
     max_objects: int | None = None,
     min_age_days: int = DEFAULT_MIN_AGE_DAYS,
     min_size_bytes: int = DEFAULT_MIN_SIZE_BYTES,
@@ -759,6 +770,7 @@ def plan_object_storage_offload(
         provider_kind=provider_kind,
         store_ref=store_ref,
         only=only,
+        scope=scope,
         max_objects=max_objects,
         min_age_days=min_age_days,
         min_size_bytes=min_size_bytes,
@@ -1593,6 +1605,7 @@ def _control_document(plan: ObjectStorageOffloadPlan) -> dict[str, Any]:
         "min_size_bytes": plan.min_size_bytes,
         "counts": {str(key): int(value) for key, value in plan.counts.items()},
         "selected_only": plan.selected_only,
+        **({"scope": plan.scope.document()} if plan.scope else {}),
         "manifest": plan.manifest.document(),
         "specs": [
             {
@@ -1724,7 +1737,8 @@ def load_object_storage_offload_plan(archive_root: Path | str, *, manifest_sha25
                 target_identity_sha256=identity,
             )
         )
-    rebuilt = _manifest_for_specs(archive_id, specs)
+    loaded_scope = ObjectScope.from_document(document["scope"]) if document.get("scope") is not None else None
+    rebuilt = _manifest_for_specs(archive_id, specs, scope=loaded_scope)
     if rebuilt is None or rebuilt.document() != manifest.document():
         raise _fail("object_storage_offload_control_invalid")
     return ObjectStorageOffloadPlan(
@@ -1740,12 +1754,20 @@ def load_object_storage_offload_plan(archive_root: Path | str, *, manifest_sha25
         specs=tuple(specs),
         counts={str(key): int(value) for key, value in counts.items()},
         selected_only=selected_only,
+        scope=ObjectScope.from_document(document["scope"]) if document.get("scope") is not None else None,
         loaded_from_control=True,
     )
 
 
 def _fresh_revalidated(plan: ObjectStorageOffloadPlan) -> ObjectStorageOffloadPlan:
     _require_setup_evidence(plan.archive_root, provider_kind=plan.provider_kind, store_ref=plan.store_ref)
+    if plan.scope is not None:
+        if any(not plan.scope.includes(spec.object_id, destructive=True) for spec in plan.specs):
+            raise ObjectStorageScopeError("object_storage_scope_control_mismatch")
+        if plan.scope.kind == "captured_by_session":
+            current_scope = resolve_scope(plan.archive_root, captured_by_session=plan.scope.session_ref)
+            if any(not current_scope.includes(spec.object_id, destructive=True) for spec in plan.specs):
+                raise ObjectStorageScopeError("object_storage_scope_changed")
     if plan.loaded_from_control:
         # A resumed plan re-checks retention: a draft written since the
         # approval must not lose its object.
@@ -1764,6 +1786,7 @@ def _fresh_revalidated(plan: ObjectStorageOffloadPlan) -> ObjectStorageOffloadPl
         provider_kind=plan.provider_kind,
         store_ref=plan.store_ref,
         only=plan.selected_only,
+        scope=plan.scope,
         max_objects=None,
         min_age_days=plan.min_age_days,
         min_size_bytes=plan.min_size_bytes,

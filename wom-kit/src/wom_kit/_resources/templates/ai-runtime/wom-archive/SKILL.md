@@ -141,6 +141,8 @@ Do not preload every reference.
 - Run `backup-evidence --dry-run` before backup claims. Configuration, local
   commit, declared label, generated index, and historical receipt do not prove
   current remote completion.
+- Storage operations default to this session. Explicit delegation can select other
+  sessions or an exact list; follow [storage-scope.md](references/storage-scope.md).
 - Do not hand-edit canonical zets, receipts, generated indexes, or managed
   profile state. If evidence is incomplete, stale, contradictory, or
   interrupted, stop at the last verified boundary and state what is unknown.

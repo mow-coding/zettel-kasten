@@ -22,6 +22,8 @@ reachable from this module.
 
 from __future__ import annotations
 
+from .object_storage_scope import ObjectScope, ObjectStorageScopeError, resolve_scope, validate_scope
+
 import hashlib
 import hmac
 import json
@@ -455,7 +457,7 @@ def _manifest_source_token(specs: Sequence[RestoreSpec]) -> bytes:
 
 
 def _manifest_for_specs(
-    archive_id: str, specs: Sequence[RestoreSpec], *, mode: str
+    archive_id: str, specs: Sequence[RestoreSpec], *, mode: str, scope: ObjectScope | None = None
 ) -> ExactOperationManifest | None:
     items: list[ExactOperationItem] = []
     for ordinal, spec in enumerate(specs):
@@ -508,6 +510,7 @@ def _manifest_for_specs(
         operation=OPERATION,
         archive_identity_sha256=exact_human_approval_archive_identity_sha256(archive_id),
         items=items,
+        operation_evidence=scope.evidence(len(specs)) if scope is not None else None,
     )
 
 
@@ -523,6 +526,7 @@ class ObjectStorageRestorePlan:
     specs: tuple[RestoreSpec, ...]
     counts: Mapping[str, int]
     selected_only: str | None = None
+    scope: ObjectScope | None = None
     loaded_from_control: bool = False
 
     @property
@@ -556,6 +560,7 @@ class ObjectStorageRestorePlan:
             )
         return {
             "schema_version": PLAN_SCHEMA,
+            **(self.scope.summary(int(self.counts.get("unique_object_count") or 0)) if self.scope else {"scope_kind": "legacy_all_sessions"}),
             "ok": self.approveable,
             "state": state,
             "reason_codes": [reason],
@@ -625,6 +630,7 @@ def _build_plan(
     store_ref: str,
     mode: str,
     only: str | None,
+    scope: ObjectScope | None,
     max_objects: int | None,
     progress: Callable[[str, str, int | None, int | None], None] | None,
 ) -> ObjectStorageRestorePlan:
@@ -649,6 +655,7 @@ def _build_plan(
     except preservation.ObjectStoragePreservationError:
         raise _fail("object_storage_restore_plan_invalid") from None
     inventory_sha256 = _source_inventory_sha256(rows)
+    scope = validate_scope(root, scope, groups, only)
     counts = {
         "manifest_row_count": len(rows),
         "unique_object_count": len(groups),
@@ -671,6 +678,8 @@ def _build_plan(
     if selected_only is not None and selected_only not in groups:
         counts["selected_object_not_found_count"] = 1
     for object_id in sorted(groups):
+        if not scope.includes(object_id, destructive=False):
+            continue
         if selected_only is not None and object_id != selected_only:
             continue
         group = groups[object_id]
@@ -763,7 +772,7 @@ def _build_plan(
             )
     if max_objects is not None and len(specs) > max_objects:
         raise _fail("object_storage_restore_plan_invalid")
-    manifest = _manifest_for_specs(archive_id, specs, mode=mode)
+    manifest = _manifest_for_specs(archive_id, specs, mode=mode, scope=scope)
     return ObjectStorageRestorePlan(
         archive_root=root,
         archive_id=archive_id,
@@ -775,6 +784,7 @@ def _build_plan(
         specs=tuple(specs),
         counts=counts,
         selected_only=selected_only,
+        scope=scope,
     )
 
 
@@ -785,6 +795,7 @@ def plan_object_storage_restore(
     store_ref: str,
     mode: str = MODE_RESTORE,
     only: str | None = None,
+    scope: ObjectScope | None = None,
     max_objects: int | None = None,
     progress: Callable[[str, str, int | None, int | None], None] | None = None,
 ) -> ObjectStorageRestorePlan:
@@ -794,6 +805,7 @@ def plan_object_storage_restore(
         store_ref=store_ref,
         mode=mode,
         only=only,
+        scope=scope,
         max_objects=max_objects,
         progress=progress,
     )
@@ -1559,6 +1571,7 @@ def _control_document(plan: ObjectStorageRestorePlan) -> dict[str, Any]:
         "source_inventory_sha256": plan.source_inventory_sha256,
         "counts": {str(key): int(value) for key, value in plan.counts.items()},
         "selected_only": plan.selected_only,
+        **({"scope": plan.scope.document()} if plan.scope else {}),
         "manifest": plan.manifest.document(),
         "specs": [
             {
@@ -1709,7 +1722,8 @@ def load_object_storage_restore_plan(
                 target_identity_sha256=identity,
             )
         )
-    rebuilt = _manifest_for_specs(archive_id, specs, mode=mode)
+    loaded_scope = ObjectScope.from_document(document["scope"]) if document.get("scope") is not None else None
+    rebuilt = _manifest_for_specs(archive_id, specs, mode=mode, scope=loaded_scope)
     if rebuilt is None or rebuilt.document() != manifest.document():
         raise _fail("object_storage_restore_control_invalid")
     return ObjectStorageRestorePlan(
@@ -1723,12 +1737,16 @@ def load_object_storage_restore_plan(
         specs=tuple(specs),
         counts={str(key): int(value) for key, value in counts.items()},
         selected_only=selected_only,
+        scope=ObjectScope.from_document(document["scope"]) if document.get("scope") is not None else None,
         loaded_from_control=True,
     )
 
 
 def _fresh_revalidated(plan: ObjectStorageRestorePlan) -> ObjectStorageRestorePlan:
     _require_setup_evidence(plan.archive_root, provider_kind=plan.provider_kind, store_ref=plan.store_ref)
+    if plan.scope is not None:
+        if any(not plan.scope.includes(spec.object_id, destructive=False) for spec in plan.specs):
+            raise ObjectStorageScopeError("object_storage_scope_control_mismatch")
     if plan.loaded_from_control:
         return plan
     if plan.manifest is None:
@@ -1739,6 +1757,7 @@ def _fresh_revalidated(plan: ObjectStorageRestorePlan) -> ObjectStorageRestorePl
         store_ref=plan.store_ref,
         mode=plan.mode,
         only=plan.selected_only,
+        scope=plan.scope,
         max_objects=None,
         progress=None,
     )

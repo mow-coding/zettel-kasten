@@ -33,6 +33,8 @@ provider-call ceiling bound the batch, as in preservation).
 
 from __future__ import annotations
 
+from .object_storage_scope import ObjectScope, ObjectStorageScopeError, resolve_scope, validate_scope
+
 import hashlib
 import hmac
 import json
@@ -309,7 +311,7 @@ def _item_id_for(spec: UploadSpec) -> str:
     return "item:" + hashlib.sha256((spec.object_id + "\x00" + spec.receipt_relative).encode("ascii")).hexdigest()
 
 
-def _manifest_for_specs(*, archive_id: str, specs: Sequence[UploadSpec]) -> ExactOperationManifest | None:
+def _manifest_for_specs(*, archive_id: str, specs: Sequence[UploadSpec], scope: ObjectScope | None = None) -> ExactOperationManifest | None:
     items: list[ExactOperationItem] = []
     for ordinal, spec in enumerate(specs):
         items.append(
@@ -352,6 +354,7 @@ def _manifest_for_specs(*, archive_id: str, specs: Sequence[UploadSpec]) -> Exac
         operation=OPERATION,
         archive_identity_sha256=exact_human_approval_archive_identity_sha256(archive_id),
         items=items,
+        operation_evidence=scope.evidence(len(specs)) if scope is not None else None,
     )
 
 
@@ -392,6 +395,7 @@ class ObjectStorageUploadPlan:
     local_bytes_only: bool
     selected_only: str | None
     max_objects: int | None
+    scope: ObjectScope | None = None
     loaded_from_control: bool = False
 
     @property
@@ -447,6 +451,7 @@ class ObjectStorageUploadPlan:
             )
         return {
             "schema_version": PLAN_SCHEMA,
+            **(self.scope.summary(int(self.inventory.get("unique_object_count") or 0)) if self.scope else {"scope_kind": "legacy_all_sessions"}),
             "ok": self.approveable,
             "state": state,
             "reason_codes": reason_codes,
@@ -462,6 +467,8 @@ class ObjectStorageUploadPlan:
             "unique_object_count": int(self.inventory.get("unique_object_count") or 0),
             "classification": {key: int(self.classification.get(key, 0)) for key in _CLASSIFICATION_KEYS},
             "upload_planned_count": planned,
+            "execution_step_count": len(self.manifest.items) if self.manifest else 0,
+            "manifest_projection_step_count": 1 if planned else 0,
             "planned_upload_bytes": self.planned_upload_bytes,
             "expected_no_retry_provider_put_call_count": expected_put_calls,
             "manifest_bound_provider_put_call_ceiling": put_call_ceiling,
@@ -590,6 +597,7 @@ def _classify_and_build(
     only: str | None,
     max_objects: int | None,
     local_bytes_only: bool,
+    scope: ObjectScope,
     progress: Callable[[str, str, int | None, int | None], None] | None,
 ) -> tuple[tuple[UploadSpec, ...], dict[str, int], tuple[str, ...]]:
     inventory_sha = str(inventory["source_inventory_sha256"])
@@ -602,6 +610,9 @@ def _classify_and_build(
     for index, (object_id, row) in enumerate(sorted(unique_rows.items()), start=1):
         if progress is not None and (index == 1 or index % 1000 == 0 or index == len(unique_rows)):
             progress("upload-inventory", "classified manifest objects", index, len(unique_rows))
+        if not scope.includes(object_id):
+            counts["excluded_by_filter_count"] += 1
+            continue
         if _byte_external(row):
             counts["excluded_byte_external_count"] += 1
             continue
@@ -725,6 +736,7 @@ def _plan_core(
     only: str | None = None,
     max_objects: int | None = None,
     local_bytes_only: bool = False,
+    scope: ObjectScope | None = None,
     progress: Callable[[str, str, int | None, int | None], None] | None = None,
 ) -> ObjectStorageUploadPlan:
     try:
@@ -764,6 +776,7 @@ def _plan_core(
         code="object_storage_upload_manifest_invalid",
     )
     inventory, unique_rows = preservation._inventory(rows, groups)
+    scope = validate_scope(root, scope, groups, only)
     specs, counts, blockers = _classify_and_build(
         root,
         archive_id,
@@ -775,9 +788,10 @@ def _plan_core(
         only=only,
         max_objects=max_objects,
         local_bytes_only=local_bytes_only,
+        scope=scope,
         progress=progress,
     )
-    manifest = None if blockers else _manifest_for_specs(archive_id=archive_id, specs=specs)
+    manifest = None if blockers else _manifest_for_specs(archive_id=archive_id, specs=specs, scope=scope)
     return ObjectStorageUploadPlan(
         archive_root=root,
         archive_id=archive_id,
@@ -795,6 +809,7 @@ def _plan_core(
         local_bytes_only=local_bytes_only,
         selected_only=_object_id(only) if only else None,
         max_objects=max_objects,
+        scope=scope,
     )
 
 
@@ -806,6 +821,7 @@ def plan_object_storage_upload(
     only: str | None = None,
     max_objects: int | None = None,
     local_bytes_only: bool = False,
+    scope: ObjectScope | None = None,
     progress: Callable[[str, str, int | None, int | None], None] | None = None,
 ) -> ObjectStorageUploadPlan:
     return _plan_core(
@@ -815,6 +831,7 @@ def plan_object_storage_upload(
         only=only,
         max_objects=max_objects,
         local_bytes_only=local_bytes_only,
+        scope=scope,
         progress=progress,
     )
 
@@ -859,6 +876,7 @@ def _control_document(plan: ObjectStorageUploadPlan) -> dict[str, Any]:
         "inventory": plan.inventory,
         "classification": plan.classification,
         "selected_only": plan.selected_only,
+        **({"scope": plan.scope.document()} if plan.scope else {}),
         "max_objects": plan.max_objects,
         "local_bytes_only": plan.local_bytes_only,
         "manifest": plan.manifest.document(),
@@ -917,6 +935,7 @@ def _same_control_plan(left: ObjectStorageUploadPlan, right: ObjectStorageUpload
         and left.manifest.document() == right.manifest.document()
         and left.specs == right.specs
         and left.classification == right.classification
+        and left.scope == right.scope
         and left.selected_only == right.selected_only
         and left.max_objects == right.max_objects
         and left.local_bytes_only == right.local_bytes_only
@@ -940,7 +959,7 @@ def load_object_storage_upload_plan(archive_root: Path | str, *, manifest_sha256
     supplied_control_sha = document.pop("control_sha256", None)
     if (
         document.get("schema_version") != CONTROL_SCHEMA
-        or set(document) != _CONTROL_FIELDS
+        or set(document) not in (_CONTROL_FIELDS, _CONTROL_FIELDS | {"scope"})
         or document.get("private_control_document") is not True
         or type(supplied_control_sha) is not str
         or not hmac.compare_digest(supplied_control_sha, _sha(document))
@@ -1054,6 +1073,10 @@ def load_object_storage_upload_plan(archive_root: Path | str, *, manifest_sha256
         or batch_item.fields[0].post_sha256 != hash_field_value(_manifest_batch_token(specs))
     ):
         raise _fail("object_storage_upload_control_invalid")
+    loaded_scope = ObjectScope.from_document(document["scope"]) if document.get("scope") is not None else None
+    rebuilt = _manifest_for_specs(archive_id=current_archive_id, specs=specs, scope=loaded_scope)
+    if rebuilt is None or rebuilt.document() != manifest.document():
+        raise _fail("object_storage_upload_control_invalid")
     return ObjectStorageUploadPlan(
         archive_root=root,
         archive_id=document["archive_id"],
@@ -1071,6 +1094,7 @@ def load_object_storage_upload_plan(archive_root: Path | str, *, manifest_sha256
         local_bytes_only=bool(document["local_bytes_only"]),
         selected_only=document.get("selected_only"),
         max_objects=document.get("max_objects"),
+        scope=ObjectScope.from_document(document["scope"]) if document.get("scope") is not None else None,
         loaded_from_control=True,
     )
 
@@ -1815,6 +1839,9 @@ def _fresh_revalidated(
     plan: ObjectStorageUploadPlan, *, progress_hook: Callable[[ExactOperationProgress], None] | None
 ) -> ObjectStorageUploadPlan:
     _require_setup_evidence(plan.archive_root, provider_kind=plan.provider_kind, store_ref=plan.store_ref)
+    if plan.scope is not None:
+        if any(not plan.scope.includes(spec.object_id, destructive=False) for spec in plan.specs):
+            raise ObjectStorageScopeError("object_storage_scope_control_mismatch")
     if plan.loaded_from_control:
         return plan
     if plan.manifest is None:
@@ -1855,6 +1882,7 @@ def _fresh_revalidated(
         only=plan.selected_only,
         max_objects=plan.max_objects,
         local_bytes_only=plan.local_bytes_only,
+        scope=plan.scope,
         progress=revalidation_progress,
     )
     if (
@@ -2011,7 +2039,7 @@ def _apply_core(
                 progress_hook=progress_hook,
                 _runner_entered=runner_entered,
             )
-    except (ObjectStorageUploadError, ExactOperationManifestError, preservation.ObjectStoragePreservationError) as failure:
+    except (ObjectStorageUploadError, ObjectStorageScopeError, ExactOperationManifestError, preservation.ObjectStoragePreservationError) as failure:
         if not resume and not runner_entered[0] and getattr(failure, "effects", None) is None:
             try:
                 failure.effects = "none"
@@ -2123,6 +2151,64 @@ def verify_object_storage_upload(
         "private_values_echoed": False,
         "remote_keys_echoed": False,
     }
+
+
+def abandon_object_storage_upload(plan, *, reviewer_claim, approval_id, execution_sha256,
+                                  dry_run=False, key_provider=None):
+    """Stop a checkpointed execution without pretending its PUTs never happened.
+
+    Retain controls, checkpoints, receipts and every remote copy. A subsequent
+    plan has its own exact approval; remote equality is checked by that writer.
+    """
+    from . import exact_approval_claims as claims
+    from .exact_human_approval import exact_human_approval_context_sha256
+    from .exact_human_approval import _authenticated_claim_reference_core
+    from .exact_human_approval_workflow import _abandon_started_exact_human_approved_claims_core
+
+    if (not plan.loaded_from_control or plan.manifest is None
+            or _SHA256_RE.fullmatch(str(execution_sha256 or "")) is None):
+        raise _fail("object_storage_upload_resume_invalid")
+    context = object_storage_upload_context(plan, reviewer_claim=reviewer_claim)
+    with exact_operation_writer_lock(plan.archive_root) as lock:
+        checkpoints = FileExactOperationCheckpointStore(plan.archive_root, writer_lock=lock)
+        listing = claims.list_exact_human_approval_claims(plan.archive_root, status="all",
+                                                        max_claims=claims.MAX_LISTED_CLAIMS, key_provider=key_provider)
+        selected = next((c for c in listing["claims"] if c["approval_id"] == approval_id), None)
+        if (listing["blocker_codes"] or not selected or selected["status"] != "started"
+                or selected["context_sha256"] != exact_human_approval_context_sha256(context)
+                or not checkpoints.resume_checkpoint_present(execution_sha256)):
+            raise _fail("object_storage_upload_resume_invalid")
+        def reference_with_key(key, boundary):
+            root, parent = boundary
+            return _authenticated_claim_reference_core(plan.archive_root, approval_id, key,
+                                                       bound_archive_root=root, claim_parent_binding=parent)[0]
+        reference = claims._with_key_and_boundary(plan.archive_root, reference_with_key,
+                                                  key_provider=key_provider, claims_boundary=None)
+        actual = exact_operation_execution_sha256(plan.manifest, approval_authority=ExactOperationApprovalAuthority.from_reference(reference))
+        if not hmac.compare_digest(actual, execution_sha256):
+            raise _fail("object_storage_upload_resume_invalid")
+        if dry_run:
+            return {"ok": True, "dry_run": True, "state": "ready_to_abandon",
+                    "existing_effects": "preserved_not_rolled_back", "provider_api_called": False,
+                    "writes_performed": False, "remaining_objects_will_run": False}
+
+        def guard(claim):
+            if claim.approval_id != approval_id:
+                return False
+            authority = _assert_approved(plan, claim, context)
+            actual = exact_operation_execution_sha256(plan.manifest, approval_authority=authority)
+            return hmac.compare_digest(actual, execution_sha256) and checkpoints.resume_checkpoint_present(actual)
+
+        result = _abandon_started_exact_human_approved_claims_core(
+            plan.archive_root, context, guard, key_provider=key_provider,
+            resume_boundary=claims._claims_boundary_default(plan.archive_root),
+            failure_code="object_storage_upload_abandoned_with_effects_preserved")
+        if result["abandoned_started_claim_count"] != 1:
+            raise _fail("object_storage_upload_resume_invalid")
+        return {**result, "ok": True, "state": "abandoned", "provider_api_called": False,
+                "existing_effects": "preserved_not_rolled_back", "remaining_objects_will_run": False,
+                "checkpoints_and_receipts_preserved": True,
+                "next_safe_actions": ["Create a new scoped plan. Remote copies must be independently checked; abandonment proves neither upload completion nor rollback."]}
 
 
 __all__ = [

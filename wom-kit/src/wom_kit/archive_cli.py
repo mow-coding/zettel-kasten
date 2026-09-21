@@ -375,6 +375,8 @@ Commands:
 
 from __future__ import annotations
 
+from . import object_storage_scope
+
 import argparse
 import codecs
 import copy
@@ -18304,11 +18306,17 @@ def command_object_storage_upload(args: argparse.Namespace) -> int:
     expected_manifest_sha256 = str(getattr(args, "expected_manifest_sha256", None) or "").strip().lower()
     resume_approval_id = str(getattr(args, "resume_approval_id", None) or "").strip()
     resume_execution_sha256 = str(getattr(args, "resume_execution_sha256", None) or "").strip().lower()
+    abandon = bool(getattr(args, "abandon_started_upload", False))
     resume_requested = bool(resume_approval_id or resume_execution_sha256)
+    if abandon and (not resume_requested or not reviewer or not expected_manifest_sha256):
+        return _object_storage_upload_cli_error(args, "object_storage_upload_resume_invalid")
     if resume_requested and not (resume_approval_id and resume_execution_sha256):
         return _object_storage_upload_cli_error(args, "object_storage_upload_resume_invalid")
     if resume_requested and (
-        not args.approve
+        (not args.approve and not abandon)
+        or getattr(args, "object_list", None)
+        or getattr(args, "captured_by_session", None)
+        or getattr(args, "this_session", False)
         or getattr(args, "only", None)
         or getattr(args, "max_objects", None) is not None
         or getattr(args, "local_bytes_only", False)
@@ -18325,16 +18333,25 @@ def command_object_storage_upload(args: argparse.Namespace) -> int:
             plan = object_storage_upload_exact.load_object_storage_upload_plan(
                 Path(args.archive_root), manifest_sha256=expected_manifest_sha256
             )
+            if not abandon and (plan.scope is None or plan.scope.kind == "all_sessions") and not getattr(args, "all_sessions", False):
+                raise object_storage_scope.ObjectStorageScopeError("object_storage_resume_all_sessions_required")
         else:
             plan = object_storage_upload_exact.plan_object_storage_upload(
                 Path(args.archive_root),
                 provider_kind=args.provider_kind,
                 store_ref=args.store_ref,
                 only=args.only,
+                scope=object_storage_scope.cli_scope(Path(args.archive_root), args),
                 max_objects=args.max_objects,
                 local_bytes_only=bool(getattr(args, "local_bytes_only", False)),
                 progress=plan_progress,
             )
+        if abandon:
+            result = object_storage_upload_exact.abandon_object_storage_upload(
+                plan, reviewer_claim=reviewer, approval_id=resume_approval_id,
+                execution_sha256=resume_execution_sha256, dry_run=bool(args.dry_run))
+            print_object_storage_upload_result(result, args.format)
+            return 0 if result.get("ok") else 1
         if args.dry_run:
             result = plan.public_document()
             # v0.4.36 (beta letter 168 ①): env-ref presence, no value read.
@@ -18402,6 +18419,10 @@ def command_object_storage_upload(args: argparse.Namespace) -> int:
                     transport_factory=transport_factory,
                     progress_hook=exact_progress,
                 )
+    except exact_approval_claims.ExactApprovalClaimsError as error:
+        return _object_storage_upload_cli_error(args, error.code)
+    except object_storage_scope.ObjectStorageScopeError as error:
+        return _object_storage_upload_cli_error(args, error.code)
     except object_storage_upload_exact.ObjectStorageUploadError as exc:
         return _object_storage_upload_cli_error(
             args, exc.code, cause=_object_storage_upload_content_free_cause(exc),
@@ -18853,6 +18874,9 @@ def command_object_storage_restore(args: argparse.Namespace) -> int:
         return _object_storage_restore_cli_error(args, "object_storage_restore_resume_invalid")
     if resume_requested and (
         not args.approve
+        or getattr(args, "object_list", None)
+        or getattr(args, "captured_by_session", None)
+        or getattr(args, "this_session", False)
         or getattr(args, "only", None)
         or getattr(args, "max_objects", None) is not None
         or getattr(args, "verify_only", False)
@@ -18873,6 +18897,8 @@ def command_object_storage_restore(args: argparse.Namespace) -> int:
             plan = object_storage_restore.load_object_storage_restore_plan(
                 Path(args.archive_root), manifest_sha256=expected_manifest_sha256
             )
+            if (plan.scope is None or plan.scope.kind == "all_sessions") and not getattr(args, "all_sessions", False):
+                raise object_storage_scope.ObjectStorageScopeError("object_storage_resume_all_sessions_required")
         else:
             plan = object_storage_restore.plan_object_storage_restore(
                 Path(args.archive_root),
@@ -18880,6 +18906,7 @@ def command_object_storage_restore(args: argparse.Namespace) -> int:
                 store_ref=args.store_ref,
                 mode=mode,
                 only=args.only,
+                scope=object_storage_scope.cli_scope(Path(args.archive_root), args),
                 max_objects=args.max_objects,
                 progress=plan_progress,
             )
@@ -18915,6 +18942,8 @@ def command_object_storage_restore(args: argparse.Namespace) -> int:
                     transport_factory=transport_factory,
                     progress_hook=exact_progress,
                 )
+    except object_storage_scope.ObjectStorageScopeError as error:
+        return _object_storage_restore_cli_error(args, error.code)
     except object_storage_restore.ObjectStorageRestoreError as exc:
         return _object_storage_restore_cli_error(args, exc.code)
     except object_storage_preservation.ObjectStoragePreservationError as exc:
@@ -18995,6 +19024,9 @@ def command_object_storage_offload(args: argparse.Namespace) -> int:
         return _object_storage_offload_cli_error(args, "object_storage_offload_resume_invalid")
     if resume_requested and (
         not args.approve
+        or getattr(args, "object_list", None)
+        or getattr(args, "captured_by_session", None)
+        or getattr(args, "this_session", False)
         or getattr(args, "only", None)
         or getattr(args, "max_objects", None) is not None
     ):
@@ -19015,12 +19047,15 @@ def command_object_storage_offload(args: argparse.Namespace) -> int:
             plan = object_storage_offload.load_object_storage_offload_plan(
                 Path(args.archive_root), manifest_sha256=expected_manifest_sha256
             )
+            if (plan.scope is None or plan.scope.kind == "all_sessions") and not getattr(args, "all_sessions", False):
+                raise object_storage_scope.ObjectStorageScopeError("object_storage_resume_all_sessions_required")
         else:
             plan = object_storage_offload.plan_object_storage_offload(
                 Path(args.archive_root),
                 provider_kind=args.provider_kind,
                 store_ref=args.store_ref,
                 only=args.only,
+                scope=object_storage_scope.cli_scope(Path(args.archive_root), args),
                 max_objects=args.max_objects,
                 min_age_days=int(min_age_days),
                 min_size_bytes=int(min_size_bytes),
@@ -19058,6 +19093,8 @@ def command_object_storage_offload(args: argparse.Namespace) -> int:
                     transport_factory=transport_factory,
                     progress_hook=exact_progress,
                 )
+    except object_storage_scope.ObjectStorageScopeError as error:
+        return _object_storage_offload_cli_error(args, error.code)
     except object_storage_offload.ObjectStorageOffloadError as exc:
         return _object_storage_offload_cli_error(args, exc.code)
     except object_storage_restore.ObjectStorageRestoreError as exc:
@@ -41075,6 +41112,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Exact plan_sha256 from the preceding --dry-run; required for --approve and resume.",
     )
     object_storage_upload.add_argument("--resume-approval-id", help="Resume an interrupted exact upload using its one-use approval id.")
+    object_storage_upload.add_argument("--object-list", help="UTF-8 file with one exact object_id per line; selects only this reviewed set.")
+    object_storage_upload.add_argument("--captured-by-session", help="Select captures attributed to this exact work_session_ref, including an explicitly delegated session.")
+    object_storage_upload.add_argument("--this-session", action="store_true", help="Use WOM_WORK_SESSION_REF (also the default); never infer another session.")
+    object_storage_upload.add_argument("--all-sessions", action="store_true", help="Explicit archive-wide selection, including other sessions; also required for legacy global resume.")
+    object_storage_upload.add_argument("--abandon-started-upload", action="store_true", help="Close this exact interrupted upload with its effects preserved; never resumes PUTs or deletes remote copies. Supports --dry-run before --approve.")
     object_storage_upload.add_argument("--resume-execution-sha256", help="Resume the exact checkpoint execution bound to --resume-approval-id.")
     object_storage_upload.add_argument("--reviewed-by", help="Safe reviewer id required when --approve is used.")
     object_storage_upload.add_argument("--progress", action="store_true", help="Stream planning and per-object progress to stderr; stdout keeps the final result.")
@@ -41251,6 +41293,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Exact plan_sha256 from the preceding --dry-run; required for --approve and resume.",
     )
     object_storage_restore_parser.add_argument("--resume-approval-id", help="Resume an interrupted exact restore using its one-use approval id.")
+    object_storage_restore_parser.add_argument("--object-list", help="UTF-8 file with one exact object_id per line; selects only this reviewed set.")
+    object_storage_restore_parser.add_argument("--captured-by-session", help="Select captures attributed to this exact work_session_ref, including an explicitly delegated session.")
+    object_storage_restore_parser.add_argument("--this-session", action="store_true", help="Use WOM_WORK_SESSION_REF (also the default); never infer another session.")
+    object_storage_restore_parser.add_argument("--all-sessions", action="store_true", help="Explicit archive-wide selection, including other sessions; also required for legacy global resume.")
     object_storage_restore_parser.add_argument("--resume-execution-sha256", help="Resume the exact checkpoint execution bound to --resume-approval-id.")
     object_storage_restore_parser.add_argument("--reviewed-by", help="Safe reviewer id required when --approve is used.")
     object_storage_restore_parser.add_argument("--progress", action="store_true", help="Stream planning and per-object progress to stderr; stdout keeps the final result.")
@@ -41311,6 +41357,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Exact plan_sha256 from the preceding --dry-run; required for --approve and resume.",
     )
     object_storage_offload_parser.add_argument("--resume-approval-id", help="Resume an interrupted exact offload using its one-use approval id.")
+    object_storage_offload_parser.add_argument("--object-list", help="UTF-8 file with one exact object_id per line; selects only this reviewed set.")
+    object_storage_offload_parser.add_argument("--captured-by-session", help="Select captures attributed to this exact work_session_ref, including an explicitly delegated session.")
+    object_storage_offload_parser.add_argument("--this-session", action="store_true", help="Use WOM_WORK_SESSION_REF (also the default); never infer another session.")
+    object_storage_offload_parser.add_argument("--all-sessions", action="store_true", help="Explicit archive-wide selection, including other sessions; also required for legacy global resume.")
     object_storage_offload_parser.add_argument("--resume-execution-sha256", help="Resume the exact checkpoint execution bound to --resume-approval-id.")
     object_storage_offload_parser.add_argument("--reviewed-by", help="Safe reviewer id required when --approve is used.")
     object_storage_offload_parser.add_argument("--progress", action="store_true", help="Stream planning and per-object progress to stderr; stdout keeps the final result.")

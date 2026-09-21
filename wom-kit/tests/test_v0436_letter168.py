@@ -140,7 +140,7 @@ class UploadCauseTests(unittest.TestCase):
 
     def test_store_setup_missing_names_the_registered_labels(self) -> None:
         code, preview = self.run_cli(
-            "object-storage-upload", str(self.archive.root), "--provider-kind", _upload_fixture.PROVIDER,
+            "object-storage-upload", "--all-sessions", str(self.archive.root), "--provider-kind", _upload_fixture.PROVIDER,
             "--store-ref", "storage:account:another-label", "--dry-run",
         )
         self.assertEqual(code, 1, preview)

@@ -7,6 +7,8 @@ tests and use an in-memory transport plus the fake dialog.
 """
 from __future__ import annotations
 
+from wom_kit.object_storage_scope import ObjectScope
+
 import hashlib
 import io
 import os
@@ -540,7 +542,7 @@ class RestorePlanTests(unittest.TestCase):
                 "preservation_status": "bytes_preserved",
             }), encoding="utf-8")
 
-            plan = restore.plan_object_storage_restore(root, provider_kind=PROVIDER, store_ref=STORE)
+            plan = restore.plan_object_storage_restore(root, provider_kind=PROVIDER, store_ref=STORE, scope=ObjectScope("all_sessions"))
             document = plan.public_document()
             self.assertTrue(document["ok"], document)
             self.assertEqual(document["mode"], "restore")
@@ -565,14 +567,14 @@ class RestorePlanTests(unittest.TestCase):
             kinds = {spec.object_id: spec.remote_source_kind for spec in plan.specs}
             self.assertEqual(kinds["sha256:" + preserved_digest], restore.REMOTE_SOURCE_PRESERVED)
             # verify-only covers every remote-verified object, present or not
-            verify = restore.plan_object_storage_restore(root, provider_kind=PROVIDER, store_ref=STORE, mode=restore.MODE_VERIFY_ONLY)
+            verify = restore.plan_object_storage_restore(root, provider_kind=PROVIDER, store_ref=STORE, mode=restore.MODE_VERIFY_ONLY, scope=ObjectScope("all_sessions"))
             self.assertEqual(verify.public_document()["verify_target_count"], 5)
             self.assertEqual(verify.public_document()["manifest_rewrite_planned_count"], 0)
             # --only and --max-objects
             only = restore.plan_object_storage_restore(root, provider_kind=PROVIDER, store_ref=STORE, only=hashlib.sha256(missing).hexdigest())
             self.assertEqual(len(only.specs), 1)
             with self.assertRaises(restore.ObjectStorageRestoreError) as ctx:
-                restore.plan_object_storage_restore(root, provider_kind=PROVIDER, store_ref=STORE, max_objects=1)
+                restore.plan_object_storage_restore(root, provider_kind=PROVIDER, store_ref=STORE, max_objects=1, scope=ObjectScope("all_sessions"))
             self.assertEqual(ctx.exception.code, "object_storage_restore_plan_invalid")
 
     def test_plan_requires_setup_evidence_for_the_store(self):
@@ -581,7 +583,7 @@ class RestorePlanTests(unittest.TestCase):
             raw = b"x"
             _write_rows(root, [_row(raw, locations=[_remote(raw)])])
             with self.assertRaises(restore.ObjectStorageRestoreError) as ctx:
-                restore.plan_object_storage_restore(root, provider_kind=PROVIDER, store_ref="storage:account:unregistered")
+                restore.plan_object_storage_restore(root, provider_kind=PROVIDER, store_ref="storage:account:unregistered", scope=ObjectScope("all_sessions"))
             self.assertIn(ctx.exception.code, {"object_storage_restore_setup_evidence_missing", "object_storage_restore_setup_evidence_mismatch"})
 
 
@@ -619,7 +621,7 @@ class RestorePlanTests(unittest.TestCase):
             root = _build_root(Path(tmp))
             raw = b"schema validated receipt"
             _write_rows(root, [_row(raw, locations=[_remote(raw)])])
-            plan = restore.plan_object_storage_restore(root, provider_kind=PROVIDER, store_ref=STORE)
+            plan = restore.plan_object_storage_restore(root, provider_kind=PROVIDER, store_ref=STORE, scope=ObjectScope("all_sessions"))
             result = _run(plan, _MemoryTransport({plan.specs[0].remote_key: raw}))
             self.assertTrue(result["ok"], result)
             schema_path = Path(__file__).resolve().parents[1] / "schemas" / "object-storage-restore-receipt-v0.1.schema.json"
@@ -643,7 +645,7 @@ class RestoreExecutionTests(unittest.TestCase):
                 _row(offloaded, locations=[{**_local(offloaded, availability="offloaded"), "offload_receipt_ref": "receipts/x.json", "offloaded_at": "2026-09-01T00:00:00Z"}, _remote(offloaded)]),
             ]
             _write_rows(root, rows)
-            plan = restore.plan_object_storage_restore(root, provider_kind=PROVIDER, store_ref=STORE)
+            plan = restore.plan_object_storage_restore(root, provider_kind=PROVIDER, store_ref=STORE, scope=ObjectScope("all_sessions"))
             self.assertEqual(len(plan.specs), 3)
             self.assertEqual(len(plan.manifest.items), 4)  # 3 receipts + 1 projection
             transport = _MemoryTransport({spec.remote_key: raw for spec, raw in zip(plan.specs, sorted([missing, gone, offloaded], key=lambda b: "sha256:" + hashlib.sha256(b).hexdigest()))})
@@ -700,7 +702,7 @@ class RestoreExecutionTests(unittest.TestCase):
             absent = b"absent remote copy"
             good = b"good remote copy"
             _write_rows(root, [_row(corrupt, locations=[_remote(corrupt)]), _row(absent, locations=[_remote(absent)]), _row(good, locations=[_remote(good)])])
-            plan = restore.plan_object_storage_restore(root, provider_kind=PROVIDER, store_ref=STORE)
+            plan = restore.plan_object_storage_restore(root, provider_kind=PROVIDER, store_ref=STORE, scope=ObjectScope("all_sessions"))
             by_id = {spec.object_id: spec for spec in plan.specs}
             objects = {
                 by_id["sha256:" + hashlib.sha256(corrupt).hexdigest()].remote_key: b"CORRUPT remote copy",
@@ -735,7 +737,7 @@ class RestoreExecutionTests(unittest.TestCase):
             first = b"first object restored"
             second = b"second object stalls"
             _write_rows(root, [_row(first, locations=[_remote(first)]), _row(second, locations=[_remote(second)])])
-            plan = restore.plan_object_storage_restore(root, provider_kind=PROVIDER, store_ref=STORE)
+            plan = restore.plan_object_storage_restore(root, provider_kind=PROVIDER, store_ref=STORE, scope=ObjectScope("all_sessions"))
             objects = {spec.remote_key: raw for spec, raw in zip(plan.specs, sorted([first, second], key=lambda b: "sha256:" + hashlib.sha256(b).hexdigest()))}
             order = [raw for raw in sorted([first, second], key=lambda b: "sha256:" + hashlib.sha256(b).hexdigest())]
 
@@ -766,7 +768,7 @@ class RestoreExecutionTests(unittest.TestCase):
             root = _build_root(Path(tmp))
             raw = b"promoted then crashed"
             _write_rows(root, [_row(raw, locations=[_remote(raw)])])
-            plan = restore.plan_object_storage_restore(root, provider_kind=PROVIDER, store_ref=STORE)
+            plan = restore.plan_object_storage_restore(root, provider_kind=PROVIDER, store_ref=STORE, scope=ObjectScope("all_sessions"))
             transport = _MemoryTransport({plan.specs[0].remote_key: raw})
             with patch.object(restore, "_create_receipt", side_effect=RuntimeError("crash after move")):
                 with self.assertRaises(ExactOperationManifestError):
@@ -785,7 +787,7 @@ class RestoreExecutionTests(unittest.TestCase):
             root = _build_root(Path(tmp))
             raw = b"the manifest bytes"
             _write_rows(root, [_row(raw, locations=[_remote(raw)])])
-            plan = restore.plan_object_storage_restore(root, provider_kind=PROVIDER, store_ref=STORE)
+            plan = restore.plan_object_storage_restore(root, provider_kind=PROVIDER, store_ref=STORE, scope=ObjectScope("all_sessions"))
             self.assertEqual(len(plan.specs), 1)
             # a stale sink from an interrupted attempt
             sink = root / restore._sink_relative(plan, plan.specs[0])
@@ -813,7 +815,7 @@ class RestoreExecutionTests(unittest.TestCase):
             missing = b"missing locally"
             _write_rows(root, [_row(present, locations=[_local(present), _remote(present)]), _row(missing, locations=[_remote(missing)])])
             _write_local(root, present)
-            plan = restore.plan_object_storage_restore(root, provider_kind=PROVIDER, store_ref=STORE, mode=restore.MODE_VERIFY_ONLY)
+            plan = restore.plan_object_storage_restore(root, provider_kind=PROVIDER, store_ref=STORE, mode=restore.MODE_VERIFY_ONLY, scope=ObjectScope("all_sessions"))
             self.assertEqual(len(plan.specs), 2)
             self.assertEqual(len(plan.manifest.items), 2)
             manifest_before = (root / "objects/manifests/files.jsonl").read_bytes()
@@ -858,7 +860,7 @@ class RestoreCliTests(unittest.TestCase):
 
     def base_args(self) -> list[str]:
         return [
-            "object-storage-restore", str(self.root),
+            "object-storage-restore", "--all-sessions", str(self.root),
             "--provider-kind", PROVIDER, "--store-ref", STORE,
             "--endpoint-host", "acct.r2.cloudflarestorage.com", "--bucket", "private-bucket",
             "--access-key-id-ref", "env:WOM_TEST_RESTORE_AK", "--secret-access-key-ref", "env:WOM_TEST_RESTORE_SK",

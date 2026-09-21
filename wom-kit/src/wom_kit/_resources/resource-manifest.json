@@ -2,7 +2,7 @@
   "schema": "wom-kit/package-resource-manifest/v0.1",
   "version": "0.4.36",
   "source_of_truth": "wom-kit source resource directories",
-  "file_count": 173,
+  "file_count": 174,
   "files": [
     {
       "source": "schemas/activity-group-membership-receipt.schema.json",
@@ -745,8 +745,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/SKILL.md",
       "packaged": "templates/ai-runtime/wom-archive/SKILL.md",
-      "bytes": 11523,
-      "sha256": "838c18aa7c530d659bb9889172f2319345c3b5fef8cc801e571b47241f8c0b10"
+      "bytes": 11886,
+      "sha256": "e9b5bdf3a2daa409ba0ea14493e01addb597129576de78bedd0efcb7ffac0c35"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
@@ -783,6 +783,12 @@
       "packaged": "templates/ai-runtime/wom-archive/references/startup-and-update.md",
       "bytes": 9260,
       "sha256": "d5f3d069de42d6c6179c56720937904fadecfb2dc0c3d00bf2d3130c628dfb67"
+    },
+    {
+      "source": "templates/ai-runtime/wom-archive/references/storage-scope.md",
+      "packaged": "templates/ai-runtime/wom-archive/references/storage-scope.md",
+      "bytes": 981,
+      "sha256": "9525aa33a901a8308377a5e7421f7a43290fe00ed857a1f54edaaa52c2f15563"
     },
     {
       "source": "templates/company/AGENTS.md",
