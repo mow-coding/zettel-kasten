@@ -23,6 +23,17 @@ class Example(unittest.TestCase):
 
 
 class IncrementalCITests(unittest.TestCase):
+    def test_new_gh_raw_log_escape_guard_is_retried_without_changing_bytes(self):
+        guarded = subprocess.CompletedProcess([], 1, b'', b'pass --allow-escape-sequences to output it anyway')
+        raw = b'log with \x1b[0m colors\n'
+        success = subprocess.CompletedProcess([], 0, raw, b'')
+        with patch.object(ci.subprocess, 'run', side_effect=[guarded, success]) as run:
+            self.assertEqual(ci.api('synthetic/example', 'actions/jobs/1/logs', raw=True), raw.decode())
+            self.assertEqual(run.call_args.args[0][-1], '--allow-escape-sequences')
+        with patch.object(ci.subprocess, 'run', return_value=guarded) as run:
+            with self.assertRaises(subprocess.CalledProcessError): ci.api('synthetic/example', 'metadata')
+            self.assertEqual(run.call_count, 1)
+
     def test_only_assertion_literals_change(self):
         new = SAMPLE.replace('old expected message', 'new expected message')
         self.assertEqual(ci.assertion_changes(SAMPLE, new, 'test_example'),

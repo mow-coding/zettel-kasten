@@ -208,7 +208,15 @@ def validate_jobs(jobs: list[dict], targets: list[str], load_log) -> dict:
 
 
 def api(repo: str, endpoint: str, *, raw=False):
-    value = subprocess.check_output(['gh', 'api', f'repos/{repo}/{endpoint}'])
+    command = ['gh', 'api', f'repos/{repo}/{endpoint}']
+    response = subprocess.run(command, capture_output=True)
+    if (raw and response.returncode
+            and b'pass --allow-escape-sequences' in response.stderr):
+        # Newer gh refuses ANSI-bearing job logs, even when stdout is piped.
+        # Keep raw bytes for the evidence hash; never render them as commands.
+        response = subprocess.run([*command, '--allow-escape-sequences'], capture_output=True)
+    response.check_returncode()
+    value = response.stdout
     return value.decode('utf-8') if raw else json.loads(value)
 
 
