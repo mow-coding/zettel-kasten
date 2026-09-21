@@ -8217,7 +8217,7 @@ class ArchiveCliTests(unittest.TestCase):
         )
         self.assertTrue(
             any(
-                "pyproject version metadata is not an exact stable version label"
+                "pyproject version metadata is not an exact stable or canonical beta version label"
                 in warning
                 for warning in result["warnings"]
             )
