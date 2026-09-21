@@ -140,3 +140,9 @@ CI wall time에는 대기·동시 실행이 포함될 수 있으므로 이를 �
 
 배포는 GitHub의 `queue: max`로 직렬 실행한다. 대기열의 100건 제한에 걸리면 취소를 완료로 세지 않고 작업표에서 복구 대상으로 관리한다.
 동시성 근거: [GitHub 공식 문서](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
+
+### 설치 파일 검증 결과 재사용
+
+CI의 `installed-wheel-<run>-<attempt>` 산출물에는 검사한 wheel 자체, 검사 JSON, 소스 commit/tree와 파일 SHA·크기를 함께 보존한다. 안정판 담당자는 annotated tag와 실제 병합 결과를 확인한 뒤 `wom-kit/tools/verify_release_artifact.py`로 PR·CI attempt·전체 tree·wheel 바이트를 대조한다. 전부 같으면 이미 검사한 파일을 공개하며 같은 파일을 다시 만들지 않는다. 증거가 없거나 입력이 달라졌으면 필요한 검증을 새로 수행한다. 공개 후 익명 다운로드와 설치 확인은 별도로 수행한다.
+
+무거운 검사는 분류와 빠른 gate가 모두 성공한 뒤 시작한다. 버전·문서·검사 도구 설정의 초기 실패로 불필요한 전체 검사가 실행되는 것을 줄인다.

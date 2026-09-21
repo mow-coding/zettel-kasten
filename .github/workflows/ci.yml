@@ -79,7 +79,7 @@ jobs:
 
   tests:
     name: Tests ${{ matrix.os }} py${{ matrix.python-version }} shard ${{ matrix.shard_index }}/${{ matrix.shard_count }}
-    needs: classify
+    needs: [classify, gate]
     if: needs.classify.outputs.lane == 'full'
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.timeout-minutes }}
@@ -225,7 +225,7 @@ jobs:
 
   doctor_scale:
     name: Doctor ${{ matrix.profile }} scale gate (Ubuntu py3.12)
-    needs: classify
+    needs: [classify, gate]
     if: needs.classify.outputs.lane == 'full'
     runs-on: ubuntu-latest
     # Includes synthetic fixture generation and cleanup; the measured operational
@@ -271,7 +271,7 @@ jobs:
 
   link_index_scale:
     name: Link-index regression scale gate (Windows py3.12)
-    needs: classify
+    needs: [classify, gate]
     if: needs.classify.outputs.lane == 'full'
     runs-on: windows-latest
     timeout-minutes: 10
@@ -322,7 +322,7 @@ jobs:
 
   installed_wheel:
     name: Installed public entrypoints and workflow gate (Windows py3.12)
-    needs: classify
+    needs: [classify, gate]
     if: needs.classify.outputs.lane == 'full'
     runs-on: windows-latest
     timeout-minutes: 25
@@ -342,7 +342,33 @@ jobs:
       # temporary environment with PYTHONPATH removed, and tests fresh-process
       # public entrypoints, native-broker boundaries, and synthetic workflows.
       - name: Exercise the actual installed candidate
-        run: python -B wom-kit/tools/check_wheel_install.py --format json
+        shell: pwsh
+        env:
+          CANDIDATE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+          WORKFLOW_COMMIT: ${{ github.workflow_sha }}
+        run: |
+          $output = Join-Path $env:RUNNER_TEMP "installed-wheel"
+          New-Item -ItemType Directory -Force -Path $output | Out-Null
+          python -B wom-kit/tools/check_wheel_install.py --format json --wheel-output-dir $output > "$output/wheel-check.json"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          @'
+          import hashlib, json, os, pathlib, platform, subprocess
+          output = pathlib.Path(os.environ['RUNNER_TEMP']) / 'installed-wheel'
+          report = json.loads((output / 'wheel-check.json').read_text(encoding='utf-8-sig'))
+          wheel = output / report['wheel_filename']
+          digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
+          assert report['ok'] is True and report['wheel_sha256'] == digest
+          git = lambda ref: subprocess.check_output(['git', 'rev-parse', ref], text=True).strip()
+          proof = {'schema':'wom-kit/installed-wheel-artifact/v1',
+                   'source_commit':git('HEAD'), 'source_tree':git('HEAD^{tree}'),
+                   'candidate_commit':os.environ['CANDIDATE_COMMIT'],
+                   'workflow_commit':os.environ['WORKFLOW_COMMIT'],
+                   'run_id':os.environ['GITHUB_RUN_ID'], 'attempt':os.environ['GITHUB_RUN_ATTEMPT'],
+                   'python':platform.python_version(), 'platform':platform.system(),
+                   'wheel':{'name':wheel.name,'size_bytes':wheel.stat().st_size,'sha256':digest}}
+          (output / 'source-proof.json').write_text(json.dumps(proof, indent=2)+'\n', encoding='utf-8')
+          '@ | python -
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
       - name: Assert installed tests left the worktree clean
         shell: pwsh
@@ -353,6 +379,14 @@ jobs:
             $changes
             exit 1
           }
+
+      - name: Preserve verified wheel bytes and source proof for release reuse
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: installed-wheel-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/installed-wheel/
+          if-no-files-found: error
 
   required:
     name: Required CI
