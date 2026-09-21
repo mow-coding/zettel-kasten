@@ -58,9 +58,9 @@ jobs:
         with:
           python-version: '3.12'
 
-      # Install the same runtime dependency surface declared for the CLI.
-      - name: Install runtime dependencies
-        run: python -m pip install --disable-pip-version-check -r wom-kit/cli/requirements.txt
+      # Documentation contracts validate JSON schemas as well as runtime data.
+      - name: Install runtime and documentation-check dependencies
+        run: python -m pip install --disable-pip-version-check -r wom-kit/cli/requirements.txt -r wom-kit/requirements-test.txt
 
       # Same four hygiene checkers the local pre-release gate runs:
       # public links, Korean product language, public privacy, runtime skill.
