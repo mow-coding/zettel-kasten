@@ -250,7 +250,7 @@ def _safe_runtime_skill_projection(
         else "managed_invalid"
     )
     raw_version = raw_installation.get("installed_version")
-    installed_version = archive_services.stable_version_value(
+    installed_version = archive_services.release_version_value(
         raw_version if isinstance(raw_version, str) else None
     )
     version_invalid = bool(

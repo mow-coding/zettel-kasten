@@ -82,9 +82,12 @@ class V0419ReleaseDocsTests(unittest.TestCase):
         ))
         for gate in ("doctor_scale", "installed_wheel"):
             self.assertIn(gate, jobs["required"]["needs"])
-        required = jobs["required"]["steps"][0]
-        self.assertIn("needs.installed_wheel.result", required["env"]["INSTALLED_WHEEL_RESULT"])
-        self.assertIn('test "$INSTALLED_WHEEL_RESULT" = "success"', required["run"])
+        required = next(step for step in jobs["required"]["steps"]
+                        if "ci_change_policy.py --verify-results" in step.get("run", ""))
+        self.assertIn("toJSON(needs)", required["env"]["CI_NEEDS_JSON"])
+        self.assertIn("needs.classify.outputs.lane", required["env"]["CI_LANE"])
+        for job in ("doctor_scale", "installed_wheel"):
+            self.assertEqual(jobs[job]["if"], "needs.classify.outputs.lane == 'full'")
 
     def test_current_version_surfaces_are_exact(self) -> None:
         self.assertEqual(__version__, "0.4.37")

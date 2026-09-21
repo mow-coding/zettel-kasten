@@ -32,6 +32,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterator, Mapping
 
 from .schema_validator import validate_schema
+from .version_policy import release_version_value
 from .process_launch import noninteractive_creationflags
 
 
@@ -113,7 +114,7 @@ WHEEL_FILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,199}\.whl$")
 DIST_NAME_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,126}[A-Za-z0-9])?$")
 PUBLIC_WHEEL_PATH_RE = re.compile(
     r"^/mow-coding/zettel-kasten/releases/download/"
-    r"v(?P<version>(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))/"
+    r"v(?P<version>(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:b[1-9][0-9]*)?)/"
     r"wom_kit-(?P=version)-py3-none-any\.whl$"
 )
 PROJECT_RUNTIME_TRANSIENT_UNLINK_ATTEMPTS = 8
@@ -607,8 +608,7 @@ class RuntimeMaterialization:
 
 
 def _version(value: str | None) -> str | None:
-    text = str(value or "").strip().removeprefix("v")
-    return text if STABLE_VERSION_RE.fullmatch(text) else None
+    return release_version_value(value)
 
 
 def _sha256_bytes(data: bytes) -> str:
@@ -1249,7 +1249,7 @@ def launcher_bytes(target: str) -> bytes:
     # not rewrite an older target launcher to import a module its wheel lacks.
     entry_module = (
         "wom_kit.cli_entry"
-        if tuple(int(part) for part in version.split(".")) >= (0, 4, 19)
+        if tuple(int(part) for part in version.split("b", 1)[0].split(".")) >= (0, 4, 19)
         else "wom_kit.archive_cli"
     )
     return (
@@ -2108,7 +2108,7 @@ def project_write_guard(
             minimum = _version("0.4.3")
             runtime_required = bool(
                 minimum is not None
-                and tuple(int(part) for part in pinned_version.split("."))
+                and tuple(int(part) for part in pinned_version.split("b", 1)[0].split("."))
                 >= tuple(int(part) for part in minimum.split("."))
             )
             if runtime_required:

@@ -1,0 +1,51 @@
+name: WOM 사용 중 문제 보고
+description: 개인정보를 제외한 문제와 재현 절차를 알려 주세요.
+title: "[피드백] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        이 보고서는 공개됩니다. 원본 편지, 실제 파일 경로, 계정명, 개인 문서, 인증 정보는 넣지 마세요.
+        가상의 이름과 합성 자료로 재현해 주세요. 별도로 보낸 원본은 이곳에 다시 첨부하지 않습니다.
+        접수 번호는 GitHub가 발급합니다. 본문 검사, 전달, 개발진 접수, 수정, 배포, 고객 확인은 서로 다른 상태입니다.
+  - type: input
+    id: version
+    attributes:
+      label: WOM 버전과 운영체제
+      placeholder: "예: v0.4.37, Windows 11"
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 기대한 동작
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 실제 결과와 작업에 미친 영향
+      description: 이전 수정이 성공한 뒤 다른 문제가 나온 경우 그 차이도 적어 주세요.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 합성 자료로 재현하는 순서
+      description: 재현하지 못했다면 미재현이라고 적어 주세요. 원본 데이터를 올리지 마세요.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 확인한 범위와 아직 확인하지 않은 단계
+      description: 검사 통과만으로 실제 사용 성공이라고 표시하지 마세요. 공개 가능한 오류 코드나 기존 이슈·PR 링크를 적어 주세요.
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: 공개 범위 확인
+      options:
+        - label: 원본 편지·고객 식별자·실제 개인 경로·인증 정보를 포함하지 않았습니다.
+          required: true

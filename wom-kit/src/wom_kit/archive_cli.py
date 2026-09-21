@@ -9260,7 +9260,7 @@ PROJECT_UPDATE_COLLISION_ENTRY_REF_RE = re.compile(
     r"update-entry:(?!0000)[0-9]{4}"
 )
 PROJECT_UPDATE_COLLISION_PLAN_RE = re.compile(r"sha256:[0-9a-f]{64}")
-PROJECT_UPDATE_COLLISION_TAG_RE = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+")
+PROJECT_UPDATE_COLLISION_TAG_RE = archive_services.RELEASE_VERSION_TAG_RE
 PROJECT_UPDATE_COLLISION_REVIEWER_RE = re.compile(
     r"[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,127}"
 )
@@ -9775,7 +9775,7 @@ def _project_update_collision_blocked_result(
     )
     messages = {
         "project_update_collision_target_invalid": (
-            "--target must be one exact stable release tag."
+            "--target must be one exact stable or canonical beta release tag."
         ),
         "project_update_collision_entry_ref_invalid": (
             "--entry-ref must be one opaque collision reference."
@@ -11900,19 +11900,14 @@ def git_version_tags() -> list[str]:
 
 
 def semver_key_from_tag(tag: str) -> tuple[int, int, int, str] | None:
-    match = re.match(r"^v(\d+)\.(\d+)\.(\d+)(.*)$", tag)
-    if not match:
-        return None
-    return (int(match.group(1)), int(match.group(2)), int(match.group(3)), match.group(4))
+    return archive_services.release_sort_key(tag)
 
 
 def release_identity_probe() -> dict[str, Any]:
     current_tag = f"v{__version__}"
     release_notes = runtime_release_note_path(__version__)
     tags = git_version_tags()
-    tag_keys = [(tag, semver_key_from_tag(tag)) for tag in tags]
-    valid_tags = [(tag, key) for tag, key in tag_keys if key is not None]
-    latest_tag = max(valid_tags, key=lambda item: item[1])[0] if valid_tags else None
+    latest_tag = archive_services.latest_semver_tag(tags)
     local_tag_present = current_tag in tags
     release_notes_present = release_notes.is_file()
     if local_tag_present:
@@ -39034,7 +39029,7 @@ def build_parser() -> argparse.ArgumentParser:
     project_version_update.add_argument(
         "--target",
         help=(
-            "Exact stable release tag such as v0.3.215; required for preview "
+            "Exact stable or canonical beta release tag such as v0.3.215; required for preview "
             "or a new approval and discovered from sealed state on resume."
         ),
     )
@@ -39135,7 +39130,7 @@ def build_parser() -> argparse.ArgumentParser:
     project_version_update_collision.add_argument(
         "--target",
         required=True,
-        help="Exact stable release tag bound by the collision plan.",
+        help="Exact stable or canonical beta release tag bound by the collision plan.",
     )
     project_version_update_collision.add_argument(
         "--entry-ref",
@@ -46914,7 +46909,7 @@ def build_parser() -> argparse.ArgumentParser:
     project_bytecode_repair_plan.add_argument("--max-files", type=int, default=completion_workflows.PROJECT_BYTECODE_REPAIR_MAX_FILES)
     project_bytecode_repair_plan.add_argument(
         "--target",
-        help="Optional exact stable release tag from collision inspect-all.",
+        help="Optional exact stable or canonical beta release tag from collision inspect-all.",
     )
     project_bytecode_repair_plan.add_argument(
         "--expected-materialization-plan-sha256",
@@ -46933,7 +46928,7 @@ def build_parser() -> argparse.ArgumentParser:
     project_bytecode_repair.add_argument("--expected-plan-sha256", required=True)
     project_bytecode_repair.add_argument(
         "--target",
-        help="Exact stable release tag used by the bound repair plan.",
+        help="Exact stable or canonical beta release tag used by the bound repair plan.",
     )
     project_bytecode_repair.add_argument(
         "--expected-materialization-plan-sha256",

@@ -579,6 +579,11 @@ See [Versioning](VERSIONING.md) and [Upgrade Guide](UPGRADE.md).
 
 ## Repository Layout
 
+Our [shared development rules](wom-kit/docs/development/README.md) describe how
+human maintainers, Claude and Codex preserve decisions, hand off work, verify
+changes and deliver releases. The public rules and synthetic evidence are
+shareable; customer correspondence and machine-specific task records stay private.
+
 ```text
 wom-kit/
   specs/        product and protocol specifications

@@ -469,14 +469,14 @@
     {
       "source": "schemas/project-runtime-receipt-v0.1.schema.json",
       "packaged": "schemas/project-runtime-receipt-v0.1.schema.json",
-      "bytes": 3806,
-      "sha256": "917c013535b8b11000c543ae0b00b20fe93d4631bf805d9d93f812f2a5f66999"
+      "bytes": 3874,
+      "sha256": "9f75acd199d9a3950d4dd74d5a59ec963966a6bff7a787eed47eebe6ca6715c6"
     },
     {
       "source": "schemas/project-runtime-receipt-v0.2.schema.json",
       "packaged": "schemas/project-runtime-receipt-v0.2.schema.json",
-      "bytes": 4035,
-      "sha256": "ba429f395525bb2b54d4ef975d9392121821cdf7ea13eb6756bb26ca0bdf1af5"
+      "bytes": 4103,
+      "sha256": "ec6f83d582f9a18d78132aea9a03d2b9cb6170b0937f03681d063a5dd8588f2a"
     },
     {
       "source": "schemas/project-version-update-receipt-v0.2.schema.json",
@@ -493,8 +493,8 @@
     {
       "source": "schemas/project-version-update-receipt-v0.4.schema.json",
       "packaged": "schemas/project-version-update-receipt-v0.4.schema.json",
-      "bytes": 10387,
-      "sha256": "e1dab0363bc93307520dcf54dbdbb6be874186817b479267846be5bafa4d165d"
+      "bytes": 10489,
+      "sha256": "d018f3d93846949161fb1010ea503bf4cca284dd9efdedaafe05b553f2f0d594"
     },
     {
       "source": "schemas/project-version-update-receipt.schema.json",

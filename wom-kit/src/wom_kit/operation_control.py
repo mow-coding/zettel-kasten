@@ -21,6 +21,7 @@ import time
 from typing import Any, Callable, Mapping
 
 from . import project_update_legacy_recovery, project_update_transaction
+from .version_policy import RELEASE_VERSION_TAG_RE
 
 
 OPERATION_JOURNAL_SCHEMA = "wom-kit/operation-journal/v0.2"
@@ -31,7 +32,7 @@ RUN_ID_RE = re.compile(r"[0-9a-f]{32}")
 SAFE_REVIEWER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,127}")
 CONTROL_DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
 SAFE_DOMAIN_VALUE_RE = re.compile(r"[a-z][a-z0-9_]{0,127}")
-SAFE_RELEASE_TAG_RE = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+")
+SAFE_RELEASE_TAG_RE = RELEASE_VERSION_TAG_RE
 SAFE_COLLISION_REF_RE = re.compile(r"update-entry:(?!0000)[0-9]{4}")
 MAX_DOMAIN_BLOCKER_CODES = 32
 MAX_DOMAIN_COLLISION_REFS = 32

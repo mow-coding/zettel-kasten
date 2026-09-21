@@ -173,7 +173,7 @@ def _write_minimal_wheel(destination: Path, version: str) -> Path:
             "archive = wom_kit.archive_cli:main\n"
         ).encode(),
     }
-    if tuple(int(part) for part in version.split(".")) >= (0, 4, 19):
+    if tuple(int(part) for part in version.split("b", 1)[0].split(".")) >= (0, 4, 19):
         # Synthetic payload only: preserve the real release's module-presence
         # boundary without claiming this tiny fixture tests startup behavior.
         files["wom_kit/cli_entry.py"] = (

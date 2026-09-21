@@ -65,6 +65,9 @@ from . import (
 from .schema_validator import validate_schema
 from .version_policy import (
     STABLE_VERSION_TAG_RE,
+    RELEASE_VERSION_TAG_RE,
+    release_version_value,
+    release_sort_key,
     normalize_version_label,
     stable_version_value,
 )
@@ -856,7 +859,7 @@ WOM_KIT_VERSION_PIN_CANDIDATES = (
     ".zettel-kasten/installed-version.txt",
     "installed-version.txt",
 )
-WOM_KIT_PROJECT_UPDATE_TAG_RE = STABLE_VERSION_TAG_RE
+WOM_KIT_PROJECT_UPDATE_TAG_RE = RELEASE_VERSION_TAG_RE
 WOM_KIT_PROJECT_UPDATE_RECEIPTS_RELATIVE = ".zettel-kasten/receipts/version-updates"
 WOM_KIT_PROJECT_UPDATE_LOCK_RELATIVE = ".zettel-kasten/version-update.lock"
 PROFILE_WALLET_NODE_KINDS = {"person", "organization", "team", "family", "project", "agent"}
@@ -105866,13 +105869,7 @@ def redacted_path_value(path: Path, *, redact_local_paths: bool) -> str:
 
 
 def version_sort_key(value: str | None) -> tuple[int, int, int, str] | None:
-    normalized = normalize_version_label(value)
-    if not normalized:
-        return None
-    match = re.match(r"^(\d+)\.(\d+)\.(\d+)(.*)$", normalized)
-    if not match:
-        return None
-    return (int(match.group(1)), int(match.group(2)), int(match.group(3)), match.group(4))
+    return release_sort_key(value)
 
 
 def version_label_from_normalized(value: str | None) -> str | None:
@@ -106387,7 +106384,7 @@ def latest_semver_tag(labels: Iterable[str]) -> str | None:
     candidates: list[tuple[tuple[int, int, int, str], str]] = []
     for label in labels:
         candidate = label.strip()
-        if not WOM_KIT_PROJECT_UPDATE_TAG_RE.fullmatch(candidate):
+        if not STABLE_VERSION_TAG_RE.fullmatch(candidate):
             continue
         key = version_sort_key(candidate)
         if key is not None:
@@ -106638,12 +106635,12 @@ def wom_kit_project_source_mirror_info(
             return summary
         pin_text = str(pin_read["text"])
         installed_pin = pin_text.strip().lstrip("\ufeff").strip()
-    normalized_source = stable_version_value(source_version)
-    normalized_pyproject = stable_version_value(pyproject_version)
-    normalized_pin = stable_version_value(installed_pin)
+    normalized_source = release_version_value(source_version)
+    normalized_pyproject = release_version_value(pyproject_version)
+    normalized_pin = release_version_value(installed_pin)
     summary["source_version"] = normalized_source
     summary["pyproject_version"] = normalized_pyproject
-    summary["installed_pin"] = stable_version_value(
+    summary["installed_pin"] = release_version_value(
         installed_pin,
         include_prefix=True,
     )
@@ -106660,7 +106657,7 @@ def wom_kit_project_source_mirror_info(
         summary["observation_state"] = "failed"
         summary["observation_reason_code"] = "project_source_metadata_invalid"
         warnings.append(
-            "WOM-kit project source mirror version metadata is not an exact stable version label."
+            "WOM-kit project source mirror version metadata is not an exact stable or canonical beta version label."
         )
         return summary
 
@@ -109235,7 +109232,7 @@ try:
         or not git_metadata_real(mirror)
         or len(expected_head) not in (40, 64)
         or not all(c in "0123456789abcdef" for c in expected_head)
-        or not re.fullmatch(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", expected_tag)
+        or not re.fullmatch(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:b[1-9][0-9]*)?", expected_tag)
         or len(expected_wrapper) not in (40, 64)
         or not all(c in "0123456789abcdef" for c in expected_wrapper)
     ):
@@ -109383,23 +109380,23 @@ def wom_kit_runtime_alignment(
         "pyproject_version"
     )
     raw_pin_version = project_pin.get("installed_version")
-    source_version = stable_version_value(
+    source_version = release_version_value(
         raw_source_version
         if isinstance(raw_source_version, str)
         else None
     )
-    pyproject_version = stable_version_value(
+    pyproject_version = release_version_value(
         raw_pyproject_version
         if isinstance(raw_pyproject_version, str)
         else None
     )
-    pin_version = stable_version_value(
+    pin_version = release_version_value(
         raw_pin_version if isinstance(raw_pin_version, str) else None,
         include_prefix=True,
     )
     normalized_source = source_version
     normalized_pyproject = pyproject_version
-    normalized_pin = stable_version_value(pin_version)
+    normalized_pin = release_version_value(pin_version)
     source_version_key = version_sort_key(source_version)
     pyproject_version_key = version_sort_key(pyproject_version)
     pin_version_key = version_sort_key(pin_version)
@@ -109974,10 +109971,10 @@ def wom_kit_version_info(
     service_path = Path(__file__).resolve()
     kit_root = service_path.parents[2]
     raw_pyproject_version = read_wom_kit_pyproject_version()
-    pyproject_version = stable_version_value(raw_pyproject_version)
+    pyproject_version = release_version_value(raw_pyproject_version)
     package_version = WOM_KIT_VERSION
     normalized_package = normalize_version_label(package_version)
-    normalized_pyproject = stable_version_value(pyproject_version)
+    normalized_pyproject = release_version_value(pyproject_version)
     pyproject_matches = (
         normalized_pyproject == normalized_package
         if normalized_pyproject is not None
@@ -109989,7 +109986,7 @@ def wom_kit_version_info(
         and pyproject_version is None
     ):
         warnings.append(
-            "WOM-kit pyproject version metadata is not an exact stable version label."
+            "WOM-kit pyproject version metadata is not an exact stable or canonical beta version label."
         )
     if pyproject_matches is False:
         warnings.append("WOM-kit package version and pyproject.toml version differ.")
@@ -110122,7 +110119,7 @@ def wom_kit_version_info(
                                 "WOM-kit installed-version pin is invalid or exceeds the size limit."
                             )
                         else:
-                            installed_version = stable_version_value(
+                            installed_version = release_version_value(
                                 str(pin_read["text"]),
                                 include_prefix=True,
                             )
@@ -110135,7 +110132,7 @@ def wom_kit_version_info(
                                     "project_pin_invalid"
                                 )
                                 warnings.append(
-                                    "WOM-kit installed-version pin is not an exact stable version label."
+                                    "WOM-kit installed-version pin is not an exact stable or canonical beta version label."
                                 )
                             else:
                                 pin_summary["status"] = "present"
@@ -115429,7 +115426,7 @@ def wom_kit_project_update_source_versions_observation(
                 "versions": versions,
             }
         text = str(text_observation["text"])
-        version = stable_version_value(parser(text))
+        version = release_version_value(parser(text))
         if version is None:
             return {
                 "state": "failed",
@@ -115584,7 +115581,7 @@ def wom_kit_project_update_target_evidence(
                 "project_target_source_metadata_invalid"
             )
             return evidence
-        source_version = stable_version_value(parser(blob_text))
+        source_version = release_version_value(parser(blob_text))
         if source_version is None:
             evidence["observation_state"] = "failed"
             evidence["observation_reason_code"] = (
@@ -118925,7 +118922,7 @@ def _wom_kit_project_version_update_collision_inspect_batch_core(
     target_ref_snapshot_private: dict[str, str] | None = None
 
     fixed_messages = {
-        "project_update_collision_target_invalid": "The target must be one exact stable release tag.",
+        "project_update_collision_target_invalid": "The target must be one exact stable or canonical beta release tag.",
         "project_update_collision_expected_plan_invalid": "The exact materialization plan digest is required.",
         "project_update_collision_batch_entry_refs_invalid": "Provide one unique bounded list of opaque collision references.",
         "project_update_collision_batch_entry_set_incomplete": "Explicit collision references must equal the complete unchanged projected conflict set.",
@@ -119655,7 +119652,7 @@ def _wom_kit_project_version_update_collision_legacy_core_with_runner(
     fixed_messages = {
         "project_update_collision_mode_invalid": "Choose exactly one collision command mode.",
         "project_update_collision_action_invalid": "Choose inspect or preserve-relocate.",
-        "project_update_collision_target_invalid": "The target must be one exact stable release tag.",
+        "project_update_collision_target_invalid": "The target must be one exact stable or canonical beta release tag.",
         "project_update_collision_entry_ref_invalid": "The entry reference must be one bounded opaque ordinal.",
         "project_update_collision_expected_plan_invalid": "The exact materialization plan digest is required.",
         "project_update_collision_inspect_requires_dry_run": "Collision inspection is read-only.",
@@ -137264,7 +137261,7 @@ def _wom_kit_project_version_update_legacy_core_generator(
             "Approved project-version-update requires external writers to stay quiescent for the whole transaction; close editors and pause sync, backup, and other Git processes before approval."
         )
     if not WOM_KIT_PROJECT_UPDATE_TAG_RE.fullmatch(target_tag):
-        blockers.append("target must be an exact stable release tag such as v0.3.215.")
+        blockers.append("target must be an exact stable or canonical beta release tag such as v0.3.215.")
     if approve and reviewer is None:
         blockers.append("project-version-update approve requires a safe --reviewed-by actor id.")
     if approve and not affirm_external_writers_quiescent:
@@ -137923,7 +137920,7 @@ def _wom_kit_project_version_update_legacy_core_generator(
                 continue
             previous_version = normalize_version_label(previous_text)
             if previous_version is None or not WOM_KIT_PROJECT_UPDATE_TAG_RE.fullmatch(f"v{previous_version}"):
-                blockers.append("A recognized installed-version pin does not contain an exact stable version.")
+                blockers.append("A recognized installed-version pin does not contain an exact stable or canonical beta version.")
                 continue
             spec["previous_bytes"] = previous_bytes
             spec["previous_version"] = f"v{previous_version}"
