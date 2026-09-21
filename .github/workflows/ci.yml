@@ -14,6 +14,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: ci-${{ github.event_name == 'push' && github.sha || github.ref }}
@@ -39,13 +40,24 @@ jobs:
         with:
           python-version: '3.12'
       - name: Test classification and failure aggregation
-        run: python -m unittest discover -s wom-kit/tests -p test_ci_change_policy.py -v
+        run: |
+          python -m unittest discover -s wom-kit/tests -p test_ci_change_policy.py -v
+          python -m unittest discover -s wom-kit/tests -p test_incremental_ci.py -v
       - name: Classify exact base and head
         id: plan
         env:
           CI_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CI_PR_NUMBER: ${{ github.event.pull_request.number }}
+          CI_PLAN_PATH: ${{ runner.temp }}/incremental-plan.json
+          GH_TOKEN: ${{ github.token }}
         run: python wom-kit/tools/ci_change_policy.py
+      - uses: actions/upload-artifact@v7
+        if: steps.plan.outputs.lane == 'incremental'
+        with:
+          name: incremental-plan
+          path: ${{ runner.temp }}/incremental-plan.json
+          if-no-files-found: error
 
   gate:
     name: Release readiness gate
@@ -388,6 +400,42 @@ jobs:
           path: ${{ runner.temp }}/installed-wheel/
           if-no-files-found: error
 
+  focused:
+    name: Focused regression ${{ matrix.os }} py${{ matrix.python }}
+    needs: [classify, gate]
+    if: needs.classify.outputs.lane == 'incremental'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: ubuntu-latest, python: '3.10'}
+          - {os: ubuntu-latest, python: '3.12'}
+          - {os: windows-latest, python: '3.12'}
+    env:
+      PYTHONPATH: wom-kit/src
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install unchanged runtime and test dependencies
+        run: python -m pip install --disable-pip-version-check -r wom-kit/cli/requirements.txt -r wom-kit/requirements-test.txt
+      - name: Retrieve exact input and baseline evidence
+        run: gh run download "${{ github.run_id }}" --repo "${{ github.repository }}" --name incremental-plan --dir "${{ runner.temp }}"
+      - name: Revalidate changed assertions and unfinished pytest coverage
+        run: python -B wom-kit/tools/run_focused_tests.py --plan "${{ runner.temp }}/incremental-plan.json" --output "${{ runner.temp }}/focused-result.json"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: focused-${{ matrix.os }}-${{ matrix.python }}
+          path: ${{ runner.temp }}/focused-result.json
+          if-no-files-found: error
+
   required:
     name: Required CI
     if: always()
@@ -398,6 +446,7 @@ jobs:
       - doctor_scale
       - link_index_scale
       - installed_wheel
+      - focused
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

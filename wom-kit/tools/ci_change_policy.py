@@ -40,11 +40,12 @@ def classify(paths: list[str], *, event: str) -> str:
 
 
 def check_results(lane: str, needs: dict) -> list[str]:
-    if lane not in {"docs", "full", "post_merge"}:
+    if lane not in {"docs", "full", "post_merge", "incremental"}:
         return ["invalid_lane"]
     expected = {"classify": "success", "gate": "success"}
     expected.update({name: "success" if lane == "full" else "skipped"
                      for name in HEAVY_JOBS})
+    expected['focused'] = 'success' if lane == 'incremental' else 'skipped'
     return sorted(set(needs) - set(expected)) + [name for name, result in expected.items()
             if not isinstance(needs.get(name), dict)
             or needs[name].get("result") != result]
@@ -86,6 +87,13 @@ def main() -> int:
         paths = changed_paths(os.environ.get("CI_BASE_SHA", ""),
                               os.environ.get("CI_HEAD_SHA", ""))
     lane = classify(paths, event=event)
+    if lane == 'full' and event == 'pull_request' and os.environ.get('CI_PR_NUMBER'):
+        from incremental_ci import find_plan
+        plan = find_plan(os.environ['GITHUB_REPOSITORY'], os.environ['CI_HEAD_SHA'],
+                         int(os.environ['CI_PR_NUMBER']))
+        if plan is not None:
+            Path(os.environ['CI_PLAN_PATH']).write_text(json.dumps(plan, indent=2) + '\n', encoding='utf-8')
+            lane = 'incremental'
     report = {"schema": "wom-kit/ci-change-plan/v1", "lane": lane,
               "base": os.environ.get("CI_BASE_SHA"), "head": os.environ.get("CI_HEAD_SHA"),
               "changed_path_count": len(paths),

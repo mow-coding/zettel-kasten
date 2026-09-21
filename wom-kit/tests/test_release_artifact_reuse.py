@@ -35,6 +35,26 @@ class ReleaseArtifactReuseTests(unittest.TestCase):
                           {"run": {**run, "jobs": []}}]:
                 with self.subTest(delta=delta), self.assertRaises(ValueError):
                     reuse.validate(root, **{**args, **delta})
+            # Overall baseline failure stays failure. A different current run
+            # must independently pass the focused coverage and Required CI.
+            baseline = {**run, 'conclusion': 'failure'}
+            plan = {'schema': 'wom-kit/incremental-ci-plan/v1', 'head': 'c' * 40,
+                    'baseline_head': 'b' * 40, 'baseline_tree': 'a' * 40,
+                    'baseline_run': 1, 'baseline_attempt': 2}
+            current = {**run, 'headSha': 'c' * 40, 'databaseId': 2, 'attempt': 1,
+                       'jobs': [{'name': name, 'conclusion': 'success'} for name in
+                                ['Required CI', 'Focused regression ubuntu-latest py3.10',
+                                 'Focused regression ubuntu-latest py3.12',
+                                 'Focused regression windows-latest py3.12']]}
+            incremental_args = {**args, 'tree': 'd' * 40, 'candidate': 'c' * 40,
+                                'run': current, 'baseline_run': baseline, 'verified_plan': plan}
+            self.assertEqual(reuse.validate(root, **incremental_args)['artifact_ci_run'], 1)
+            for delta in ({'run': {**current, 'conclusion': 'failure'}},
+                          {'run': {**current, 'jobs': current['jobs'][:-1]}},
+                          {'verified_plan': {**plan, 'baseline_attempt': 3}},
+                          {'verified_plan': {**plan, 'baseline_tree': 'e' * 40}}):
+                with self.subTest(delta=delta), self.assertRaises(ValueError):
+                    reuse.validate(root, **{**incremental_args, **delta})
             with wheel.open("ab") as out:
                 out.write(b"changed")
             with self.assertRaisesRegex(ValueError, "retained_wheel_bytes_mismatch"):

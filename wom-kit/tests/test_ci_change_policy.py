@@ -24,6 +24,7 @@ class CIChangePolicyTests(unittest.TestCase):
 
     def test_documentation_skips_are_exact_not_blanket_success(self):
         results = {name: {"result": "skipped"} for name in policy.HEAVY_JOBS}
+        results["focused"] = {"result": "skipped"}
         results.update({"classify": {"result": "success"}, "gate": {"result": "success"}})
         self.assertEqual(policy.check_results("docs", results), [])
         for name in results:
@@ -36,10 +37,18 @@ class CIChangePolicyTests(unittest.TestCase):
 
     def test_full_requires_every_job_and_rejects_unknown_lane(self):
         results = {name: {"result": "success"} for name in ["classify", "gate", *policy.HEAVY_JOBS]}
+        results["focused"] = {"result": "skipped"}
         self.assertEqual(policy.check_results("full", results), [])
         self.assertEqual(policy.check_results("", results), ["invalid_lane"])
         self.assertTrue(policy.check_results("full", {}))
         self.assertIn("new_unclassified_job", policy.check_results("full", {**results, "new_unclassified_job": {"result": "failure"}}))
+
+    def test_incremental_requires_focused_success_and_no_unplanned_heavy_run(self):
+        results = {name: {"result": "skipped"} for name in policy.HEAVY_JOBS}
+        results.update({name: {"result": "success"} for name in ("classify", "gate", "focused")})
+        self.assertEqual(policy.check_results("incremental", results), [])
+        for state in ("failure", "cancelled", "skipped"):
+            self.assertIn("focused", policy.check_results("incremental", {**results, "focused": {"result": state}}))
 
     def test_real_git_rename_cannot_hide_deleted_product_source(self):
         with tempfile.TemporaryDirectory() as temp:
