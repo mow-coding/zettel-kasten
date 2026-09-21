@@ -74,3 +74,7 @@
 실제 자동 배포의 draft 조회404를 교정하고 검증된 자산으로 공개 단계만 재개한다. 인증 목록의 유일한 numeric release ID로 draft를 조회한다. 배포 도구 전용 변경은 제품 실행 계약 불변을 확인하고 Linux/Windows 도구 회귀와 빠른 gate를 수행한다. 설치 성공, 공개 성공, 익명 새 설치 성공을 구분한다. 상세: [공개 복구 기록](../../meeting-minutes/2026-09-22-beta-publication-recovery.md).
 
 DP27 보완: 병합 후 삭제된 branch의 run 연결 목록이 비어 있으면, merged PR의 정확한 head와 commit 목록으로 baseline 소속을 입증한다. 소속 불명은 통과로 바꾸지 않는다.
+
+## DP28 — v0.4.37 공개 및 전달 판정
+
+v0.4.37의 정확한 검증 wheel을 공개하고 익명 다운로드와 두 fresh Windows 설치, SHA/크기/PEP610/174개 리소스/공개 bootstrap 출처를 확인했다. 제품 수정의 공개 전달은 가능하며 고객 실제 수용은 미확인이다. 자동 beta 최초 실패와 수동 복구, 교정 PR 통과 및 후속 자동 실행 상태를 분리한다. 상세: [출시 증거](../../meeting-minutes/2026-09-22-v0437-public-release-evidence.md).
