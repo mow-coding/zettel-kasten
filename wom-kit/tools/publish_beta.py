@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import urllib.request
+import urllib.parse
 
 
 def run(*args: str) -> str:
@@ -30,6 +31,58 @@ def find_release(repo: str, tag: str) -> dict | None:
     if len(matches) > 1:
         raise ValueError('ambiguous_release_identity')
     return matches[0] if matches else None
+
+
+def release_api(repo: str, endpoint: str, method: str, payload: dict) -> dict:
+    response = subprocess.check_output(
+        ["gh", "api", "--method", method, f"repos/{repo}/{endpoint}", "--input", "-"],
+        input=json.dumps(payload), text=True, encoding="utf-8")
+    return json.loads(response)
+
+
+def release_identity(release: dict, tag: str) -> int:
+    if (release.get("tag_name") != tag or release.get("prerelease") is not True
+            or type(release.get("id")) is not int or release["id"] <= 0):
+        raise ValueError("release_identity_mismatch")
+    return release["id"]
+
+
+def obtain_release(repo: str, tag: str, notes: Path, receipt: Path) -> dict:
+    if receipt.exists():
+        identity = json.loads(receipt.read_text(encoding="utf-8"))
+        if identity.get("repo") != repo or identity.get("tag") != tag:
+            raise ValueError("release_receipt_mismatch")
+        release_id = identity["release_id"]
+        if type(release_id) is not int or release_id <= 0:
+            raise ValueError("invalid_release_receipt_id")
+        release = json.loads(run("gh", "api", f"repos/{repo}/releases/{release_id}"))
+    else:
+        release = find_release(repo, tag)
+        if release is None:
+            # Creation returns the authoritative ID even when draft discovery
+            # does not yet expose this release to the workflow token.
+            release = release_api(repo, "releases", "POST", {
+                "tag_name": tag, "name": f"WOM {tag} beta",
+                "body": notes.read_text(encoding="utf-8"), "draft": True,
+                "prerelease": True, "make_latest": "false"})
+    release_id = release_identity(release, tag)
+    receipt.write_text(json.dumps({"repo": repo, "tag": tag,
+                                  "release_id": release_id}) + "\n", encoding="utf-8")
+    return release
+
+
+def download_asset(repo: str, asset: dict, destination: Path) -> None:
+    # Use the immutable asset ID; gh release download rediscovers drafts by tag.
+    with destination.open("wb") as output:
+        subprocess.run(["gh", "api", f"repos/{repo}/releases/assets/{asset['id']}",
+                        "-H", "Accept: application/octet-stream"], stdout=output, check=True)
+
+
+def upload_asset(repo: str, release_id: int, path: Path) -> dict:
+    endpoint = (f"https://uploads.github.com/repos/{repo}/releases/{release_id}/assets"
+                f"?name={urllib.parse.quote(path.name, safe='')}")
+    return json.loads(run("gh", "api", "--method", "POST", endpoint,
+                          "-H", "Content-Type: application/octet-stream", "--input", str(path)))
 
 
 def validate_inputs(source: dict, proof: dict, check: dict, wheel: Path) -> dict:
@@ -98,17 +151,8 @@ def publish(repo: str, directory: Path) -> dict:
     else:
         run("git", "tag", "-a", tag, "-m", f"WOM opt-in beta {tag}", commit)
         run("git", "push", "origin", f"refs/tags/{tag}")
-    # Listing is read-only and distinguishes absence from authentication/network errors.
-    release = find_release(repo, tag)
-    if release is None:
-        run("gh", "release", "create", tag, "--repo", repo, "--verify-tag", "--draft",
-            "--prerelease", "--latest=false", "--title", f"WOM {tag} beta", "--notes-file", str(notes))
-        release = find_release(repo, tag)
-    if release is None:
-        raise ValueError('created_draft_not_found')
-    release = json.loads(run("gh", "api", f"repos/{repo}/releases/{release['id']}"))
-    if not release["prerelease"]:
-        raise ValueError("existing_release_is_not_beta")
+    release = obtain_release(repo, tag, notes, directory / "release-identity.json")
+    release_id = release_identity(release, tag)
     assets = {a["name"]: a for a in release["assets"]}
     expected_files = [wheel, evidence_path, directory / "wheel-check.json"]
     # Never use --clobber. Retries reuse exactly matching assets or stop.
@@ -116,9 +160,8 @@ def publish(repo: str, directory: Path) -> dict:
         expected = artifact_row(path)
         if path.name in assets:
             with tempfile.TemporaryDirectory() as tmp:
-                run("gh", "release", "download", tag, "--repo", repo,
-                    "--pattern", path.name, "--dir", tmp)
                 downloaded = Path(tmp) / path.name
+                download_asset(repo, assets[path.name], downloaded)
                 if path.name == "wheel-check.json":
                     # Durations may differ on retry. Preserve the earlier valid
                     # report for exactly these wheel bytes; never replace it.
@@ -128,15 +171,18 @@ def publish(repo: str, directory: Path) -> dict:
         else:
             if not release["draft"]:
                 raise ValueError("published_release_is_incomplete")
-            run("gh", "release", "upload", tag, str(path), "--repo", repo)
+            assets[path.name] = upload_asset(repo, release_id, path)
     # Download draft bytes after upload too: reported metadata alone is insufficient.
     with tempfile.TemporaryDirectory() as tmp:
-        run("gh", "release", "download", tag, "--repo", repo, "--pattern", wheel.name, "--dir", tmp)
+        download_asset(repo, assets[wheel.name], Path(tmp) / wheel.name)
         if artifact_row(Path(tmp) / wheel.name) != row:
             raise ValueError("draft_wheel_mismatch")
     if release["draft"]:
         latest_before = json.loads(run("gh", "api", f"repos/{repo}/releases/latest"))["tag_name"]
-        run("gh", "release", "edit", tag, "--repo", repo, "--draft=false", "--prerelease", "--latest=false")
+        published = release_api(repo, f"releases/{release_id}", "PATCH",
+                                {"draft": False, "prerelease": True, "make_latest": "false"})
+        if release_identity(published, tag) != release_id or published.get("draft") is not False:
+            raise ValueError("release_publication_not_confirmed")
         latest_after = json.loads(run("gh", "api", f"repos/{repo}/releases/latest"))["tag_name"]
         if latest_after != latest_before:
             raise ValueError("stable_latest_changed_during_beta_publication")
