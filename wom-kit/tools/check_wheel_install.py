@@ -3315,7 +3315,8 @@ class WheelPartialEvidence:
         version = evidence.get("package_version")
         wheel_hash = evidence.get("wheel_sha256")
         if (
-            not isinstance(version, str) or re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version) is None
+            not isinstance(version, str) or len(version) > 64
+            or re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:b[1-9][0-9]*)?", version) is None
             or not isinstance(wheel_hash, str) or SHA256_RE.fullmatch(wheel_hash) is None
         ):
             raise WheelCheckError("Partial runtime evidence has invalid public bindings.")

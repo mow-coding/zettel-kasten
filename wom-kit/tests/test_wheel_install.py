@@ -2846,6 +2846,17 @@ class InstalledRuntimeJourneyHookTests(unittest.TestCase):
             with self.subTest(evidence=evidence), self.assertRaises(check_wheel_install.WheelCheckError):
                 self.invoke(evidence)
 
+    def test_partial_runtime_evidence_accepts_canonical_beta_but_keeps_proof_checks(self):
+        evidence = {**self.evidence, "package_version": "0.4.38b1"}
+        holder = check_wheel_install.WheelPartialEvidence()
+        holder.record_runtime(evidence)
+        self.assertEqual(holder.public_payload()["installed_v0419_runtime_journey"], evidence)
+        for version in ("0.4.38b0", "0.4.38b01", "0.4.38-beta.1", "0.4.38b1/private", "0.4.38b" + "1" * 65):
+            with self.subTest(version=version), self.assertRaises(check_wheel_install.WheelCheckError):
+                holder.record_runtime({**evidence, "package_version": version})
+        with self.assertRaises(check_wheel_install.WheelCheckError):
+            holder.record_runtime({**evidence, "real_candidate_repair_and_process_loss_resume": False})
+
     def test_non_windows_lane_does_not_emulate_windows_runtime(self):
         with mock.patch.object(check_wheel_install.os, "name", "posix"), mock.patch.object(
             check_wheel_install, "_run_installed_entrypoint",
