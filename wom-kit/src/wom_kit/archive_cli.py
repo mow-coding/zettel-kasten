@@ -38625,6 +38625,14 @@ def _validate_doctor_progress_log_path(
     candidate = log_path if log_path.is_absolute() else Path.cwd() / log_path
     resolved_log = candidate.resolve()
     resolved_archive = archive_root.resolve()
+    # A pre-existing hardlink may alias archive bytes even when its spelling is
+    # outside the archive. Refuse it before choosing a numbered new log name.
+    try:
+        existing = candidate.lstat()
+    except FileNotFoundError:
+        existing = None
+    if existing is not None and (not stat.S_ISREG(existing.st_mode) or existing.st_nlink > 1):
+        raise ValueError("doctor_progress_log_existing_path_unsafe")
     try:
         resolved_log.relative_to(resolved_archive)
     except ValueError:

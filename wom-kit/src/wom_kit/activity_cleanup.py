@@ -21,6 +21,7 @@ from . import archive_services as services
 from .exact_human_approval_windows import ExactHumanApprovalOperation
 from .exact_human_approval import PERMISSION_INTERACTIVE_INTENT_MECHANISM
 from .operation_approval_binding import ExactOperationApprovalBinding
+from .process_launch import noninteractive_creationflags
 
 ROOT = "receipts/activity-cleanup"
 SCHEMA = "wom-kit/activity-cleanup-request/v1"
@@ -88,7 +89,8 @@ def _git_inventory(root):
         return {"repository": False}
     def git(*args):
         run = subprocess.run(["git", "--no-optional-locks", "-C", str(root), *args],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30, check=False)
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30, check=False,
+            creationflags=noninteractive_creationflags())
         if run.returncode:
             raise ActivityCleanupError("activity_cleanup_git_inventory_unavailable")
         return run.stdout

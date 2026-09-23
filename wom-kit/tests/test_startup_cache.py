@@ -1,8 +1,11 @@
 import hashlib
 import json
+import marshal
 import os
 from pathlib import Path
+import shutil
 import tempfile
+import types
 import unittest
 
 from wom_kit import startup_cache as cache
@@ -55,6 +58,38 @@ class StartupCacheTests(unittest.TestCase):
         module = types.ModuleType("synthetic")
         cache._RetainedLoader(filename, payload).exec_module(module)
         self.assertEqual(module.answer, 42)
+
+    def test_installed_large_modules_verify_after_independent_compilation(self):
+        source_root = Path(__file__).resolve().parents[1] / "src" / "wom_kit"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for name in cache.MODULES:
+                shutil.copy2(source_root / (name + ".py"), root / (name + ".py"))
+            cache.build(root)
+            self.assertEqual(set(cache.verify(root, verify_compiled=True)),
+                {"wom_kit." + name for name in cache.MODULES})
+
+    def test_forged_code_origin_and_trailing_bytes_are_refused(self):
+        target = self.root / cache._filename("archive_cli")
+        original = target.read_bytes()
+        code = marshal.loads(original[16:])
+        self.assertIsInstance(code, types.CodeType)
+        forged = original[:16] + marshal.dumps(code.replace(co_filename="private/other.py"))
+        target.write_bytes(forged)
+        manifest = self.root / cache.MANIFEST
+        document = json.loads(manifest.read_bytes())
+        document["modules"]["archive_cli"]["cache_sha256"] = hashlib.sha256(forged).hexdigest()
+        document["modules"]["archive_cli"]["cache_size"] = len(forged)
+        manifest.write_text(json.dumps(document), encoding="ascii")
+        with self.assertRaises(cache.StartupCacheError):
+            cache.verify(self.root, verify_compiled=True)
+        with_trailing = original + b"ignored"
+        target.write_bytes(with_trailing)
+        document["modules"]["archive_cli"]["cache_sha256"] = hashlib.sha256(with_trailing).hexdigest()
+        document["modules"]["archive_cli"]["cache_size"] = len(with_trailing)
+        manifest.write_text(json.dumps(document), encoding="ascii")
+        with self.assertRaises(cache.StartupCacheError):
+            cache.verify(self.root, verify_compiled=True)
 
 
 if __name__ == "__main__":

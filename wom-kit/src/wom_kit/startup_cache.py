@@ -10,11 +10,13 @@ from __future__ import annotations
 import hashlib
 import importlib.abc
 import importlib.util
+import io
 import json
 import marshal
 from pathlib import Path
 import struct
 import sys
+import types
 
 MODULES = ("archive_services", "archive_cli")
 MANIFEST = "startup-cache.json"
@@ -47,6 +49,28 @@ def _filename(name):
 def compiled_bytes(raw, name):
     code = compile(raw, "wom_kit/" + name + ".py", "exec", dont_inherit=True, optimize=0)
     return importlib.util.MAGIC_NUMBER + struct.pack("<I", 3) + importlib.util.source_hash(raw) + marshal.dumps(code)
+
+
+def _compiled_code_matches(payload, raw, name):
+    # marshal may encode reference sharing differently for a large code object.
+    # Check the decoded code and every byte consumed, not its incidental encoding.
+    stream = io.BytesIO(payload[16:])
+    retained = marshal.load(stream)
+    if stream.tell() != len(payload) - 16 or not isinstance(retained, types.CodeType):
+        return False
+    expected = compile(raw, "wom_kit/" + name + ".py", "exec", dont_inherit=True, optimize=0)
+
+    def same_code(left, right):
+        if (left != right or left.co_filename != right.co_filename
+            or getattr(left, "co_qualname", None) != getattr(right, "co_qualname", None)):
+            return False
+        return all(
+            same_code(a, b) if isinstance(a, types.CodeType) and isinstance(b, types.CodeType)
+            else not isinstance(a, types.CodeType) and not isinstance(b, types.CodeType)
+            for a, b in zip(left.co_consts, right.co_consts)
+        ) and len(left.co_consts) == len(right.co_consts)
+
+    return same_code(retained, expected)
 
 
 def build(package_root):
@@ -90,11 +114,11 @@ def verify(package_root, *, verify_compiled=False):
             if (entry != {"source_sha256": _sha(source), "cache_sha256": _sha(payload), "source_size": len(source), "cache_size": len(payload)}
                 or payload[:16] != importlib.util.MAGIC_NUMBER + struct.pack("<I", 3) + importlib.util.source_hash(source)):
                 raise ValueError()
-            if verify_compiled and payload != compiled_bytes(source, name):
+            if verify_compiled and not _compiled_code_matches(payload, source, name):
                 raise ValueError()
             retained["wom_kit." + name] = (str(root / (name + ".py")), payload)
         return retained
-    except (OSError, ValueError, KeyError, TypeError):
+    except (OSError, ValueError, KeyError, TypeError, EOFError):
         raise StartupCacheError("startup_cache_integrity_mismatch") from None
 
 
