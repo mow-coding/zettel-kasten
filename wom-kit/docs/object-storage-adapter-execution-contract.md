@@ -318,7 +318,7 @@ remote object is never deleted; `object-storage-restore` brings the bytes back.
   reparse-free path chain and carries a usable identity (inode ≥ 1, one link);
   not referenced by any inbox draft (body or frontmatter objet tokens) and not
   the fidelity source of any inbox draft's private receipt; captured at least
-  `--min-age-days` (default 30) ago and at least `--min-size-bytes` (default 0)
+  `--min-age-days` (default 0: no date filter, including unknown dates) ago and at least `--min-size-bytes` (default 0)
   large — `--only` bypasses the two filters, never the safety predicates.
   Every exclusion is counted; an unreadable draft or fidelity receipt blocks
   the whole plan (`object_storage_offload_retention_evidence_unreadable`).

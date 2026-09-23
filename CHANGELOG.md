@@ -6,6 +6,13 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.38 - 2026-09-23
+
+- Resolve two activity-completion reports together: revise an unpublished zet while retaining its identity and earlier body, and build session storage lists from authenticated intake and actual zet use.
+- Remove the default 30-day offload filter. Bind remote preservation to whole-body SHA-256 and a strong response ETag, reuse a matching generation without restoring local objects, and pass the exact completed upload list to a separate offload step.
+- Add Windows activity cleanup for classified external originals and project files, with exact per-file preservation, Git/worktree inspection, native deletion and interruption recovery. Valid session-wide access adds no operation dialogs.
+- Clarify command errors, progress, quality warnings and storage costs; reduce installed runtime startup with verified derived bytecode caches. Synthetic and installed-artifact validation are recorded separately from client acceptance.
+
 ## v0.4.37 - 2026-09-21
 
 - Default upload, restore and offload to the current session capture scope; support explicit delegated-session, object-list and all-session selection.

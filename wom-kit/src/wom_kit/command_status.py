@@ -138,6 +138,8 @@ COMPOUND_APPROVAL_FIXED_CLOSED_PLAN_WRITERS: dict[str, str] = {}
 # approval.  Their plan documents keep the same contract shape so an AI
 # operator can tell a validation preview from approval authority.
 EXACT_APPROVAL_REOPENED_WRITERS = frozenset({
+    "draft-revision-write",
+    "activity-cleanup",
     "discard-draft",
     "discard-draft-restore",
     "zettel-edge-batch",

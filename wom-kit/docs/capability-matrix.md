@@ -1,8 +1,8 @@
 ﻿# WOM-kit Capability Matrix
 
-Version: v0.4.37 implementation and release scope
+Version: v0.4.38 implementation and release scope
 
-Status: v0.4.37 session-scoped storage and explicit delegation; [scope contract](object-storage-session-scope.md).
+Status: v0.4.38 activity completion and session-scoped storage; [activity contract](activity-completion.md).
 
 Status: v0.4.36 no-dialog grants, letter-168, and session-owned writes truth
 Date: 2026-09-04
@@ -119,8 +119,8 @@ revalidated dimension by dimension without exposing compared values, and
 noninteractive Windows child processes use the common no-console policy while
 native approval and credential interaction remain visible.
 
-The current parser inventory has 61 approval-available, 59 fixed-closed, and
-202 not-exposed canonical paths, including ten conditional approval scopes.
+The current parser inventory has 63 approval-available, 59 fixed-closed, and
+204 not-exposed canonical paths, including ten conditional approval scopes.
 v0.4.36 added `operator-feedback-archive` (delivered letters leave the archive).
 v0.4.33 reopened `object-storage-upload` under the exact approval contract.
 v0.4.21 reopened `discard-draft`, `discard-draft-restore`, `zettel-edge-batch`,

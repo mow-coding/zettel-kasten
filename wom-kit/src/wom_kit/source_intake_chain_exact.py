@@ -307,6 +307,7 @@ def plan_source_intake_chain(
     item_id: str = "item",
     manifest_id: str | None = None,
     project_intake_receipt: str | None = None,
+    _recovery_capture_preview: dict[str, Any] | None = None,
 ) -> SourceIntakeChainExactPlan:
     """Plan record, selection and capture from projected bytes; write nothing."""
 
@@ -343,7 +344,7 @@ def plan_source_intake_chain(
 
     # Step 1: the intake record from the reviewed source-intake plan file.
     try:
-        record = source_intake_record_exact.plan_source_intake_record(root, input_plan_path)
+        record = source_intake_record_exact.plan_source_intake_record(root, input_plan_path, _allow_existing_exact=_recovery_capture_preview is not None)
     except source_intake_record_exact.SourceIntakeRecordExactError as error:
         return _blocked_plan(
             **common,
@@ -393,7 +394,8 @@ def plan_source_intake_chain(
             source_intake_receipt=record.receipt_relative_path,
             item_id=item_id,
             manifest_id=manifest_id,
-            projected_source_intake_receipt_bytes=record.receipt_bytes,
+            projected_source_intake_receipt_bytes=(None if _recovery_capture_preview is not None and (root / record.receipt_relative_path).exists() else record.receipt_bytes),
+            _allow_existing_exact=_recovery_capture_preview is not None,
         )
     except objet_capture_selection_exact.ExistingIntakeCaptureSelectionError as error:
         return _blocked_plan(
@@ -445,19 +447,22 @@ def plan_source_intake_chain(
         selection_document = json.loads(selection.selection_bytes.decode("utf-8"))
         if not isinstance(selection_document, dict):
             raise ValueError("selection document must be an object")
-        preview = archive_services._objet_capture_run(
-            root,
-            None,
-            approve=False,
-            reviewed_by=None,
-            project_intake_receipt=project_intake_receipt,
-            selection_document=selection_document,
-            selection_document_path=selection.selection_relative_path,
-            native_exact_authorized=True,
-            projected_source_intake_receipts={
-                record.receipt_relative_path: record.receipt_bytes
-            },
-        )
+        if _recovery_capture_preview is not None:
+            preview = copy.deepcopy(_recovery_capture_preview)
+        else:
+            preview = archive_services._objet_capture_run(
+                root,
+                None,
+                approve=False,
+                reviewed_by=None,
+                project_intake_receipt=project_intake_receipt,
+                selection_document=selection_document,
+                selection_document_path=selection.selection_relative_path,
+                native_exact_authorized=True,
+                projected_source_intake_receipts={
+                    record.receipt_relative_path: record.receipt_bytes
+                },
+            )
     except (
         archive_services.ArchiveServiceError,
         OSError,
@@ -471,6 +476,8 @@ def plan_source_intake_chain(
             steps=(record_step, selection_step, _blocked_step(STEP_NAMES[2], "objet_capture_plan_failed")),
             blocker="source_intake_chain_plan_blocked",
         )
+    if _recovery_capture_preview is not None:
+        preview = copy.deepcopy(_recovery_capture_preview)
     capture_blockers = preview.get("blockers") if isinstance(preview.get("blockers"), list) else []
     item_blockers = [
         blocker
@@ -664,6 +671,7 @@ def _execute_core(
     *,
     reviewer_claim: str,
     progress_hook: Callable[[ExactOperationProgress], None] | None = None,
+    _resume: bool = False,
 ) -> dict[str, Any]:
     root = plan.archive_root
     if not plan.approveable or plan.record is None or plan.selection is None:
@@ -677,6 +685,7 @@ def _execute_core(
         item_id=plan.item_id,
         manifest_id=plan.manifest_id,
         project_intake_receipt=plan.project_intake_receipt,
+        _recovery_capture_preview=plan.capture_preview if _resume else None,
     )
     if not fresh.approveable or fresh.record is None or fresh.selection is None:
         raise _fail("source_intake_chain_state_drifted")
@@ -717,6 +726,7 @@ def _execute_core(
             claim=claim,
             chain_authority=authority.for_item(str(record_step.item_identity_sha256)),
             progress_hook=progress_hook,
+            _resume=_resume,
         )
     except (
         source_intake_record_exact.SourceIntakeRecordExactError,
@@ -742,6 +752,7 @@ def _execute_core(
                 source_intake_receipt=str(fresh.record.receipt_relative_path),
                 item_id=fresh.item_id,
                 manifest_id=fresh.manifest_id,
+                _allow_existing_exact=_resume,
             )
             if (
                 not selection_plan.approveable
@@ -756,6 +767,7 @@ def _execute_core(
                 claim=claim,
                 chain_authority=authority.for_item(str(selection_step.item_identity_sha256)),
                 progress_hook=progress_hook,
+                _resume=_resume,
             )
         except (
             SourceIntakeChainExactError,
@@ -780,14 +792,29 @@ def _execute_core(
 
             # Step 3: capture from the selection file now on disk.
             try:
-                capture_result = archive_services.objet_capture_apply(
-                    root,
-                    Path(str(fresh.selection.selection_relative_path)),
-                    reviewed_by=reviewer_claim,
-                    project_intake_receipt=fresh.project_intake_receipt,
-                    exact_human_approval_claim=claim,
-                    batch_authority=authority.for_item(str(capture_step.item_identity_sha256)),
-                )
+                already = None
+                if _resume:
+                    current = archive_services._objet_capture_run(root, Path(str(fresh.selection.selection_relative_path)),
+                        approve=False, reviewed_by=None, project_intake_receipt=fresh.project_intake_receipt,
+                        native_exact_authorized=True)
+                    current_items = current.get("items") or []
+                    original_ids = {item.get("object_id") for item in fresh.capture_preview.get("items", [])}
+                    if (current.get("ok") is True and current_items
+                        and {item.get("object_id") for item in current_items} == original_ids
+                        and all(item.get("planned_action") == "skip_already_present" and not item.get("blockers") for item in current_items)):
+                        already = {"ok": True, "dry_run": False, "items": current_items,
+                            "already_present_verified": True, "files_written": []}
+                if already is not None:
+                    capture_result = already
+                else:
+                    capture_result = archive_services.objet_capture_apply(
+                        root,
+                        Path(str(fresh.selection.selection_relative_path)),
+                        reviewed_by=reviewer_claim,
+                        project_intake_receipt=fresh.project_intake_receipt,
+                        exact_human_approval_claim=claim,
+                        batch_authority=authority.for_item(str(capture_step.item_identity_sha256)),
+                    )
             except (archive_services.ArchiveServiceError, OSError) as error:
                 failure_code = str(getattr(error, "code", "") or "objet_capture_write_failed")
                 step_documents.append(
@@ -804,8 +831,14 @@ def _execute_core(
                     and capture_result.get("dry_run") is not True
                 )
                 capture_document = _step_result_document(
-                    capture_step, capture_result, "written" if capture_ok else "failed"
+                    capture_step, capture_result, ("already_present_verified" if capture_result.get("already_present_verified") else "written") if capture_ok else "failed"
                 )
+                capture_document["object_ids"] = sorted({
+                    item["object_id"] for item in capture_result.get("items", [])
+                    if isinstance(item, dict) and not item.get("blockers")
+                    and isinstance(item.get("object_id"), str)
+                    and re.fullmatch(r"sha256:[0-9a-f]{64}", item["object_id"])
+                })
                 if not capture_ok:
                     blockers = capture_result.get("blockers")
                     item_blockers = [

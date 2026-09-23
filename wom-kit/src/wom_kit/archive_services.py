@@ -3579,7 +3579,7 @@ AI_ARTIFACT_INVENTORY_DEFAULT_ROOTS = (
 AI_ARTIFACT_UNMANAGED_PROJECT_SCRATCH = ".wom-scratch"
 AI_ARTIFACT_UNMANAGED_PROJECT_SCAN_LIMIT = 10_000
 AI_ARTIFACT_UNMANAGED_PROJECT_NEXT_SAFE_ACTIONS = (
-    "Keep external project-root files outside WOM lifecycle and GC authority until an explicit reviewed root-registration contract exists.",
+    "Use activity-cleanup with an explicit private file request to preserve and clean external project roots; read-only artifact registration alone does not authorize deletion.",
     "Review long-lived external work through the human-artifact or source-intake preservation path before any cleanup.",
     "Do not close the operation until every reviewed external artifact has durable preserve, defer, or discard evidence.",
 )
@@ -19385,7 +19385,7 @@ def zet_revision_plan(
         or not canonical.is_file()
         or not canonical_relative.startswith("zettels/")
     ):
-        raise ArchiveServiceError("Zet revision target must be one plain canonical zet.")
+        raise ArchiveServiceError("Zet revision target must be one plain canonical zet. For an unpublished draft use draft-revision-plan then draft-revision-write.")
 
     canonical_snapshot = validated_zet_revision_snapshot(
         canonical,
@@ -38736,9 +38736,10 @@ def _source_fidelity_verify_for_mint(
     path: Path,
     *,
     affirmations: dict[str, str] | None,
+    _candidate_path: Path | None = None,
 ) -> dict[str, Any]:
     legacy_snapshot = validated_approval_zettel_snapshot(
-        path,
+        _candidate_path or path,
         max_bytes=SOURCE_FIDELITY_MAX_DRAFT_BYTES,
         expected_zettel_id=None,
         expected_archive_id=read_archive_id(root),
@@ -38838,7 +38839,7 @@ def _source_fidelity_verify_for_mint(
     # v0.3.313 fidelity drafts use an LF-only byte contract.  Legacy AI drafts
     # are classified and affirmed above through the tolerant, duplicate-safe
     # approval parser so old Windows CRLF records remain reviewable.
-    snapshot = _source_fidelity_raw_draft_snapshot(root, path)
+    snapshot = _source_fidelity_raw_draft_snapshot(root, _candidate_path or path)
     if not snapshot.get("ok"):
         return {
             "applicable": True,
@@ -60924,7 +60925,11 @@ def zettel_quality_assessment(
                     "Markdown table content should carry a reviewed table-structure marker before it becomes canonical knowledge.",
                 )
             )
-        if not parse_review.get("row_mapping") and not parse_review.get("source_row_mapping"):
+        table_origin = parse_review.get("table_origin")
+        if table_origin is not None and table_origin not in {"authored", "transcribed", "mixed"}:
+            issues.append(quality_issue("table_origin_invalid", "warning", "ocr_table",
+                "Set parse_review.table_origin to authored, transcribed, or mixed."))
+        if table_origin != "authored" and not parse_review.get("row_mapping") and not parse_review.get("source_row_mapping"):
             issues.append(
                 quality_issue(
                     "table_row_mapping_missing",
@@ -61024,6 +61029,7 @@ def zettel_quality_assessment(
         "blocker_count": blocker_count,
         "warning_count": warning_count,
         "issues": issues,
+        "warning_explanations": zettel_quality_warning_explanations(frontmatter, body, issues),
         "document_type": {
             "value_present": bool(document_type),
             "recognized": bool(document_type in ZET_QUALITY_DOCUMENT_TYPES) if document_type else False,
@@ -101919,9 +101925,18 @@ def backup_evidence_status(
         "Keep local reviewed WOM state authoritative even when an external backup or replica is later verified."
     )
 
+    from . import storage_cost
+    capacity_summary = storage_cost.capacity(root, grouped_records, receipt_cache=receipt_cache)
+    capacity_summary["scan_complete"] = scan_complete
+    providers = {loc.get("provider_kind") for rows in grouped_records.values() for row in rows
+        for loc in row.get("locations", []) if isinstance(loc, dict) and loc.get("provider") == "object_storage"}
+    cost_summary = storage_cost.estimate_capacity(capacity_summary,
+        provider_kind="cloudflare-r2" if providers == {"cloudflare-r2"} else "unknown_or_mixed")
     return {
         "ok": not blockers,
         "schema": BACKUP_EVIDENCE_STATUS_SCHEMA,
+        "capacity": capacity_summary,
+        "cost_estimate": cost_summary,
         "dry_run": True,
         "lifecycle_action": "backup_evidence_status",
         "archive_id": archive_id,
@@ -145942,6 +145957,29 @@ class _S3CompatibleTransport:
 
     # -- transport methods -------------------------------------------------
 
+    def preservation_binding(self) -> dict[str, str]:
+        """Non-secret remote identity; stored privately, never a public diagnostic."""
+        return {"service": self._service, "endpoint_host": self._endpoint_host,
+                "bucket": self._bucket, "region": self._region}
+
+    def head_object_if_match(self, *, key: str, etag: str) -> dict[str, Any]:
+        from .remote_preservation_proof import strong_etag
+        if strong_etag(etag) is None:
+            return {"state": "unavailable"}
+        response = self._dispatch(method="HEAD", key=key,
+            payload_hash=SIGV4_UNSIGNED_PAYLOAD, extra_headers={"if-match": etag})
+        if response.get("transport_error"):
+            return {"state": "unavailable"}
+        status = response.get("status")
+        if status in (404, 412):
+            return {"state": "changed"}
+        headers = response.get("headers") or {}
+        returned = strong_etag(headers.get("etag")) if isinstance(headers, dict) else None
+        size = _object_storage_parse_content_length(headers.get("content-length")) if isinstance(headers, dict) else None
+        if status != 200 or returned != etag or size is None:
+            return {"state": "unavailable"}
+        return {"state": "unchanged", "etag": returned, "size": size}
+
     def head_object(self, *, key: str, presence_only: bool = False) -> dict[str, Any]:
         # Whole-object sha256 verification is done by re-download-and-hash (CB-Q2
         # fallback), NOT by a stored server-side checksum. R2 does not implement
@@ -145999,7 +146037,7 @@ class _S3CompatibleTransport:
                 "verification_state": "complete" if size is not None else "unavailable",
             }
         # GetObject and hash the streamed bytes to the whole-object sha256 hex.
-        checksum_hex, verified_size, verification_complete = self._get_object_sha256_evidence(
+        checksum_hex, verified_size, verification_complete, get_etag = self._get_object_sha256_evidence_with_etag(
             key,
             expected_size=size,
         )
@@ -146009,25 +146047,33 @@ class _S3CompatibleTransport:
             "checksum_sha256": checksum_hex,
             "presence_state": "present",
             "verification_state": "complete" if verification_complete else "unavailable",
+            "whole_get_etag": get_etag if verification_complete else None,
         }
 
     def _get_object_sha256_hex(self, key: str) -> str | None:
         checksum_hex, _, _ = self._get_object_sha256_evidence(key, expected_size=None)
         return checksum_hex
 
-    def _get_object_sha256_evidence(
+    def _get_object_sha256_evidence(self, key: str, *, expected_size: int | None) -> tuple[str | None, int | None, bool]:
+        # Retain the existing three-value API for previous callers.
+        return self._get_object_sha256_evidence_with_etag(key, expected_size=expected_size)[:3]
+
+    def _get_object_sha256_evidence_with_etag(
         self,
         key: str,
         *,
         expected_size: int | None,
-    ) -> tuple[str | None, int | None, bool]:
+    ) -> tuple[str | None, int | None, bool, str | None]:
         # GET the object body and return its lowercase-hex sha256, or None if the
         # object could not be read completely. The default sender supplies only
         # scalar streamed evidence; legacy injected fakes may still supply body.
         response = self._dispatch(method="GET", key=key, payload_hash=SIGV4_UNSIGNED_PAYLOAD)
         status = int(response.get("status") or 0)
+        from .remote_preservation_proof import strong_etag
+        headers = response.get("headers") or {}
+        etag = strong_etag(headers.get("etag")) if isinstance(headers, dict) else None
         if response.get("transport_error") or status != 200:
-            return None, None, False
+            return None, None, False, None
         if "body_complete" in response or "body_sha256" in response:
             checksum_hex = response.get("body_sha256")
             body_size = response.get("body_size")
@@ -146041,20 +146087,20 @@ class _S3CompatibleTransport:
                 and body_size >= 0
                 and (expected_size is None or body_size == expected_size)
             ):
-                return checksum_hex, body_size, True
-            return None, None, False
+                return checksum_hex, body_size, True, etag
+            return None, None, False, None
         body = response.get("body")
         if isinstance(body, (bytes, bytearray)):
             value = bytes(body)
             if expected_size is None or len(value) != expected_size:
-                return None, None, False
-            return hashlib.sha256(value).hexdigest(), len(value), True
+                return None, None, False, None
+            return hashlib.sha256(value).hexdigest(), len(value), True, etag
         if isinstance(body, str):
             value = body.encode("utf-8")
             if expected_size is None or len(value) != expected_size:
-                return None, None, False
-            return hashlib.sha256(value).hexdigest(), len(value), True
-        return None, None, False
+                return None, None, False, None
+            return hashlib.sha256(value).hexdigest(), len(value), True, etag
+        return None, None, False, None
 
     def put_object(
         self,
@@ -151289,11 +151335,12 @@ def zettel_quality_warning_explanations(
             "code": "document_type_missing",
             "category": "frontmatter_field",
             "field": "document_type",
+            "example": "document_type: private_working_note",
             "allowed_values": sorted(ZET_QUALITY_DOCUMENT_TYPES),
             "field_present": "document_type" in (frontmatter if isinstance(frontmatter, dict) else {}),
             "issue_values_echoed": False,
         })
-    table_codes = [code for code in ("table_row_mapping_missing", "table_structure_review_missing") if code in codes]
+    table_codes = [code for code in ("table_origin_invalid", "table_row_mapping_missing", "table_structure_review_missing") if code in codes]
     if table_codes:
         evidence = zettel_markdown_table_evidence(body if isinstance(body, str) else "")
         for code in table_codes:
@@ -151302,8 +151349,13 @@ def zettel_quality_warning_explanations(
                 "category": "table_parse_review",
                 "field": (
                     "parse_review.row_mapping" if code == "table_row_mapping_missing"
+                    else "parse_review.table_origin" if code == "table_origin_invalid"
                     else "parse_review.structure_reviewed (or table_structure_reviewed)"
                 ),
+                "table_origin_field": "parse_review.table_origin",
+                "table_origin_allowed_values": ["authored", "transcribed", "mixed"],
+                "authored_table_note": "An authored summary has no original rows to map. Declare authored; never invent mapping or automatically mark review complete.",
+                "example": "parse_review:\n  table_origin: authored\n  structure_reviewed: true # only after actual review",
                 **evidence,
                 "issue_values_echoed": False,
             })
@@ -165022,6 +165074,8 @@ def staged_cleanup_check(
     *,
     deferred_path: Path | str | None = None,
     progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
+    remote_verifier=None,
+    remote_provider_kind: str = "cloudflare-r2",
 ) -> dict[str, Any]:
     """Report-only G2 deletion-safety verifier for a staged intake folder.
 
@@ -165541,10 +165595,24 @@ def staged_cleanup_check(
             object_id,
             source_size,
         )
+        remote_preserved = False
+        if not bytes_verified and record_present and receipt_valid and remote_verifier is not None:
+            from .object_storage_restore import _remote_location
+            candidates = [remote for record in manifest_records
+                if record.get("object_id") == object_id
+                and (remote := _remote_location(record, provider_kind=remote_provider_kind,
+                    store_ref=remote_verifier.store_ref)) is not None]
+            keys = {remote["remote_key"] for remote in candidates}
+            if len(keys) == 1:
+                remote_result = remote_verifier.verify(key=next(iter(keys)), object_id=object_id,
+                    size=source_size, heartbeat=lambda: _progress("remote-proof", "verifying"))
+                remote_preserved = remote_result["state"] == "verified_match"
+                bytes_verified = remote_preserved
         if bytes_verified and record_present and receipt_valid:
             status = "preserved"
             preservation_kind = "objet"
-            reason_code = "objet_bytes_manifest_store_and_receipt_verified"
+            reason_code = ("objet_bytes_manifest_remote_and_receipt_verified" if remote_preserved
+                           else "objet_bytes_manifest_store_and_receipt_verified")
             selected_manifest_present = True
             selected_receipt_present = True
             selected_bytes_verified = True
@@ -165606,7 +165674,7 @@ def staged_cleanup_check(
                 # deferment, not corruption. No provider is called here.
                 status = "deferred"
                 preservation_kind = "objet"
-                reason_code = "objet_bytes_offloaded_remote_only_restore_before_cleanup"
+                reason_code = "objet_bytes_offloaded_remote_proof_required"
                 selected_manifest_present = True
                 selected_receipt_present = receipt_candidate_present
                 selected_bytes_verified = False

@@ -93,7 +93,7 @@ _TERMINAL_STATUSES = frozenset({STATUS_BYTES_OFFLOADED, STATUS_REVIEW_REQUIRED})
 _REVIEW_REASONS = frozenset(
     {"remote_absent", "remote_size_mismatch", "remote_checksum_mismatch"}
 )
-DEFAULT_MIN_AGE_DAYS = 30
+DEFAULT_MIN_AGE_DAYS = 0
 DEFAULT_MIN_SIZE_BYTES = 0
 # Only originals captured by WOM's own intake are offload candidates. Snapshot
 # writers (zet revision / title remap / activity-group before-snapshots) and
@@ -446,12 +446,14 @@ class ObjectStorageOffloadPlan:
     selected_only: str | None = None
     scope: ObjectScope | None = None
     loaded_from_control: bool = False
+    capacity: dict[str, Any] | None = None
 
     @property
     def approveable(self) -> bool:
         return self.manifest is not None and bool(self.specs) and not self.blockers
 
     def public_document(self) -> dict[str, Any]:
+        from . import storage_cost
         if self.blockers:
             state = "blocked"
             reason = list(self.blockers)
@@ -481,6 +483,12 @@ class ObjectStorageOffloadPlan:
             next_actions.append(
                 "Objects without local bytes are not offload targets; object-storage-restore is the command for them."
             )
+        age_excluded = int(self.counts["below_min_age_count"]) + int(self.counts["captured_at_unknown_count"])
+        if age_excluded:
+            next_actions.append(
+                f"The explicit {self.min_age_days}-day filter excluded {age_excluded} objects "
+                "(including unknown capture dates). Use --min-age-days 0 to disable date filtering."
+            )
         return {
             "schema_version": PLAN_SCHEMA,
             **(self.scope.summary(int(self.counts.get("unique_object_count") or 0)) if self.scope else {"scope_kind": "legacy_all_sessions"}),
@@ -492,8 +500,14 @@ class ObjectStorageOffloadPlan:
             "source_binding_sha256": self.manifest.source_set_sha256 if self.manifest else None,
             "effect_binding_sha256": self.manifest.effect_set_sha256 if self.manifest else None,
             "source_inventory_sha256": self.source_inventory_sha256,
+            "capacity": self.capacity,
+            "cost_estimate": storage_cost.estimate_capacity(self.capacity,
+                class_b=len(self.specs) * 2, provider_kind=self.provider_kind),
             "retention_evidence_sha256": self.retention_sha256,
             "min_age_days": self.min_age_days,
+            "age_filter_enabled": self.min_age_days > 0,
+            "age_filter_excluded_count": age_excluded,
+            "warning_codes": ["object_storage_offload_age_filter_excluded"] if age_excluded else [],
             "min_size_bytes": self.min_size_bytes,
             **{str(key): int(value) for key, value in self.counts.items()},
             "planned_object_count": len(self.specs),
@@ -693,18 +707,19 @@ def _build_plan(
             if size_bytes < min_size_bytes:
                 counts["below_min_size_count"] += 1
                 continue
-            captured = None
-            for row in group:
-                provenance = row.get("provenance") if isinstance(row.get("provenance"), dict) else {}
-                captured = _parse_time(provenance.get("captured_at"))
-                if captured is not None:
-                    break
-            if captured is None:
-                counts["captured_at_unknown_count"] += 1
-                continue
-            if (now - captured).days < min_age_days:
-                counts["below_min_age_count"] += 1
-                continue
+            if min_age_days > 0:
+                captured = None
+                for row in group:
+                    provenance = row.get("provenance") if isinstance(row.get("provenance"), dict) else {}
+                    captured = _parse_time(provenance.get("captured_at"))
+                    if captured is not None:
+                        break
+                if captured is None:
+                    counts["captured_at_unknown_count"] += 1
+                    continue
+                if (now - captured).days < min_age_days:
+                    counts["below_min_age_count"] += 1
+                    continue
         counts["offload_target_count"] += 1
         source_token = _source_token(
             object_id=object_id, rows=group, remote_key=remote_key, remote_source_kind=remote_source_kind
@@ -735,6 +750,7 @@ def _build_plan(
     if max_objects is not None and len(specs) > max_objects:
         raise _fail("object_storage_offload_plan_invalid")
     manifest = _manifest_for_specs(archive_id, specs, scope=scope) if not blockers else None
+    from . import storage_cost
     return ObjectStorageOffloadPlan(
         archive_root=root,
         archive_id=archive_id,
@@ -747,6 +763,8 @@ def _build_plan(
         manifest=manifest,
         specs=tuple(specs),
         counts=counts,
+        capacity=storage_cost.capacity(root, groups, provider_kind=normalized_provider, store_ref=normalized_store,
+            offloadable_bytes=sum(spec.size_bytes for spec in specs)),
         blockers=tuple(blockers),
         selected_only=selected_only,
         scope=scope,
@@ -835,16 +853,16 @@ def _receipt_document(
     }
 
 
-def _create_or_match_document(root: Path, relative: str, raw: bytes, *, failure_code: str) -> None:
+def _create_or_match_document(root: Path, relative: str, raw: bytes, *, failure_code: str, max_bytes: int = _MAX_RECEIPT_BYTES) -> None:
     """Create-only, torn-write-safe: serialize beside the target, fsync, move
     no-replace; an existing target must match byte for byte."""
 
-    if len(raw) > _MAX_RECEIPT_BYTES:
+    if len(raw) > max_bytes:
         raise _fail(failure_code)
     target = archive_services.archive_internal_path(root, relative)
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists():
-        preservation._read_exact_receipt(target, raw, max_bytes=_MAX_RECEIPT_BYTES, failure_code=failure_code)
+        preservation._read_exact_receipt(target, raw, max_bytes=max_bytes, failure_code=failure_code)
         return
     temporary = target.parent / f".{target.name}.tmp-{os.getpid()}"
     try:
@@ -870,7 +888,7 @@ def _create_or_match_document(root: Path, relative: str, raw: bytes, *, failure_
         except OSError:
             pass
         raise _fail(failure_code) from None
-    preservation._read_exact_receipt(target, raw, max_bytes=_MAX_RECEIPT_BYTES, failure_code=failure_code)
+    preservation._read_exact_receipt(target, raw, max_bytes=max_bytes, failure_code=failure_code)
 
 
 def _receipt_path(plan: ObjectStorageOffloadPlan, spec: OffloadSpec) -> Path:
@@ -1080,6 +1098,7 @@ def _offload_one(
     *,
     execution_sha256: str,
     heartbeat: Callable[[], None],
+    verifier=None,
 ) -> tuple[str, str, str | None, str | None]:
     """Return (offload_status, remote_state, review_reason, completed_at_override).
 
@@ -1116,31 +1135,30 @@ def _offload_one(
     identity = _file_identity(destination)
     if identity is None:
         raise _fail("object_storage_offload_local_conflict")
-    if marker is not None and marker["local_identity"] == identity:
-        # The proof of an earlier attempt of this approved execution stands:
-        # the file is byte-identical (device, inode, size, mtime) and the
-        # bound delete re-hashes it through its handle before removing it.
-        proof = marker
-    else:
-        if marker is not None:
-            _discard_marker(plan, spec, execution_sha256=execution_sha256)
-        remote_state = _prove_remote(spec, transport, heartbeat=heartbeat)
-        if remote_state == "absent":
-            return STATUS_REVIEW_REQUIRED, "absent", "remote_absent", None
-        if remote_state == "size_mismatch":
-            return STATUS_REVIEW_REQUIRED, "size_mismatch", "remote_size_mismatch", None
-        if remote_state == "checksum_mismatch":
-            return STATUS_REVIEW_REQUIRED, "checksum_mismatch", "remote_checksum_mismatch", None
-        if remote_state != "verified_match":
-            raise _fail("object_storage_offload_remote_unavailable")
-        # Local bytes re-hashed once more after the (possibly long) download,
-        # and their identity captured for the handle-bound delete.
-        if restore._destination_state(root, spec.object_id, spec.size_bytes, heartbeat=heartbeat) != "present_verified":
-            raise _fail("object_storage_offload_local_conflict")
-        identity = _file_identity(destination)
-        if identity is None:
-            raise _fail("object_storage_offload_local_conflict")
-        proof = _write_marker(plan, spec, identity=identity, execution_sha256=execution_sha256)
+    # A pre-delete marker is a recovery intent, never proof that remote bytes
+    # remain unchanged after the process stopped. Revalidate before every delete.
+    if marker is not None and marker["local_identity"] != identity:
+        _discard_marker(plan, spec, execution_sha256=execution_sha256)
+        marker = None
+    remote_state = (verifier.verify(key=spec.remote_key, object_id=spec.object_id,
+        size=spec.size_bytes, heartbeat=heartbeat)["state"] if verifier is not None
+        else _prove_remote(spec, transport, heartbeat=heartbeat))
+    if remote_state == "absent":
+        return STATUS_REVIEW_REQUIRED, "absent", "remote_absent", None
+    if remote_state == "size_mismatch":
+        return STATUS_REVIEW_REQUIRED, "size_mismatch", "remote_size_mismatch", None
+    if remote_state == "checksum_mismatch":
+        return STATUS_REVIEW_REQUIRED, "checksum_mismatch", "remote_checksum_mismatch", None
+    if remote_state != "verified_match":
+        raise _fail("object_storage_offload_remote_unavailable")
+    # Local bytes re-hashed once more after the (possibly long) download,
+    # and their identity captured for the handle-bound delete.
+    if restore._destination_state(root, spec.object_id, spec.size_bytes, heartbeat=heartbeat) != "present_verified":
+        raise _fail("object_storage_offload_local_conflict")
+    identity = _file_identity(destination)
+    if identity is None:
+        raise _fail("object_storage_offload_local_conflict")
+    proof = _write_marker(plan, spec, identity=identity, execution_sha256=execution_sha256)
     expected = {
         "type": "file",
         "identity": {"device": proof["local_identity"]["device"], "inode": proof["local_identity"]["inode"]},
@@ -1489,6 +1507,9 @@ class _Writer:
         self.plan = plan
         self.transport = transport
         self.execution_sha256 = execution_sha256
+        from .remote_preservation_proof import PreservationVerifier, ProofStore
+        self.verifier = PreservationVerifier(transport, store_ref=plan.store_ref,
+            execution_sha256=execution_sha256, proof_store=ProofStore(plan.archive_root))
         self.by_target = {spec.receipt_relative: spec for spec in plan.specs}
         self.status_counts: dict[str, int] = {status: 0 for status in sorted(_TERMINAL_STATUSES)}
         self.provider_get_count = 0
@@ -1512,10 +1533,10 @@ class _Writer:
             except ObjectStorageOffloadError:
                 had_marker = False
             status, remote_state, review_reason, completed_at = _offload_one(
-                self.plan, spec, self.transport, execution_sha256=self.execution_sha256, heartbeat=heartbeat
+                self.plan, spec, self.transport, execution_sha256=self.execution_sha256, heartbeat=heartbeat,
+                verifier=self.verifier
             )
-            if not had_marker:
-                self.provider_get_count += 1
+            self.provider_get_count = self.verifier.get_count
             _create_receipt(
                 self.plan,
                 spec,
@@ -1808,6 +1829,12 @@ def _result_document(plan: ObjectStorageOffloadPlan, core: Mapping[str, Any], wr
         "planned_object_count": len(plan.specs),
         "receipts_created_count": writer.receipts_created_count,
         "provider_get_call_count": writer.provider_get_count,
+        "provider_conditional_head_call_count": writer.verifier.conditional_head_count,
+        "min_age_days": plan.min_age_days,
+        "age_filter_excluded_count": int(plan.counts["below_min_age_count"]) + int(plan.counts["captured_at_unknown_count"]),
+        "below_min_age_count": int(plan.counts["below_min_age_count"]),
+        "captured_at_unknown_count": int(plan.counts["captured_at_unknown_count"]),
+        "warning_codes": plan.public_document()["warning_codes"],
         "status_counts": dict(writer.status_counts),
         "local_bytes_freed": writer.local_bytes_freed,
         "local_bytes_reappeared_count": writer.manifest_index_lifecycle.reappeared,

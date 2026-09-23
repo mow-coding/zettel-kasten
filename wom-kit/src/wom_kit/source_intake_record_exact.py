@@ -661,6 +661,7 @@ def _source_intake_record_plan_from_bytes(
 def plan_source_intake_record(
     archive_root: Path | str,
     plan_path: Path | str,
+    *, _allow_existing_exact: bool = False,
 ) -> SourceIntakeRecordExactPlan:
     """Build one absent-to-exact-bytes receipt creation manifest."""
 
@@ -713,6 +714,8 @@ def plan_source_intake_record(
             and existing_reason is None
             and hmac.compare_digest(existing, receipt_raw)
         ):
+            if _allow_existing_exact:
+                return ready
             return SourceIntakeRecordExactPlan(
                 archive_root=root,
                 archive_id=archive_id,
@@ -997,6 +1000,7 @@ def _execute_core(
     *,
     progress_hook: Callable[[ExactOperationProgress], None] | None = None,
     chain_authority: Any = None,
+    _resume: bool = False,
 ) -> dict[str, Any]:
     if chain_authority is not None:
         authority = _chain_authority(plan, claim, chain_authority)
@@ -1007,6 +1011,7 @@ def _execute_core(
     fresh = plan_source_intake_record(
         plan.archive_root,
         plan.input_plan_path,
+        _allow_existing_exact=_resume,
     )
     if (
         not fresh.approveable
@@ -1023,6 +1028,8 @@ def _execute_core(
             plan.archive_root,
             writer_lock=writer_lock,
         )
+        from .exact_operation_manifest import exact_operation_execution_sha256
+        has_checkpoint = _resume and checkpoints.resume_checkpoint_present(exact_operation_execution_sha256(fresh.manifest, approval_authority=authority))
         core = apply_exact_operation(
             fresh.manifest,
             payloads=_Payloads(fresh),
@@ -1030,6 +1037,7 @@ def _execute_core(
             verifier=_Verifier(fresh),
             checkpoint_store=checkpoints,
             approval_authority=authority,
+            resume=has_checkpoint,
             progress_hook=progress_hook,
         )
     return {
@@ -1132,6 +1140,7 @@ def execute_source_intake_record_in_chain(
     claim: _ClaimedExactHumanApproval,
     chain_authority: Any,
     progress_hook: Callable[[ExactOperationProgress], None] | None = None,
+    _resume: bool = False,
 ) -> dict[str, Any]:
     """Write one record as the first step of an approved intake chain.
 
@@ -1151,6 +1160,7 @@ def execute_source_intake_record_in_chain(
         None,
         progress_hook=progress_hook,
         chain_authority=chain_authority,
+        _resume=_resume,
     )
 
 

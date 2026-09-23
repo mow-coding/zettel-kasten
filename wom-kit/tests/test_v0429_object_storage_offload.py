@@ -144,7 +144,7 @@ class OffloadedStateReaderTests(unittest.TestCase):
             self.assertFalse(entry["preserved_bytes_verified"])
             self.assertTrue(entry["manifest_record_present"])
             entries = [item for item in result["entries"] if item["status"] == "deferred"]
-            self.assertTrue(any(item["reason_code"] == "objet_bytes_offloaded_remote_only_restore_before_cleanup" for item in entries), result["entries"])
+            self.assertTrue(any(item["reason_code"] == "objet_bytes_offloaded_remote_proof_required" for item in entries), result["entries"])
             self.assertNotIn("objet_store_missing_or_sha256_mismatch", json.dumps(result))
             self.assertFalse(result["deletion_performed"])
             self.assertNotIn(str(root), json.dumps(result))
