@@ -135,6 +135,13 @@ def _write_minimal_wheel(destination: Path, version: str) -> Path:
     )
     files = {
         "wom_kit/__init__.py": f'__version__ = "{version}"\n'.encode(),
+        # This wheel exercises the updater transaction, not the startup-cache
+        # compiler. The real wheel has that module; keep the synthetic wheel's
+        # public import surface compatible with the runtime initialization.
+        "wom_kit/startup_cache.py": (
+            "def build(root):\n"
+            "    return None\n"
+        ).encode(),
         "wom_kit/archive_cli.py": (
             "import sys\n"
             f"VERSION = {version!r}\n"
