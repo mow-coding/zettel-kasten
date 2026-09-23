@@ -24138,7 +24138,7 @@ def command_zet_revision_plan(args: argparse.Namespace) -> int:
         )
     except (archive_services.ArchiveServiceError, OSError, UnicodeError, ValueError):
         print(
-            "zet-revision-plan requires a published canonical zet. For an unpublished inbox zet, use draft-revision-plan and draft-revision-write.",
+            "zet-revision-plan needs a published canonical zet and a Markdown proposal under the private revisions folder. For an unpublished inbox zet, use draft-revision-plan and draft-revision-write.",
             file=sys.stderr,
         )
         return 1
@@ -51098,7 +51098,7 @@ def main(argv: list[str] | None = None) -> int:
                 "effects_state": "none",
                 "files_written": [],
                 "missing_arguments": missing_arguments,
-                "unknown_arguments": unknown_arguments,
+                **({"unknown_arguments": unknown_arguments} if unknown_arguments else {}),
                 "private_values_echoed": False,
             }
         )

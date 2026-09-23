@@ -3,7 +3,8 @@
 Built only while materializing a verified runtime. The launcher verifies source
 and payload hashes before executing retained bytes; ordinary launches write no
 cache. The runtime's full wheel verifier also recompiles these two derived files
-and compares exact bytes, so the cache manifest is not a new trust root.
+and compares their complete code metadata, so the cache manifest is not a new
+trust root.
 """
 from __future__ import annotations
 
@@ -22,6 +23,7 @@ MODULES = ("archive_services", "archive_cli")
 MANIFEST = "startup-cache.json"
 SCHEMA = "wom-kit/startup-cache/v1"
 MAX_BYTES = 64 * 1024 * 1024
+_COMPILED_PROOF_CACHE = set()
 
 
 class StartupCacheError(ValueError):
@@ -61,12 +63,21 @@ def _compiled_code_matches(payload, raw, name):
     expected = compile(raw, "wom_kit/" + name + ".py", "exec", dont_inherit=True, optimize=0)
 
     def same_code(left, right):
-        if (left != right or left.co_filename != right.co_filename
-            or getattr(left, "co_qualname", None) != getattr(right, "co_qualname", None)):
+        # CodeType equality omits some debug metadata on older Python versions.
+        # Every executable and provenance-bearing field must match the source.
+        fields = ("co_argcount", "co_posonlyargcount", "co_kwonlyargcount",
+            "co_nlocals", "co_stacksize", "co_flags", "co_code", "co_names",
+            "co_varnames", "co_filename", "co_name", "co_qualname",
+            "co_firstlineno", "co_linetable", "co_exceptiontable",
+            "co_freevars", "co_cellvars")
+        if sys.version_info < (3, 11) and left.co_lnotab != right.co_lnotab:
+            return False
+        if left != right or any(getattr(left, field, None) != getattr(right, field, None)
+                                for field in fields):
             return False
         return all(
             same_code(a, b) if isinstance(a, types.CodeType) and isinstance(b, types.CodeType)
-            else not isinstance(a, types.CodeType) and not isinstance(b, types.CodeType)
+            else not isinstance(a, types.CodeType) and not isinstance(b, types.CodeType) and a == b
             for a, b in zip(left.co_consts, right.co_consts)
         ) and len(left.co_consts) == len(right.co_consts)
 
@@ -114,8 +125,14 @@ def verify(package_root, *, verify_compiled=False):
             if (entry != {"source_sha256": _sha(source), "cache_sha256": _sha(payload), "source_size": len(source), "cache_size": len(payload)}
                 or payload[:16] != importlib.util.MAGIC_NUMBER + struct.pack("<I", 3) + importlib.util.source_hash(source)):
                 raise ValueError()
-            if verify_compiled and not _compiled_code_matches(payload, source, name):
-                raise ValueError()
+            if verify_compiled:
+                proof_key = (sys.implementation.cache_tag, name, _sha(source), _sha(payload))
+                if proof_key not in _COMPILED_PROOF_CACHE:
+                    if not _compiled_code_matches(payload, source, name):
+                        raise ValueError()
+                    if len(_COMPILED_PROOF_CACHE) >= 8:
+                        _COMPILED_PROOF_CACHE.clear()
+                    _COMPILED_PROOF_CACHE.add(proof_key)
             retained["wom_kit." + name] = (str(root / (name + ".py")), payload)
         return retained
     except (OSError, ValueError, KeyError, TypeError, EOFError):

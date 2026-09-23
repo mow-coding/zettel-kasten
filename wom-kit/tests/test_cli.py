@@ -58662,7 +58662,8 @@ state:
                 ]
             )
             self.assertEqual(code, 1)
-            self.assertIn("could not read one safe canonical zet", output)
+            self.assertIn("private revisions folder", output)
+            self.assertIn("use draft-revision-plan and draft-revision-write", output)
             self.assertNotIn(outside_marker, output)
 
     def test_zet_revision_write_previews_but_approve_fails_closed_without_writes(self) -> None:

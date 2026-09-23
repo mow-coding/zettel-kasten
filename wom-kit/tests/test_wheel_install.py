@@ -2819,7 +2819,7 @@ class InstalledRuntimeJourneyHookTests(unittest.TestCase):
         self.assertEqual(call.args[0][1:3], ["-I", "-B"])
         self.assertEqual(call.args[0][3], str(check_wheel_install.RUNTIME_JOURNEY_TOOL))
         self.assertEqual(call.args[0][4], str(self.wheel))
-        self.assertEqual(call.kwargs["timeout_seconds"], 1200)
+        self.assertEqual(call.kwargs["timeout_seconds"], check_wheel_install.RUNTIME_JOURNEY_TIMEOUT_SECONDS)
         checker_tree = ast.parse(CHECKER_PATH.read_text(encoding="utf-8"))
         check_function = next(node for node in checker_tree.body if isinstance(node, ast.FunctionDef) and node.name == "check_wheel")
         calls = [node for node in ast.walk(check_function) if isinstance(node, ast.Call)

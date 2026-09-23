@@ -7,6 +7,7 @@ import shutil
 import tempfile
 import types
 import unittest
+from unittest import mock
 
 from wom_kit import startup_cache as cache
 
@@ -90,6 +91,24 @@ class StartupCacheTests(unittest.TestCase):
         manifest.write_text(json.dumps(document), encoding="ascii")
         with self.assertRaises(cache.StartupCacheError):
             cache.verify(self.root, verify_compiled=True)
+
+    def test_same_verified_bytes_skip_recompilation_but_changed_bytes_do_not(self):
+        cache._COMPILED_PROOF_CACHE.clear()
+        with mock.patch.object(cache, "_compiled_code_matches", wraps=cache._compiled_code_matches) as check:
+            cache.verify(self.root, verify_compiled=True)
+            cache.verify(self.root, verify_compiled=True)
+            self.assertEqual(check.call_count, len(cache.MODULES))
+            target = self.root / cache._filename("archive_cli")
+            altered = target.read_bytes() + b"trailing"
+            target.write_bytes(altered)
+            manifest = self.root / cache.MANIFEST
+            document = json.loads(manifest.read_bytes())
+            document["modules"]["archive_cli"]["cache_sha256"] = hashlib.sha256(altered).hexdigest()
+            document["modules"]["archive_cli"]["cache_size"] = len(altered)
+            manifest.write_text(json.dumps(document), encoding="ascii")
+            with self.assertRaises(cache.StartupCacheError):
+                cache.verify(self.root, verify_compiled=True)
+            self.assertEqual(check.call_count, len(cache.MODULES) + 1)
 
 
 if __name__ == "__main__":

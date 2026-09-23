@@ -337,7 +337,9 @@ jobs:
     needs: [classify, gate]
     if: needs.classify.outputs.lane == 'full'
     runs-on: windows-latest
-    timeout-minutes: 25
+    # The real update-and-recovery journey remains mandatory. Its 20-minute
+    # child ceiling timed out on hosted runners after valid repair stages.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
 

@@ -116,6 +116,11 @@ class InvocationEffectTests(unittest.TestCase):
         self.assertEqual(rejected["entry_gate"], "required_dry_run_missing")
         self.assertEqual(rejected["effects"], [])
 
+    def test_staged_remote_verification_declares_remote_read_without_execution(self) -> None:
+        result = self.resolve("staged-cleanup-check", "--dry-run", "--verify-remote")
+        self.assertIn(("remote_read", "object_storage"), self.effects(result))
+        self.assertFalse(result["execution_authorized"])
+
     def test_doctor_memory_cache_and_explicit_output_scopes_are_distinct(self) -> None:
         self.assertEqual(self.effects(self.resolve("doctor")), {("local_read", "archive")})
         result = self.resolve(

@@ -316,10 +316,11 @@ class NotionPropertyBackfillCliTests(unittest.TestCase):
         # v0.4.21 reopened eight writers and added source-intake-chain;
         # v0.4.28 added object-storage-restore; v0.4.29 object-storage-offload;
         # v0.4.30 exact-approval-claim-finalize; v0.4.33 reopened object-storage-upload;
-        # v0.4.36 added operator-feedback-archive.
+        # v0.4.36 added operator-feedback-archive; v0.4.38 adds
+        # draft-revision-write and activity-cleanup.
         self.assertEqual(
             inventory["counts"]["approval_available_command_count"],
-            61,
+            63,
         )
         self.assertEqual(
             by_path["operator-feedback-archive"]["approval_status"],

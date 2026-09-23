@@ -110,7 +110,8 @@ class RuntimePhaseProtocolTests(unittest.TestCase):
             good.replace(b'"elapsed_ms":20', b'"elapsed_ms":NaN'),
             good.replace(b'"elapsed_ms":20', b'"elapsed_ms":Infinity'),
             good.replace(b'"elapsed_ms":20', b'"elapsed_ms":19'),
-            good.replace(b'"elapsed_ms":20', b'"elapsed_ms":1200001'),
+            good.replace(b'"elapsed_ms":20',
+                         b'"elapsed_ms":' + str(checker.RUNTIME_PHASE_LIMIT_MS + 1).encode("ascii")),
             good.replace(b'"sequence":3', b'"sequence":3,"sequence":3'),
             line(3, "private_stage", "begin", 20), line(3, "synthetic_project", "private_event", 20),
             line(3, "synthetic_project", "passed", 20),
@@ -135,10 +136,10 @@ class RuntimePhaseProtocolTests(unittest.TestCase):
                 self.assertNotIn("private_", json.dumps(result))
 
     def test_deadline_tail_and_missing_newline_do_not_discard_valid_prefix(self):
-        for tail in (line(4, "synthetic_project", "passed", 1200001), b"partial"):
+        for tail in (line(4, "synthetic_project", "passed", checker.RUNTIME_PHASE_LIMIT_MS + 1), b"partial"):
             observer = checker.RuntimePhaseObservation()
             valid_prefix(observer)
-            observer.feed(line(3, "synthetic_project", "begin", 1199999))
+            observer.feed(line(3, "synthetic_project", "begin", checker.RUNTIME_PHASE_LIMIT_MS - 1))
             try:
                 observer.feed(tail)
             except checker.WheelCheckError:

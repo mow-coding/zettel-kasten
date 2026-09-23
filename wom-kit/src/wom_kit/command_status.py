@@ -1400,7 +1400,9 @@ _AUDITED_INVOCATION_OPTIONS = {
     "index": "--format --output --progress",
     "index-health": "--dry-run --format --max-items --output --progress",
     "staged-cleanup-check": (
-        "--deferred --dry-run --format --output --progress --staged"
+        "--access-key-id-ref --bucket --deferred --dry-run --endpoint-host --format "
+        "--output --progress --provider-kind --region --secret-access-key-ref "
+        "--staged --store-ref --verify-remote"
     ),
     "ai-start-here": (
         "--dry-run --expected-archive-id --expected-type --format --full-doctor "
@@ -1587,6 +1589,10 @@ def resolve_namespace_invocation_effects(
         # unlike --staged it is not constrained to the archive. Do not resolve
         # or reveal the path just to describe this possible input-file read.
         add("local_read", "explicit_input_file")
+    if canonical_path == "staged-cleanup-check" and _invocation_effect_option_value(
+        leaf_parser, namespace, "--verify-remote"
+    ):
+        add("remote_read", "object_storage")
     if canonical_path == "index":
         add("generated_index_write", "archive_generated_index")
     if canonical_path in _AUDITED_SCRATCH_OUTPUT_COMMANDS and output:

@@ -10,7 +10,15 @@ import unittest
 from unittest.mock import Mock, patch
 
 from wom_kit import activity_cleanup as cleanup
-from test_v0421_source_intake_chain_exact_approval import _KeyProvider
+
+
+class _KeyProvider:
+    def use_key(self, _root, consumer, *, create_if_missing=False):
+        key = bytearray(range(32))
+        try:
+            return consumer(memoryview(key))
+        finally:
+            key[:] = b"\0" * len(key)
 
 
 class ActivityCleanupTests(unittest.TestCase):
@@ -240,8 +248,8 @@ class ActivityCleanupTests(unittest.TestCase):
         from contextlib import ExitStack, redirect_stdout, redirect_stderr
         from wom_kit import archive_cli, archive_services as services
         from wom_kit import exact_human_approval_workflow as broker, exact_human_approval_windows as windows
-        from test_v0421_source_intake_chain_exact_approval import _Native
-        from test_object_storage_preservation import _MemoryTransport
+        from .test_v0421_source_intake_chain_exact_approval import _Native
+        from .test_object_storage_preservation import _MemoryTransport
         common = dict(archive_id=services.read_archive_id(self.root), profile_id="profile:synthetic:activity",
             profile_slug="synthetic-activity", provider_kind="cloudflare-r2", storage_account_ref="synthetic-store",
             bucket_name="synthetic-activity-bucket", region="auto", endpoint_ref="provider:endpoint:synthetic",
@@ -369,7 +377,7 @@ class ActivityCleanupTests(unittest.TestCase):
 
     @unittest.skipUnless(os.name == "nt", "Windows full access pipeline")
     def test_full_access_official_pipeline_has_zero_additional_dialogs(self):
-        from test_v0424_session_permission_modes import SessionPermissionModeTests
+        from .test_v0424_session_permission_modes import SessionPermissionModeTests
         from wom_kit import work_session_registration as registration
         fixture = SessionPermissionModeTests()
         fixture.setUp()
