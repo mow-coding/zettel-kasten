@@ -7,8 +7,8 @@
     {
       "source": "schemas/activity-cleanup-request-v1.schema.json",
       "packaged": "schemas/activity-cleanup-request-v1.schema.json",
-      "bytes": 2476,
-      "sha256": "356b6224167c19b254873ccf0fffcdc411e6e593d5546508959eb0875e72a8e7"
+      "bytes": 2366,
+      "sha256": "c3170b13645ed68ea9a75395a7944886a38a9dbc716d64959059ff51e93e075e"
     },
     {
       "source": "schemas/activity-group-membership-receipt.schema.json",
