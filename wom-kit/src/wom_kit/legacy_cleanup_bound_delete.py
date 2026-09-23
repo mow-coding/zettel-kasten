@@ -252,10 +252,12 @@ class _Win32Api:
     FILE_SHARE_READ = 0x00000001
     OPEN_EXISTING = 3
     FILE_ATTRIBUTE_DIRECTORY = 0x00000010
+    FILE_ATTRIBUTE_READONLY = 0x00000001
     FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400
     FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
     FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
     FILE_DISPOSITION_INFO_CLASS = 4
+    FILE_DISPOSITION_INFO_EX_CLASS = 21
     FILE_STREAM_INFO_CLASS = 7
     ERROR_HANDLE_EOF = 38
     ERROR_INSUFFICIENT_BUFFER = 122
@@ -376,6 +378,15 @@ class _Win32Api:
                 if delete
                 else "legacy_cleanup_bound_win32_cancellation_uncertain"
             )
+
+    def set_readonly_disposition(self, handle: int, delete: bool) -> None:
+        # FileDispositionInfoEx keeps the exact opened handle and lets Git's
+        # read-only object files be removed without changing their attributes.
+        flags = self.DWORD(0x11 if delete else 0x00)
+        if not self.set_information(handle, self.FILE_DISPOSITION_INFO_EX_CLASS,
+            ctypes.byref(flags), ctypes.sizeof(flags)):
+            raise _fail("legacy_cleanup_bound_win32_disposition_uncertain"
+                if delete else "legacy_cleanup_bound_win32_cancellation_uncertain")
 
 
 _WIN32_API: _Win32Api | None = None
@@ -584,10 +595,15 @@ def _cancel_windows_file_disposition(
     handle: int,
     path: Path,
     approved: _ApprovedFile,
+    *,
+    readonly_disposition: bool = False,
 ) -> None:
     api = _windows_api()
     try:
-        api.set_disposition(handle, False)
+        if readonly_disposition:
+            api.set_readonly_disposition(handle, False)
+        else:
+            api.set_disposition(handle, False)
         _windows_digest_handle(handle, approved, expected_link_count=1)
         _reject_windows_alternate_streams(handle, directory=False)
         _validate_windows_named_file(path, approved)
@@ -603,6 +619,8 @@ def _delete_windows_file(
     workspace_root: Path,
     path: Path,
     approved: _ApprovedFile,
+    *,
+    allow_readonly: bool = False,
 ) -> None:
     with _activity_group_bound_directory_chain(
         workspace_root,
@@ -612,11 +630,17 @@ def _delete_windows_file(
         failure: BaseException | None = None
         delete_marked = False
         committed = False
+        readonly_disposition = False
         try:
             _validate_windows_named_file(path, approved)
             _reject_windows_alternate_streams(handle, directory=False)
             _windows_digest_handle(handle, approved, expected_link_count=1)
-            _windows_api().set_disposition(handle, True)
+            readonly_disposition = bool(allow_readonly and
+                _windows_api().query(handle).attributes & _windows_api().FILE_ATTRIBUTE_READONLY)
+            if readonly_disposition:
+                _windows_api().set_readonly_disposition(handle, True)
+            else:
+                _windows_api().set_disposition(handle, True)
             delete_marked = True
             _windows_digest_handle(handle, approved, expected_link_count=0)
             _reject_windows_alternate_streams(handle, directory=False)
@@ -625,7 +649,8 @@ def _delete_windows_file(
             failure = exc
             if delete_marked and not committed:
                 try:
-                    _cancel_windows_file_disposition(handle, path, approved)
+                    _cancel_windows_file_disposition(handle, path, approved,
+                        readonly_disposition=readonly_disposition)
                     delete_marked = False
                 except BaseException as cancel_exc:
                     failure = cancel_exc
@@ -781,6 +806,8 @@ def _delete_exact_approved_file(
     workspace_root: Path | str,
     path: Path | str,
     expected: Mapping[str, Any],
+    *,
+    allow_readonly: bool = False,
 ) -> None:
     """Delete one exact approved regular file or raise content-free failure."""
 
@@ -788,7 +815,7 @@ def _delete_exact_approved_file(
     root, candidate = _validated_paths(workspace_root, path)
     try:
         if os.name == "nt":
-            _delete_windows_file(root, candidate, approved)
+            _delete_windows_file(root, candidate, approved, allow_readonly=allow_readonly)
         else:
             _delete_posix_file(root, candidate, approved)
     except LegacyCleanupBoundDeleteError:

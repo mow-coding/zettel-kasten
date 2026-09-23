@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wom-kit.invalid/schemas/activity-cleanup-request-v1.schema.json",
+  "title": "Private activity cleanup request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "activity_id",
+    "roots",
+    "items"
+  ],
+  "properties": {
+    "schema": {
+      "const": "wom-kit/activity-cleanup-request/v1"
+    },
+    "activity_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+    },
+    "roots": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "items": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "role",
+          "reason"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "role": {
+            "enum": [
+              "deliverable",
+              "source",
+              "evidence",
+              "temporary",
+              "unknown"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "disposition": {
+            "enum": [
+              "preserve",
+              "discard"
+            ],
+            "default": "preserve"
+          },
+          "discard_intent": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "remove_empty_directories": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "storage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "provider_kind": {
+          "type": "string"
+        },
+        "store_ref": {
+          "type": "string"
+        },
+        "endpoint_host": {
+          "type": "string"
+        },
+        "bucket": {
+          "type": "string"
+        },
+        "region": {
+          "type": "string"
+        },
+        "access_key_id_ref": {
+          "type": "string"
+        },
+        "secret_access_key_ref": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

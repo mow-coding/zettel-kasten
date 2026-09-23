@@ -211,9 +211,9 @@ For the current v0.4.36 working-tree parser, the inventory snapshot is:
 canonical executable command paths: 322
 alias invocation paths:              262
 all invocation paths:                584
-approval_available:                   61
+approval_available:                   63
 approval_fixed_closed:                59
-approval_not_exposed:                202
+approval_not_exposed:                204
 conditional approval paths:            10
 dry_run_exposed:                     278
 unmatched fixed-close entries:         0

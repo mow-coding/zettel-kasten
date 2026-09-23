@@ -52,7 +52,7 @@ _ROLES = {"project_current", "archive_local"}
 _RUNTIME_DIRECTIVES = {
     "direct_archive_write": "forbidden",
     "exact_human_approval": "required",
-    "external_root_gc": "forbidden",
+    "external_root_gc": "enabled",
     "instruction_auto_rewrite": "forbidden",
 }
 
@@ -345,6 +345,7 @@ def inspect_agent_instruction_policies(
             "mark current instruction files with wom-agent-policy metadata",
             "retire obsolete policy explicitly instead of deleting history",
             "resolve every active directive conflict before archive writes",
+            "Runtime external-root cleanup is provided by activity-cleanup with an exact private request and verified preservation; update obsolete local declarations explicitly. Arbitrary instruction prose is never rewritten.",
         ],
         "blockers": blockers,
         "warnings": warnings,

@@ -1443,7 +1443,15 @@ def _make_stage_progress_callback(
         # Retain the exclusively-created handle for the callback lifetime.
         # Reopening by path would let a post-initialization path replacement
         # redirect observational output into an archive-owned file.
-        log_handle = log_path.open("x", encoding="utf-8", newline="\n")
+        base_log_path = log_path
+        suffix = 0
+        while True:
+            try:
+                log_handle = log_path.open("x", encoding="utf-8", newline="\n")
+                break
+            except FileExistsError:
+                suffix += 1
+                log_path = base_log_path.with_name(base_log_path.name + f".{suffix}")
     if not enabled and log_path is None:
         return None
     started = time.monotonic()
@@ -1563,6 +1571,7 @@ def _make_stage_progress_callback(
             handle.close()
 
     setattr(progress, "close", close_progress)
+    setattr(progress, "log_path", log_path)
     return progress
 
 
@@ -18265,6 +18274,8 @@ def _object_storage_upload_progress_hooks(
             int(document["total_items"]),
         )
 
+    if stage_progress is not None:
+        setattr(stage_hook, "close", getattr(stage_progress, "close", lambda: None))
     return stage_hook, exact_progress
 
 
@@ -18275,11 +18286,26 @@ def _object_storage_upload_credential_refs_present(args: argparse.Namespace) -> 
     present = True
     for name in ("access_key_id_ref", "secret_access_key_ref"):
         ref = str(getattr(args, name, None) or "").strip()
+        if not ref:
+            return False
         if not ref.startswith("env:"):
-            return None
+            present = None if present is True else present
+            continue
         variable = ref[len("env:"):]
-        present = present and bool(variable) and variable in os.environ and bool(os.environ.get(variable))
+        if not variable or not os.environ.get(variable):
+            return False
     return present
+
+
+def command_object_storage_scope_list(args: argparse.Namespace) -> int:
+    try:
+        result = object_storage_scope.export_scope_list(Path(args.archive_root), output=args.output,
+            sessions=args.session or (), object_lists=args.object_list or (), this_session=args.this_session)
+    except (object_storage_scope.ObjectStorageScopeError, OSError, archive_services.ArchiveServiceError) as exc:
+        result = {"ok": False, "reason_codes": [getattr(exc, "code", "object_storage_scope_list_unavailable")],
+                  "private_values_echoed": False, "list_written": False}
+    print_json(result)
+    return 0 if result["ok"] else 1
 
 
 def command_object_storage_upload(args: argparse.Namespace) -> int:
@@ -18307,15 +18333,15 @@ def command_object_storage_upload(args: argparse.Namespace) -> int:
         return _object_storage_upload_cli_error(args, "object_storage_upload_resume_invalid")
     if resume_requested and not (resume_approval_id and resume_execution_sha256):
         return _object_storage_upload_cli_error(args, "object_storage_upload_resume_invalid")
-    if resume_requested and (
-        (not args.approve and not abandon)
-        or getattr(args, "object_list", None)
-        or getattr(args, "captured_by_session", None)
-        or getattr(args, "this_session", False)
-        or getattr(args, "only", None)
-        or getattr(args, "max_objects", None) is not None
-        or getattr(args, "local_bytes_only", False)
-    ):
+    resume_conflicts = ["--" + name.replace("_", "-") for name in
+        ("object_list", "captured_by_session", "this_session", "only", "max_objects", "local_bytes_only")
+        if getattr(args, name, None) is not None and getattr(args, name, None) is not False]
+    if resume_requested and resume_conflicts:
+        return _object_storage_upload_cli_error(
+            args, "object_storage_upload_resume_scope_options_conflict",
+            next_safe_actions=["Resume/abandon uses the saved plan. Remove: " + ", ".join(resume_conflicts)],
+        )
+    if resume_requested and not args.approve and not abandon:
         return _object_storage_upload_cli_error(args, "object_storage_upload_resume_invalid")
     if args.approve and (
         not reviewer or re.fullmatch(r"sha256:[0-9a-f]{64}", expected_manifest_sha256) is None
@@ -18356,7 +18382,15 @@ def command_object_storage_upload(args: argparse.Namespace) -> int:
                     "The archive index is not current for this manifest: run 'archive index <root>' before --approve (the approve refuses before the dialog with archive_index_rebuild_required).",
                     *result.get("next_safe_actions", []),
                 ]
-            if result["credential_refs_present"] is False:
+            missing_refs = ["--" + name.replace("_", "-") for name in
+                ("access_key_id_ref", "secret_access_key_ref") if not getattr(args, name, None)]
+            result["missing_credential_reference_arguments"] = missing_refs
+            if missing_refs:
+                result["next_safe_actions"] = [
+                    "Supply credential references before --approve: " + ", ".join(missing_refs),
+                    *result.get("next_safe_actions", []),
+                ]
+            elif result["credential_refs_present"] is False:
                 result["next_safe_actions"] = [
                     "A credential environment variable named by --access-key-id-ref / --secret-access-key-ref is not set in this shell; define it before --approve (the approve refuses before the dialog with object_storage_upload_credential_ref_unresolved).",
                     *result.get("next_safe_actions", []),
@@ -18378,6 +18412,13 @@ def command_object_storage_upload(args: argparse.Namespace) -> int:
                     args, "archive_index_rebuild_required",
                     cause={"cause_code": "archive_index_rebuild_required", "cause_stage": "upload_preflight"},
                     next_safe_actions=["Run 'archive index <root>' and rerun --dry-run, then --approve; no dialog was opened and no claim was written."],
+                )
+            missing_refs = ["--" + name.replace("_", "-") for name in
+                ("access_key_id_ref", "secret_access_key_ref") if not getattr(args, name, None)]
+            if missing_refs:
+                return _object_storage_upload_cli_error(
+                    args, "object_storage_upload_credential_reference_argument_missing",
+                    next_safe_actions=["Supply references (not secret values): " + ", ".join(missing_refs)],
                 )
             transport_factory = _object_storage_live_transport_factory(
                 args,
@@ -18453,6 +18494,9 @@ def command_object_storage_upload(args: argparse.Namespace) -> int:
             args, code, cause=cause, next_safe_actions=actions, effects_state=effects,
             progress_summary=progress_summary.document(),
         )
+    finally:
+        if plan_progress is not None:
+            getattr(plan_progress, "close", lambda: None)()
     print_object_storage_upload_result(result, args.format)
     return 0 if result.get("ok", False) else 1
 
@@ -18829,8 +18873,9 @@ def _object_storage_restore_progress_hooks(
 ) -> tuple[ProgressCallback | None, Callable[[ExactOperationProgress], None] | None]:
     stage_progress = _make_stage_progress_callback(
         bool(getattr(args, "progress", False)),
-        label="object-storage-restore",
+        label=str(getattr(args, "command", None) or "object-storage-restore"),
         detail="aggregate",
+        progress_log_path=getattr(args, "progress_log", None),
     )
     if stage_progress is None:
         return None, None
@@ -18957,6 +19002,11 @@ def command_object_storage_restore(args: argparse.Namespace) -> int:
         return _object_storage_restore_cli_error(
             args, str(getattr(exc, "code", "object_storage_restore_remote_unavailable"))
         )
+    finally:
+        if plan_progress is not None:
+            close = getattr(plan_progress, "close", None)
+            if close is not None:
+                close()
     print_object_storage_restore_result(result, args.format)
     return 0 if result.get("ok", False) else 1
 
@@ -19112,8 +19162,33 @@ def command_object_storage_offload(args: argparse.Namespace) -> int:
         return _object_storage_offload_cli_error(
             args, str(getattr(exc, "code", "object_storage_offload_remote_unavailable"))
         )
+    finally:
+        if plan_progress is not None:
+            close = getattr(plan_progress, "close", None)
+            if close is not None:
+                close()
     print_object_storage_offload_result(result, args.format)
     return 0 if result.get("ok", False) else 1
+
+
+def _print_storage_capacity_cost(result):
+    capacity = result.get("capacity") or {}
+    for key, label in (("local_only_bytes", "Local-only bytes"),
+        ("remote_preserved_bytes_at_recorded_time", "Remote bytes at recorded verification"),
+        ("offloadable_bytes_pending_live_verification", "Offloadable bytes pending live verification"),
+        ("projected_remote_bytes", "Projected remote bytes after operation")):
+        if key in capacity:
+            print(f"{label}: {capacity[key] if capacity[key] is not None else 'unknown'}")
+    estimate = result.get("cost_estimate") or {}
+    if estimate.get("available"):
+        print(f"Estimated monthly storage before free allowance: USD {estimate['monthly_storage_usd_before_free_allowance']}")
+        print(f"Planned request usage before account rounding: USD {estimate['request_usage_usd_before_rounding']}")
+        print(f"Rates: {estimate['source']} ({estimate['rates_as_of']}, {estimate['storage_class']})")
+        print("Account-wide free quota and actual bill: unknown; no free allowance subtracted.")
+    handoff = result.get("offload_handoff")
+    if handoff:
+        print(f"Same verified object list: {handoff['object_list_archive_relative_path']}")
+        print("Next: preview object-storage-offload using this exact private list; uploading did not delete local files.")
 
 
 def print_object_storage_offload_result(result: dict[str, Any], output_format: str) -> None:
@@ -19121,6 +19196,7 @@ def print_object_storage_offload_result(result: dict[str, Any], output_format: s
         print_json(result)
         return
     print(f"Object-storage offload {result.get('state') or 'blocked'}.")
+    _print_storage_capacity_cost(result)
     print(f"Plan SHA-256: {result.get('plan_sha256') or result.get('manifest_sha256') or '-'}")
     if "planned_object_count" in result:
         print(f"Planned objects: {result.get('planned_object_count', 0)}")
@@ -21383,6 +21459,7 @@ def print_object_storage_upload_result(result: dict[str, Any], output_format: st
         print_json(result)
         return
     print(f"Object-storage upload {result.get('state') or 'blocked'}.")
+    _print_storage_capacity_cost(result)
     print(f"Writer: {result.get('writer_state') or 'available'}"
           + (f" ({result['writer_unavailable_reason']})" if result.get("writer_unavailable_reason") else ""))
     print(f"Plan SHA-256: {result.get('plan_sha256') or result.get('manifest_sha256') or '-'}")
@@ -21978,7 +22055,7 @@ def print_source_intake_chain_result(result: dict[str, Any], output_format: str)
         print_json(result)
         return
     print(f"Source intake chain {result.get('state') or 'blocked'}.")
-    print(f"Chain plan SHA-256: {result.get('plan_sha256') or '-'}")
+    print(f"Chain plan fingerprint (not an object_id): {result.get('plan_sha256') or '-'}")
     print(
         f"Approvals: {result.get('approval_count', 0)} "
         f"(single-step commands: {result.get('single_step_approval_count', 3)})"
@@ -21990,6 +22067,8 @@ def print_source_intake_chain_result(result: dict[str, Any], output_format: str)
         if step.get("output_path"):
             line += f" -> {step['output_path']}"
         print(line)
+        for object_id in step.get("object_ids") or []:
+            print(f"  Captured object_id: {object_id}")
     if result.get("files_written"):
         print("Files written:")
         for path in result["files_written"]:
@@ -23940,6 +24019,112 @@ def command_abstract_freshness(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def command_activity_cleanup(args: argparse.Namespace) -> int:
+    from . import activity_cleanup
+    try:
+        candidate = activity_cleanup.plan(Path(args.archive_root), args.request, resume=args.resume)
+        if getattr(args, "private_plan_output", None):
+            activity_cleanup.write_private_plan(candidate, args.private_plan_output)
+            candidate["public"]["private_plan_written"] = True
+        if args.dry_run:
+            print_json(candidate["public"])
+            return 0 if candidate["public"]["ok"] else 1
+        if os.name != "nt":
+            raise activity_cleanup.ActivityCleanupError("activity_cleanup_native_delete_not_supported")
+        if args.expected_plan_sha256 and args.expected_plan_sha256 != candidate["public"]["plan_sha256"]:
+            raise activity_cleanup.ActivityCleanupError("activity_cleanup_plan_changed")
+        reviewer = archive_services.safe_foreign_quarantine_actor_id(args.reviewed_by)
+        if reviewer is None:
+            raise activity_cleanup.ActivityCleanupError("activity_cleanup_reviewer_required")
+        binding = activity_cleanup.approval_binding(candidate)
+        context = binding.context(archive_id=archive_services.read_archive_id(candidate["root"]), reviewer_claim=reviewer)
+        def run(claim):
+            storage = candidate["material"]["storage"]
+            backend = None
+            if any(i["disposition"] == "preserve" for i in candidate["material"]["items"]):
+                factory = _object_storage_live_transport_factory(argparse.Namespace(**storage),
+                    invalid=lambda: activity_cleanup.ActivityCleanupError("activity_cleanup_storage_arguments_invalid"),
+                    unavailable=lambda: activity_cleanup.ActivityCleanupError("activity_cleanup_remote_unavailable"))
+                backend = activity_cleanup.OfficialPreservationBackend(candidate, reviewer=reviewer, transport_factory=factory)
+            return activity_cleanup.execute(candidate, reviewer=reviewer, claim=claim, backend=backend)
+        if args.resume:
+            from .exact_human_approval_workflow import _resume_exact_human_approved_write_core
+            completed = candidate["journal"].read("completed")
+            if completed:
+                # No mutation and no permission reuse when reporting a terminal journal.
+                replacements = sum(os.path.lexists(item["path"]) for item in candidate["material"]["items"])
+                result = {**completed, "replayed_completed_record": True, "writes_performed": False,
+                    "replacement_files_retained": replacements, "remaining": activity_cleanup.remaining_inventory(candidate["material"]),
+                    "ok": replacements == 0}
+            else:
+                approval = candidate["journal"].read("approval")
+                if not approval:
+                    raise activity_cleanup.ActivityCleanupError("activity_cleanup_resume_approval_missing")
+                result = _resume_exact_human_approved_write_core(candidate["root"], context, approval["approval_id"],
+                    lambda claim: (candidate["journal"].read("intent") == candidate["material"]
+                        and approval["plan_sha256"] == binding.plan_sha256
+                        and approval["target_binding_sha256"] == binding.target_binding_sha256), run)
+        else:
+            result = _execute_exact_human_approved_write(candidate["root"], context, run)
+        print_json(result)
+        return 0 if result.get("ok") else 1
+    except (activity_cleanup.ActivityCleanupError, archive_services.ArchiveServiceError, OSError, ValueError,
+            ExactHumanApprovalError, ExactHumanApprovalWorkflowError, ExactHumanApprovalWindowsError) as exc:
+        return _exact_human_approval_cli_error(args, lifecycle_action="activity_cleanup",
+            reason_code=getattr(exc, "code", "activity_cleanup_failed_safely"),
+            effects_state="none" if args.dry_run else "unknown")
+
+
+def command_draft_revision(args: argparse.Namespace) -> int:
+    from . import draft_revision
+    try:
+        if args.command == "draft-revision-write" and not getattr(args, "approve", False) and not getattr(args, "dry_run", False):
+            raise draft_revision.DraftRevisionError("draft_revision_approve_required")
+        candidate = draft_revision.plan(Path(args.archive_root), draft=args.draft, proposal=args.proposal,
+            resume_plan_sha256=args.expected_plan_sha256 if getattr(args, "resume", False) else None)
+        if not getattr(args, "approve", False):
+            print_json(candidate["public"])
+            return 0 if candidate["public"]["ok"] else 1
+        if args.dry_run:
+            raise draft_revision.DraftRevisionError("draft_revision_modes_conflict")
+        if not args.expected_plan_sha256 or candidate["public"]["plan_sha256"] != args.expected_plan_sha256:
+            raise draft_revision.DraftRevisionError("draft_revision_plan_changed")
+        reviewer = archive_services.safe_foreign_quarantine_actor_id(args.reviewed_by)
+        if reviewer is None:
+            raise draft_revision.DraftRevisionError("draft_revision_reviewer_required")
+        binding = draft_revision.approval_binding(candidate)
+        context = binding.context(archive_id=archive_services.read_archive_id(candidate["root"]), reviewer_claim=reviewer)
+        def write_revision(claim):
+            return draft_revision.write(candidate["root"], draft=args.draft, proposal=args.proposal,
+                expected_plan_sha256=args.expected_plan_sha256, reviewer=reviewer, claim=claim, binding=binding,
+                resume=getattr(args, "resume", False))
+        if getattr(args, "resume", False):
+            from .exact_human_approval_workflow import _resume_exact_human_approved_write_core
+            from .exact_human_approval import exact_human_approval_context_sha256
+            intent = json.loads((candidate["root"] / draft_revision.ROOT / (args.expected_plan_sha256[7:] + ".intent.json")).read_bytes())
+            approval = intent.get("approval") or {}
+            listing = exact_approval_claims.list_exact_human_approval_claims(candidate["root"], status="all", max_claims=exact_approval_claims.MAX_LISTED_CLAIMS)
+            prior = next((row for row in listing["claims"] if row["approval_id"] == approval.get("approval_id")), None)
+            if listing["blocker_codes"] or prior is None or prior["context_sha256"] != exact_human_approval_context_sha256(context):
+                raise draft_revision.DraftRevisionError("draft_revision_resume_claim_invalid")
+            if prior["status"] == "succeeded":
+                if candidate["target"].read_bytes() != candidate["after_bytes"]:
+                    raise draft_revision.DraftRevisionError("draft_revision_resume_changed")
+                result = {**candidate["public"], "dry_run": False, "state": "already_revised", "writes_performed": False}
+            else:
+                result = _resume_exact_human_approved_write_core(candidate["root"], context, prior["approval_id"],
+                    lambda claim: all(intent.get(key) == value for key, value in candidate["material"].items()), write_revision)
+        else:
+            result = _execute_exact_human_approved_write(candidate["root"], context, write_revision)
+        print_json(result)
+        return 0 if result.get("ok") else 1
+    except (draft_revision.DraftRevisionError, archive_services.ArchiveServiceError, OSError, ValueError,
+            ExactHumanApprovalError, ExactHumanApprovalWorkflowError, ExactHumanApprovalWindowsError) as exc:
+        return _exact_human_approval_cli_error(args, lifecycle_action="draft_revision_write",
+            reason_code=getattr(exc, "code", "draft_revision_failed_safely"),
+            effects_state="unknown" if getattr(args, "approve", False) else "none")
+
+
 def command_zet_revision_plan(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("zet-revision-plan is read-only and requires --dry-run.", file=sys.stderr)
@@ -23953,7 +24138,7 @@ def command_zet_revision_plan(args: argparse.Namespace) -> int:
         )
     except (archive_services.ArchiveServiceError, OSError, UnicodeError, ValueError):
         print(
-            "zet-revision-plan could not read one safe canonical zet and private revision proposal.",
+            "zet-revision-plan needs a published canonical zet and a Markdown proposal under the private revisions folder. For an unpublished inbox zet, use draft-revision-plan and draft-revision-write.",
             file=sys.stderr,
         )
         return 1
@@ -28350,6 +28535,11 @@ def command_create_draft(args: argparse.Namespace) -> int:
         return 0
 
     ai_creation_mode = _create_draft_ai_provenance_scope(args)
+    if ai_creation_mode and not args.dry_run and not args.approve:
+        return _create_draft_cli_error(
+            args, reason_code="create_draft_approve_argument_missing",
+            message="Draft execution requires --approve; use --dry-run to prepare without writing.",
+        )
     if (args.approve and not ai_creation_mode) or (
         not args.dry_run and not (ai_creation_mode and args.approve)
     ):
@@ -32577,11 +32767,21 @@ def command_staged_cleanup_check(args: argparse.Namespace) -> int:
                 f"[staged-cleanup-check] result pending ref={terminal_output_ref}",
                 file=sys.stderr,
             )
+        remote_verifier = None
+        if getattr(args, "verify_remote", False):
+            from .remote_preservation_proof import PreservationVerifier, ProofStore
+            transport = _object_storage_live_transport_factory(args,
+                invalid=lambda: ValueError("remote_proof_configuration_missing"),
+                unavailable=lambda: ValueError("remote_proof_credentials_unavailable"))()
+            remote_verifier = PreservationVerifier(transport, store_ref=args.store_ref,
+                execution_sha256="sha256:" + secrets.token_hex(32), proof_store=ProofStore(archive_root))
         result = archive_services.staged_cleanup_check(
             archive_root,
             args.staged,
             deferred_path=Path(args.deferred) if args.deferred else None,
             progress_callback=operation_progress_callback(reporter, operation_journal),
+            remote_verifier=remote_verifier,
+            remote_provider_kind=getattr(args, "provider_kind", "cloudflare-r2"),
         )
         public_result = staged_cleanup_public_result(result)
     except (
@@ -38425,6 +38625,14 @@ def _validate_doctor_progress_log_path(
     candidate = log_path if log_path.is_absolute() else Path.cwd() / log_path
     resolved_log = candidate.resolve()
     resolved_archive = archive_root.resolve()
+    # A pre-existing hardlink may alias archive bytes even when its spelling is
+    # outside the archive. Refuse it before choosing a numbered new log name.
+    try:
+        existing = candidate.lstat()
+    except FileNotFoundError:
+        existing = None
+    if existing is not None and (not stat.S_ISREG(existing.st_mode) or existing.st_nlink > 1):
+        raise ValueError("doctor_progress_log_existing_path_unsafe")
     try:
         resolved_log.relative_to(resolved_archive)
     except ValueError:
@@ -41069,6 +41277,42 @@ def build_parser() -> argparse.ArgumentParser:
     object_storage_upload_verify.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     object_storage_upload_verify.set_defaults(func=command_object_storage_upload_verify)
 
+    activity_cleanup_parser = subcommands.add_parser("activity-cleanup", help="Plan or resume exact activity files through preservation and native cleanup.")
+    activity_cleanup_parser.add_argument("archive_root")
+    activity_cleanup_parser.add_argument("--request", required=True, help="Private JSON request with exact files and classification reasons.")
+    activity_cleanup_parser.add_argument("--private-plan-output", help="Create a private exact plan with classifications and reasons outside the archive; never publish this file.")
+    activity_cleanup_modes = activity_cleanup_parser.add_mutually_exclusive_group(required=True)
+    activity_cleanup_modes.add_argument("--dry-run", action="store_true")
+    activity_cleanup_modes.add_argument("--approve", action="store_true")
+    activity_cleanup_modes.add_argument("--resume", action="store_true")
+    activity_cleanup_parser.add_argument("--expected-plan-sha256")
+    activity_cleanup_parser.add_argument("--reviewed-by")
+    activity_cleanup_parser.add_argument("--format", choices=["json"], default="json")
+    activity_cleanup_parser.set_defaults(func=command_activity_cleanup)
+
+    for revision_command in ("draft-revision-plan", "draft-revision-write"):
+        draft_revision_parser = subcommands.add_parser(revision_command, help="Revise one unpublished zet with identity, links and prior content preserved.")
+        draft_revision_parser.add_argument("archive_root")
+        draft_revision_parser.add_argument("--draft", required=True, help="Archive-relative inbox draft.")
+        draft_revision_parser.add_argument("--proposal", required=True, help="Private reviewed replacement draft in this archive.")
+        draft_revision_parser.add_argument("--dry-run", action="store_true")
+        if revision_command == "draft-revision-write":
+            draft_revision_parser.add_argument("--approve", action="store_true")
+            draft_revision_parser.add_argument("--resume", action="store_true", help="Finish the same interrupted plan, retaining its snapshot.")
+        draft_revision_parser.add_argument("--expected-plan-sha256")
+        draft_revision_parser.add_argument("--reviewed-by")
+        draft_revision_parser.add_argument("--format", choices=["json"], default="json")
+        draft_revision_parser.set_defaults(func=command_draft_revision)
+
+    scope_list_parser = subcommands.add_parser("object-storage-scope-list", help="Write a private exact list from proven session activity and explicit lists.")
+    scope_list_parser.add_argument("archive_root")
+    scope_list_parser.add_argument("--session", action="append", help="Explicitly include a work session; repeat for delegated sessions.")
+    scope_list_parser.add_argument("--this-session", action="store_true")
+    scope_list_parser.add_argument("--object-list", action="append", help="Add an existing exact object list.")
+    scope_list_parser.add_argument("--output", required=True, help="New private list file outside the archive; never overwrites.")
+    scope_list_parser.add_argument("--format", choices=["json"], default="json")
+    scope_list_parser.set_defaults(func=command_object_storage_scope_list)
+
     object_storage_upload = subcommands.add_parser(
         "object-storage-upload",
         aliases=["object-storage-upload-execute", "objet-storage-upload"],
@@ -41294,6 +41538,7 @@ def build_parser() -> argparse.ArgumentParser:
     object_storage_restore_parser.add_argument("--all-sessions", action="store_true", help="Explicit archive-wide selection, including other sessions; also required for legacy global resume.")
     object_storage_restore_parser.add_argument("--resume-execution-sha256", help="Resume the exact checkpoint execution bound to --resume-approval-id.")
     object_storage_restore_parser.add_argument("--reviewed-by", help="Safe reviewer id required when --approve is used.")
+    object_storage_restore_parser.add_argument("--progress-log", help="Write progress JSONL; an existing name is preserved and .1, .2, ... is used.")
     object_storage_restore_parser.add_argument("--progress", action="store_true", help="Stream planning and per-object progress to stderr; stdout keeps the final result.")
     object_storage_restore_parser.add_argument(
         "--dry-run",
@@ -41339,7 +41584,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--min-age-days",
         type=int,
         dest="min_age_days",
-        help=f"Only objects captured at least this many days ago (default {object_storage_offload.DEFAULT_MIN_AGE_DAYS}).",
+        help=f"Explicit date filter; 0 disables it, including unknown dates (default {object_storage_offload.DEFAULT_MIN_AGE_DAYS}).",
     )
     object_storage_offload_parser.add_argument(
         "--min-size-bytes",
@@ -41358,6 +41603,7 @@ def build_parser() -> argparse.ArgumentParser:
     object_storage_offload_parser.add_argument("--all-sessions", action="store_true", help="Explicit archive-wide selection, including other sessions; also required for legacy global resume.")
     object_storage_offload_parser.add_argument("--resume-execution-sha256", help="Resume the exact checkpoint execution bound to --resume-approval-id.")
     object_storage_offload_parser.add_argument("--reviewed-by", help="Safe reviewer id required when --approve is used.")
+    object_storage_offload_parser.add_argument("--progress-log", help="Write progress JSONL; an existing name is preserved and .1, .2, ... is used.")
     object_storage_offload_parser.add_argument("--progress", action="store_true", help="Stream planning and per-object progress to stderr; stdout keeps the final result.")
     object_storage_offload_parser.add_argument(
         "--dry-run",
@@ -46899,6 +47145,10 @@ def build_parser() -> argparse.ArgumentParser:
             "this local diagnostic artifact and its operation journal are written."
         ),
     )
+    staged_cleanup.add_argument("--verify-remote", action="store_true", help="Read remote preservation evidence without restoring local bytes; never deletes.")
+    staged_cleanup.add_argument("--provider-kind", default="cloudflare-r2", choices=["cloudflare-r2", "s3-compatible"])
+    for remote_option in ("store-ref", "endpoint-host", "bucket", "region", "access-key-id-ref", "secret-access-key-ref"):
+        staged_cleanup.add_argument("--" + remote_option, help="Remote proof configuration reference; never a secret value.")
     staged_cleanup.set_defaults(func=command_staged_cleanup_check)
 
     project_bytecode_repair_plan = subcommands.add_parser(
@@ -50817,6 +51067,18 @@ def main(argv: list[str] | None = None) -> int:
                 name = raw_name.strip()
                 if re.fullmatch(r"(?:--)?[A-Za-z0-9][A-Za-z0-9_-]*", name):
                     missing_arguments.append(name)
+        # Compare token names to parser definitions, never echo argparse's raw
+        # error tail (it includes positional values and private file paths).
+        selected_parser = _selected_cli_argument_parser(parser, raw_argv)
+        known_options = set(parser._option_string_actions)
+        if selected_parser is not None:
+            known_options.update(selected_parser._option_string_actions)
+        option_tokens = raw_argv[:raw_argv.index("--")] if "--" in raw_argv else raw_argv
+        unknown_arguments = sorted({
+            token.split("=", 1)[0] for token in option_tokens
+            if re.fullmatch(r"--?[A-Za-z][A-Za-z0-9_-]*", token.split("=", 1)[0])
+            and token.split("=", 1)[0] not in known_options
+        })
         command = raw_argv[0] if raw_argv and re.fullmatch(r"[a-z0-9][a-z0-9-]*", raw_argv[0]) else None
         print_json(
             {
@@ -50836,6 +51098,7 @@ def main(argv: list[str] | None = None) -> int:
                 "effects_state": "none",
                 "files_written": [],
                 "missing_arguments": missing_arguments,
+                **({"unknown_arguments": unknown_arguments} if unknown_arguments else {}),
                 "private_values_echoed": False,
             }
         )

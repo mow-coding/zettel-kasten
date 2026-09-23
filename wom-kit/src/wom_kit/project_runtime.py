@@ -890,8 +890,8 @@ def project_runtime_policy_document(raw: bytes | None) -> dict[str, Any] | None:
         "runtime_root": ".zettel-kasten/runtimes/vX.Y.Z",
         "active_version_pin": ".zettel-kasten/installed-version.txt",
         "launcher": ".zettel-kasten/bin/archive.cmd",
-        "supply_lock": "wom-kit/project-runtime-supply-lock-v0.4.37.json",
-        "supply_lock_sha256": "sha256:f21575f891701e52f41e95fb50759327f30d9b10bc99e32b54e8eef8ac3eeabe",
+        "supply_lock": "wom-kit/project-runtime-supply-lock-v0.4.38.json",
+        "supply_lock_sha256": "sha256:f6966b3f4dd385536241504cd8789f0320e54c9ca7eaf12dff77c5956a46855f",
         "global_path_mutation": False,
     }
     if value != expected:
@@ -3623,6 +3623,16 @@ def _verify_installed_wheel_payloads(final: Path, wheels: list[Path]) -> set[str
         actual_sha256, actual_size = _sha256_file(path)
         if actual_size != expected_size or actual_sha256 != expected_sha256:
             raise ProjectRuntimeError("project_runtime_installed_payload_mismatch")
+    allowed_cache_files = set()
+    cache_package = site_packages / "wom_kit"
+    if (cache_package / "startup-cache.json").exists():
+        from . import startup_cache
+        try:
+            startup_cache.verify(cache_package, verify_compiled=True)
+        except (ValueError, OSError) as error:
+            raise ProjectRuntimeError("project_runtime_startup_cache_invalid") from error
+        allowed_cache_files = {"wom_kit/" + startup_cache.MANIFEST,
+            *("wom_kit/" + startup_cache._filename(name) for name in startup_cache.MODULES)}
     expected_root_files = {
         logical
         for logical in combined
@@ -3638,7 +3648,7 @@ def _verify_installed_wheel_payloads(final: Path, wheels: list[Path]) -> set[str
         for logical, path, _size, _sha256 in _walk_regular_files(root_path):
             observed = f"{root_name}/{logical}"
             observed_root_files.add(observed)
-            if observed not in expected_root_files and not _validate_generated_dist_info_file(
+            if observed not in expected_root_files and observed not in allowed_cache_files and not _validate_generated_dist_info_file(
                 final=final,
                 site_packages=site_packages,
                 logical=observed,
@@ -3940,6 +3950,14 @@ def _remove_runtime_bytecode(runtime: Path) -> None:
             raise ProjectRuntimeError("project_runtime_bytecode_cleanup_failed") from error
     if any(path.suffix.casefold() == ".pyc" for path in runtime.rglob("*.pyc")):
         raise ProjectRuntimeError("project_runtime_bytecode_cleanup_failed")
+
+
+def _build_runtime_startup_cache(runtime: Path) -> None:
+    # Build with the runtime's own interpreter and a relative co_filename so
+    # independent reference materializations produce identical cache bytes.
+    _run_bounded([str(runtime / "Scripts" / "python.exe"), "-I", "-B", "-X", "utf8", "-c",
+        "from pathlib import Path; import wom_kit; from wom_kit.startup_cache import build; build(Path(wom_kit.__file__).parent)"],
+        stage="runtime-startup-cache-build", callback=None)
 
 
 def _canonicalize_pyvenv_cfg(runtime: Path) -> None:
@@ -4893,6 +4911,8 @@ def _initialize_runtime_payload(
             [*wheel_paths, trusted_pip_wheel],
         ),
     )
+    if tuple(int(part) for part in bootstrap.version.split("b", 1)[0].split(".")) >= (0, 4, 38):
+        local_stage("startup-cache-build", lambda: _build_runtime_startup_cache(runtime))
     return _runtime_process_verification(
         runtime,
         version=bootstrap.version,

@@ -2,6 +2,16 @@
   "schema": "wom-kit/writer-session-coverage/v1",
   "description": "Every parser path whose --approve is available must be classified here. session_integrated paths expose the session refs (or name the route that does); pending paths are still owned by the recovery train; legacy_exception paths are deliberately outside session scope per the 2026-09-05 writer-coverage decisions 6 and 7. The checker fails on any unclassified, stale or misclassified path; it never reports all-writer coverage while pending is non-empty.",
   "paths": {
+    "activity-cleanup": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_activity_cleanup"]
+    },
+    "draft-revision-write": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_feedback_171_172"]
+    },
     "git-backup-reconcile-plan": {
       "status": "session_integrated",
       "evidence": [

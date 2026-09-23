@@ -133,6 +133,32 @@ class ScopeTests(unittest.TestCase):
             self.assertEqual([x.object_id for x in upload.plan_object_storage_upload(self.root, store_ref=rs.STORE).specs], [up._oid(self.a)])
             self.assertEqual(scope.resolve_scope(self.root, all_sessions=True).kind, "all_sessions")
 
+    def test_chain_intake_claim_selects_captured_object(self):
+        claims = [self._capture_receipt(self.a, A, 11)]
+        claims[0]["operation"] = "source_intake_chain"
+        with patch.object(exact_approval_claims, "list_exact_human_approval_claims", return_value={"claims": claims, "blocker_codes": []}):
+            self.assertEqual(scope.resolve_scope(self.root, captured_by_session=A).object_ids, (up._oid(self.a),))
+
+    def test_session_used_existing_object_is_included_without_search_attribution(self):
+        claims = [self._capture_receipt(self.a, B, 11)]
+        claims.append({"approval_id": "usage", "context_sha256": "sha256:" + "d" * 64,
+            "operation": "zettel_objet_link", "status": "succeeded", "session_presenter": {"work_session_ref": A}})
+        directory = self.root / "receipts/objects/zettel-links"
+        directory.mkdir(parents=True)
+        receipt = {"archive_id": archive_services.read_archive_id(self.root), "action": "add_zettel_objet_link",
+            "object_id": up._oid(self.a), "exact_human_approval": {"exact_human_approval":
+                {"approval_id": "usage", "context_sha256": "sha256:" + "d" * 64}}}
+        (directory / "synthetic.json").write_text(json.dumps(receipt), encoding="utf-8")
+        with patch.object(exact_approval_claims, "list_exact_human_approval_claims", return_value={"claims": claims, "blocker_codes": []}):
+            # A copied valid approval reference is not authentication of this
+            # independently fabricated object-use receipt.
+            with self.assertRaisesRegex(scope.ObjectStorageScopeError, "session_scope_unavailable"):
+                scope.resolve_scope(self.root, captured_by_session=A)
+            receipt["exact_human_approval"]["exact_human_approval"]["context_sha256"] = "sha256:" + "f" * 64
+            (directory / "synthetic.json").write_text(json.dumps(receipt), encoding="utf-8")
+            with self.assertRaisesRegex(scope.ObjectStorageScopeError, "session_scope_unavailable"):
+                scope.resolve_scope(self.root, captured_by_session=A)
+
     def test_incomplete_session_evidence_never_falls_back_to_all(self):
         with patch.object(exact_approval_claims, "list_exact_human_approval_claims", return_value={"claims": [], "blocker_codes": ["incomplete"]}):
             with self.assertRaisesRegex(scope.ObjectStorageScopeError, "evidence_incomplete"):

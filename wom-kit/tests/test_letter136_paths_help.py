@@ -64,7 +64,7 @@ class Letter136PathsAndHelpTests(unittest.TestCase):
             self.assertFalse(external["managed_by_gc"])
             self.assertIn("never be deleted", "\n".join(result["warnings"]))
             self.assertIn(
-                "explicit reviewed root-registration contract",
+                "activity-cleanup with an explicit private file request",
                 "\n".join(external["next_safe_actions"]),
             )
             self.assertIn(

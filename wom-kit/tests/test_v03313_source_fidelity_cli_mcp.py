@@ -198,7 +198,7 @@ class SourceFidelityCliTests(unittest.TestCase):
 
     def test_ai_create_draft_requires_exactly_one_execution_mode(self) -> None:
         cases = (
-            ([], ["compound_exact_human_approval_binding_required"]),
+            ([], ["create_draft_approve_argument_missing"]),
             (
                 ["--dry-run", "--approve"],
                 ["capability_mode_conflicting"],

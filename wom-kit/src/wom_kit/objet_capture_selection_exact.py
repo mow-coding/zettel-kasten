@@ -347,6 +347,7 @@ def plan_existing_intake_capture_selection(
     item_id: str = "item",
     manifest_id: str | None = None,
     projected_source_intake_receipt_bytes: bytes | None = None,
+    _allow_existing_exact: bool = False,
 ) -> ExistingIntakeCaptureSelectionPlan:
     """Build one stable, private-path-bound selection creation manifest.
 
@@ -506,7 +507,7 @@ def plan_existing_intake_capture_selection(
         selection_path,
         max_bytes=_MAX_SELECTION_BYTES,
     )
-    if target_reason != "missing":
+    if target_reason != "missing" and not (_allow_existing_exact and target_reason is None and target_raw == selection_bytes):
         blocker = (
             "existing_intake_capture_selection_target_collision"
             if target_raw != selection_bytes
@@ -886,6 +887,7 @@ def _execute_core(
     *,
     progress_hook: Callable[[ExactOperationProgress], None] | None = None,
     chain_authority: Any = None,
+    _resume: bool = False,
 ) -> dict[str, Any]:
     if chain_authority is not None:
         authority = _chain_authority(plan, claim, chain_authority)
@@ -899,6 +901,7 @@ def _execute_core(
         source_intake_receipt=plan.source_intake_receipt,
         item_id=plan.request_item_id,
         manifest_id=plan.request_manifest_id,
+        _allow_existing_exact=_resume,
     )
     if (
         not fresh.approveable
@@ -915,6 +918,8 @@ def _execute_core(
             plan.archive_root,
             writer_lock=writer_lock,
         )
+        from .exact_operation_manifest import exact_operation_execution_sha256
+        has_checkpoint = _resume and checkpoints.resume_checkpoint_present(exact_operation_execution_sha256(fresh.manifest, approval_authority=authority))
         core = apply_exact_operation(
             fresh.manifest,
             payloads=_Payloads(fresh),
@@ -922,6 +927,7 @@ def _execute_core(
             verifier=_Verifier(fresh),
             checkpoint_store=checkpoints,
             approval_authority=authority,
+            resume=has_checkpoint,
             progress_hook=progress_hook,
         )
     return {
@@ -993,6 +999,7 @@ def execute_existing_intake_capture_selection_in_chain(
     claim: _ClaimedExactHumanApproval,
     chain_authority: Any,
     progress_hook: Callable[[ExactOperationProgress], None] | None = None,
+    _resume: bool = False,
 ) -> dict[str, Any]:
     """Write one selection as the second step of an approved intake chain."""
 
@@ -1004,6 +1011,7 @@ def execute_existing_intake_capture_selection_in_chain(
         None,
         progress_hook=progress_hook,
         chain_authority=chain_authority,
+        _resume=_resume,
     )
 
 

@@ -407,6 +407,7 @@ class ObjectStorageUploadPlan:
         return sum(spec.size_bytes for spec in self.specs)
 
     def public_document(self) -> dict[str, Any]:
+        from . import storage_cost
         planned = len(self.specs)
         expected_put_calls, put_call_ceiling = preservation._provider_put_call_budget(self.specs)
         if self.writer_state != "available":
@@ -470,6 +471,9 @@ class ObjectStorageUploadPlan:
             "execution_step_count": len(self.manifest.items) if self.manifest else 0,
             "manifest_projection_step_count": 1 if planned else 0,
             "planned_upload_bytes": self.planned_upload_bytes,
+            "capacity": self.inventory.get("capacity"),
+            "cost_estimate": storage_cost.estimate_capacity(self.inventory.get("capacity"),
+                class_a=expected_put_calls, class_b=planned * 3, provider_kind=self.provider_kind),
             "expected_no_retry_provider_put_call_count": expected_put_calls,
             "manifest_bound_provider_put_call_ceiling": put_call_ceiling,
             "local_bytes_only": self.local_bytes_only,
@@ -791,6 +795,10 @@ def _plan_core(
         scope=scope,
         progress=progress,
     )
+    from . import storage_cost
+    inventory = dict(inventory)
+    inventory["capacity"] = storage_cost.capacity(root, groups, provider_kind=normalized_provider,
+        store_ref=normalized_store, planned_uploads=[(spec.object_id, spec.size_bytes) for spec in specs])
     manifest = None if blockers else _manifest_for_specs(archive_id=archive_id, specs=specs, scope=scope)
     return ObjectStorageUploadPlan(
         archive_root=root,
@@ -1649,10 +1657,14 @@ class _Writer:
         reviewed_by: str,
     ) -> None:
         self.plan = plan
-        self.transport = transport
+        from .remote_preservation_proof import PreservationVerifier, ProofStore, RecordingTransport, PreservationQueryAdapter
+        self.proof_verifier = PreservationVerifier(transport, store_ref=plan.store_ref,
+            execution_sha256=plan.manifest.manifest_sha256, proof_store=ProofStore(plan.archive_root))
+        self.transport = RecordingTransport(transport, self.proof_verifier,
+            {spec.remote_key: (spec.object_id, spec.size_bytes) for spec in plan.specs})
         self.reviewed_by = reviewed_by
         self.by_target = {spec.receipt_relative: spec for spec in plan.specs}
-        self.query = preservation.ObjectStorageRemoteQueryAdapter(transport)
+        self.query = PreservationQueryAdapter(self.proof_verifier)
         self.ledger = _preservation_guard(
             lambda: preservation._ManifestBoundPreservationLedger(plan), code="object_storage_upload_control_invalid"
         )
@@ -1664,12 +1676,11 @@ class _Writer:
         self.manifest_index_lifecycle = restore._ManifestIndexLifecycle()
 
     def _query(self, spec: UploadSpec, digest: str, heartbeat: Callable[[], None]) -> preservation.ObjectStorageRemoteQueryResult:
-        return _preservation_guard(
-            lambda: self.query.query(
-                remote_key=spec.remote_key, expected_size=spec.size_bytes, expected_sha256=digest, heartbeat=heartbeat
-            ),
-            code="object_storage_upload_plan_invalid",
-        )
+        state = self.proof_verifier.verify(key=spec.remote_key, object_id="sha256:" + digest,
+            size=spec.size_bytes, heartbeat=heartbeat)["state"]
+        return preservation.ObjectStorageRemoteQueryResult(state,
+            state not in {"absent", "verification_unavailable"},
+            state in {"checksum_mismatch", "verified_match"}, state == "verified_match")
 
     def _write_object(self, spec: UploadSpec, heartbeat: Callable[[], None]) -> None:
         digest, size = _preservation_guard(
@@ -1957,8 +1968,21 @@ def _apply_with_store(
     durable = _durable_result_counts(plan, writer.ledger)
     counts = durable["classification_counts"]
     review_count = int(counts[STATUS_REVIEW_REQUIRED])
+    handoff = None
+    if core.get("status") == "completed" and not review_count:
+        from .object_storage_offload import _create_or_match_document
+        ids = sorted({spec.object_id for spec in plan.specs})
+        raw = ("\n".join(ids) + "\n").encode("ascii")
+        relative = "receipts/providers/upload-offload-lists/" + plan.manifest.manifest_sha256.removeprefix("sha256:") + ".txt"
+        _create_or_match_document(plan.archive_root, relative, raw,
+            failure_code="object_storage_offload_receipt_conflict", max_bytes=8 * 1024 * 1024)
+        handoff = {"object_list_archive_relative_path": relative, "object_count": len(ids),
+            "object_list_sha256": "sha256:" + hashlib.sha256(raw).hexdigest(),
+            "next_command": "object-storage-offload <archive-root> --object-list <archive-root>/<object-list-archive-relative-path> --dry-run",
+            "separate_offload_request_required": True, "local_deletion_performed": False}
     return {
         "schema_version": RESULT_SCHEMA,
+        "offload_handoff": handoff,
         "ok": core.get("status") == "completed",
         "state": "completed_with_review" if review_count else "uploaded",
         "manifest_sha256": plan.manifest.manifest_sha256,

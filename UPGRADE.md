@@ -24,6 +24,21 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.4.38 Activity completion
+
+Use the exact public wheel after publication. Review the [activity guide](wom-kit/docs/activity-completion.md) and make a private request for selected external files. The default object offload age is now zero; an explicit positive age limit still applies. Upload produces an exact list for a separate offload command. An unpublished zet uses `draft-revision-plan/write`, then a separate quality check and mint. Keep the original approval and request for interruption recovery.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0438-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.38/wom_kit-0.4.38-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+The customer must still run the reviewed `project-version-update` workflow. Bootstrap installation alone does not update a pinned project runtime.
+
 ## v0.4.37 Session-scoped storage
 
 Use the exact public wheel only after its release exists. Default storage selection is now session-scoped. Delegate another session or an exact list explicitly. Preserve the original interrupted upload receipts and use the documented abandonment path before starting a narrower plan.

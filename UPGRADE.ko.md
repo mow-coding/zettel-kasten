@@ -2,6 +2,21 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.4.38 활동 종료와 자료 정리
+
+정확한 공개 릴리스와 설치 파일이 나온 뒤 설치하세요. [활동 종료 안내](wom-kit/docs/activity-completion.md)에서 비공개 요청 파일과 명령 순서를 확인하세요. 기본 30일 제한은 없어졌지만, 직접 지정한 날짜 필터는 그대로 적용됩니다. 업로드 뒤에는 결과에 나온 정확한 목록으로 비우기를 별도 실행합니다. 미발행 zet은 수정·품질 검사·발행을 차례로 진행합니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0438-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.38/wom_kit-0.4.38-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+기존 프로젝트는 그 후 검토된 `project-version-update` 절차로 설치 버전을 바꿔야 합니다. 고객의 실제 사용 결과는 별도로 확인합니다.
+
 ## v0.4.37 현재 세션 범위와 명시적 위임
 
 정확한 공개 릴리스와 설치 파일이 나온 뒤 설치하세요. 기본 정리 범위는 현재 세션입니다. 다른 세션이나 정확한 목록도 명시적으로 맡길 수 있습니다. 중단된 업로드의 기존 영수증은 보존하고, 안내된 포기 절차 후 좁힌 새 계획을 만드세요.

@@ -213,6 +213,8 @@ class ExactHumanApprovalOperation(Enum):
     zettel_edge_batch_revert = "zettel_edge_batch_revert"
     mint_zet_batch = "mint_zet_batch"
     retire_draft_batch = "retire_draft_batch"
+    draft_revision_write = "draft_revision_write"
+    activity_cleanup = "activity_cleanup"
     zet_revision_write = "zet_revision_write"
     zet_revision_restore_write = "zet_revision_restore_write"
     source_intake_chain = "source_intake_chain"
@@ -507,6 +509,8 @@ _OPERATION_LABELS = {
     ExactHumanApprovalOperation.zettel_edge_batch_revert: "zet 엣지 배치 되돌리기",
     ExactHumanApprovalOperation.mint_zet_batch: "zet 배치 발행",
     ExactHumanApprovalOperation.retire_draft_batch: "발행된 초안 배치 퇴역",
+    ExactHumanApprovalOperation.draft_revision_write: "미발행 zet 의미 개정",
+    ExactHumanApprovalOperation.activity_cleanup: "활동 자료 정리",
     ExactHumanApprovalOperation.zet_revision_write: "정본 zet 의미 개정",
     ExactHumanApprovalOperation.zet_revision_restore_write: "정본 zet 개정 복원",
     ExactHumanApprovalOperation.source_intake_chain: "새 원본 반입 사슬(근거 기록·선정·보존)",
@@ -603,6 +607,8 @@ _OPERATION_QUESTIONS = {
     ExactHumanApprovalOperation.retire_draft_batch: (
         "발행을 마친 이 초안 배치 전체를 퇴역시킬까요?"
     ),
+    ExactHumanApprovalOperation.draft_revision_write: "검토한 제안으로 이 미발행 zet를 개정할까요?",
+    ExactHumanApprovalOperation.activity_cleanup: "검토한 제안으로 이 활동 자료를 정리할까요?",
     ExactHumanApprovalOperation.zet_revision_write: "검토한 제안으로 이 정본 zet를 개정할까요?",
     ExactHumanApprovalOperation.zet_revision_restore_write: (
         "이 개정 영수증 이전의 바이트로 정본 zet를 복원할까요?"
@@ -757,6 +763,12 @@ _OPERATION_SUMMARIES = {
         "정본이 이미 있는 초안만 inbox에서 퇴역시키고 퇴역 영수증과 배치 영수증을 "
         "남깁니다. 정본과 발행 영수증은 건드리지 않습니다."
     ),
+    ExactHumanApprovalOperation.draft_revision_write: (
+        "검토한 제안으로 미발행 zet 하나를 수정하고 이전 본문과 수정 영수증을 보존합니다. 발행은 별도입니다."
+    ),
+    ExactHumanApprovalOperation.activity_cleanup: (
+        "확정 목록의 자료를 보존 검증한 뒤 정리하고 파일별 결과를 남깁니다. 변경되거나 새로 생긴 파일은 별도로 보고합니다."
+    ),
     ExactHumanApprovalOperation.zet_revision_write: (
         "검토한 제안 파일의 내용으로 정본 zet 하나를 원자적으로 바꾸고 이전 바이트를 "
         "스냅샷과 개정 영수증으로 보존합니다. 다른 zet는 건드리지 않습니다."
@@ -811,6 +823,8 @@ _OPERATION_APPROVE_BUTTONS = {
     ExactHumanApprovalOperation.zettel_edge_batch_revert: "배치 엣지 되돌리기",
     ExactHumanApprovalOperation.mint_zet_batch: "배치 발행",
     ExactHumanApprovalOperation.retire_draft_batch: "배치 퇴역",
+    ExactHumanApprovalOperation.draft_revision_write: "개정 실행",
+    ExactHumanApprovalOperation.activity_cleanup: "정리 실행",
     ExactHumanApprovalOperation.zet_revision_write: "개정 실행",
     ExactHumanApprovalOperation.zet_revision_restore_write: "개정 복원",
     ExactHumanApprovalOperation.source_intake_chain: "반입 사슬 실행",

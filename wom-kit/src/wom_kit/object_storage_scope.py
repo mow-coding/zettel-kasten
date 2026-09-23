@@ -77,7 +77,7 @@ class ObjectScope:
                 "scope_warning_codes": ["object_storage_all_sessions_explicit"] if self.kind == "all_sessions" else []}
 
 
-def _session_objects(root, session_ref, *, key_provider=None):
+def _session_owners(root, *, key_provider=None):
     from . import archive_services as services, exact_approval_claims as claims
 
     try:
@@ -104,7 +104,7 @@ def _session_objects(root, session_ref, *, key_provider=None):
         if not isinstance(approval_id, str):
             continue
         claim = by_id.get(approval_id)
-        if not claim or claim.get("operation") not in {"objet_capture", "objet_capture_batch"} or claim["context_sha256"] != reference.get("context_sha256"):
+        if not claim or claim.get("operation") not in {"objet_capture", "objet_capture_batch", "source_intake_chain"} or claim["context_sha256"] != reference.get("context_sha256"):
             continue
         presenter = claim.get("session_presenter") or {}
         owner = presenter.get("work_session_ref")
@@ -118,11 +118,126 @@ def _session_objects(root, session_ref, *, key_provider=None):
                     and item.get("logical_key") == f"objects/sha256/{oid[7:9]}/{oid[7:]}"
                     and {"capture": "captured", "repair_append": "repair_appended", "re_materialize": "re_materialized", "skip_already_present": "skip_already_present"}.get(item.get("planned_action")) == item.get("action")):
                 owners.setdefault(oid, set()).add(owner)
+    _add_zet_usage_owners(root, by_id, owners, key_provider=key_provider)
+    return owners
+
+
+def _session_objects(root, session_ref, *, key_provider=None):
+    owners = _session_owners(root, key_provider=key_provider)
     ids = tuple(sorted(oid for oid, sessions in owners.items() if session_ref in sessions))
     if not ids:
         raise ObjectStorageScopeError("object_storage_session_scope_unavailable_use_object_list")
     shared = tuple(oid for oid in ids if len(owners[oid]) > 1)
     return ObjectScope("captured_by_session", ids, session_ref, shared)
+
+
+def _reference_ids(value):
+    if isinstance(value, str):
+        return set(re.findall(r"objet:(sha256:[0-9a-f]{64})(?![0-9a-f])", value))
+    if isinstance(value, dict):
+        result = set()
+        for key, item in value.items():
+            if key in {"object_id", "source_object_id"} and isinstance(item, str) and OID.fullmatch(item):
+                result.add(item)
+            elif key == "object_ids" and isinstance(item, list):
+                result.update(oid for oid in item if isinstance(oid, str) and OID.fullmatch(oid))
+            else:
+                result.update(_reference_ids(item))
+        return result
+    if isinstance(value, list):
+        return set().union(*(_reference_ids(v) for v in value)) if value else set()
+    return set()
+
+
+def _snapshot_object_refs(root, relative, sha):
+    from . import archive_services as services
+    if not isinstance(relative, str) or not isinstance(sha, str):
+        return set()
+    digest = sha.removeprefix("sha256:")
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        return set()
+    try:
+        path = services.archive_internal_path(root, relative)
+        if services.objet_capture_path_chain_blockers(root, relative) or path.stat().st_size > 8 * 1024 * 1024:
+            return set()
+        raw = path.read_bytes()
+        if hashlib.sha256(raw).hexdigest() != digest:
+            return set()
+        # Only explicit object links in the exact version worked on. Never
+        # infer activity from today's possibly edited note or its timestamp.
+        return set(re.findall(r"objet:(sha256:[0-9a-f]{64})(?![0-9a-f])", raw.decode("utf-8")))
+    except (OSError, ValueError, UnicodeError):
+        return set()
+
+
+def _add_zet_usage_owners(root, by_id, owners, *, key_provider=None):
+    from . import archive_services as services, completion_workflows as workflows
+    from .session_object_usage import add_owners
+    add_owners(root, by_id, owners, key_provider=key_provider)
+    # Historical unsigned usage receipts do not become trusted merely because
+    # they copied a valid approval id. Preserve them as unattributed evidence.
+    # Creation receipts are immutable and linked through authenticated receipts.
+    # Replayed review does not turn an old creation into new session activity.
+    creation_claims = [c for c in by_id.values() if c.get("operation") == "create_draft" and c.get("status") == "succeeded"]
+    if not creation_claims:
+        return
+    from .exact_human_approval_link import read_exact_human_approval_link
+    from .exact_human_approval_workflow import _production_key_provider
+    provider = key_provider or _production_key_provider()
+    for claim in creation_claims:
+        owner = (claim.get("session_presenter") or {}).get("work_session_ref")
+        if not isinstance(owner, str) or not SESSION.fullmatch(owner):
+            continue
+        try:
+            link = provider.use_key(root, lambda key: read_exact_human_approval_link(root,
+                claim["approval_id"], receipt_authentication_key=key), create_if_missing=False)
+            if link.get("effect") != "created":
+                continue
+            source = link["source_operation_receipt"]
+            raw = services.archive_internal_path(root, source["relative_path"]).read_bytes()
+            if "sha256:" + hashlib.sha256(raw).hexdigest() != source["sha256"]:
+                continue
+            receipt = json.loads(raw)
+            ids = _reference_ids(receipt.get("source_fidelity"))
+            for oid in ids:
+                owners.setdefault(oid, set()).add(owner)
+        except Exception:
+            # Legacy unlinked creations remain unattributed, never guessed.
+            continue
+
+
+def export_scope_list(root, *, output, sessions=(), object_lists=(), this_session=False, key_provider=None):
+    from . import archive_services as services
+    root = services.require_existing_archive_root(Path(root))
+    chosen_sessions = set(sessions)
+    if this_session or not (sessions or object_lists):
+        chosen_sessions.add(os.environ.get("WOM_WORK_SESSION_REF"))
+    if any(not isinstance(s, str) or not SESSION.fullmatch(s) for s in chosen_sessions):
+        raise ObjectStorageScopeError("object_storage_session_scope_required")
+    owners = _session_owners(root, key_provider=key_provider)
+    available = {r["object_id"] for r in services.load_manifest_records(root)
+                 if isinstance(r, dict) and OID.fullmatch(str(r.get("object_id") or ""))}
+    selected = {oid for oid, sessions_for_oid in owners.items() if chosen_sessions & sessions_for_oid}
+    for name in object_lists:
+        selected.update(resolve_scope(root, object_list=name).object_ids)
+    if not selected <= available:
+        raise ObjectStorageScopeError("object_storage_scope_object_missing")
+    payload = ("\n".join(sorted(selected)) + ("\n" if selected else "")).encode("utf-8")
+    if selected:
+        path = Path(output)
+        # Explicit private output only; never overwrite another list or archive data.
+        if path.resolve().is_relative_to(root.resolve()):
+            raise ObjectStorageScopeError("object_storage_scope_output_inside_archive")
+        with path.open("xb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+    return {"schema": "wom-kit/object-storage-scope-list/v1", "ok": bool(selected),
+            "selected_object_count": len(selected), "other_session_excluded_count": len((set(owners) & available) - selected),
+            "shared_object_count": sum(len(owners.get(oid, ())) > 1 for oid in selected),
+            "unattributed_object_count": len(available - set(owners)), "evidence_scan_complete": True,
+            "list_written": bool(selected), "list_sha256": "sha256:" + hashlib.sha256(payload).hexdigest(),
+            "private_values_echoed": False, "next_command": "object-storage-upload --object-list <private-list> --dry-run"}
 
 
 def resolve_scope(root, *, only=None, object_list=None, captured_by_session=None,

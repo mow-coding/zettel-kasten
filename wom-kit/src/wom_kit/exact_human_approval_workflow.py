@@ -389,6 +389,7 @@ def _run_started_claim_writer(
     writer: Callable[[_ClaimedExactHumanApproval], Mapping[str, Any]],
     claim: _ClaimedExactHumanApproval,
     *,
+    archive_root: Path | str | None = None,
     claim_succeeded_finalizer: _ClaimSucceededFinalizer | None = None,
 ) -> dict[str, Any]:
     """Run one writer, then finish claim-bound domain finalization in order."""
@@ -435,6 +436,9 @@ def _run_started_claim_writer(
         result = dict(raw_result)
         if result["ok"] is True:
             try:
+                if archive_root is not None:
+                    from .session_object_usage import record as record_object_usage
+                    record_object_usage(archive_root, context, claim, result)
                 claim.finalize_succeeded()
                 if claim_succeeded_finalizer is not None:
                     claim_succeeded_finalizer(claim)
@@ -737,6 +741,7 @@ def _execute_exact_human_approved_write_with_review_kind_core(
             context,
             writer,
             claim,
+            archive_root=archive_root,
             claim_succeeded_finalizer=claim_succeeded_finalizer,
         )
         return _attach_session_permission_evidence(
@@ -872,6 +877,7 @@ def _resume_exact_human_approved_write_core(
             context,
             writer,
             claim,
+            archive_root=archive_root,
             claim_succeeded_finalizer=claim_succeeded_finalizer,
         )
 
@@ -1060,6 +1066,7 @@ def _resume_exact_human_approved_transaction_with_key_core(
             context,
             started_writer,
             claim,
+            archive_root=archive_root,
             claim_succeeded_finalizer=claim_succeeded_finalizer,
         )
         result["exact_human_approval_resume_branch"] = "started_writer"

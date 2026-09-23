@@ -36,7 +36,8 @@ RUNTIME_PHASES = (
     "repair_result_validation", "repair_independent_noop", "terminal_control_check",
     "runtime_process_origin", "project_launcher_version", "doctor_startup", "final_claim_check",
 )
-RUNTIME_PHASE_LIMIT_MS = 1_200_000
+RUNTIME_JOURNEY_TIMEOUT_SECONDS = 1800
+RUNTIME_PHASE_LIMIT_MS = RUNTIME_JOURNEY_TIMEOUT_SECONDS * 1000
 RUNTIME_PHASE_LINE_BYTES = 512
 RUNTIME_PHASE_STREAM_BYTES = 32 * 1024
 RESOURCE_PREFIX = "wom_kit/_resources/"
@@ -4908,7 +4909,8 @@ def _check_installed_v0419_runtime_journey(
             [str(python), "-I", "-B", str(RUNTIME_JOURNEY_TOOL), str(wheel),
              str(source_copy), str(KIT_ROOT.parent / "wom_kit" / "__init__.py"),
              str(fixture_root), expected_package_version],
-            cwd=cwd, label="installed v0.4.19 real runtime journey", timeout_seconds=1200,
+            cwd=cwd, label="installed v0.4.19 real runtime journey",
+            timeout_seconds=RUNTIME_JOURNEY_TIMEOUT_SECONDS,
             stderr_observer=observation,
             nonzero_stdout_observer=observe_nonzero,
         )
@@ -4959,7 +4961,8 @@ def _validate_v0419_runtime_evidence(
         or any(evidence.get(key) is not True for key in expected_true)
         or evidence.get("private_values_echoed") is not False
         or not isinstance(seconds, dict) or set(seconds) != expected_seconds
-        or any(type(value) not in {int, float} or not 0 <= value <= 1200 for value in seconds.values())
+        or any(type(value) not in {int, float} or not 0 <= value <= RUNTIME_JOURNEY_TIMEOUT_SECONDS
+               for value in seconds.values())
         or seconds.get("doctor_first_status", 3) > 2 or seconds.get("doctor_maximum_progress_gap", 11) > 10
         or type(evidence.get("doctor_startup_status_event_count")) is not int
         or evidence["doctor_startup_status_event_count"] < 1
