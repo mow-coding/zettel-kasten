@@ -96,9 +96,8 @@ Do not preload every reference.
   or remaining approval immediately.
 - For large mint work, `--progress` is content-free stderr liveness; stdout is
   final output. Never parse heartbeat as approval or completion.
-- Substantive repeatable tool failures use the reviewed
-  `operator-feedback-compose` and `operator-feedback-body-check` route before
-  lifecycle binding. Metadata alone does not prove body completeness.
+- Developer letters: one approved `operator-feedback-compose` (no feedback_id)
+  plus `operator-feedback-body-check`; report "전달 전", no review copies.
 - Never expose secret values, credential-store responses, private paths, or excerpts.
   Read-only results never authorize calls, writes, or deletes.
 - Never ask for a provider secret in chat. Use `credential-adopt` only for first

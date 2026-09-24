@@ -39,12 +39,17 @@ _MAX_RECEIPT_CANDIDATES = 128
 class WorkSessionGitProvenanceError(RuntimeError):
     """Fixed-code errors; rejected private input is never retained as context."""
 
-    def __init__(self, code="work_session_git_provenance_invalid"):
+    def __init__(self, code="work_session_git_provenance_invalid", *, cause_code=None):
         self.code = code if type(code) is str and code in {
             "work_session_git_provenance_invalid", "work_session_git_snapshot_unavailable",
             "work_session_git_snapshot_changed", "work_session_git_receipt_limit",
         } else "work_session_git_provenance_invalid"
+        # Letter 173 C: the ordinary plan's fixed blocker code, never free text.
+        self.cause_code = cause_code if type(cause_code) is str and SAFE_CAUSE_CODE_RE.fullmatch(cause_code) else None
         super().__init__(self.code)
+
+
+SAFE_CAUSE_CODE_RE = re.compile(r"[a-z][a-z0-9_]{0,95}")
 
 
 def _canonical(value):
@@ -158,7 +163,11 @@ def _observe(store, held, options):
             or plan.get("blockers") != [] or not capture
             or plan.get("changes") != capture.get("public_changes")
             or plan.get("change_summary", {}).get("count") != len(capture.get("private_changes", []))):
-        raise WorkSessionGitProvenanceError("work_session_git_snapshot_unavailable")
+        blockers = plan.get("blockers") if isinstance(plan.get("blockers"), list) else []
+        cause = next((code for code in blockers if type(code) is str and SAFE_CAUSE_CODE_RE.fullmatch(code)), None)
+        raise WorkSessionGitProvenanceError("work_session_git_snapshot_unavailable",
+                                            cause_code=cause or ("git_backup_plan_inspection_incomplete"
+                                                                 if plan.get("inspection_complete") is not True else None))
     capture["root"] = str(capture["root"])
     return _canonical({"plan_sha256": plan["plan_sha256"], "capture": capture, "options": options})
 
@@ -166,14 +175,14 @@ def _observe(store, held, options):
 def _safe_failure(call):
     # Raise outside the handler so private exception data cannot survive in
     # __context__/__cause__, including callbacks and OS errors carrying paths.
-    failure = None
+    failure, cause = None, None
     try:
         return call()
     except WorkSessionGitProvenanceError as exc:
-        failure = exc.code
+        failure, cause = exc.code, exc.cause_code
     except Exception:
         failure = "work_session_git_provenance_invalid"
-    raise WorkSessionGitProvenanceError(failure)
+    raise WorkSessionGitProvenanceError(failure, cause_code=cause)
 
 
 def _capture_git_snapshot_held(

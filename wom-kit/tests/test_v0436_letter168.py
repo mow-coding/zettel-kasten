@@ -349,7 +349,14 @@ class ComposeDefaultRecordTests(unittest.TestCase):
                                "--reviewed-by", _compose_fixture.REVIEWER)
         self.assertTrue(created["draft_record"]["record_created"], created["draft_record"])
         self.assertTrue((self.root / created["draft_record"]["record_path"]).is_file())
-        step_one = next(line for line in created["next_safe_actions"] if line.startswith("1."))
+        # Request E (2026-09-24): the created letter is ready to deliver; the revise
+        # path is only offered when the person asks for a change.
+        self.assertEqual(created["user_status_label"], "전달 전")
+        self.assertTrue(created["human_review_completed_by_this_approval"])
+        self.assertFalse(created["separate_review_copy_needed"])
+        self.assertTrue(any("operator-feedback-mark-delivered" in line and "--only" in line
+                            for line in created["next_safe_actions"]))
+        step_one = next(line for line in created["revision_route_if_requested"] if line.startswith("1."))
         self.assertIn("feedback-body-sha256:<sha>", step_one)
         self.assertIn("--no-create-draft-record", step_one)
         check = self.run_cli("operator-feedback-body-check", str(self.root), "--feedback-id", self.request["feedback_id"], "--dry-run")

@@ -133,6 +133,31 @@ IMMUTABLE_FEEDBACK_STATUSES = frozenset(
 )
 
 FEEDBACK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{2,120}$")
+# Letter 172/E: agents invented or duplicated numbers (two "166"s, camp-*).
+# A new letter without an id receives the next standard number.
+STANDARD_FEEDBACK_ID_RE = re.compile(r"^wom-feedback-(\d{8})-(\d{3,6})$")
+
+
+def _local_date_stamp() -> str:
+    return datetime.now().astimezone().strftime("%Y%m%d")
+
+
+def next_feedback_id(root: Path | str) -> str:
+    """Next standard letter id from existing bodies and records; reads names only."""
+
+    root = Path(root)
+    highest = 0
+    for relative, suffix in ((BODY_PREFIX, ".md"), (RECORD_PREFIX, ".yml")):
+        directory = root / relative
+        if not directory.is_dir() or directory.is_symlink():
+            continue
+        for entry in directory.iterdir():
+            if not entry.name.endswith(suffix):
+                continue
+            match = STANDARD_FEEDBACK_ID_RE.fullmatch(entry.name[: -len(suffix)])
+            if match:
+                highest = max(highest, int(match.group(2)))
+    return f"wom-feedback-{_local_date_stamp()}-{highest + 1:03d}"
 REQUEST_FILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.json$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 FEEDBACK_REF_RE = re.compile(r"^feedback-body-sha256:[0-9a-f]{64}$")
@@ -798,12 +823,14 @@ def _prepare_plan(
     result["expected_body_sha256"] = normalized_expected
     result["request_sha256"] = request_sha256
     blockers: list[str] = []
-    if set(document) != REQUEST_KEYS:
+    automatic_id = normalized_intent == "create" and set(document) == REQUEST_KEYS - {"feedback_id"}
+    if set(document) != REQUEST_KEYS and not automatic_id:
         blockers.append("feedback_body_request_schema_invalid")
     if document.get("schema") != REQUEST_SCHEMA:
         blockers.append("feedback_body_request_schema_invalid")
 
-    feedback_id = document.get("feedback_id")
+    feedback_id = next_feedback_id(root) if automatic_id else document.get("feedback_id")
+    result["feedback_id_assigned_automatically"] = automatic_id
     safe_id = (
         feedback_id
         if isinstance(feedback_id, str) and FEEDBACK_ID_RE.fullmatch(feedback_id)

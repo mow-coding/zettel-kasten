@@ -13,8 +13,23 @@ import re
 from . import work_session_service as sessions
 
 
-def _failure(code, *, mode, effects_started=False, original_commit_verified=False):
-    return {
+# Letter 173 C: fixed sub-causes and the next action for each, without secrets.
+_CAUSE_NEXT_ACTIONS = {
+    "repository_attributes_not_supported": (
+        "an untracked or ignored .gitattributes can change what Git would commit; run "
+        "`archive git-backup-plan <archive-root> --dry-run --format json` and see its "
+        "attribute guidance; do not delete or disable attribute files to bypass this"),
+    "tracked_repository_attributes_not_supported": (
+        "a tracked .gitattributes changes Git filters; WOM backup does not support it"),
+    "git_info_attributes_not_supported": (
+        ".git/info/attributes changes Git filters; WOM backup does not support it"),
+    "git_backup_plan_inspection_incomplete": (
+        "run `archive git-backup-plan <archive-root> --dry-run --format json` and follow its blockers"),
+}
+
+
+def _failure(code, *, mode, effects_started=False, original_commit_verified=False, cause_code=None):
+    result = {
         "schema": "wom-kit/git-backup-session-command/v1",
         "ok": False,
         "status": "blocked",
@@ -25,6 +40,11 @@ def _failure(code, *, mode, effects_started=False, original_commit_verified=Fals
         "original_commit_verified": original_commit_verified is True,
         "private_values_echoed": False,
     }
+    if type(cause_code) is str and re.fullmatch(r"[a-z][a-z0-9_]{0,95}", cause_code):
+        result["cause_code"] = cause_code
+        result["next_safe_actions"] = [_CAUSE_NEXT_ACTIONS.get(cause_code,
+            "run `archive git-backup-plan <archive-root> --dry-run --format json` for the same cause")]
+    return result
 
 
 def dispatch_session_git_backup(
@@ -36,6 +56,7 @@ def dispatch_session_git_backup(
     workflow = None
     started = False
     original_verified = False
+    cause = None
     code = "work_session_git_command_unavailable"
     try:
         from . import work_session_git_workflow as workflow
@@ -103,11 +124,13 @@ def dispatch_session_git_backup(
             code = proposed
         if started and type(error) is getattr(workflow, "WorkSessionGitWorkflowError", None):
             original_verified = getattr(error, "original_commit_verified", False) is True
+            cause = getattr(error, "cause_code", None)
         if isinstance(error, sessions.WorkSessionWaitError) and error.args in (
             ("work_session_wait_cancelled",), ("work_session_wait_root_changed",),
         ):
             code = error.args[0]
-    return _failure(code, mode=mode, effects_started=started, original_commit_verified=original_verified)
+    return _failure(code, mode=mode, effects_started=started, original_commit_verified=original_verified,
+                    cause_code=cause)
 
 
 def _project_mcp_git_backup_result(result, *, mode):

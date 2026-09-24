@@ -1204,6 +1204,8 @@ OPERATOR_FEEDBACK_STATUSES = ("draft", "delivered", "acknowledged", "resolved", 
 OPERATOR_FEEDBACK_RECORD_INTENTS = ("create", "update")
 # Not-yet-delivered lifecycle state: the only status mark-delivered may transition from.
 OPERATOR_FEEDBACK_PENDING_STATUS = "draft"
+# Request E: user-facing names. "draft" is an internal state, never a review task.
+OPERATOR_FEEDBACK_USER_LABELS = (("before_delivery", "전달 전"), ("delivered", "전달 완료"))
 OPERATOR_FEEDBACK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{2,120}$")
 APPROVAL_HANDOFF_SCHEMA = "wom-kit/approval-handoff/v0.1"
 APPROVAL_HANDOFF_RECEIPT_SCHEMA = "wom-kit/approval-handoff-receipt/v0.1"
@@ -5116,7 +5118,7 @@ def _write_bytes_create_if_absent(path: Path, value: bytes) -> None:
 
 def operator_feedback_runtime_routing() -> dict[str, Any]:
     return {
-        "schema": "wom-kit/operator-feedback-runtime-routing/v0.2",
+        "schema": "wom-kit/operator-feedback-runtime-routing/v0.3",
         "canonical_metadata_dir": OPERATOR_FEEDBACK_DIR,
         "canonical_receipt_dir": OPERATOR_FEEDBACK_RECEIPTS_DIR,
         "user_knowledge_objets_are_canonical_feedback_tracker": False,
@@ -5141,70 +5143,67 @@ def operator_feedback_runtime_routing() -> dict[str, Any]:
             },
             {
                 "step": 3,
-                "action": "preview_feedback_body",
+                "action": "preview_feedback_letter",
                 "command": (
                     "archive operator-feedback-compose <archive-root> "
                     "--request profiles/local/operator-feedback/requests/<private>.json "
                     "--dry-run --format json"
                 ),
-                "writes": False,
-            },
-            {
-                "step": 4,
-                "action": "human_review",
-                "command": None,
-                "required_gate": True,
                 "meaning": (
-                    "A human reviews the existing ledger, content-free body plan, "
-                    "and intended feedback metadata before either approval."
+                    "Omit feedback_id in a new request; WOM assigns the next standard "
+                    "wom-feedback-YYYYMMDD-NNN number."
                 ),
                 "writes": False,
             },
             {
-                "step": 5,
-                "action": "approve_feedback_body",
+                "step": 4,
+                "action": "compose_feedback_letter",
                 "command": (
                     "archive operator-feedback-compose <archive-root> "
                     "--request profiles/local/operator-feedback/requests/<private>.json "
                     "--expected-plan-sha256 <sha256> --reviewed-by <human-actor> "
                     "--approve --format json"
                 ),
-                "requires_completed_human_review": True,
+                "meaning": (
+                    "This one approval writes the deliverable letter, its receipt and its "
+                    "record. A valid session grant covers it without a dialog."
+                ),
                 "writes": True,
             },
             {
-                "step": 6,
-                "action": "preview_feedback_record",
-                "command": (
-                    "archive operator-feedback-record <archive-root> "
-                    "--feedback-id <safe-id> --feedback-ref <safe-ref> "
-                    "--status draft --intent create --dry-run --format json"
-                ),
-                "requires_completed_human_review": True,
-                "writes": False,
-            },
-            {
-                "step": 7,
-                "action": "approve_feedback_record",
-                "command": (
-                    "archive operator-feedback-record <archive-root> "
-                    "--feedback-id <safe-id> --feedback-ref <safe-ref> "
-                    "--status draft --intent create --approve "
-                    "--reviewed-by <human-actor> "
-                    "--format json"
-                ),
-                "requires_completed_human_review": True,
-                "writes": True,
-            },
-            {
-                "step": 8,
-                "action": "verify_feedback_body_binding",
+                "step": 5,
+                "action": "verify_feedback_letter",
                 "command": (
                     "archive operator-feedback-body-check <archive-root> "
                     "--feedback-id <safe-id> --dry-run --format json"
                 ),
-                "requires_completed_human_review": True,
                 "writes": False,
+            },
+            {
+                "step": 6,
+                "action": "present_letter_before_delivery",
+                "command": None,
+                "user_label": "전달 전",
+                "meaning": (
+                    "Tell the person the one letter is ready to deliver (before delivery) "
+                    "and where it is. Do not create separate review copies or ask for "
+                    "another content approval; revise only when the person asks."
+                ),
+                "writes": False,
+            },
+            {
+                "step": 7,
+                "action": "record_user_delivery",
+                "command": (
+                    "archive operator-feedback-mark-delivered <archive-root> "
+                    "--only <safe-id> --approve --reviewed-by <human-actor> --format json"
+                ),
+                "user_label": "전달 완료",
+                "meaning": (
+                    "Run only after the person says they delivered it. Developer receipt "
+                    "is a separate later state (acknowledged)."
+                ),
+                "writes": True,
             },
         ],
         "truth_boundaries": {
@@ -5215,6 +5214,14 @@ def operator_feedback_runtime_routing() -> dict[str, Any]:
             "delivered_status_proves_human_receipt": False,
             "approval_inferred": False,
         },
+        # Request E: two user-visible states; no extra review stage or side copies.
+        "user_states": dict(OPERATOR_FEEDBACK_USER_LABELS),
+        "separate_review_copies_allowed": False,
+        "extra_content_approval_stage": False,
+        "revision_route": (
+            "archive operator-feedback-compose <archive-root> --request <same-request> "
+            "--intent revise --expected-body-sha256 <sha256> --dry-run --format json"
+        ),
     }
 
 
@@ -5254,10 +5261,11 @@ def operator_feedback_plan(archive_root: Path | str, *, dry_run: bool = True) ->
                 "--feedback-id <safe-id> --dry-run --format json"
             ),
             "recommended_managed_body_first_sequence": [
-                "preview and human-review operator-feedback-compose",
-                "approve the unchanged compose plan so the body and receipt exist",
-                "create metadata with the exact feedback-body-sha256 digest",
-                "run operator-feedback-body-check after creation to verify the binding",
+                "preview operator-feedback-compose (omit feedback_id to receive the next number)",
+                "approve the unchanged compose plan; it writes the letter, receipt and record",
+                "run operator-feedback-body-check to verify the binding",
+                "tell the person the letter is ready (before delivery); make no review copies",
+                "after the person reports delivery, run operator-feedback-mark-delivered --only <id>",
             ],
             "wrong_draft_withdrawal": {
                 "status": "archived",
@@ -5976,12 +5984,21 @@ def operator_feedback_ledger(archive_root: Path | str, *, dry_run: bool = True) 
                     delivered_boundary = candidate
 
     pending.sort()
+    from . import operator_feedback_body
 
     return {
         "ok": not blockers,
         "state": "ready" if not blockers else "blocked",
         "dry_run": True,
         "lifecycle_action": "operator_feedback_ledger",
+        # Request E: the person sees two states; developer receipt stays separate.
+        "user_view": {
+            "labels": dict(OPERATOR_FEEDBACK_USER_LABELS),
+            "before_delivery_count": counts["draft"],
+            "delivered_count": sum(counts[status] for status in OPERATOR_FEEDBACK_STATUSES if status != "draft"),
+            "developer_acknowledged_count": counts["acknowledged"] + counts["resolved"],
+            "next_feedback_id": operator_feedback_body.next_feedback_id(root),
+        },
         "archive_id": read_archive_id(root),
         "summary": {
             "feedback_dir": OPERATOR_FEEDBACK_DIR,

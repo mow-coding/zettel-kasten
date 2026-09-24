@@ -2,6 +2,21 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.4.39 편지 173 수정과 전달할 편지 하나
+
+공개된 뒤 정확한 wheel을 사용하세요. `activity-cleanup` 미리보기 뒤 승인할 때 Windows 폴더 크기 변동 때문에 거부되던 문제가 해결됐습니다. 미리보기를 다시 실행하고 그 계획을 승인하세요. 커밋될 수 있는 경로에 닿지 않는 무시된 속성 파일은 Git 백업을 막지 않습니다. 피드백 편지는 번호를 직접 고르거나 별도 검토본을 만들 필요가 없습니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0439-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.39/wom_kit-0.4.39-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+고객은 여전히 검토된 `project-version-update` 절차를 실행해야 합니다. 부트스트랩 설치만으로 프로젝트에 고정된 런타임은 바뀌지 않습니다.
+
 ## v0.4.38 활동 종료와 자료 정리
 
 정확한 공개 릴리스와 설치 파일이 나온 뒤 설치하세요. [활동 종료 안내](wom-kit/docs/activity-completion.md)에서 비공개 요청 파일과 명령 순서를 확인하세요. 기본 30일 제한은 없어졌지만, 직접 지정한 날짜 필터는 그대로 적용됩니다. 업로드 뒤에는 결과에 나온 정확한 목록으로 비우기를 별도 실행합니다. 미발행 zet은 수정·품질 검사·발행을 차례로 진행합니다.

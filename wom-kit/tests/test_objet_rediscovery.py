@@ -1475,12 +1475,11 @@ class ObjetRediscoveryPlanTests(unittest.TestCase):
                 [
                     "read_feedback_policy",
                     "inspect_feedback_ledger",
-                    "preview_feedback_body",
-                    "human_review",
-                    "approve_feedback_body",
-                    "preview_feedback_record",
-                    "approve_feedback_record",
-                    "verify_feedback_body_binding",
+                    "preview_feedback_letter",
+                    "compose_feedback_letter",
+                    "verify_feedback_letter",
+                    "present_letter_before_delivery",
+                    "record_user_delivery",
                 ],
             )
             readiness = packet["runtime_guidance_readiness"]

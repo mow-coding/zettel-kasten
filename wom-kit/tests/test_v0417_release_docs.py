@@ -13,8 +13,8 @@ ROOT = Path(__file__).resolve().parents[2]
 KIT = ROOT / "wom-kit"
 RESOURCE_ROOT = KIT / "src" / "wom_kit" / "_resources"
 RELEASE = KIT / "docs" / "releases" / "v0.4.17.md"
-CURRENT_RELEASE = KIT / "docs" / "releases" / "v0.4.38.md"
-PACKAGED_RELEASE = RESOURCE_ROOT / "release-notes" / "v0.4.38.md"
+CURRENT_RELEASE = KIT / "docs" / "releases" / "v0.4.39.md"
+PACKAGED_RELEASE = RESOURCE_ROOT / "release-notes" / "v0.4.39.md"
 LOCK = KIT / "project-runtime-supply-lock-v0.4.17.json"
 PUBLIC_CURRENT_DOCUMENTS = (
     ROOT / "README.md",
@@ -87,9 +87,9 @@ PROJECT_RECORDS = (
 
 class V0417ReleaseDocsTests(unittest.TestCase):
     def test_current_version_surfaces_are_exact(self) -> None:
-        self.assertEqual(__version__, "0.4.38")
+        self.assertEqual(__version__, "0.4.39")
         self.assertIn(
-            'version = "0.4.38"',
+            'version = "0.4.39"',
             (KIT / "pyproject.toml").read_text(encoding="utf-8"),
         )
         for path in (
@@ -98,21 +98,21 @@ class V0417ReleaseDocsTests(unittest.TestCase):
         ):
             with self.subTest(path=path):
                 self.assertIn(
-                    '__version__ = "0.4.38"',
+                    '__version__ = "0.4.39"',
                     path.read_text(encoding="utf-8"),
                 )
         self.assertIn(
-            'PACKAGE_VERSION = "0.4.38"',
+            'PACKAGE_VERSION = "0.4.39"',
             (KIT / "tests" / "test_wheel_install.py").read_text(encoding="utf-8"),
         )
         citation = (ROOT / "CITATION.cff").read_text(encoding="utf-8")
-        self.assertIn('version: "0.4.38"', citation)
-        self.assertIn('date-released: "2026-09-23"', citation)
+        self.assertIn('version: "0.4.39"', citation)
+        self.assertIn('date-released: "2026-09-24"', citation)
         versioning = (ROOT / "VERSIONING.md").read_text(encoding="utf-8")
-        self.assertIn("Current public baseline:\n\n```text\nv0.4.38", versioning)
-        self.assertIn("Previous public baseline:\n\n```text\nv0.4.37", versioning)
+        self.assertIn("Current public baseline:\n\n```text\nv0.4.39", versioning)
+        self.assertIn("Previous public baseline:\n\n```text\nv0.4.38", versioning)
         self.assertIn(
-            "v0.4.38",
+            "v0.4.39",
             (ROOT / "README.ko.md").read_text(encoding="utf-8"),
         )
 
@@ -126,7 +126,7 @@ class V0417ReleaseDocsTests(unittest.TestCase):
         self.assertEqual(current, expected)
         self.assertNotIn(b"\r", current)
         current_lock = (
-            KIT / "project-runtime-supply-lock-v0.4.38.json"
+            KIT / "project-runtime-supply-lock-v0.4.39.json"
         ).read_bytes()
         lock_sha256 = hashlib.sha256(current_lock).hexdigest()
         policy = json.loads(
@@ -134,7 +134,7 @@ class V0417ReleaseDocsTests(unittest.TestCase):
         )
         self.assertEqual(
             policy["supply_lock"],
-            "wom-kit/project-runtime-supply-lock-v0.4.38.json",
+            "wom-kit/project-runtime-supply-lock-v0.4.39.json",
         )
         self.assertEqual(
             policy["supply_lock_sha256"],
@@ -150,14 +150,14 @@ class V0417ReleaseDocsTests(unittest.TestCase):
         self.assertEqual(CURRENT_RELEASE.read_bytes(), PACKAGED_RELEASE.read_bytes())
         self.assertEqual(
             sorted(path.name for path in PACKAGED_RELEASE.parent.glob("v*.md")),
-            ["v0.4.38.md"],
+            ["v0.4.39.md"],
         )
         manifest = json.loads(
             (RESOURCE_ROOT / "resource-manifest.json").read_text(encoding="utf-8")
         )
-        self.assertEqual(manifest["version"], "0.4.38")
+        self.assertEqual(manifest["version"], "0.4.39")
         packaged_paths = {row["packaged"] for row in manifest["files"]}
-        self.assertIn("release-notes/v0.4.38.md", packaged_paths)
+        self.assertIn("release-notes/v0.4.39.md", packaged_paths)
         self.assertNotIn("release-notes/v0.4.17.md", packaged_paths)
 
     def test_current_install_guides_use_exact_v0419_bootstrap(self) -> None:
@@ -170,14 +170,14 @@ class V0417ReleaseDocsTests(unittest.TestCase):
                 )
                 self.assertIn(
                     '$womBootstrapRoot = Join-Path $env:LOCALAPPDATA '
-                    '"WOM\\bootstrap-v0438-$womBootstrapNonce"',
+                    '"WOM\\bootstrap-v0439-$womBootstrapNonce"',
                     document,
                 )
                 self.assertRegex(
                     document,
                     re.escape("& $womBootstrapPython") + r"\s+-m\s+pip\s+install\b",
                 )
-                self.assertIn("wom_kit-0.4.38-py3-none-any.whl", document)
+                self.assertIn("wom_kit-0.4.39-py3-none-any.whl", document)
                 self.assertIn(
                     r'& "$womBootstrapRoot\Scripts\archive.exe" --version',
                     document,

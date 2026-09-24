@@ -60,6 +60,125 @@ class ActivityCleanupTests(unittest.TestCase):
         self.request.write_text(json.dumps(self.document))
         self.assertIn("activity_cleanup_unknown_classification", self.plan()["public"]["blockers"])
 
+    def test_directory_only_metadata_churn_keeps_plan_while_content_changes_do_not(self):
+        # Letter 173 A: preview and approve differed only in folder size rows
+        # (0 <-> 4096 on Windows). Folder size and mtime carry no content that the
+        # listing does not already record, so they must not change the plan.
+        nested = self.external / "nested"
+        nested.mkdir()
+        (nested / "kept.txt").write_bytes(b"unselected but inventoried")
+        first = self.plan()["public"]["plan_sha256"]
+        scratch = nested / "transient.tmp"
+        scratch.write_bytes(b"x")
+        scratch.unlink()
+        os.utime(nested, ns=(1, 1))
+        original_lstat = Path.lstat
+        class _FlippedDirectorySize:
+            def __init__(self, info):
+                self._info = info
+                self.st_size = 4096 if info.st_size == 0 else 0
+            def __getattr__(self, name):
+                return getattr(self._info, name)
+        def windows_like_lstat(path):
+            info = original_lstat(path)
+            return _FlippedDirectorySize(info) if stat.S_ISDIR(info.st_mode) else info
+        with patch.object(Path, "lstat", windows_like_lstat):
+            self.assertEqual(self.plan()["public"]["plan_sha256"], first)
+        self.assertEqual(self.plan()["public"]["plan_sha256"], first)
+        (nested / "new.txt").write_bytes(b"new file")
+        self.assertNotEqual(self.plan()["public"]["plan_sha256"], first)
+        (nested / "new.txt").unlink()
+        self.assertEqual(self.plan()["public"]["plan_sha256"], first)
+        (nested / "kept.txt").write_bytes(b"unselected content changed")
+        self.assertNotEqual(self.plan()["public"]["plan_sha256"], first)
+
+    def test_refusal_before_approval_reports_no_effects(self):
+        # Letter 173 request 2: a plan mismatch refused before any write is not an
+        # unknown outcome.
+        import io
+        from contextlib import redirect_stdout
+        from wom_kit import archive_cli
+        output = io.StringIO()
+        with redirect_stdout(output):
+            code = archive_cli.main(["activity-cleanup", str(self.root), "--request", str(self.request),
+                "--approve", "--expected-plan-sha256", "sha256:" + "0" * 64, "--reviewed-by", "person:synthetic"])
+        result = json.loads(output.getvalue())
+        self.assertEqual(code, 1)
+        self.assertEqual(result["effects_state"], "none")
+        self.assertIn(result["reason_codes"][0], {"activity_cleanup_plan_changed", "activity_cleanup_native_delete_not_supported"})
+        self.assertFalse((self.root / cleanup.ROOT).exists())
+
+    def test_private_journal_stays_out_of_git_tracked_receipts(self):
+        # The intent holds absolute paths, reasons and storage endpoints; an
+        # archive Git backup must never pick it up (receipts/ is tracked).
+        store = cleanup.Journal(self.root, "synthetic-activity", self.key)
+        store.write("intent", {"synthetic": True})
+        self.assertTrue((self.root / "profiles/local/activity-cleanup/synthetic-activity/intent.json").is_file())
+        self.assertFalse((self.root / "receipts/activity-cleanup").exists())
+        self.assertEqual(store.read("intent"), {"synthetic": True})
+        gitignore = self.root / ".gitignore"
+        gitignore.write_text(gitignore.read_text(encoding="utf-8").replace("profiles/local/\n", ""), encoding="utf-8")
+        with self.assertRaises(cleanup.ActivityCleanupError) as refused:
+            store.write("approval", {"synthetic": True})
+        self.assertEqual(refused.exception.code, "activity_cleanup_private_journal_not_ignored")
+        self.assertFalse((self.root / "profiles/local/activity-cleanup/synthetic-activity/approval.json").exists())
+
+    def test_v0438_journal_under_receipts_is_still_resumable(self):
+        store = cleanup.Journal(self.root, "legacy-activity", self.key)
+        legacy = self.root / "receipts/activity-cleanup/legacy-activity/intent.json"
+        legacy.parent.mkdir(parents=True)
+        document = {"legacy": True}
+        legacy.write_bytes(cleanup.encoded({"document": document, "mac": store._mac(document)}))
+        self.assertEqual(store.read("intent"), document)
+        legacy.write_bytes(cleanup.encoded({"document": {"legacy": False}, "mac": store._mac(document)}))
+        with self.assertRaises(cleanup.ActivityCleanupError):
+            store.read("intent")
+
+    def test_remote_proof_store_is_private_and_refuses_an_unignored_boundary(self):
+        from wom_kit.remote_preservation_proof import ProofStore
+        store = ProofStore(self.root, key_provider=self.key)
+        proof = {"schema": "wom-kit/remote-preservation-proof/v1", "binding": {"remote": {"bucket": "synthetic"}},
+                 "sha256": "0" * 64, "size": 1, "etag": '"synthetic"', "execution_sha256": "sha256:" + "1" * 64}
+        store.save(proof)
+        self.assertTrue(any((self.root / "profiles/local/remote-byte-proofs").rglob("*.json")))
+        self.assertFalse((self.root / "receipts/providers/remote-byte-proofs").exists())
+        self.assertEqual(store.load(proof["binding"]), proof)
+        gitignore = self.root / ".gitignore"
+        gitignore.write_text(gitignore.read_text(encoding="utf-8").replace("profiles/local/\n", ""), encoding="utf-8")
+        with self.assertRaises(Exception):
+            store.save({**proof, "size": 2})
+
+    def test_preview_reports_content_free_stages_and_counts(self):
+        # Letter 173 B: a long preview/approve must not look like a hang.
+        import io
+        from contextlib import redirect_stdout, redirect_stderr
+        from wom_kit import archive_cli
+        progress_log = self.base / "progress.jsonl"
+        output, errors = io.StringIO(), io.StringIO()
+        with redirect_stdout(output), redirect_stderr(errors):
+            code = archive_cli.main(["activity-cleanup", str(self.root), "--request", str(self.request),
+                "--dry-run", "--progress-log", str(progress_log)])
+        self.assertEqual(code, 0, output.getvalue())
+        self.assertTrue(json.loads(output.getvalue())["ok"])
+        stderr = errors.getvalue()
+        for stage in ("activity-cleanup-inventory", "activity-cleanup-hash"):
+            self.assertIn(stage, stderr)
+            self.assertIn(stage, progress_log.read_text(encoding="utf-8"))
+        for private in ("PRIVATE_SYNTHETIC", str(self.external), "Original synthetic test source"):
+            self.assertNotIn(private, stderr)
+            self.assertNotIn(private, progress_log.read_text(encoding="utf-8"))
+        quiet = io.StringIO()
+        with redirect_stdout(io.StringIO()), redirect_stderr(quiet):
+            archive_cli.main(["activity-cleanup", str(self.root), "--request", str(self.request), "--dry-run", "--no-progress"])
+        self.assertNotIn("activity-cleanup-hash", quiet.getvalue())
+        inside = io.StringIO()
+        with redirect_stdout(inside):
+            code = archive_cli.main(["activity-cleanup", str(self.root), "--request", str(self.request),
+                "--dry-run", "--progress-log", str(self.root / "progress.jsonl")])
+        self.assertEqual(code, 1)
+        self.assertEqual(json.loads(inside.getvalue())["reason_codes"], ["activity_cleanup_progress_log_path_unsafe"])
+        self.assertFalse((self.root / "progress.jsonl").exists())
+
     @unittest.skipUnless(shutil.which("git"), "Git inventory")
     def test_git_history_dirty_files_and_other_worktree_are_distinguished(self):
         def git(*args):

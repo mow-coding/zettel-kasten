@@ -13,9 +13,9 @@ ROOT = Path(__file__).resolve().parents[2]
 KIT = ROOT / "wom-kit"
 RESOURCE_ROOT = KIT / "src" / "wom_kit" / "_resources"
 RELEASE = KIT / "docs" / "releases" / "v0.4.20.md"
-CURRENT_RELEASE = KIT / "docs" / "releases" / "v0.4.38.md"
-PACKAGED_RELEASE = RESOURCE_ROOT / "release-notes" / "v0.4.38.md"
-LOCK = KIT / "project-runtime-supply-lock-v0.4.38.json"
+CURRENT_RELEASE = KIT / "docs" / "releases" / "v0.4.39.md"
+PACKAGED_RELEASE = RESOURCE_ROOT / "release-notes" / "v0.4.39.md"
+LOCK = KIT / "project-runtime-supply-lock-v0.4.39.json"
 BOOTSTRAP_DOCUMENTS = (
     ROOT / "README.md",
     ROOT / "README.ko.md",
@@ -50,34 +50,34 @@ CURRENT_PUBLIC_DOCUMENTS = (
 
 class V0420ReleaseDocsTests(unittest.TestCase):
     def test_current_version_surfaces_are_exact(self) -> None:
-        self.assertEqual(__version__, "0.4.38")
-        self.assertIn('version = "0.4.38"', (KIT / "pyproject.toml").read_text(encoding="utf-8"))
+        self.assertEqual(__version__, "0.4.39")
+        self.assertIn('version = "0.4.39"', (KIT / "pyproject.toml").read_text(encoding="utf-8"))
         for shim in (KIT / "src" / "wom_kit" / "__init__.py", ROOT / "wom_kit" / "__init__.py"):
-            self.assertIn('__version__ = "0.4.38"', shim.read_text(encoding="utf-8"))
+            self.assertIn('__version__ = "0.4.39"', shim.read_text(encoding="utf-8"))
         citation = (ROOT / "CITATION.cff").read_text(encoding="utf-8")
-        self.assertIn('version: "0.4.38"', citation)
-        self.assertIn('date-released: "2026-09-23"', citation)
+        self.assertIn('version: "0.4.39"', citation)
+        self.assertIn('date-released: "2026-09-24"', citation)
         versioning = (ROOT / "VERSIONING.md").read_text(encoding="utf-8")
-        self.assertIn("Current public baseline:\n\n```text\nv0.4.38", versioning)
-        self.assertIn("Previous public baseline:\n\n```text\nv0.4.37", versioning)
-        self.assertIn("Previous public baseline: v0.4.37.", (ROOT / "README.md").read_text(encoding="utf-8"))
-        self.assertIn("v0.4.38", (ROOT / "README.ko.md").read_text(encoding="utf-8"))
+        self.assertIn("Current public baseline:\n\n```text\nv0.4.39", versioning)
+        self.assertIn("Previous public baseline:\n\n```text\nv0.4.38", versioning)
+        self.assertIn("Previous public baseline: v0.4.38.", (ROOT / "README.md").read_text(encoding="utf-8"))
+        self.assertIn("v0.4.39", (ROOT / "README.ko.md").read_text(encoding="utf-8"))
 
     def test_supply_lock_and_policy_are_exact(self) -> None:
         current = LOCK.read_bytes()
         previous = (KIT / "project-runtime-supply-lock-v0.4.20.json").read_bytes()
-        self.assertEqual(previous.replace(b'"target_tag": "v0.4.20"', b'"target_tag": "v0.4.38"'), current)
+        self.assertEqual(previous.replace(b'"target_tag": "v0.4.20"', b'"target_tag": "v0.4.39"'), current)
         policy = json.loads((KIT / "project-runtime-policy.json").read_text(encoding="utf-8"))
-        self.assertEqual(policy["supply_lock"], "wom-kit/project-runtime-supply-lock-v0.4.38.json")
+        self.assertEqual(policy["supply_lock"], "wom-kit/project-runtime-supply-lock-v0.4.39.json")
         self.assertEqual(policy["supply_lock_sha256"], "sha256:" + hashlib.sha256(current).hexdigest())
 
     def test_current_release_is_the_only_packaged_note(self) -> None:
         self.assertEqual(CURRENT_RELEASE.read_bytes(), PACKAGED_RELEASE.read_bytes())
-        self.assertEqual(sorted(path.name for path in PACKAGED_RELEASE.parent.iterdir()), ["v0.4.38.md"])
+        self.assertEqual(sorted(path.name for path in PACKAGED_RELEASE.parent.iterdir()), ["v0.4.39.md"])
         manifest = json.loads((RESOURCE_ROOT / "resource-manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(manifest["version"], "0.4.38")
+        self.assertEqual(manifest["version"], "0.4.39")
         packaged_paths = {row["packaged"] for row in manifest["files"]}
-        self.assertIn("release-notes/v0.4.38.md", packaged_paths)
+        self.assertIn("release-notes/v0.4.39.md", packaged_paths)
         self.assertNotIn("release-notes/v0.4.20.md", packaged_paths)
         self.assertTrue((KIT / "docs" / "releases" / "v0.4.20.md").is_file())
 
@@ -86,9 +86,9 @@ class V0420ReleaseDocsTests(unittest.TestCase):
             document = path.read_text(encoding="utf-8")
             with self.subTest(path=path):
                 self.assertIn('$womBootstrapNonce = [guid]::NewGuid().ToString("N")', document)
-                self.assertIn('$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\\bootstrap-v0438-$womBootstrapNonce"', document)
+                self.assertIn('$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\\bootstrap-v0439-$womBootstrapNonce"', document)
                 self.assertRegex(document, re.escape("& $womBootstrapPython") + r"\s+-m\s+pip\s+install\b")
-                self.assertIn("wom_kit-0.4.38-py3-none-any.whl", document)
+                self.assertIn("wom_kit-0.4.39-py3-none-any.whl", document)
                 if path.name.startswith("UPGRADE"):
                     continue  # upgrade guides keep every historical section
                 self.assertNotIn("bootstrap-v0420-", document)
