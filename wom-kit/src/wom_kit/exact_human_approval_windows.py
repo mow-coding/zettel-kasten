@@ -248,6 +248,9 @@ class ExactHumanApprovalOperation(Enum):
     zet_title_remap_revert_recover = "zet_title_remap_revert_recover"
     # Triage group 6 (2026-09-24): derived text for existing objets.
     derived_text_capture = "derived_text_capture"
+    # Triage group 6 (2026-09-24): saved views.
+    saved_view_write = "saved_view_write"
+    saved_view_revert = "saved_view_revert"
 
 
 def _validated_target_preview_text(value: str | None) -> str | None:
@@ -564,6 +567,8 @@ _OPERATION_LABELS = {
     ExactHumanApprovalOperation.zet_title_remap_recover: "중단된 제목 변경 복구",
     ExactHumanApprovalOperation.zet_title_remap_revert_recover: "중단된 제목 되돌리기 복구",
     ExactHumanApprovalOperation.derived_text_capture: "파생 텍스트 등록",
+    ExactHumanApprovalOperation.saved_view_write: "저장된 보기 만들기",
+    ExactHumanApprovalOperation.saved_view_revert: "저장된 보기 되돌리기",
 }
 
 _OPERATION_QUESTIONS = {
@@ -725,6 +730,12 @@ _OPERATION_QUESTIONS = {
     ),
     ExactHumanApprovalOperation.derived_text_capture: (
         "검토한 추출 텍스트를 해당 오브제의 파생 텍스트로 등록할까요?"
+    ),
+    ExactHumanApprovalOperation.saved_view_write: (
+        "검토한 조건으로 비공개 저장된 보기 하나를 만들까요?"
+    ),
+    ExactHumanApprovalOperation.saved_view_revert: (
+        "WOM이 만든 저장된 보기 하나를 영수증대로 제거할까요?"
     ),
 }
 
@@ -955,6 +966,12 @@ _OPERATION_SUMMARIES = {
     ExactHumanApprovalOperation.derived_text_capture: (
         "추출·OCR·음성 인식 텍스트를 원본 오브제에 연결된 파생 텍스트로 저장하고 영수증을 남깁니다. 원본 오브제는 바뀌지 않습니다."
     ),
+    ExactHumanApprovalOperation.saved_view_write: (
+        "검토한 필터 조건의 저장된 보기 파일 하나와 영수증을 씁니다. zet 본문은 바뀌지 않습니다."
+    ),
+    ExactHumanApprovalOperation.saved_view_revert: (
+        "영수증과 바이트가 일치하는 저장된 보기 파일 하나만 제거하고 되돌리기 영수증을 남깁니다."
+    ),
 }
 
 _OPERATION_APPROVE_BUTTONS = {
@@ -1021,6 +1038,8 @@ _OPERATION_APPROVE_BUTTONS = {
     ExactHumanApprovalOperation.zet_title_remap_recover: "복구 실행",
     ExactHumanApprovalOperation.zet_title_remap_revert_recover: "복구 실행",
     ExactHumanApprovalOperation.derived_text_capture: "텍스트 등록",
+    ExactHumanApprovalOperation.saved_view_write: "보기 만들기",
+    ExactHumanApprovalOperation.saved_view_revert: "보기 제거",
 }
 
 

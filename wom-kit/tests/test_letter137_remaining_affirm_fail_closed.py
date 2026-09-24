@@ -11,6 +11,7 @@ from pathlib import Path
 from types import ModuleType
 from unittest import mock
 
+from wom_kit import command_status  # noqa: E402
 from wom_kit import (
     archive_cli,
     archive_services,
@@ -403,6 +404,8 @@ class Letter137RemainingAffirmCliBoundaryTests(_RemainingAffirmAssertions):
             )
             before = _snapshot(Path(root))
             for arguments, module, service, action in calls:
+                if arguments[0] in command_status.EXACT_APPROVAL_REOPENED_WRITERS:  # reopened in v0.4.40
+                    continue
                 with self.subTest(action=action):
                     self._assert_cli_block(
                         arguments=arguments,

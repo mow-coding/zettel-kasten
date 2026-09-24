@@ -117,6 +117,16 @@
       "route": "environment",
       "evidence": ["test_derive_text_capture_exact"]
     },
+    "saved-view-write": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_saved_view_exact"]
+    },
+    "saved-view-revert": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_saved_view_exact"]
+    },
     "draft-revision-write": {
       "status": "session_integrated",
       "route": "environment",

@@ -88,8 +88,6 @@ COMPOUND_APPROVAL_FIXED_CLOSED_COMMANDS = frozenset(
         "project-version-update-collision",
         "runtime-skill-install",
         "runtime-skill-uninstall",
-        "saved-view-revert",
-        "saved-view-write",
         "tiro-lossless-recovery-fetch-run",
         "zet-revision-restore-proposal-from-snapshot",
     }
@@ -146,6 +144,9 @@ EXACT_APPROVAL_REOPENED_WRITERS = frozenset({
     "zet-title-remap-revert-recover",
     # Triage group 6 (2026-09-24): derived text capture.
     "derive-text capture",
+    # Triage group 6 (2026-09-24): saved views.
+    "saved-view-write",
+    "saved-view-revert",
 })
 
 # Public parser and dispatch exposure was audited at v0.3.320 and its explicit

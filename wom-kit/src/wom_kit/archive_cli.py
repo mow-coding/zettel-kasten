@@ -31962,12 +31962,49 @@ def command_view_recommendation_plan(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def _print_saved_view_result(args: argparse.Namespace, result: dict[str, Any], kind: str) -> None:
+    if args.format == "json":
+        print_json(result)
+        return
+    summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+    print(f"Saved-view {kind}: {result.get('state', 'blocked')}")
+    if kind == "write":
+        print(f"- matching zets: {summary.get('matching_zettel_count')}")
+    print(f"- target: {summary.get('target_path') or 'none'}")
+    print(f"- plan: {summary.get('plan_sha256') or 'none'}")
+    for blocker in result.get("blockers", []):
+        print(f"BLOCKED: {blocker}")
+    print("Private view name and facet values: not echoed")
+
+
 def command_saved_view_write(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
+    if args.approve and not args.dry_run:
+        # Reopened 2026-09-24 (triage group 6): the group 3 plan-digest route.
+        if not args.affirm_view_reviewed:
+            return _exact_human_approval_cli_error(
+                args,
+                lifecycle_action="saved_view_write",
+                reason_code="saved_view_write_review_affirmation_required",
+            )
+        return _plan_digest_exact_route(
             args,
             lifecycle_action="saved_view_write",
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.saved_view_write,
+            plan=lambda: saved_view_workflows.saved_view_write_plan(
+                Path(args.archive_root), request_path=args.request,
+            ),
+            write=lambda digest, reviewer, binding, claim: saved_view_workflows.saved_view_write(
+                Path(args.archive_root),
+                request_path=args.request,
+                expected_plan_sha256=digest,
+                reviewed_by=reviewer,
+                affirm_view_reviewed=True,
+                exact_human_approval_claim=claim,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+            ),
+            printer=lambda result: _print_saved_view_result(args, result, "write"),
+            nothing_to_do=lambda preview: preview.get("state") == "already_recorded",
         )
     if bool(args.dry_run) == bool(args.approve):
         print("Provide exactly one of --dry-run or --approve.", file=sys.stderr)
@@ -32004,11 +32041,26 @@ def command_saved_view_write(args: argparse.Namespace) -> int:
 
 
 def command_saved_view_revert(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
+    if args.approve and not args.dry_run:
+        # Reopened 2026-09-24 (triage group 6): the group 3 plan-digest route.
+        return _plan_digest_exact_route(
             args,
             lifecycle_action="saved_view_revert",
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.saved_view_revert,
+            plan=lambda: saved_view_workflows.saved_view_revert_plan(
+                Path(args.archive_root), receipt_path=args.receipt,
+            ),
+            write=lambda digest, reviewer, binding, claim: saved_view_workflows.saved_view_revert(
+                Path(args.archive_root),
+                receipt_path=args.receipt,
+                expected_plan_sha256=digest,
+                reviewed_by=reviewer,
+                exact_human_approval_claim=claim,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+            ),
+            printer=lambda result: _print_saved_view_result(args, result, "revert"),
+            nothing_to_do=lambda preview: preview.get("state") == "already_reverted",
         )
     if bool(args.dry_run) == bool(args.approve):
         print("Provide exactly one of --dry-run or --approve.", file=sys.stderr)
@@ -32905,7 +32957,7 @@ def _plan_digest_exact_route(
             preview.get("ok") is not True
             or preview.get("blockers")
             or not isinstance(digest, str)
-            or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+            or re.fullmatch(r"(?:sha256:)?[0-9a-f]{64}", digest) is None
         ):
             return _exact_human_approval_cli_error(
                 args,

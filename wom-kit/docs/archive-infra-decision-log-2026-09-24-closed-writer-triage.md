@@ -150,6 +150,14 @@ reviewed preview; a run with nothing to write opens no dialog. A missing
 reviewer is refused as JSON before any text is read. Evidence:
 `test_derive_text_capture_exact`.
 
+Letter 147 listed `saved-view-write` among the commands it needed. The
+dormant writer and its revert already re-derived their plan under
+`_SavedViewLock` and refused drift; `saved-view-write` / `saved-view-revert
+--approve` now bind that plan digest through the group 3 route (the route
+accepts a `sha256:`-prefixed digest). The write keeps its
+`--affirm-view-reviewed` requirement before any dialog. Evidence:
+`test_saved_view_exact`.
+
 ## Removal of Retired and Replaced Writers (v0.4.40)
 
 Owner direction (2026-09-24): a useless closed command is deleted outright, not

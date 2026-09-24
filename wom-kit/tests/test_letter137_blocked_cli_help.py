@@ -51,7 +51,7 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
         }
         self.assertEqual(
             len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS),
-            21,
+            19,
         )
         for exact_batch_command in (
             "source-intake-batch",
