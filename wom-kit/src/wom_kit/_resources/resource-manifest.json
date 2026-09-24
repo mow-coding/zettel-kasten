@@ -757,8 +757,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
       "packaged": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
-      "bytes": 9623,
-      "sha256": "ccca6ef814e4a3ce21d9328c5316cab11693de7be38ca5c05c2f98b002dae1be"
+      "bytes": 9531,
+      "sha256": "60689700fff8f22ab0bf4299b849305be21a067449d20294013b530613508836"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/foreign-sharing-and-trust.md",
