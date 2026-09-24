@@ -9,7 +9,7 @@ from wom_kit import archive_cli, archive_services, command_status
 
 
 FIXED_CLOSED_PATHS = (
-    "derive-text capture",
+    # derive-text capture was reopened in v0.4.40 (test_derive_text_capture_exact).
     "zet-revision-restore-proposal-from-snapshot",
 )
 
@@ -54,7 +54,6 @@ class V0412FixedCloseSurfaceTruthTests(unittest.TestCase):
                 )
 
         for argv in (
-            ["derive-text", "capture"],
             ["zet-revision-restore-proposal-from-snapshot"],
         ):
             with self.subTest(argv=argv):

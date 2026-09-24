@@ -80951,14 +80951,16 @@ class ObjetCaptureTests(unittest.TestCase):
             self.assertEqual(code, 1, output)
             code, output = self.run_cli(base + ["--dry-run", "--approve"])
             self.assertEqual(code, 1, output)
-            code, output = self.run_cli(base + ["--approve", "--format", "json"])
+            # Reopened in v0.4.40: a missing source objet is refused before
+            # any dialog.
+            code, output = self.run_cli(base + ["--approve", "--reviewed-by", "person:test", "--format", "json"])
             self.assertEqual(code, 1, output)
             blocked = json.loads(output)
             self.assertEqual(blocked["state"], "blocked")
             self.assertEqual(blocked["lifecycle_action"], "derived_text_capture_apply")
             self.assertEqual(
                 blocked["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
+                ["derived_text_capture_apply_preflight_blocked"],
             )
             self.assertFalse(blocked["private_values_echoed"])
             self.assertEqual(self._inventory(archive_root), before)

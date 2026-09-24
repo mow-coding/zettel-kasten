@@ -1,6 +1,6 @@
 # Archive Infra Decision Log: Closed-Writer Triage (2026-09-24)
 
-Status: owner decision recorded; groups 1-5a and the removals implemented for v0.4.40.
+Status: owner decision recorded; groups 1-5a, the title-remap reclassification, group 6 (in progress) and the removals implemented for v0.4.40.
 
 ## Decision (owner, 2026-09-24)
 
@@ -134,6 +134,21 @@ A closed `restore-drill` left `preflight --require-restore-drill` and
   any archive. Where their approval record lives needs a design decision.
 
 Evidence: `wom-kit/tests/test_group5_restore_gitignore_identity_exact.py`.
+
+## Group 6: Derived Text Capture (v0.4.40)
+
+Customer impact first: letters 033-036 attached extracted, OCR and ASR text to
+existing objets (3,746 links) before v0.4.0 fixed the writer closed; since
+then only a new capture could carry a derived-text half. Nested
+`derive-text capture` (single and `--from-manifest`) now writes under exact
+approval. The dry-run reports `plan_sha256` over the exact text identity,
+source objet, derivation metadata and planned action; approval binds that
+digest (one dialog, or none under a valid session grant). The writer
+re-derives the plan after the claim and refuses
+`derived_text_capture_plan_changed`; `--expected-plan-sha256` binds the
+reviewed preview; a run with nothing to write opens no dialog. A missing
+reviewer is refused as JSON before any text is read. Evidence:
+`test_derive_text_capture_exact`.
 
 ## Removal of Retired and Replaced Writers (v0.4.40)
 

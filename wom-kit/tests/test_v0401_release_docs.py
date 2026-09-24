@@ -104,7 +104,7 @@ class V0401ReleaseDocsTests(unittest.TestCase):
 
     def test_current_parser_combines_all_released_writers(self) -> None:
         blocked = archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS
-        self.assertEqual(len(blocked), 22)  # 2026-09-24 triage reopen
+        self.assertEqual(len(blocked), 21)  # 2026-09-24 triage reopen
         self.assertNotIn("object-storage-upload", blocked)  # v0.4.33
         self.assertNotIn("migrate", blocked)
         self.assertNotIn("discard-draft", blocked)
@@ -124,7 +124,7 @@ class V0401ReleaseDocsTests(unittest.TestCase):
         self.assertNotIn("source-intake-batch", blocked)
         self.assertNotIn("objet-capture-batch", blocked)
         self.assertNotIn("revert-edge", blocked)
-        self.assertIn("derive-text capture", blocked)
+        self.assertNotIn("derive-text capture", blocked)  # reopened in v0.4.40
         self.assertIn("zet-revision-restore-proposal-from-snapshot", blocked)
 
         inventory = command_status.build_command_status_inventory(
@@ -143,8 +143,8 @@ class V0401ReleaseDocsTests(unittest.TestCase):
         self.assertEqual(counts["alias_invocation_path_count"], 248)  # v0.4.40: aliases of deleted writers removed
         self.assertEqual(counts["invocation_path_count"], 559)
         # v0.4.33 reopened object-storage-upload (one path moves from fixed-closed to available).
-        self.assertEqual(counts["approval_available_command_count"], 84)  # 2026-09-24 triage reopen
-        self.assertEqual(counts["approval_fixed_closed_command_count"], 23)
+        self.assertEqual(counts["approval_available_command_count"], 85)  # 2026-09-24 triage reopen
+        self.assertEqual(counts["approval_fixed_closed_command_count"], 22)
         self.assertEqual(counts["approval_not_exposed_command_count"], 204)
         self.assertEqual(counts["conditional_approval_command_count"], 10)
         self.assertEqual(counts["dry_run_exposed_command_count"], 266)
@@ -197,7 +197,7 @@ class V0401ReleaseDocsTests(unittest.TestCase):
         )
         self.assertEqual(
             by_path["derive-text capture"]["approval_status"],
-            "approval_fixed_closed",
+            "approval_available",  # reopened in v0.4.40
         )
         self.assertEqual(
             by_path["zet-revision-restore-proposal-from-snapshot"]["approval_status"],

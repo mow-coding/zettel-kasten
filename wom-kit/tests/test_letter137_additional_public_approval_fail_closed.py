@@ -302,7 +302,7 @@ class Letter137AdditionalPublicCliBoundaryTests(_CliAssertions):
             "parcel": ["pack"],
         }
         alias_groups = {key: value for key, value in alias_groups.items() if key not in REMOVED_COMMANDS_V0440}  # deleted in v0.4.40
-        self.assertEqual(len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS), 22)  # 2026-09-24 triage reopen
+        self.assertEqual(len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS), 21)  # 2026-09-24 triage reopen
         for exact_batch_command in (
             "source-intake-batch",
             "objet-capture-batch",
@@ -369,7 +369,8 @@ class Letter137AdditionalPublicCliBoundaryTests(_CliAssertions):
             for action in capture._actions
             if "--approve" in action.option_strings
         )
-        self.assertEqual(approve.help, archive_cli.COMPOUND_APPROVAL_BLOCKED_HELP)
+        # Reopened in v0.4.40: the help names the exact approval.
+        self.assertIn("exact approval", approve.help)
         parcel_help = " ".join(top.choices["parcel"].format_help().split())
         init_help = " ".join(top.choices["init"].format_help().split())
         create_help = " ".join(top.choices["create-draft"].format_help().split())
@@ -415,12 +416,11 @@ class Letter137AdditionalPublicCliBoundaryTests(_CliAssertions):
                 side_effect=AssertionError("derived input must not be read"),
             ) as service:
                 code, stdout, stderr = self.run_cli(argv)
-                self.assert_fixed_json_block(
-                    code,
-                    stdout,
-                    stderr,
-                    lifecycle_action=lifecycle,
-                )
+                # Reopened in v0.4.40: approve without a reviewer is refused
+                # before any derived input is read.
+                self.assertEqual(code, 1)
+                self.assertEqual(stderr, "")
+                self.assertEqual(json.loads(stdout)["reason_codes"], [f"{lifecycle}_reviewer_required"])
                 service.assert_not_called()
 
     def test_human_create_draft_blocks_before_body_file_or_service(self) -> None:

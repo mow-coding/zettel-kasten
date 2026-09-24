@@ -73,7 +73,6 @@ COMPOUND_APPROVAL_FIXED_CLOSED_COMMANDS = frozenset(
     {
         "add-source",
         "credential-lifecycle",
-        "derive-text capture",
         "external-locator-deactivate",
         "imap-mailbox-adapter-manifest-write",
         "imap-mailbox-header-metadata-scan",
@@ -145,6 +144,8 @@ EXACT_APPROVAL_REOPENED_WRITERS = frozenset({
     # Reclassified 2026-09-24: legacy title-remap journal recovery.
     "zet-title-remap-recover",
     "zet-title-remap-revert-recover",
+    # Triage group 6 (2026-09-24): derived text capture.
+    "derive-text capture",
 })
 
 # Public parser and dispatch exposure was audited at v0.3.320 and its explicit

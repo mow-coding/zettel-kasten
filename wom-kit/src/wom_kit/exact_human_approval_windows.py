@@ -246,6 +246,8 @@ class ExactHumanApprovalOperation(Enum):
     # Reclassified 2026-09-24: legacy title-remap journal recovery.
     zet_title_remap_recover = "zet_title_remap_recover"
     zet_title_remap_revert_recover = "zet_title_remap_revert_recover"
+    # Triage group 6 (2026-09-24): derived text for existing objets.
+    derived_text_capture = "derived_text_capture"
 
 
 def _validated_target_preview_text(value: str | None) -> str | None:
@@ -561,6 +563,7 @@ _OPERATION_LABELS = {
     ExactHumanApprovalOperation.archive_identity_reconcile: "아카이브 신원 파일 수리",
     ExactHumanApprovalOperation.zet_title_remap_recover: "중단된 제목 변경 복구",
     ExactHumanApprovalOperation.zet_title_remap_revert_recover: "중단된 제목 되돌리기 복구",
+    ExactHumanApprovalOperation.derived_text_capture: "파생 텍스트 등록",
 }
 
 _OPERATION_QUESTIONS = {
@@ -719,6 +722,9 @@ _OPERATION_QUESTIONS = {
     ),
     ExactHumanApprovalOperation.zet_title_remap_revert_recover: (
         "중단된 제목 되돌리기 작업을 검토한 복구 계획대로 끝낼까요?"
+    ),
+    ExactHumanApprovalOperation.derived_text_capture: (
+        "검토한 추출 텍스트를 해당 오브제의 파생 텍스트로 등록할까요?"
     ),
 }
 
@@ -946,6 +952,9 @@ _OPERATION_SUMMARIES = {
     ExactHumanApprovalOperation.zet_title_remap_revert_recover: (
         "남아 있는 옛 제목 되돌리기 저널을 검토한 계획대로 마무리하거나 되돌리고 잠금을 정리합니다."
     ),
+    ExactHumanApprovalOperation.derived_text_capture: (
+        "추출·OCR·음성 인식 텍스트를 원본 오브제에 연결된 파생 텍스트로 저장하고 영수증을 남깁니다. 원본 오브제는 바뀌지 않습니다."
+    ),
 }
 
 _OPERATION_APPROVE_BUTTONS = {
@@ -1011,6 +1020,7 @@ _OPERATION_APPROVE_BUTTONS = {
     ExactHumanApprovalOperation.archive_identity_reconcile: "신원 수리",
     ExactHumanApprovalOperation.zet_title_remap_recover: "복구 실행",
     ExactHumanApprovalOperation.zet_title_remap_revert_recover: "복구 실행",
+    ExactHumanApprovalOperation.derived_text_capture: "텍스트 등록",
 }
 
 

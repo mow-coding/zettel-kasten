@@ -144,7 +144,7 @@ class V0433ReleaseDocsTests(unittest.TestCase):
         self.assertIn("`writer_state`", contract)
         self.assertIn("`local_bytes_missing`", contract)
         approval = (KIT / "docs" / "exact-human-approval-contract.md").read_text(encoding="utf-8")
-        self.assertIn("84 approval-available, 23 fixed-closed", " ".join(approval.split()))  # current parser inventory
+        self.assertIn("85 approval-available, 22 fixed-closed", " ".join(approval.split()))  # current parser inventory
         matrix = (KIT / "docs" / "capability-matrix.md").read_text(encoding="utf-8")
         self.assertIn("upload reopened in v0.4.33 as preservation PUT + adoption projection", matrix)
         register = (KIT / "docs" / "recovery-operations-acceptance.md").read_text(encoding="utf-8")
@@ -175,9 +175,9 @@ class V0433ReleaseDocsTests(unittest.TestCase):
         routed = sum(1 for row in manifest["paths"].values() if row.get("route"))
         # v0.4.23 integrated create-draft (LR-06a); v0.4.24 through v0.4.27, v0.4.31 and v0.4.32 change no writer;
         # v0.4.28 restore, v0.4.29 offload, v0.4.30 claim finalize and v0.4.33 upload are pending (target v0.4.34).
-        self.assertEqual(len(statuses), 84)  # 2026-09-24 triage reopen
+        self.assertEqual(len(statuses), 85)  # 2026-09-24 triage reopen
         self.assertEqual(statuses.count("session_integrated") - routed, 6)
-        self.assertEqual(routed, 30)  # 2026-09-24 triage reopen
+        self.assertEqual(routed, 31)  # 2026-09-24 triage reopen
         self.assertEqual(statuses.count("pending"), 29)  # v0.4.36: five rows integrated through the environment route
         self.assertEqual(statuses.count("legacy_exception"), 19)
         self.assertEqual(manifest["paths"]["create-draft"]["status"], "session_integrated")

@@ -162067,6 +162067,7 @@ def _derived_text_capture_run(
     review_status: str,
     approve: bool,
     reviewed_by: str | None,
+    _exact_verified: bool = False,
     model_name: str | None = None,
     model_version: str | None = None,
     confidence: float | int | None = None,
@@ -162097,6 +162098,7 @@ def _derived_text_capture_run(
         language=language,
         born_digital=born_digital,
         source_presence="manifest_lookup",
+        _exact_verified=_exact_verified,
     )
 
 
@@ -162122,6 +162124,7 @@ def _derived_text_capture_core(
     born_digital: bool = False,
     source_presence: str = "manifest_lookup",
     paired_with: dict[str, Any] | None = None,
+    _exact_verified: bool = False,
 ) -> dict[str, Any]:
     blockers = _derived_text_metadata_blockers(
         source_object_id=source_object_id,
@@ -162208,6 +162211,7 @@ def _derived_text_capture_core(
         language=language,
         born_digital=born_digital,
         paired_with=paired_with,
+        _exact_verified=_exact_verified,
     )
 
 
@@ -162234,8 +162238,11 @@ def _derived_text_register(
     language: str | None = None,
     born_digital: bool = False,
     paired_with: dict[str, Any] | None = None,
+    _exact_verified: bool = False,
 ) -> dict[str, Any]:
-    if approve:
+    # Reopened 2026-09-24 (triage group 6): only the exact-approval path
+    # (derived_text_capture_approved) reaches the approved core.
+    if approve and not _exact_verified:
         return _compound_exact_human_approval_blocked(
             lifecycle_action="derived_text_register",
         )
@@ -162252,7 +162259,7 @@ def _derived_text_register(
         tool_name=tool_name,
         tool_version=tool_version,
         review_status=review_status,
-        approve=False,
+        approve=approve,
         reviewed_by=reviewed_by,
         captured_at=captured_at,
         model_name=model_name,
@@ -162559,7 +162566,7 @@ def derived_text_capture_dry_run(
     language: str | None = None,
     born_digital: bool = False,
 ) -> dict[str, Any]:
-    return _derived_text_capture_run(
+    result = _derived_text_capture_run(
         archive_root,
         text_file=text_file,
         source_object_id=source_object_id,
@@ -162574,6 +162581,158 @@ def derived_text_capture_dry_run(
         confidence=confidence,
         language=language,
         born_digital=born_digital,
+    )
+    digest = derived_text_capture_plan_sha256(result)
+    if digest is not None:
+        result["plan_sha256"] = digest
+    return result
+    digest = derived_text_capture_plan_sha256(result)
+    if digest is not None:
+        result["plan_sha256"] = digest
+    return result
+
+# Reopened 2026-09-24 (triage group 6): the exact effect set of a capture is
+# the stored text identity, its source objet and derivation metadata, and the
+# planned action. The approval binds this digest; the writer re-derives it.
+DERIVED_TEXT_PLAN_FIELDS = (
+    "archive_id",
+    "source_object_id",
+    "derived_text_id",
+    "derivation_kind",
+    "review_status",
+    "text_sha256",
+    "text_logical_key",
+    "size_bytes",
+    "source_text_encoding",
+    "source_text_sha256",
+    "planned_action",
+)
+
+
+def derived_text_capture_plan_sha256(result: Mapping[str, Any]) -> str | None:
+    if result.get("ok") is not True or result.get("blockers"):
+        return None
+    if isinstance(result.get("items"), list):
+        basis: Any = {
+            "archive_id": result.get("archive_id"),
+            "items": [
+                {
+                    **{key: item.get(key) for key in DERIVED_TEXT_PLAN_FIELDS},
+                    "item_id": item.get("item_id"),
+                    "manifest_line": item.get("manifest_line"),
+                }
+                for item in result["items"]
+                if isinstance(item, Mapping)
+            ],
+        }
+    else:
+        basis = {key: result.get(key) for key in DERIVED_TEXT_PLAN_FIELDS}
+    return sha256_json_hex(basis)
+
+
+def _derived_text_capture_exact_gate(
+    archive_root: Path | str,
+    *,
+    expected_plan_sha256: str,
+    reviewed_by: str | None,
+    claim: _ClaimedExactHumanApproval | None,
+    expected_exact_approval_plan_sha256: str | None,
+    expected_exact_approval_target_binding_sha256: str | None,
+) -> tuple[Path, str]:
+    _require_exact_human_approval_inputs_before_archive_read(
+        claim=claim,
+        expected_plan_sha256=expected_exact_approval_plan_sha256,
+        expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+    )
+    root = require_existing_archive_root(archive_root)
+    reviewer = safe_project_intake_actor_id(reviewed_by)
+    if reviewer is None:
+        raise ArchiveServiceError("derived_text_capture_reviewer_invalid")
+    try:
+        binding = plan_digest_approval_binding(
+            ExactHumanApprovalOperation.derived_text_capture, expected_plan_sha256
+        )
+    except OperationApprovalBindingError as exc:
+        raise ArchiveServiceError(exc.code) from None
+    _require_exact_human_operation_approval(
+        root,
+        binding,
+        reviewer_claim=reviewer,
+        expected_plan_sha256=expected_exact_approval_plan_sha256,
+        expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+        claim=claim,
+    )
+    return root, reviewer
+
+
+def _derived_text_plan_changed(fresh: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        **fresh,
+        "ok": False,
+        "dry_run": False,
+        "state": "blocked",
+        "blockers": ["derived_text_capture_plan_changed"],
+        "would_change": [],
+    }
+
+
+def derived_text_capture_approved(
+    archive_root: Path | str,
+    *,
+    expected_plan_sha256: str,
+    reviewed_by: str | None,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None,
+    expected_exact_approval_plan_sha256: str | None,
+    expected_exact_approval_target_binding_sha256: str | None,
+    **capture: Any,
+) -> dict[str, Any]:
+    root, reviewer = _derived_text_capture_exact_gate(
+        archive_root,
+        expected_plan_sha256=expected_plan_sha256,
+        reviewed_by=reviewed_by,
+        claim=exact_human_approval_claim,
+        expected_exact_approval_plan_sha256=expected_exact_approval_plan_sha256,
+        expected_exact_approval_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+    )
+    fresh = derived_text_capture_dry_run(root, **capture)
+    if fresh.get("plan_sha256") != expected_plan_sha256:
+        return _derived_text_plan_changed(fresh)
+    return _derived_text_capture_run(
+        root,
+        approve=True,
+        reviewed_by=reviewer,
+        _exact_verified=True,
+        **capture,
+    )
+
+
+def derived_text_capture_manifest_approved(
+    archive_root: Path | str,
+    manifest_path: Path | str,
+    *,
+    expected_plan_sha256: str,
+    reviewed_by: str | None,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None,
+    expected_exact_approval_plan_sha256: str | None,
+    expected_exact_approval_target_binding_sha256: str | None,
+) -> dict[str, Any]:
+    root, reviewer = _derived_text_capture_exact_gate(
+        archive_root,
+        expected_plan_sha256=expected_plan_sha256,
+        reviewed_by=reviewed_by,
+        claim=exact_human_approval_claim,
+        expected_exact_approval_plan_sha256=expected_exact_approval_plan_sha256,
+        expected_exact_approval_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+    )
+    fresh = derived_text_capture_manifest_dry_run(root, manifest_path)
+    if fresh.get("plan_sha256") != expected_plan_sha256:
+        return _derived_text_plan_changed(fresh)
+    return _derived_text_capture_manifest_run(
+        root,
+        manifest_path,
+        approve=True,
+        reviewed_by=reviewer,
+        _exact_verified=True,
     )
 
 
@@ -162721,6 +162880,7 @@ def _derived_text_capture_manifest_run(
     *,
     approve: bool,
     reviewed_by: str | None,
+    _exact_verified: bool = False,
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
@@ -162807,7 +162967,15 @@ def _derived_text_capture_manifest_run(
                 )
             )
             continue
-        if approve:
+        if approve and _exact_verified:
+            item_result = _derived_text_capture_run(
+                root,
+                approve=True,
+                reviewed_by=str(reviewed_by),
+                _exact_verified=True,
+                **kwargs,
+            )
+        elif approve:
             item_result = derived_text_capture_apply(
                 root,
                 reviewed_by=str(reviewed_by),
@@ -162860,12 +163028,16 @@ def derived_text_capture_manifest_dry_run(
     archive_root: Path | str,
     manifest_path: Path | str,
 ) -> dict[str, Any]:
-    return _derived_text_capture_manifest_run(
+    result = _derived_text_capture_manifest_run(
         archive_root,
         manifest_path,
         approve=False,
         reviewed_by=None,
     )
+    digest = derived_text_capture_plan_sha256(result)
+    if digest is not None:
+        result["plan_sha256"] = digest
+    return result
 
 
 def derived_text_capture_manifest_apply(

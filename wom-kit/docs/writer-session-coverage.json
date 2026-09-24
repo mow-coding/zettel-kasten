@@ -112,6 +112,11 @@
       "route": "environment",
       "evidence": ["test_title_remap_recover_exact"]
     },
+    "derive-text capture": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_derive_text_capture_exact"]
+    },
     "draft-revision-write": {
       "status": "session_integrated",
       "route": "environment",

@@ -33841,16 +33841,6 @@ def command_objet_capture(args: argparse.Namespace) -> int:
 
 
 def command_derive_text_capture(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action=(
-                "derived_text_capture_manifest_apply"
-                if args.from_manifest
-                else "derived_text_capture_apply"
-            ),
-            reason_code="compound_exact_human_approval_binding_required",
-        )
     if args.dry_run and args.approve:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
         return 1
@@ -33858,8 +33848,10 @@ def command_derive_text_capture(args: argparse.Namespace) -> int:
         print("Derived text capture requires --dry-run or --approve.", file=sys.stderr)
         return 1
     if args.approve and not args.reviewed_by:
-        print("Derived text capture requires --reviewed-by when --approve is used.", file=sys.stderr)
-        return 1
+        action = "derived_text_capture_manifest_apply" if args.from_manifest else "derived_text_capture_apply"
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action=action, reason_code=f"{action}_reviewer_required",
+        )
     single_fields = [
         args.text_file,
         args.source_object_id,
@@ -33885,6 +33877,47 @@ def command_derive_text_capture(args: argparse.Namespace) -> int:
         )
         return 1
 
+    if args.approve:
+        # Reopened 2026-09-24 (triage group 6): one fresh preview, then one
+        # dialog (or a valid session grant) bound to its plan digest.
+        capture = None if args.from_manifest else _derive_text_capture_kwargs(args)
+        return _plan_digest_exact_route(
+            args,
+            lifecycle_action=(
+                "derived_text_capture_manifest_apply" if args.from_manifest else "derived_text_capture_apply"
+            ),
+            operation=ExactHumanApprovalOperation.derived_text_capture,
+            plan=lambda: (
+                archive_services.derived_text_capture_manifest_dry_run(
+                    Path(args.archive_root), Path(args.from_manifest)
+                )
+                if args.from_manifest
+                else archive_services.derived_text_capture_dry_run(Path(args.archive_root), **capture)
+            ),
+            write=lambda digest, reviewer, binding, claim: (
+                archive_services.derived_text_capture_manifest_approved(
+                    Path(args.archive_root),
+                    Path(args.from_manifest),
+                    expected_plan_sha256=digest,
+                    reviewed_by=reviewer,
+                    exact_human_approval_claim=claim,
+                    expected_exact_approval_plan_sha256=binding.plan_sha256,
+                    expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+                )
+                if args.from_manifest
+                else archive_services.derived_text_capture_approved(
+                    Path(args.archive_root),
+                    expected_plan_sha256=digest,
+                    reviewed_by=reviewer,
+                    exact_human_approval_claim=claim,
+                    expected_exact_approval_plan_sha256=binding.plan_sha256,
+                    expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+                    **capture,
+                )
+            ),
+            printer=lambda result: _print_derive_text_capture_result(args, result),
+            nothing_to_do=lambda preview: not preview.get("would_change"),
+        )
     try:
         if args.from_manifest:
             if args.dry_run:
@@ -33923,7 +33956,27 @@ def command_derive_text_capture(args: argparse.Namespace) -> int:
     except (archive_services.ArchiveServiceError, OSError, json.JSONDecodeError) as exc:
         print(f"Derived text capture failed: {exc}", file=sys.stderr)
         return 1
+    _print_derive_text_capture_result(args, result)
+    return 0 if result.get("ok") else 1
 
+
+def _derive_text_capture_kwargs(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "text_file": Path(args.text_file),
+        "source_object_id": args.source_object_id,
+        "derivation_kind": args.derivation_kind,
+        "tool_name": args.tool_name,
+        "tool_version": args.tool_version,
+        "review_status": args.review_status,
+        "model_name": args.model_name,
+        "model_version": args.model_version,
+        "confidence": args.confidence,
+        "language": args.language,
+        "born_digital": args.born_digital,
+    }
+
+
+def _print_derive_text_capture_result(args: argparse.Namespace, result: dict[str, Any]) -> None:
     if args.format == "json":
         print_json(result)
     elif args.from_manifest:
@@ -33945,7 +33998,6 @@ def command_derive_text_capture(args: argparse.Namespace) -> int:
             print(f"BLOCKED: {blocker}")
         for warning in result.get("warnings", []):
             print(f"WARNING: {warning}")
-    return 0 if result.get("ok") else 1
 
 
 def command_derive_text_coverage(args: argparse.Namespace) -> int:
@@ -47185,9 +47237,16 @@ def build_parser() -> argparse.ArgumentParser:
     derive_text_capture.add_argument(
         "--approve",
         action="store_true",
-        help=COMPOUND_APPROVAL_BLOCKED_HELP,
+        help=(
+            "Capture the reviewed text after one exact approval (a native dialog, "
+            "or none under a valid session grant) bound to the fresh plan digest."
+        ),
     )
     derive_text_capture.add_argument("--reviewed-by", help="Reviewer id required for approved capture.")
+    derive_text_capture.add_argument(
+        "--expected-plan-sha256",
+        help="Optional plan_sha256 from the reviewed --dry-run; --approve refuses if the plan changed.",
+    )
     derive_text_capture.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     derive_text_capture.set_defaults(func=command_derive_text_capture)
 
