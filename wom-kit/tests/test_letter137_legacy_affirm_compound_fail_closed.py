@@ -12,6 +12,10 @@ from types import ModuleType
 from unittest import mock
 
 from wom_kit import archive_cli, archive_services, completion_workflows
+import sys as _removed_sys
+from pathlib import Path as _RemovedPath
+_removed_sys.path.insert(0, str(_RemovedPath(__file__).resolve().parent))
+from removed_commands_v0440 import REMOVED_COMMANDS_V0440  # noqa: E402
 
 
 COMPOUND_APPROVAL_BLOCKER = "compound_exact_human_approval_binding_required"
@@ -474,6 +478,8 @@ class Letter137LegacyAffirmCliBoundaryTests(_BoundaryAssertions):
             ),
         )
         for arguments, service, action in calls:
+            if arguments[0] in REMOVED_COMMANDS_V0440:  # deleted in v0.4.40
+                continue
             with self.subTest(action=action):
                 self._assert_cli_block(
                     arguments=arguments,
@@ -545,6 +551,8 @@ class Letter137LegacyAffirmCliBoundaryTests(_BoundaryAssertions):
             ),
         )
         for arguments, service, action in calls:
+            if arguments[0] in REMOVED_COMMANDS_V0440:  # deleted in v0.4.40
+                continue
             with self.subTest(action=action):
                 self._assert_cli_block(
                     arguments=arguments,
@@ -633,6 +641,8 @@ class Letter137LegacyAffirmCliBoundaryTests(_BoundaryAssertions):
             ),
         )
         for arguments, service, action in calls:
+            if arguments[0] in REMOVED_COMMANDS_V0440:  # deleted in v0.4.40
+                continue
             with self.subTest(action=action):
                 self._assert_cli_block(
                     arguments=arguments,
@@ -684,6 +694,8 @@ class Letter137LegacyAffirmCliBoundaryTests(_BoundaryAssertions):
         # archive that does not exist the writer is never entered, the error
         # is a fixed code, and no private argument is echoed.
         for arguments, service, action in calls:
+            if arguments[0] in REMOVED_COMMANDS_V0440:  # deleted in v0.4.40
+                continue
             with self.subTest(action=action):
                 args = self.parser.parse_args(arguments)
                 stdout, stderr = io.StringIO(), io.StringIO()

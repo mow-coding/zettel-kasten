@@ -28,7 +28,6 @@ required_gates:
     receipt_required_for_transfer: true
 example_command:
   - archive
-  - transfer-ownership
   - <family-archive>
   - --new-owner
   - person:child-template

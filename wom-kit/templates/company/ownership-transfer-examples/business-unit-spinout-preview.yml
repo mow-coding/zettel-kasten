@@ -32,7 +32,6 @@ required_gates:
     receipt_required_for_transfer: true
 example_command:
   - archive
-  - transfer-ownership
   - <business-unit-archive>
   - --new-owner
   - company:template-spinout

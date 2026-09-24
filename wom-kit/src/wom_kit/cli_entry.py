@@ -16,8 +16,8 @@ from . import __version__
 # Public names and defaults only: CI compares this presentation table with
 # the actual parser. It grants no capability, argument validity, or approval.
 _PROGRESS_COMMANDS = """
-abstract-backfill-plan abstract-backfill-receipt-audit abstract-backfill-recover
-abstract-backfill-recovery-plan abstract-backfill-revert abstract-backfill-write
+abstract-backfill-plan abstract-backfill-receipt-audit
+abstract-backfill-recovery-plan
 abstract-catalog abstract-freshness activity-cleanup activity-group-membership-plan
 activity-group-membership-recover activity-group-membership-removal-plan
 activity-group-membership-removal-recover activity-group-membership-removal-write
@@ -33,7 +33,8 @@ mint-zet mint-zettel notion-import-locator-evidence-plan
 notion-import-locator-loss-audit notion-locator-loss-audit
 object-storage-adopt-existing object-storage-offload object-storage-restore object-storage-upload object-storage-upload-adopt-existing object-storage-upload-execute
 objet-capture-batch objet-capture-selection objet-storage-adopt-existing objet-storage-offload objet-storage-restore objet-storage-upload
-operator-start-here project-version-update revision-receipt-audit runtime-context
+operator-start-here project-version-update remint-reconcile-batch retire-draft-reconcile-batch
+revision-receipt-audit runtime-context
 source-intake-batch source-intake-chain source-intake-record staged-cleanup-check
 start-here
 title-readiness title-remap-plan title-remap-receipt-audit title-remap-recover
@@ -41,8 +42,8 @@ title-remap-recovery-plan title-remap-revert title-remap-revert-plan
 title-remap-revert-recover title-remap-revert-recovery-plan title-remap-write
 update-wom-kit upgrade-check validate version version-update
 zet-abstract-backfill-plan zet-abstract-backfill-receipt-audit
-zet-abstract-backfill-recover zet-abstract-backfill-recovery-plan
-zet-abstract-backfill-revert zet-abstract-backfill-write zet-abstract-freshness
+zet-abstract-backfill-recovery-plan
+zet-abstract-freshness
 zet-catalog zet-catalog-drain zet-catalog-pass zet-catalog-pass-cleanup
 zet-catalog-pass-read zet-first-readiness zet-objet-link
 zet-revision-receipt-audit zet-title-check zet-title-readiness zet-title-remap-plan

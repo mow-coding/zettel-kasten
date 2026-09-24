@@ -18,14 +18,12 @@ class V0419CapabilityAvailabilityTests(unittest.TestCase):
             "add-source": "add_source_binding",
             "discard-draft": "discard_draft_apply",
             "credential-lifecycle": "authenticated_credential_lifecycle_decision",
-            "github-repo": "approve_github_repository_setup_plan",
             "import-external": "import_external_archive",
             "migrate": "migrate_archive",
             "parcel": "pack_work_context",
             "notion-page-recovery": "authenticated_notion_page_recovery_execute",
             "objet-capture-selection": "objet_capture_selection_record",
             "prehashed-objet-ledger": "prehashed_objet_ledger_register",
-            "transfer-ownership": "transfer_archive_ownership",
             "revert-batch": "zettel_edge_batch_revert",
             "mint-zet-batch": "mint_zet_batch",
         }
@@ -388,12 +386,12 @@ class V0419CapabilityAvailabilityTests(unittest.TestCase):
 
         dry_run = command_status.resolve_capability_availability(
             inventory,
-            "transfer-ownership",
+            "credential-lifecycle",
             requested_mode="dry_run",
         )
         approve = command_status.resolve_capability_availability(
             inventory,
-            "transfer-ownership",
+            "credential-lifecycle",
             requested_mode="approve",
         )
         available_writer = command_status.resolve_capability_availability(
@@ -819,8 +817,8 @@ class V0419CapabilityAvailabilityTests(unittest.TestCase):
         status = command_status.resolve_suggested_command_mode(
             inventory,
             (
-                "archive transfer-ownership <archive-root> "
-                "--new-owner <id> --approve"
+                "archive credential-lifecycle <archive-root> "
+                "--workspace-fingerprint <sha> --default-credential-id <id> --approve"
             ),
             trusted_parser=parser,
         )
@@ -842,15 +840,17 @@ class V0419CapabilityAvailabilityTests(unittest.TestCase):
         stderr = io.StringIO()
         with mock.patch.object(
             archive_cli,
-            "command_transfer_ownership",
+            "command_credential_lifecycle",
             side_effect=AssertionError("unavailable handler must not run"),
         ) as handler, redirect_stdout(stdout), redirect_stderr(stderr):
             exit_code = archive_cli.main(
                 [
-                    "transfer-ownership",
+                    "credential-lifecycle",
                     private_marker,
-                    "--new-owner",
-                    "person:synthetic",
+                    "--workspace-fingerprint",
+                    "sha256:" + "b" * 64,
+                    "--default-credential-id",
+                    "credential:synthetic",
                     "--approve",
                     "--format",
                     "json",
@@ -983,7 +983,7 @@ class V0419CapabilityAvailabilityTests(unittest.TestCase):
             for row in payload["data"]["capability_availability"]["rows"]
         }
         self.assertEqual(
-            rows["transfer-ownership"]["approve_without_arguments"]["state"],
+            rows["credential-lifecycle"]["approve_without_arguments"]["state"],
             command_status.CAPABILITY_WRITER_UNAVAILABLE,
         )
         self.assertEqual(
@@ -1038,8 +1038,8 @@ class V0419CapabilityAvailabilityTests(unittest.TestCase):
             "--zettel-id <id> --dry-run"
         )
         unavailable_command = (
-            "archive transfer-ownership <archive-root> "
-            "--new-owner <id> --approve"
+            "archive credential-lifecycle <archive-root> "
+            "--workspace-fingerprint <sha> --default-credential-id <id> --approve"
         )
         available_status = command_status.resolve_suggested_command_mode(
             inventory,

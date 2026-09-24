@@ -86,8 +86,6 @@ Commands:
           Audit or record a bounded, receipt-backed AI session handoff checkpoint.
   prompt-boundary
           Preview prompt-injection boundary risk for untrusted text.
-  github-repo
-          Plan GitHub repository metadata for a WOM profile.
   object-storage
           Plan object storage metadata for WOM objets.
   object-storage-recommendation
@@ -130,8 +128,8 @@ Commands:
           Search the private generated alias index without reflecting the query.
   source-reference-coverage-audit
           Compare observed canonical source-reference coverage with separate recorded storage evidence.
-  external-locator-plan / external-locator-record / external-locator-deactivate-plan / external-locator-deactivate / external-locator-revert
-          Review, record, recover, and exactly revert provider-neutral external locators.
+  external-locator-plan / external-locator-record / external-locator-deactivate-plan / external-locator-deactivate
+          Review, record, recover, and deactivate provider-neutral external locators (exact revert: external-locator-record --revert-recovery).
   objet-capture-batch
           Preflight and execute one bounded reviewed multi-item Objet capture request.
   markup-normalization-plan / markup-normalization / markup-normalization-recovery
@@ -144,8 +142,6 @@ Commands:
           Plan a future provider presigned URL request without creating URLs.
   object-storage-operation-request-plan
           Compose the read-only approval request package before any future object storage operation.
-  object-storage-upload-evidence
-          Record reviewed external upload evidence and update manifest locations without provider calls.
   object-storage-upload-evidence-audit
           Audit upload evidence receipts and manifest locations without provider calls.
   object-storage-upload-plan
@@ -166,8 +162,6 @@ Commands:
           Plan missing Notion ancestor crawl requests from a sanitized nested tree fixture.
   notion-ancestor-fetch-adapter-execution-contract
           Preview the read-only execution contract for a future Notion ancestor fetch adapter.
-  notion-ancestor-fetch-adapter-run
-          Run the approval-gated local Notion ancestor structure fetch adapter.
   notion-recover
           Run the beginner-friendly one-command Notion missing-location recovery wrapper.
   notion-page-recovery-plan
@@ -224,8 +218,6 @@ Commands:
           Check a credential request against the approval policy gate.
   credential-keepassxc-command-plan
           Plan a KeePassXC CLI command after approval receipt verification, without executing it.
-  credential-keepassxc-write
-          Execute a minimal KeePassXC CLI add after approval receipt verification.
   credential-access-broker-plan
           Plan a future approved credential broker request without retrieving secrets.
   credential-access-approval-plan
@@ -298,14 +290,10 @@ Commands:
           Preview a human-review attestation packet from a foreign-block trust report.
   foreign-block-quarantine
           Plan future isolated holding for a foreign block without writing quarantine files.
-  quarantine-foreign-block
-          Preview or approve an isolated quarantine case write for a foreign block.
   quarantine-review
           List and validate existing foreign block quarantine cases.
   quarantine-decision
           Preview a future decision path for one foreign block quarantine case.
-  record-quarantine-decision
-          Preview or approve recording a local quarantine decision without trusting a foreign block.
   quarantine-decision-review
           List and validate recorded foreign block quarantine decisions.
   quarantine-decision-outcome
@@ -336,8 +324,6 @@ Commands:
           Inspect provider bindings and external account change plans.
   sources
           Inspect source bindings and mapped source items.
-  scan-source
-          Metadata-only scan of a registered source into source-maps/.
   add-source
           Register a source without hand-editing source-bindings.yml.
   mint-zet
@@ -345,8 +331,6 @@ Commands:
           Alias: mint-zettel.
   retire-draft
           Close an already minted inbox draft after evidence verification.
-  delegate-zet
-          Preview or write delegated zet access from a saved view.
   attest-zet
           Preview attestation of a delegated foreign zet receipt.
   anchor-zet
@@ -368,8 +352,6 @@ Commands:
           Plan a first real personal/team pilot without writing files.
   preflight
           Check an archive before connecting real personal or team data.
-  transfer-ownership
-          Preview or apply an archive ownership transfer.
   search  Search the generated local SQLite index.
 """
 
@@ -6992,7 +6974,7 @@ class Doctor:
                                     "the receipt."
                                 ),
                                 suggested_command=(
-                                    "archive object-storage-wom-location-reconcile <archive-root> "
+                                    "archive object-storage-adopt-existing <archive-root> "
                                     f"--receipt {receipt_relative} --dry-run"
                                 ),
                             )
@@ -7635,7 +7617,7 @@ class Doctor:
                 self.warn(
                     "capture_enablement_receipts_missing",
                     "Objet capture enablement record is valid but no enablement receipts exist under "
-                    "receipts/capture-enablement/; re-approve with objet-capture-enable so the audit "
+                    "receipts/capture-enablement/; use an exact-approval capture path (objet-capture-selection or source-intake-chain), which needs no enablement record, so the audit "
                     "trail matches the record.",
                     record_path,
                 )
@@ -7652,7 +7634,7 @@ class Doctor:
         self.warn(
             "capture_enablement_record_invalid",
             f"ops/capture-enablement.yml is present but does not validly enable capture: {reason}; "
-            "objet capture stays blocked; inspect with objet-capture-enable --dry-run.",
+            "objet capture stays blocked; use objet-capture-selection or source-intake-chain, which need no enablement record.",
             record_path,
         )
 
@@ -12700,49 +12682,6 @@ def command_operator_feedback_body_check(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
-def command_objet_capture_enable(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="objet_capture_enable",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
-    try:
-        result = archive_services.objet_capture_enable(
-            Path(args.archive_root),
-            dry_run=args.dry_run,
-            approve=args.approve,
-            reviewed_by=args.reviewed_by,
-            revoke=args.revoke,
-            acknowledge_never_touch_name=args.acknowledge_never_touch_name,
-            reenable=args.reenable,
-        )
-    except archive_services.ArchiveServiceError as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-    if args.format == "json":
-        print_json(result)
-    else:
-        print("Objet capture enablement.")
-        print(f"State: {result.get('state') or '-'}")
-        print(f"Action: {result.get('action') or '-'}")
-        print(f"Never-touch name match: {result.get('never_touch_name_match')}")
-        if result.get("reason"):
-            print(f"Reason: {result['reason']}")
-        if result.get("dry_run"):
-            for path in result.get("planned_writes") or []:
-                print(f"Planned write: {path}")
-            print("Writes: none")
-        else:
-            for path in result.get("files_written") or []:
-                print(f"Wrote: {path}")
-        if result.get("blockers"):
-            print("Blockers:")
-            for blocker in result["blockers"]:
-                print(f"- {blocker}")
-    return 0 if result.get("ok") else 1
-
-
 def command_approval_handoff_plan(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("approval-handoff-plan is read-only and requires --dry-run.", file=sys.stderr)
@@ -14328,76 +14267,6 @@ def command_ai_usage_report(args: argparse.Namespace) -> int:
 
     print_json(result)
     return 0 if result["ok"] else 1
-
-
-def command_github_repo(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="approve_github_repository_setup_plan",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
-    if args.dry_run and args.approve:
-        print("Use either --dry-run or --approve, not both.", file=sys.stderr)
-        return 1
-    if not args.dry_run and not args.approve:
-        print("GitHub repository setup requires --dry-run or --approve.", file=sys.stderr)
-        return 1
-    if args.approve and not args.reviewed_by:
-        print("GitHub repository setup requires --reviewed-by when --approve is used.", file=sys.stderr)
-        return 1
-
-    try:
-        if args.dry_run:
-            result = archive_services.github_repository_setup_plan(
-                Path(args.archive_root),
-                profile_id=args.profile_id,
-                profile_slug=args.profile_slug,
-                github_owner=args.github_owner,
-                github_account_ref=args.github_account_ref,
-                repo_name=args.repo_name,
-                visibility=args.visibility,
-                remote_protocol=args.remote_protocol,
-            )
-        else:
-            result = archive_services.approve_github_repository_setup_plan(
-                Path(args.archive_root),
-                reviewed_by=args.reviewed_by,
-                write_local_profile=args.write_local_profile,
-                profile_id=args.profile_id,
-                profile_slug=args.profile_slug,
-                github_owner=args.github_owner,
-                github_account_ref=args.github_account_ref,
-                repo_name=args.repo_name,
-                visibility=args.visibility,
-                remote_protocol=args.remote_protocol,
-            )
-    except (archive_services.ArchiveServiceError, OSError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-
-    if args.format == "json":
-        print_json(result)
-    else:
-        mode = "dry-run" if result["dry_run"] else "approved"
-        state = "passed" if result["ok"] else "blocked"
-        print(f"GitHub repository setup {mode} {state}.")
-        print(f"Archive: {result['archive_id']}")
-        print(f"Profile: {result.get('profile_id') or '-'}")
-        print(f"Repository: {result.get('github_owner') or '-'}/{result.get('proposed_repo_name') or '-'}")
-        if result.get("receipt_path"):
-            print(f"Receipt: {result['receipt_path']}")
-        elif result.get("provider_setup_receipt_preview"):
-            print(f"Proposed receipt: {result['provider_setup_receipt_preview']['receipt_path']}")
-        if result.get("blockers"):
-            print("Blockers:")
-            for blocker in result["blockers"]:
-                print(f"- {blocker}")
-        if result.get("warnings"):
-            print("Warnings:")
-            for warning in result["warnings"]:
-                print(f"- {warning}")
-    return 0 if result.get("ok", True) else 1
 
 
 def _object_storage_setup_registration_cli_error(
@@ -16234,83 +16103,6 @@ def command_notion_ancestor_fetch_adapter_execution_contract(args: argparse.Name
     return 0 if result.get("ok", True) else 1
 
 
-def command_notion_ancestor_fetch_adapter_run(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="notion_ancestor_fetch_adapter_run",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
-    if args.dry_run == args.approve:
-        print("Choose exactly one mode: --dry-run or --approve.", file=sys.stderr)
-        return 1
-
-    try:
-        result = archive_services.notion_ancestor_fetch_adapter_run(
-            Path(args.archive_root),
-            tree_path=args.tree,
-            output_path=args.output,
-            source=args.source,
-            credential_id=args.credential_id,
-            credential_ref=args.credential_ref,
-            credential_kind=args.credential_kind,
-            credential_provider=args.credential_provider,
-            store_kind=args.store_kind,
-            adapter_kind=args.adapter_kind,
-            approval_decision=args.approval_decision,
-            approval_receipt=args.approval_receipt,
-            consumer=args.consumer,
-            reviewed_by=args.reviewed_by,
-            platform=args.platform,
-            notion_version=args.notion_version,
-            timeout_seconds=args.timeout_seconds,
-            dry_run=args.dry_run,
-            approve=args.approve,
-            max_items=args.max_items,
-            max_depth=args.max_depth,
-            scope_generation_ids=args.scope_generation_id,
-            scope_root_refs=args.scope_root_ref,
-            scope_ancestor_refs=args.scope_ancestor_ref,
-            scope_leaf_refs=args.scope_leaf_ref,
-        )
-    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-
-    if args.format == "json":
-        print_json(result)
-    else:
-        summary = result.get("fetch_summary") if isinstance(result.get("fetch_summary"), dict) else {}
-        fixture = result.get("fixture") if isinstance(result.get("fixture"), dict) else {}
-        receipt = result.get("receipt") if isinstance(result.get("receipt"), dict) else {}
-        print(f"Notion ancestor fetch adapter run: {result.get('run_state') or '-'}")
-        print(f"Archive: {result.get('archive_id') or '-'}")
-        print(f"Source: {result.get('source') or '-'}")
-        print(f"Requests: {summary.get('request_count', 0)}")
-        print(f"Fetched nodes: {summary.get('fetched_node_count', 0)}")
-        print(f"Fixture: {fixture.get('output_path') or fixture.get('proposed_output_path') or '-'}")
-        print(f"Receipt: {receipt.get('receipt_path') or receipt.get('proposed_receipt_path') or '-'}")
-        print("Page titles read: no")
-        print("Page bodies read: no")
-        print("Media bytes downloaded: no")
-        writes = result.get("files_written") or []
-        if writes:
-            print("Files written:")
-            for path in writes:
-                print(f"- {path}")
-        else:
-            print("Writes: none")
-        if result.get("blockers"):
-            print("Blockers:")
-            for blocker in result["blockers"]:
-                print(f"- {blocker}")
-        if result.get("warnings"):
-            print("Warnings:")
-            for warning in result["warnings"]:
-                print(f"- {warning}")
-    return 0 if result.get("ok", True) else 1
-
-
 def command_notion_recover(args: argparse.Namespace) -> int:
     if args.approve or not args.dry_run:
         return _exact_human_approval_cli_error(
@@ -18003,41 +17795,6 @@ def command_prehashed_objet_ledger(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
-def command_object_storage_upload_evidence(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="object_storage_upload_evidence_register",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
-    if args.dry_run == args.approve:
-        print("object-storage-upload-evidence requires exactly one of --dry-run or --approve.", file=sys.stderr)
-        return 1
-    if args.approve and not args.reviewed_by:
-        print("object-storage-upload-evidence requires --reviewed-by when --approve is used.", file=sys.stderr)
-        return 1
-    try:
-        result = archive_services.object_storage_upload_evidence_register(
-            Path(args.archive_root),
-            [Path(item) for item in args.ledger],
-            provider_kind=args.provider_kind,
-            store_ref=args.store_ref,
-            sha256_field=args.sha256_field,
-            size_field=args.size_field,
-            status_field=args.status_field,
-            dry_run=args.dry_run,
-            approve=args.approve,
-            reviewed_by=args.reviewed_by,
-            max_rows=args.max_rows,
-        )
-    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-
-    print_object_storage_upload_evidence_result(result, args.format)
-    return 0 if result.get("ok", True) else 1
-
-
 def command_object_storage_upload_evidence_audit(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("object-storage-upload-evidence-audit is read-only and requires --dry-run.", file=sys.stderr)
@@ -19323,40 +19080,6 @@ def command_object_storage_adopt_existing(args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return 1
     print_object_storage_adopt_existing_result(result, args.format)
-    return 0 if result.get("ok", True) else 1
-
-
-def command_object_storage_wom_location_reconcile(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="object_storage_wom_location_reconcile",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
-    if args.dry_run and args.approve:
-        print("Use either --dry-run or --approve, not both.", file=sys.stderr)
-        return 1
-    if not args.dry_run and not args.approve:
-        print("object-storage-wom-location-reconcile requires exactly one of --dry-run or --approve.", file=sys.stderr)
-        return 1
-    if args.approve and not (args.reviewed_by or "").strip():
-        print("object-storage-wom-location-reconcile requires --reviewed-by when --approve is used.", file=sys.stderr)
-        return 1
-    try:
-        result = archive_services.object_storage_wom_location_reconcile_run(
-            Path(args.archive_root),
-            receipt=getattr(args, "receipt", None),
-            provider_kind=getattr(args, "provider_kind", None),
-            store_ref=getattr(args, "store_ref", None),
-            max_items=getattr(args, "max_items", None),
-            reviewed_by=getattr(args, "reviewed_by", None),
-            approve=bool(args.approve),
-            dry_run=bool(args.dry_run),
-        )
-    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-    print_object_storage_wom_location_reconcile_result(result, args.format)
     return 0 if result.get("ok", True) else 1
 
 
@@ -21051,69 +20774,6 @@ def command_credential_adapter_audit_plan(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
-def command_credential_keepassxc_write(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="credential_keepassxc_write",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
-    if args.dry_run == args.approve:
-        print("Choose exactly one mode: --dry-run or --approve.", file=sys.stderr)
-        return 1
-    try:
-        result = archive_services.credential_keepassxc_write(
-            Path(args.archive_root),
-            credential_id=args.credential_id,
-            credential_ref=args.credential_ref,
-            credential_kind=args.credential_kind,
-            provider=args.provider,
-            action_kind=args.action_kind,
-            operation=args.operation,
-            approval_receipt=args.approval_receipt,
-            entry_label=args.entry_label,
-            group_label=args.group_label,
-            database_ref=args.database_ref,
-            database_path=args.database_path,
-            consumer=args.consumer,
-            reviewed_by=args.reviewed_by,
-            platform=args.platform,
-            dry_run=args.dry_run,
-            approve=args.approve,
-        )
-    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-
-    if args.format == "json":
-        print_json(result)
-    else:
-        state = result.get("execution_status") or ("passed" if result.get("ok") else "blocked")
-        print(f"Credential KeePassXC write {state}.")
-        print(f"Archive: {result.get('archive_id') or '-'}")
-        print(f"Receipt: {result.get('receipt_path') or result.get('proposed_receipt_path') or '-'}")
-        target = result.get("target") if isinstance(result.get("target"), dict) else {}
-        print(f"Entry: {target.get('entry_target') or '-'}")
-        print(f"Database path echoed: {target.get('database_path_included')}")
-        print(f"Secret returned to AI: {result.get('execution_boundary', {}).get('secret_value_return_to_ai')}")
-        writes = result.get("files_written") or []
-        if writes:
-            print("Files written:")
-            for path in writes:
-                print(f"- {path}")
-        else:
-            print("Writes: none")
-        if result.get("blockers"):
-            print("Blockers:")
-            for blocker in result["blockers"]:
-                print(f"- {blocker}")
-        if result.get("warnings"):
-            print("Warnings:")
-            for warning in result["warnings"]:
-                print(f"- {warning}")
-    return 0 if result.get("ok", True) else 1
-
-
 def command_project_intake_unpack_queue(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("project-intake-unpack-queue is read-only and requires --dry-run.", file=sys.stderr)
@@ -21247,38 +20907,6 @@ def print_prehashed_objet_ledger_result(result: dict[str, Any], output_format: s
     else:
         print(f"Appended manifest records: {registration.get('appended_manifest_records', 0)}")
         print(f"Receipt: {registration.get('receipt_path') or '-'}")
-    if result.get("blockers"):
-        print("Blockers:")
-        for blocker in result["blockers"]:
-            print(f"- {blocker}")
-    if result.get("warnings"):
-        print("Warnings:")
-        for warning in result["warnings"]:
-            print(f"- {warning}")
-
-
-def print_object_storage_upload_evidence_result(result: dict[str, Any], output_format: str) -> None:
-    if output_format == "json":
-        print_json(result)
-        return
-    state = "passed" if result.get("ok") else "blocked"
-    evidence = result.get("evidence") if isinstance(result.get("evidence"), dict) else {}
-    update = result.get("manifest_update") if isinstance(result.get("manifest_update"), dict) else {}
-    receipt = result.get("receipt") if isinstance(result.get("receipt"), dict) else {}
-    print(f"Object-storage upload evidence {state}.")
-    print(f"Archive: {result.get('archive_id') or '-'}")
-    print(f"Provider: {result.get('provider_kind') or '-'}")
-    print(f"Store ref: {result.get('store_ref') or '-'}")
-    print(f"Ledger files: {evidence.get('ledger_file_count', 0)}")
-    print(f"Rows: {evidence.get('row_count', 0)}")
-    print(f"Successful evidence rows: {evidence.get('successful_upload_count', 0)}")
-    print(f"Matched manifest records: {update.get('matched_manifest_records', 0)}")
-    if result.get("dry_run"):
-        print(f"Would add locations: {update.get('would_add_locations', 0)}")
-        print("Writes: none")
-    else:
-        print(f"Added locations: {update.get('added_locations', 0)}")
-        print(f"Receipt: {receipt.get('receipt_path') or '-'}")
     if result.get("blockers"):
         print("Blockers:")
         for blocker in result["blockers"]:
@@ -21574,33 +21202,6 @@ def print_object_storage_bytes_preservation_result(
     print("Manifest location updates: 0")
 
 
-def print_object_storage_wom_location_reconcile_result(result: dict[str, Any], output_format: str) -> None:
-    if output_format == "json":
-        print_json(result)
-        return
-    counts = result.get("counts") if isinstance(result.get("counts"), dict) else {}
-    print(f"Object storage WOM location reconcile: {result.get('status') or '-'}")
-    print(f"Archive: {result.get('archive_id') or '-'}")
-    print(f"Receipt filter: {result.get('receipt_filter') or '-'}")
-    print(f"Receipts scanned: {counts.get('receipts_scanned', 0)}")
-    print(f"Already linked: {counts.get('already_linked', 0)}")
-    print(f"Covered by existing wom_uploaded: {counts.get('covered_by_existing_wom_uploaded', 0)}")
-    print(f"Planned manifest updates: {result.get('planned_manifest_updates', 0)}")
-    print(f"Applied manifest updates: {result.get('applied_manifest_updates', 0)}")
-    print("Provider API called: no")
-    print(f"Writes: {'manifest/audit receipt' if result.get('applied_manifest_updates') else 'none'}")
-    for warning in result.get("warnings") or []:
-        print(f"Warning: {warning}")
-    if result.get("blockers"):
-        print("Blockers:")
-        for blocker in result["blockers"]:
-            print(f"- {blocker}")
-    if result.get("next_safe_actions"):
-        print("Next safe actions:")
-        for action in result["next_safe_actions"]:
-            print(f"- {action}")
-
-
 def print_imap_mailbox_operation_request_plan_result(result: dict[str, Any], output_format: str) -> None:
     if output_format == "json":
         print_json(result)
@@ -21751,53 +21352,6 @@ def command_tiro_lossless_recovery_plan(args: argparse.Namespace) -> int:
         print(f"Endpoint categories: {len(result.get('endpoint_inventory') or [])}")
         credential = result.get("credential_summary") if isinstance(result.get("credential_summary"), dict) else {}
         print(f"Credential ref supplied: {bool(credential.get('credential_ref_supplied'))}")
-        if result.get("blockers"):
-            print("Blockers:")
-            for blocker in result["blockers"]:
-                print(f"- {blocker}")
-        if result.get("warnings"):
-            print("Warnings:")
-            for warning in result["warnings"]:
-                print(f"- {warning}")
-    return 0 if result.get("ok", True) else 1
-
-
-def command_tiro_lossless_recovery_capture(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="tiro_lossless_recovery_capture",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
-    try:
-        result = archive_services.tiro_lossless_recovery_capture(
-            Path(args.archive_root),
-            bundle_path=args.bundle,
-            dry_run=args.dry_run,
-            approve=args.approve,
-            reviewed_by=args.reviewed_by,
-        )
-    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-
-    if args.format == "json":
-        print_json(result)
-    else:
-        print(f"Tiro lossless recovery capture {result.get('capture_state') or '-'}.")
-        print(f"Archive: {result.get('archive_id') or '-'}")
-        obj = result.get("object") if isinstance(result.get("object"), dict) else {}
-        print(f"Object: {obj.get('object_id') or '-'}")
-        receipt = result.get("receipt") if isinstance(result.get("receipt"), dict) else {}
-        print(f"Receipt: {receipt.get('receipt_path') or receipt.get('proposed_receipt_path') or '-'}")
-        if result.get("files_written"):
-            print("Files written:")
-            for path in result["files_written"]:
-                print(f"- {path}")
-        elif result.get("would_change"):
-            print("Would change:")
-            for path in result["would_change"]:
-                print(f"- {path}")
         if result.get("blockers"):
             print("Blockers:")
             for blocker in result["blockers"]:
@@ -24995,95 +24549,6 @@ def command_zet_abstract_backfill_plan(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
-def command_zet_abstract_backfill_write(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="zet_abstract_backfill_write",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
-    if bool(args.dry_run) == bool(args.approve):
-        print("zet-abstract-backfill-write requires exactly one of --dry-run or --approve.", file=sys.stderr)
-        return 1
-    reporter = CommandProgressReporter(bool(getattr(args, "progress", False)), label="zet-abstract-backfill-write")
-    try:
-        result = archive_services.zet_abstract_backfill_write(
-            Path(args.archive_root),
-            proposal_path=str(args.proposal),
-            expected_proposal_sha256=str(args.expected_proposal_sha256),
-            max_items=int(args.max_items),
-            dry_run=bool(args.dry_run),
-            approve=bool(args.approve),
-            reviewed_by=str(args.reviewed_by or "").strip() or None,
-            affirm_abstracts_reviewed=bool(args.affirm_abstracts_reviewed),
-            progress_callback=reporter.progress,
-        )
-    except archive_services.ArchiveServiceError:
-        print("zet-abstract-backfill-write could not read a safe private proposal or archive target.", file=sys.stderr)
-        return 1
-    except (ArchivePathError, OSError, ValueError):
-        print("zet-abstract-backfill-write failed before a privacy-safe result could be produced.", file=sys.stderr)
-        return 1
-    finally:
-        reporter.close()
-
-    if args.format == "json":
-        print_json(result)
-    else:
-        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
-        print(f"WOM zet abstract backfill write: {result.get('status') or 'unknown'}")
-        print(f"Candidates: {summary.get('candidate_count', 0)}")
-        print(f"Applied: {summary.get('applied_count', 0)}")
-        print(f"Already applied: {summary.get('already_applied_count', 0)}")
-        print(f"Blocked: {summary.get('blocked_count', 0)}")
-    return 0 if result.get("ok") else 1
-
-
-def command_zet_abstract_backfill_revert(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="zet_abstract_backfill_revert",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
-    if bool(args.dry_run) == bool(args.approve):
-        print("zet-abstract-backfill-revert requires exactly one of --dry-run or --approve.", file=sys.stderr)
-        return 1
-    reporter = CommandProgressReporter(bool(getattr(args, "progress", False)), label="zet-abstract-backfill-revert")
-    try:
-        result = archive_services.zet_abstract_backfill_revert(
-            Path(args.archive_root),
-            receipt_path=str(args.receipt),
-            expected_receipt_sha256=str(args.expected_receipt_sha256),
-            max_items=int(args.max_items),
-            dry_run=bool(args.dry_run),
-            approve=bool(args.approve),
-            reviewed_by=str(args.reviewed_by or "").strip() or None,
-            affirm_abstract_removal_reviewed=bool(args.affirm_abstract_removal_reviewed),
-            progress_callback=reporter.progress,
-        )
-    except archive_services.ArchiveServiceError:
-        print("zet-abstract-backfill-revert could not read a safe private receipt or archive target.", file=sys.stderr)
-        return 1
-    except (ArchivePathError, OSError, ValueError):
-        print("zet-abstract-backfill-revert failed before a privacy-safe result could be produced.", file=sys.stderr)
-        return 1
-    finally:
-        reporter.close()
-
-    if args.format == "json":
-        print_json(result)
-    else:
-        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
-        print(f"WOM zet abstract backfill revert: {result.get('status') or 'unknown'}")
-        print(f"Candidates: {summary.get('candidate_count', 0)}")
-        print(f"Ready: {summary.get('ready_count', 0)}")
-        print(f"Reverted: {summary.get('reverted_count', 0)}")
-        print(f"Already reverted: {summary.get('already_reverted_count', 0)}")
-        print(f"Blocked: {summary.get('blocked_count', 0)}")
-    return 0 if result.get("ok") else 1
-
-
 def command_zet_abstract_backfill_receipt_audit(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("zet-abstract-backfill-receipt-audit is read-only and requires --dry-run.", file=sys.stderr)
@@ -25181,86 +24646,6 @@ def command_zet_abstract_backfill_recovery_plan(args: argparse.Namespace) -> int
         print(
             "Execution implemented: "
             f"{bool(result.get('execution_boundary', {}).get('execution_implemented'))}"
-        )
-    return 0 if result.get("ok") else 1
-
-
-def command_zet_abstract_backfill_recover(
-    args: argparse.Namespace,
-) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="zet_abstract_backfill_recover",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
-    reporter = CommandProgressReporter(
-        bool(getattr(args, "progress", False)),
-        label="zet-abstract-backfill-recover",
-    )
-    try:
-        result = archive_services.zet_abstract_backfill_recover(
-            Path(args.archive_root),
-            operation=str(args.operation),
-            basis_sha256=str(args.basis_sha256),
-            expected_plan_digest=str(args.expected_plan_digest),
-            expected_action=str(args.expected_action),
-            dry_run=bool(args.dry_run),
-            approve=bool(args.approve),
-            reviewed_by=args.reviewed_by,
-            affirm_recovery_reviewed=bool(
-                args.affirm_recovery_reviewed
-            ),
-            affirm_archive_quiescent=bool(
-                args.affirm_archive_quiescent
-            ),
-            max_receipts=int(args.max_receipts),
-            max_locks=int(args.max_locks),
-            max_cases=int(args.max_cases),
-            progress_callback=reporter.progress,
-        )
-    except archive_services.ArchiveServiceError:
-        print(
-            "zet-abstract-backfill-recover could not bind a safe private recovery case.",
-            file=sys.stderr,
-        )
-        return 1
-    except (ArchivePathError, OSError, ValueError):
-        print(
-            "zet-abstract-backfill-recover failed before a privacy-safe result could be produced.",
-            file=sys.stderr,
-        )
-        return 1
-    finally:
-        reporter.close()
-
-    if args.format == "json":
-        print_json(result)
-    else:
-        summary = (
-            result.get("summary")
-            if isinstance(result.get("summary"), dict)
-            else {}
-        )
-        print(
-            "WOM zet abstract recovery: "
-            f"{result.get('status') or 'unknown'}"
-        )
-        print(
-            "Action: "
-            f"{result.get('expected_action') or 'unknown'}"
-        )
-        print(
-            "Canonical files written: "
-            f"{summary.get('canonical_files_written_this_run', 0)}"
-        )
-        print(
-            "Revert receipt written: "
-            f"{bool(summary.get('revert_receipt_written_this_run'))}"
-        )
-        print(
-            "Journal removed: "
-            f"{bool(summary.get('transaction_journal_removed'))}"
         )
     return 0 if result.get("ok") else 1
 
@@ -27611,39 +26996,6 @@ def command_external_locator_recovery_plan(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
-def command_external_locator_revert(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="external_locator_revert",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
-    if args.dry_run == args.approve:
-        print(
-            "external-locator-revert requires exactly one of --dry-run or --approve.",
-            file=sys.stderr,
-        )
-        return 1
-    try:
-        if args.dry_run:
-            result = completion_workflows.external_locator_revert_plan(
-                Path(args.archive_root),
-                receipt=args.receipt,
-            )
-        else:
-            result = completion_workflows.external_locator_revert(
-                Path(args.archive_root),
-                receipt=args.receipt,
-                expected_plan_sha256=args.expected_plan_sha256,
-                reviewed_by=args.reviewed_by,
-            )
-    except Exception:
-        print("external-locator-revert failed safely.", file=sys.stderr)
-        return 1
-    _print_external_locator_result(result, args.format)
-    return 0 if result.get("ok") else 1
-
-
 def command_notion_objet_link_rewrite_plan(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("notion-objet-link-rewrite-plan is read-only and requires --dry-run.", file=sys.stderr)
@@ -27734,61 +27086,6 @@ def command_notion_objet_link_convert(args: argparse.Namespace) -> int:
         print(f"- edge: {edge_write.get('edge_id') or '-'}")
         print(f"- edge receipt: {edge_write.get('receipt_path') or '-'}")
         print(f"- conversion receipt: {receipt.get('receipt_path') or '-'}")
-        if result.get("files_written"):
-            print("Files written:")
-            for path in result["files_written"]:
-                print(f"- {path}")
-        elif result.get("would_change"):
-            print("Would change:")
-            for path in result["would_change"]:
-                print(f"- {path}")
-        if result.get("blockers"):
-            print("Blockers:")
-            for blocker in result["blockers"]:
-                print(f"- {blocker}")
-        if result.get("warnings"):
-            print("Warnings:")
-            for warning in result["warnings"]:
-                print(f"- {warning}")
-        if result.get("next_safe_actions"):
-            print("Next safe actions:")
-            for action in result["next_safe_actions"]:
-                print(f"- {action}")
-    return 0 if result.get("ok", True) else 1
-
-
-def command_notion_objet_manifest_locator_label(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="notion_objet_manifest_locator_label",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
-    try:
-        result = archive_services.notion_objet_manifest_locator_label(
-            Path(args.archive_root),
-            object_id=args.object_id,
-            locator_fingerprint=args.locator_fingerprint,
-            dry_run=args.dry_run,
-            approve=args.approve,
-            reviewed_by=args.reviewed_by,
-        )
-    except (archive_services.ArchiveServiceError, OSError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-
-    if args.format == "json":
-        print_json(result)
-    else:
-        update = result.get("manifest_update") if isinstance(result.get("manifest_update"), dict) else {}
-        receipt = result.get("receipt") if isinstance(result.get("receipt"), dict) else {}
-        print(f"Notion objet manifest locator label: {result.get('write_status') or '-'}")
-        print(f"Archive: {result.get('archive_id') or '-'}")
-        print(f"Object: {result.get('object_id') or '-'}")
-        print(f"Locator fingerprint: {result.get('locator_fingerprint') or '-'}")
-        print(f"Label field: {update.get('label_field') or '-'}")
-        print(f"Already labeled: {update.get('already_labeled')}")
-        print(f"Receipt: {receipt.get('receipt_path') or '-'}")
         if result.get("files_written"):
             print("Files written:")
             for path in result["files_written"]:
@@ -30345,52 +29642,6 @@ def command_foreign_block_quarantine(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
-def command_quarantine_foreign_block(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="quarantine_foreign_block",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
-    try:
-        result = archive_services.quarantine_foreign_block(
-            Path(args.archive_root),
-            plan_path=args.plan,
-            dry_run=args.dry_run,
-            approve=args.approve,
-            reviewed_by=args.reviewed_by,
-            expected_case_id=args.expected_case_id,
-            review_note=args.review_note,
-        )
-    except archive_services.ArchiveServiceError as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-
-    if args.format == "json":
-        print_json(result)
-    else:
-        print(f"Foreign block quarantine write: {result.get('quarantine_write_status') or '-'}")
-        print(f"Trust state: {result.get('trust_state') or '-'}")
-        if result.get("proposed_paths"):
-            print("Proposed paths:")
-            for key, value in result["proposed_paths"].items():
-                print(f"- {key}: {value}")
-        if result.get("files_written"):
-            print("Files written:")
-            for value in result["files_written"]:
-                print(f"- {value}")
-        if result.get("blockers"):
-            print("Blockers:")
-            for blocker in result["blockers"]:
-                print(f"- {blocker}")
-        if result.get("warnings"):
-            print("Warnings:")
-            for warning in result["warnings"]:
-                print(f"- {warning}")
-        print("Foreign block quarantine write passed." if result.get("ok") else "Foreign block quarantine write blocked.")
-    return 0 if result.get("ok") else 1
-
-
 def command_quarantine_review(args: argparse.Namespace) -> int:
     try:
         result = archive_services.foreign_block_quarantine_review_index(
@@ -30441,53 +29692,6 @@ def command_quarantine_decision(args: argparse.Namespace) -> int:
         print(f"Foreign block quarantine decision preview: {result.get('proposed_decision') or '-'}")
         print(f"Trust state: {result.get('trust_state') or '-'}")
         print(f"Decision status: {result.get('decision_status') or '-'}")
-        if result.get("blockers"):
-            print("Blockers:")
-            for blocker in result["blockers"]:
-                print(f"- {blocker}")
-        if result.get("warnings"):
-            print("Warnings:")
-            for warning in result["warnings"]:
-                print(f"- {warning}")
-    return 0 if result.get("ok") else 1
-
-
-def command_record_quarantine_decision(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="record_quarantine_decision",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
-    try:
-        result = archive_services.record_quarantine_decision(
-            Path(args.archive_root),
-            decision_preview_path=args.decision_preview,
-            dry_run=args.dry_run,
-            approve=args.approve,
-            reviewed_by=args.reviewed_by,
-            expected_case_id=args.expected_case_id,
-            expected_decision=args.expected_decision,
-            review_note=args.review_note,
-        )
-    except archive_services.ArchiveServiceError as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-
-    if args.format == "json":
-        print_json(result)
-    else:
-        print(f"Foreign block quarantine decision record: {result.get('decision') or '-'}")
-        print(f"Trust state: {result.get('trust_state') or '-'}")
-        print(f"Decision status: {result.get('decision_status') or '-'}")
-        if result.get("proposed_paths"):
-            print("Proposed paths:")
-            for key, value in result["proposed_paths"].items():
-                print(f"- {key}: {value}")
-        if result.get("files_written"):
-            print("Files written:")
-            for value in result["files_written"]:
-                print(f"- {value}")
         if result.get("blockers"):
             print("Blockers:")
             for blocker in result["blockers"]:
@@ -34916,78 +34120,6 @@ def command_share(args: argparse.Namespace) -> int:
     return 0 if result["ok"] else 1
 
 
-def command_delegate_zet(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="delegate",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
-    if args.dry_run and args.approve:
-        print("Use either --dry-run or --approve, not both.", file=sys.stderr)
-        return 1
-    if not args.dry_run and not args.approve:
-        print("zet delegation requires --dry-run or --approve. Use --dry-run to preview.", file=sys.stderr)
-        return 1
-    if args.approve and not args.reviewed_by:
-        print("Real zet delegation requires --reviewed-by.", file=sys.stderr)
-        return 1
-    try:
-        if args.dry_run:
-            result = archive_services.delegate_zets_dry_run(
-                Path(args.archive_root),
-                view_id=args.view,
-                target_archive=args.target_archive,
-                counterparty_id=args.counterparty_id,
-                counterparty_fingerprint=args.counterparty_fingerprint,
-                allow_sensitive=args.allow_sensitive,
-                target_policy=args.target_policy,
-            )
-        else:
-            result = archive_services.delegate_zets(
-                Path(args.archive_root),
-                view_id=args.view,
-                target_archive=args.target_archive,
-                counterparty_id=args.counterparty_id,
-                counterparty_fingerprint=args.counterparty_fingerprint,
-                allow_sensitive=args.allow_sensitive,
-                target_policy=args.target_policy,
-                reviewed_by=args.reviewed_by,
-            )
-    except (archive_services.ArchiveServiceError, OSError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-
-    if args.format == "json":
-        print_json(result)
-    else:
-        if result["dry_run"]:
-            state = "passed" if result["ok"] else "blocked"
-            print(f"zet delegate dry-run {state}.")
-        else:
-            print("zet delegate receipt written.")
-        print(f"Source archive: {result['source_archive']}")
-        print(f"Target policy: {result['target_policy']}")
-        print(f"Target archive: {result['target_archive'] or '<deferred until attestation>'}")
-        print(f"View: {result['view_id']}")
-        print(f"Delegated zets: {len(result['delegated_zets'])}")
-        if result["dry_run"]:
-            print(f"Trust gate: {result['trust_gate']['status']}")
-            print(f"Proposed delegate receipt path: {result['proposed_delegate_receipt_path']}")
-        else:
-            print(f"Delegate receipt path: {result['delegate_receipt_path']}")
-            print(f"Reviewed by: {result['reviewed_by']}")
-        if result["blockers"]:
-            print("Blockers:")
-            for blocker in result["blockers"]:
-                print(f"- {blocker}")
-        if result["warnings"]:
-            print("Warnings:")
-            for warning in result["warnings"]:
-                print(f"- {warning}")
-    return 0 if result["ok"] else 1
-
-
 def command_attest_zet(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("Only --dry-run zet attestation is implemented. Real attestation writes are intentionally unavailable.", file=sys.stderr)
@@ -36179,71 +35311,6 @@ def command_sources(args: argparse.Namespace) -> int:
             mapped = source["mapped_items"]
             print(f"- {source['source_id']} ({source['source_type']}, {state}): {mapped} mapped item(s)")
     return 0
-
-
-def command_scan_source(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="scan_source",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
-    if args.dry_run and args.approve:
-        print("Use either --dry-run or --approve, not both.", file=sys.stderr)
-        return 1
-    if not args.dry_run and not args.approve:
-        print("Source scan requires --dry-run or --approve.", file=sys.stderr)
-        return 1
-    if args.approve and not args.reviewed_by:
-        print("Source scan requires --reviewed-by when --approve is used.", file=sys.stderr)
-        return 1
-
-    try:
-        if args.dry_run:
-            result = archive_services.source_scan_dry_run(
-                Path(args.archive_root),
-                source_id=args.source,
-                source_root=args.source_root,
-                limit=args.limit,
-            )
-        else:
-            result = archive_services.scan_source(
-                Path(args.archive_root),
-                source_id=args.source,
-                source_root=args.source_root,
-                reviewed_by=args.reviewed_by,
-                limit=args.limit,
-            )
-    except (archive_services.ArchiveServiceError, OSError, json.JSONDecodeError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-
-    if args.format == "json":
-        print_json(result)
-        return 0 if result["ok"] else 1
-
-    mode = "dry-run" if result["dry_run"] else "applied"
-    state = "passed" if result["ok"] else "blocked"
-    print(f"Source scan {mode} {state}.")
-    print(f"Archive: {result['source_archive']}")
-    print(f"Source: {result['source_id']} ({result['source_type']})")
-    print(f"Scan mode: {result['scan_mode']}")
-    print(f"Items: {result['item_count']}")
-    if result["dry_run"]:
-        print(f"Proposed source map path: {result['proposed_source_map_path']}")
-        print(f"Proposed receipt path: {result['proposed_receipt_path']}")
-    else:
-        print(f"Source map path: {result['source_map_path']}")
-        print(f"Receipt path: {result['receipt_path']}")
-    if result.get("blockers"):
-        print("Blockers:")
-        for blocker in result["blockers"]:
-            print(f"- {blocker}")
-    if result.get("warnings"):
-        print("Warnings:")
-        for warning in result["warnings"]:
-            print(f"- {warning}")
-    return 0 if result["ok"] else 1
 
 
 def command_add_source(args: argparse.Namespace) -> int:
@@ -37482,94 +36549,6 @@ def print_onboarding_result(result: dict[str, Any], output_format: str) -> None:
         print("Warnings:")
         for warning in result["warnings"]:
             print(f"- {warning}")
-
-
-def command_transfer_ownership(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="transfer_archive_ownership",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
-    if args.dry_run and args.approve:
-        print("Use either --dry-run or --approve, not both.", file=sys.stderr)
-        return 1
-    if args.dry_run:
-        try:
-            result = archive_services.ownership_transfer_dry_run(
-                Path(args.archive_root),
-                new_owner=args.new_owner,
-                new_owner_kind=args.new_owner_kind,
-                new_owner_archive=args.new_owner_archive,
-                operators_after=args.operator_after,
-                approved_by=args.approved_by,
-                subject=args.subject,
-                counterparty_id=args.counterparty_id,
-                counterparty_fingerprint=args.counterparty_fingerprint,
-                reason=args.reason,
-            )
-        except (archive_services.ArchiveServiceError, OSError) as exc:
-            print(str(exc), file=sys.stderr)
-            return 1
-
-        if args.format == "json":
-            print_json(result)
-        else:
-            state = "passed" if result["ok"] else "blocked"
-            print(f"Ownership transfer dry-run {state}.")
-            print(f"Archive: {result['source_archive']}")
-            print(f"Previous owner: {result['previous_owner']}")
-            print(f"New owner: {result['new_owner']}")
-            print(f"Operators after: {', '.join(result['ownership_gate']['operators_after']) or '(none)'}")
-            print(f"Trust gate: {result['trust_gate']['status']}")
-            print(f"Provider changes: {result['provider_change_plan']['status']}")
-            print(f"Proposed receipt path: {result['proposed_receipt_path']}")
-            if result["blockers"]:
-                print("Blockers:")
-                for blocker in result["blockers"]:
-                    print(f"- {blocker}")
-            if result["warnings"]:
-                print("Warnings:")
-                for warning in result["warnings"]:
-                    print(f"- {warning}")
-        return 0 if result["ok"] else 1
-
-    if not args.approve:
-        print("Real ownership transfer requires --approve. Use --dry-run to preview.", file=sys.stderr)
-        return 1
-    if not args.reviewed_by:
-        print("Real ownership transfer requires --reviewed-by.", file=sys.stderr)
-        return 1
-
-    try:
-        result = archive_services.transfer_archive_ownership(
-            Path(args.archive_root),
-            new_owner=args.new_owner,
-            new_owner_kind=args.new_owner_kind,
-            new_owner_archive=args.new_owner_archive,
-            operators_after=args.operator_after,
-            approved_by=args.approved_by,
-            subject=args.subject,
-            counterparty_id=args.counterparty_id,
-            counterparty_fingerprint=args.counterparty_fingerprint,
-            reason=args.reason,
-            reviewed_by=args.reviewed_by,
-        )
-    except (archive_services.ArchiveServiceError, OSError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-
-    if args.format == "json":
-        print_json(result)
-    else:
-        print("Ownership transfer applied.")
-        print(f"Archive: {result['source_archive']}")
-        print(f"Previous owner: {result['previous_owner']}")
-        print(f"New owner: {result['new_owner']}")
-        print(f"Reviewed by: {result['reviewed_by']}")
-        print(f"Receipt path: {result['receipt_path']}")
-        print(f"Provider changes: {result['provider_change_plan']['status']} (manual)")
-    return 0
 
 
 def command_identity_reconcile(args: argparse.Namespace) -> int:
@@ -40445,25 +39424,6 @@ def build_parser() -> argparse.ArgumentParser:
     operator_feedback_body_check.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     operator_feedback_body_check.set_defaults(func=command_operator_feedback_body_check)
 
-    objet_capture_enable = subcommands.add_parser(
-        "objet-capture-enable",
-        aliases=["capture-enable"],
-        help="Inspect, approve, or revoke the owner capture-enablement record that lets a real (non-sandbox) archive run objet-capture.",
-    )
-    objet_capture_enable.add_argument("archive_root", help="Archive root to inspect, enable, or revoke.")
-    objet_capture_enable.add_argument("--dry-run", action="store_true", help="Read-only eligibility report; writes nothing.")
-    objet_capture_enable.add_argument("--approve", action="store_true", help="Write ops/capture-enablement.yml plus a receipt after owner review.")
-    objet_capture_enable.add_argument("--reviewed-by", help="Reviewer id required when --approve is used.")
-    objet_capture_enable.add_argument("--revoke", action="store_true", help="Revoke the existing enablement record (with --approve; --dry-run previews the revoke).")
-    objet_capture_enable.add_argument(
-        "--acknowledge-never-touch-name",
-        action="store_true",
-        help="Required at approve time when the root or a parent name matches the never-touch pattern (zettel-kasten-* / *-objets).",
-    )
-    objet_capture_enable.add_argument("--reenable", action="store_true", help="Required to approve enablement over a previously revoked record.")
-    objet_capture_enable.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
-    objet_capture_enable.set_defaults(func=command_objet_capture_enable)
-
     approval_handoff_plan = subcommands.add_parser(
         "approval-handoff-plan",
         aliases=["handoff-plan", "human-approval-handoff-plan"],
@@ -41259,43 +40219,6 @@ def build_parser() -> argparse.ArgumentParser:
     prompt_boundary.add_argument("--format", choices=["json"], default="json", help="Output format.")
     prompt_boundary.set_defaults(func=command_prompt_boundary)
 
-    github_repo = subcommands.add_parser(
-        "github-repo",
-        help="Plan GitHub repository setup for a WOM profile without creating the repository.",
-    )
-    github_repo.add_argument("archive_root", help="Archive root to plan for.")
-    github_repo.add_argument("--dry-run", action="store_true", help="Preview local metadata and manual GitHub steps without writing files.")
-    github_repo.add_argument("--profile-id", help="Resolved WOM profile id.")
-    github_repo.add_argument("--profile-slug", help="ASCII profile slug used in the proposed repository name.")
-    github_repo.add_argument("--github-owner", help="GitHub user or organization name.")
-    github_repo.add_argument("--github-account-ref", help="Safe GitHub account reference such as github:account:example.")
-    github_repo.add_argument("--repo-name", help="Override repository name. Must keep the zettel-kasten- prefix.")
-    github_repo.add_argument(
-        "--visibility",
-        choices=sorted(archive_services.GITHUB_REPOSITORY_ALLOWED_VISIBILITIES),
-        default=archive_services.GITHUB_REPOSITORY_DEFAULT_VISIBILITY,
-        help="Proposed repository visibility. Defaults to private.",
-    )
-    github_repo.add_argument(
-        "--remote-protocol",
-        choices=sorted(archive_services.GITHUB_REPOSITORY_REMOTE_PROTOCOLS),
-        default=archive_services.GITHUB_REPOSITORY_DEFAULT_REMOTE_PROTOCOL,
-        help="Planned local remote protocol. Defaults to ssh.",
-    )
-    github_repo.add_argument(
-        "--approve",
-        action="store_true",
-        help="Write versioned provider metadata and a setup receipt only; never create or connect a GitHub repository.",
-    )
-    github_repo.add_argument("--reviewed-by", help="Reviewer id required with --approve.")
-    github_repo.add_argument(
-        "--write-local-profile",
-        action="store_true",
-        help="Write ignored local GitHub account hints under profiles/local/ when approving.",
-    )
-    github_repo.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
-    github_repo.set_defaults(func=command_github_repo)
-
     object_storage = subcommands.add_parser(
         "object-storage",
         help="Plan object storage setup for WOM objets without creating buckets or uploading files.",
@@ -41912,42 +40835,6 @@ def build_parser() -> argparse.ArgumentParser:
     prehashed_objet_ledger.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     prehashed_objet_ledger.set_defaults(func=command_prehashed_objet_ledger)
 
-    object_storage_upload_evidence = subcommands.add_parser(
-        "object-storage-upload-evidence",
-        aliases=["object-storage-external-upload-evidence", "objet-storage-upload-evidence"],
-        help="Record reviewed external object-storage upload evidence without calling providers.",
-    )
-    object_storage_upload_evidence.add_argument("archive_root", help="Archive root to update.")
-    object_storage_upload_evidence.add_argument(
-        "--ledger",
-        action="append",
-        required=True,
-        help="UTF-8 JSONL upload evidence ledger. May be repeated. Paths are not echoed.",
-    )
-    object_storage_upload_evidence.add_argument(
-        "--provider-kind",
-        choices=sorted(archive_services.OBJECT_STORAGE_ALLOWED_PROVIDERS),
-        default="cloudflare-r2",
-        help="Object-storage provider kind label.",
-    )
-    object_storage_upload_evidence.add_argument(
-        "--store-ref",
-        help="Safe store label/ref. Required with --approve. Do not pass URLs, bucket names, paths, tokens, or secrets.",
-    )
-    object_storage_upload_evidence.add_argument("--sha256-field", default="sha256", help="JSONL field containing sha256 or sha256:<hex>.")
-    object_storage_upload_evidence.add_argument("--size-field", default="bytes", help="Optional JSONL field containing byte size.")
-    object_storage_upload_evidence.add_argument(
-        "--status-field",
-        default="status",
-        help="JSONL field whose value must be uploaded, verified, succeeded, already_present, or ok.",
-    )
-    object_storage_upload_evidence.add_argument("--max-rows", type=int, default=100000, help="Maximum rows to inspect.")
-    object_storage_upload_evidence.add_argument("--dry-run", action="store_true", help="Preview manifest location updates without writing.")
-    object_storage_upload_evidence.add_argument("--approve", action="store_true", help="Write reviewed upload evidence receipt and manifest locations.")
-    object_storage_upload_evidence.add_argument("--reviewed-by", help="Reviewer id required when --approve is used.")
-    object_storage_upload_evidence.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
-    object_storage_upload_evidence.set_defaults(func=command_object_storage_upload_evidence)
-
     object_storage_upload_evidence_audit = subcommands.add_parser(
         "object-storage-upload-evidence-audit",
         aliases=["object-storage-external-upload-evidence-audit", "objet-storage-upload-evidence-audit"],
@@ -42503,48 +41390,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     object_storage_offload_parser.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     object_storage_offload_parser.set_defaults(func=command_object_storage_offload)
-
-    object_storage_wom_location_reconcile = subcommands.add_parser(
-        "object-storage-wom-location-reconcile",
-        aliases=[
-            "object-storage-upload-location-reconcile",
-            "object-storage-manifest-reconcile",
-            "objet-storage-wom-location-reconcile",
-        ],
-        help="Reconcile missing wom_uploaded manifest bindings from existing object-storage execution receipts.",
-    )
-    object_storage_wom_location_reconcile.add_argument("archive_root", help="Archive root to inspect or update.")
-    object_storage_wom_location_reconcile.add_argument(
-        "--receipt",
-        help="Optional archive-relative object-storage execution receipt path to target. Dry-run first.",
-    )
-    object_storage_wom_location_reconcile.add_argument(
-        "--provider-kind",
-        choices=sorted(archive_services.OBJECT_STORAGE_ALLOWED_PROVIDERS),
-        help="Optional object-storage provider kind filter.",
-    )
-    object_storage_wom_location_reconcile.add_argument(
-        "--store-ref",
-        help="Optional safe store label/ref filter. Do not pass URLs, bucket names, paths, tokens, or secrets.",
-    )
-    object_storage_wom_location_reconcile.add_argument(
-        "--max-items",
-        type=int,
-        help="Refuse if more than this many manifest binding writes would be planned.",
-    )
-    object_storage_wom_location_reconcile.add_argument("--reviewed-by", help="Safe reviewer id required when --approve is used.")
-    object_storage_wom_location_reconcile.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Preview missing/covered manifest bindings. No provider calls, no credential reads, no writes.",
-    )
-    object_storage_wom_location_reconcile.add_argument(
-        "--approve",
-        action="store_true",
-        help="Write planned manifest bindings and one audit receipt. Never calls providers or reads credentials.",
-    )
-    object_storage_wom_location_reconcile.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
-    object_storage_wom_location_reconcile.set_defaults(func=command_object_storage_wom_location_reconcile)
 
     imap_mailbox_operation_request = subcommands.add_parser(
         "imap-mailbox-operation-request-plan",
@@ -43195,72 +42040,6 @@ def build_parser() -> argparse.ArgumentParser:
     credential_keepassxc_command_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     credential_keepassxc_command_plan.set_defaults(func=command_credential_keepassxc_command_plan)
 
-    credential_keepassxc_write = subcommands.add_parser(
-        "credential-keepassxc-write",
-        aliases=["keepassxc-write"],
-        help="Execute a minimal KeePassXC CLI add after verifying an approval receipt.",
-    )
-    credential_keepassxc_write.add_argument("archive_root", help="Archive root to inspect.")
-    credential_keepassxc_write.add_argument("--credential-id", required=True, help="Safe credential label, e.g. cred:openai-api.")
-    credential_keepassxc_write.add_argument("--credential-ref", help="Optional secret: ref; exact value is not echoed.")
-    credential_keepassxc_write.add_argument(
-        "--credential-kind",
-        choices=sorted(archive_services.CREDENTIAL_REF_ALLOWED_KINDS),
-        help="Credential kind; defaults from action kind.",
-    )
-    credential_keepassxc_write.add_argument(
-        "--provider",
-        choices=sorted(archive_services.CREDENTIAL_REF_ALLOWED_PROVIDERS),
-        help="Optional provider context.",
-    )
-    credential_keepassxc_write.add_argument(
-        "--action-kind",
-        choices=sorted(archive_services.CREDENTIAL_ACCESS_BROKER_ACTIONS),
-        default="plaintext_secret_migration",
-        help="Credential action to policy-check before the write.",
-    )
-    credential_keepassxc_write.add_argument(
-        "--operation",
-        choices=["plaintext_secret_migration", "write_new_secret"],
-        default="plaintext_secret_migration",
-        help="KeePassXC write-like operation to execute.",
-    )
-    credential_keepassxc_write.add_argument(
-        "--approval-receipt",
-        required=True,
-        help="Archive-relative credential access approval receipt to verify before execution.",
-    )
-    credential_keepassxc_write.add_argument(
-        "--entry-label",
-        required=True,
-        help="Safe non-secret KeePassXC entry label. Do not pass an email, URL, token, password, or path.",
-    )
-    credential_keepassxc_write.add_argument(
-        "--group-label",
-        help="Optional safe non-secret KeePassXC group label. Do not pass a path.",
-    )
-    credential_keepassxc_write.add_argument(
-        "--database-ref",
-        default="keepassxc:human-selected-database",
-        help="Safe label for the human-selected database; never pass a .kdbx path here.",
-    )
-    credential_keepassxc_write.add_argument(
-        "--database-path",
-        help="Local .kdbx path used only for --approve execution. It is not echoed in JSON or receipts.",
-    )
-    credential_keepassxc_write.add_argument("--consumer", default="wom:adapter:keepassxc", help="Safe label for the local adapter.")
-    credential_keepassxc_write.add_argument("--reviewed-by", default="human:pending-review", help="Safe non-secret reviewer label.")
-    credential_keepassxc_write.add_argument(
-        "--platform",
-        choices=sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS),
-        default="windows",
-        help="Host platform context.",
-    )
-    credential_keepassxc_write.add_argument("--dry-run", action="store_true", help="Preview the write without executing keepassxc-cli.")
-    credential_keepassxc_write.add_argument("--approve", action="store_true", help="Execute keepassxc-cli add after local human approval.")
-    credential_keepassxc_write.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
-    credential_keepassxc_write.set_defaults(func=command_credential_keepassxc_write)
-
     credential_access_broker_plan = subcommands.add_parser(
         "credential-access-broker-plan",
         aliases=["credential-broker-plan", "secret-access-broker-plan"],
@@ -43597,23 +42376,6 @@ def build_parser() -> argparse.ArgumentParser:
     tiro_lossless_recovery_plan.add_argument("--dry-run", action="store_true", help="Required; write nothing.")
     tiro_lossless_recovery_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     tiro_lossless_recovery_plan.set_defaults(func=command_tiro_lossless_recovery_plan)
-
-    tiro_lossless_recovery_capture = subcommands.add_parser(
-        "tiro-lossless-recovery-capture",
-        aliases=["tiro-recovery-capture"],
-        help="Preview or approve preserving a private raw Tiro recovery bundle as a WOM objet.",
-    )
-    tiro_lossless_recovery_capture.add_argument("archive_root", help="Archive root to update.")
-    tiro_lossless_recovery_capture.add_argument(
-        "--bundle",
-        required=True,
-        help="Archive-relative raw Tiro recovery bundle JSON under workbench/.",
-    )
-    tiro_lossless_recovery_capture.add_argument("--dry-run", action="store_true", help="Preview object/receipt writes.")
-    tiro_lossless_recovery_capture.add_argument("--approve", action="store_true", help="Write the reviewed raw bundle as a WOM objet.")
-    tiro_lossless_recovery_capture.add_argument("--reviewed-by", help="Safe reviewer id required with --approve.")
-    tiro_lossless_recovery_capture.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
-    tiro_lossless_recovery_capture.set_defaults(func=command_tiro_lossless_recovery_capture)
 
     tiro_lossless_recovery_fetch_run = subcommands.add_parser(
         "tiro-lossless-recovery-fetch-run",
@@ -45228,88 +43990,6 @@ def build_parser() -> argparse.ArgumentParser:
     zet_abstract_backfill_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     zet_abstract_backfill_plan.set_defaults(func=command_zet_abstract_backfill_plan)
 
-    zet_abstract_backfill_write = subcommands.add_parser(
-        "zet-abstract-backfill-write",
-        aliases=["abstract-backfill-write"],
-        help="Preview or approve a SHA-bound, human-reviewed transactional abstract revision batch.",
-    )
-    zet_abstract_backfill_write.add_argument("archive_root", help="Archive root containing canonical zets.")
-    zet_abstract_backfill_write.add_argument(
-        "--proposal",
-        required=True,
-        help="Private JSONL under .wom-scratch/abstract-backfill/; its path and values are never echoed.",
-    )
-    zet_abstract_backfill_write.add_argument(
-        "--expected-proposal-sha256",
-        required=True,
-        help="Required sha256:<64 lowercase hex> identity returned by the reviewed plan.",
-    )
-    zet_abstract_backfill_write.add_argument(
-        "--max-items",
-        type=int,
-        default=500,
-        help=f"Maximum proposal rows to inspect and write (1-{archive_services.ZET_ABSTRACT_BACKFILL_MAX_ITEMS}).",
-    )
-    zet_abstract_backfill_write.add_argument("--dry-run", action="store_true", help="Preview the exact transactional write; writes nothing.")
-    zet_abstract_backfill_write.add_argument("--approve", action="store_true", help="Apply the entire validated batch and write one revision receipt.")
-    zet_abstract_backfill_write.add_argument(
-        "--reviewed-by",
-        help="Safe human reviewer id required for a new approved write; never echoed.",
-    )
-    zet_abstract_backfill_write.add_argument(
-        "--affirm-abstracts-reviewed",
-        action="store_true",
-        help="Required with --approve: affirm that every proposed abstract was human-reviewed.",
-    )
-    zet_abstract_backfill_write.add_argument(
-        "--progress",
-        action="store_true",
-        help="Stream content-free byte and row counts plus 10-second heartbeats to stderr.",
-    )
-    zet_abstract_backfill_write.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
-    zet_abstract_backfill_write.set_defaults(func=command_zet_abstract_backfill_write)
-
-    zet_abstract_backfill_revert = subcommands.add_parser(
-        "zet-abstract-backfill-revert",
-        aliases=["abstract-backfill-revert"],
-        help="Audit or approve exact one-field rollback from an abstract backfill receipt.",
-    )
-    zet_abstract_backfill_revert.add_argument("archive_root", help="Archive root containing canonical zets.")
-    zet_abstract_backfill_revert.add_argument(
-        "--receipt",
-        required=True,
-        help="Private applied receipt under receipts/revisions/abstract-backfill/; its path and values are never echoed.",
-    )
-    zet_abstract_backfill_revert.add_argument(
-        "--expected-receipt-sha256",
-        required=True,
-        help="Required sha256:<64 lowercase hex> identity returned by the applied writer.",
-    )
-    zet_abstract_backfill_revert.add_argument(
-        "--max-items",
-        type=int,
-        default=500,
-        help=f"Maximum receipt rows to audit and revert (1-{archive_services.ZET_ABSTRACT_BACKFILL_MAX_ITEMS}).",
-    )
-    zet_abstract_backfill_revert.add_argument("--dry-run", action="store_true", help="Audit exact reversibility and preview removal; writes nothing.")
-    zet_abstract_backfill_revert.add_argument("--approve", action="store_true", help="Restore the whole validated batch and write one immutable revert receipt.")
-    zet_abstract_backfill_revert.add_argument(
-        "--reviewed-by",
-        help="Safe human reviewer id required for a new approved revert; never echoed.",
-    )
-    zet_abstract_backfill_revert.add_argument(
-        "--affirm-abstract-removal-reviewed",
-        action="store_true",
-        help="Required with --approve: affirm that removal of every recorded abstract was human-reviewed.",
-    )
-    zet_abstract_backfill_revert.add_argument(
-        "--progress",
-        action="store_true",
-        help="Stream content-free receipt and row counts plus 10-second heartbeats to stderr.",
-    )
-    zet_abstract_backfill_revert.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
-    zet_abstract_backfill_revert.set_defaults(func=command_zet_abstract_backfill_revert)
-
     zet_abstract_backfill_receipt_audit = subcommands.add_parser(
         "zet-abstract-backfill-receipt-audit",
         aliases=["abstract-backfill-receipt-audit"],
@@ -45402,96 +44082,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     zet_abstract_backfill_recovery_plan.set_defaults(
         func=command_zet_abstract_backfill_recovery_plan
-    )
-
-    zet_abstract_backfill_recover = subcommands.add_parser(
-        "zet-abstract-backfill-recover",
-        aliases=["abstract-backfill-recover"],
-        help="Preview or approve one plan-digest-bound interrupted abstract transaction recovery.",
-    )
-    zet_abstract_backfill_recover.add_argument(
-        "archive_root",
-        help="Archive root containing the retained private transaction journal.",
-    )
-    zet_abstract_backfill_recover.add_argument(
-        "--operation",
-        choices=["apply", "revert"],
-        required=True,
-        help="Journal operation selected by the reviewed recovery plan.",
-    )
-    zet_abstract_backfill_recover.add_argument(
-        "--basis-sha256",
-        required=True,
-        help="Exact privacy-safe transaction basis SHA-256 from the reviewed case.",
-    )
-    zet_abstract_backfill_recover.add_argument(
-        "--expected-plan-digest",
-        required=True,
-        help="Exact complete recovery-plan digest reviewed by the operator.",
-    )
-    zet_abstract_backfill_recover.add_argument(
-        "--expected-action",
-        choices=sorted(
-            archive_services.ZET_ABSTRACT_BACKFILL_RECOVERY_ACTIONS
-        ),
-        required=True,
-        help="Exact fixed action selected by the reviewed recovery case.",
-    )
-    zet_abstract_backfill_recover.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Preview the exact SHA/action-bound case without writing.",
-    )
-    zet_abstract_backfill_recover.add_argument(
-        "--approve",
-        action="store_true",
-        help="Execute one freshly revalidated recovery case.",
-    )
-    zet_abstract_backfill_recover.add_argument(
-        "--reviewed-by",
-        help="Safe reviewer id recorded only in a newly finalized revert receipt; never echoed.",
-    )
-    zet_abstract_backfill_recover.add_argument(
-        "--affirm-recovery-reviewed",
-        action="store_true",
-        help="Required with --approve: affirm the exact recovery direction and current plan were reviewed.",
-    )
-    zet_abstract_backfill_recover.add_argument(
-        "--affirm-archive-quiescent",
-        action="store_true",
-        help="Required with --approve: affirm the original process stopped and no writer/editor is active.",
-    )
-    zet_abstract_backfill_recover.add_argument(
-        "--max-receipts",
-        type=int,
-        default=5000,
-        help="Maximum total apply/revert receipts to re-audit (1-5000).",
-    )
-    zet_abstract_backfill_recover.add_argument(
-        "--max-locks",
-        type=int,
-        default=5000,
-        help="Maximum recognized locks and journals to re-audit (1-5000 each).",
-    )
-    zet_abstract_backfill_recover.add_argument(
-        "--max-cases",
-        type=int,
-        default=100,
-        help="Maximum privacy-safe recovery cases to bind (1-500).",
-    )
-    zet_abstract_backfill_recover.add_argument(
-        "--progress",
-        action="store_true",
-        help="Stream content-free audit, write, receipt, and heartbeat progress to stderr.",
-    )
-    zet_abstract_backfill_recover.add_argument(
-        "--format",
-        choices=["text", "json"],
-        default="json",
-        help="Output format.",
-    )
-    zet_abstract_backfill_recover.set_defaults(
-        func=command_zet_abstract_backfill_recover
     )
 
     status_board = subcommands.add_parser(
@@ -46189,19 +44779,6 @@ def build_parser() -> argparse.ArgumentParser:
         func=command_external_locator_recovery_plan
     )
 
-    external_locator_revert = subcommands.add_parser(
-        "external-locator-revert",
-        help="Preview or approve exact restoration of a locator record from its receipt.",
-    )
-    external_locator_revert.add_argument("archive_root", help="Archive root to restore.")
-    external_locator_revert.add_argument("--receipt", required=True)
-    external_locator_revert.add_argument("--dry-run", action="store_true")
-    external_locator_revert.add_argument("--approve", action="store_true")
-    external_locator_revert.add_argument("--expected-plan-sha256")
-    external_locator_revert.add_argument("--reviewed-by")
-    external_locator_revert.add_argument("--format", choices=["text", "json"], default="text")
-    external_locator_revert.set_defaults(func=command_external_locator_revert)
-
     notion_objet_link_rewrite_plan = subcommands.add_parser(
         "notion-objet-link-rewrite-plan",
         help="Validate one reviewed Notion locator to objet conversion plan without writing.",
@@ -46254,24 +44831,6 @@ def build_parser() -> argparse.ArgumentParser:
     notion_objet_link_convert.add_argument("--reviewed-by", help="Safe reviewer id required with --approve.")
     notion_objet_link_convert.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     notion_objet_link_convert.set_defaults(func=command_notion_objet_link_convert)
-
-    notion_objet_manifest_locator_label = subcommands.add_parser(
-        "notion-objet-manifest-locator-label",
-        aliases=["notion-objet-locator-label"],
-        help="Preview or approve adding a reviewed Notion locator fingerprint label to one object manifest record.",
-    )
-    notion_objet_manifest_locator_label.add_argument("archive_root", help="Archive root to update.")
-    notion_objet_manifest_locator_label.add_argument("--object-id", required=True, help="Manifested object id, sha256:<64 hex>.")
-    notion_objet_manifest_locator_label.add_argument(
-        "--locator-fingerprint",
-        required=True,
-        help="Reviewed sha256 locator fingerprint from notion-objet-link-plan or notion-objet-link-index.",
-    )
-    notion_objet_manifest_locator_label.add_argument("--dry-run", action="store_true", help="Preview manifest label update without writing files.")
-    notion_objet_manifest_locator_label.add_argument("--approve", action="store_true", help="Write the reviewed non-secret locator label and receipt.")
-    notion_objet_manifest_locator_label.add_argument("--reviewed-by", help="Safe reviewer id required with --approve.")
-    notion_objet_manifest_locator_label.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
-    notion_objet_manifest_locator_label.set_defaults(func=command_notion_objet_manifest_locator_label)
 
     block_header = subcommands.add_parser("block-header", help="Preview the derived block header for one zet.")
     block_header.add_argument("archive_root", help="Archive root to inspect.")
@@ -46479,20 +45038,6 @@ def build_parser() -> argparse.ArgumentParser:
     foreign_block_quarantine.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     foreign_block_quarantine.set_defaults(func=command_foreign_block_quarantine)
 
-    quarantine_foreign_block = subcommands.add_parser(
-        "quarantine-foreign-block",
-        help="Preview or approve a local isolated quarantine case write for a foreign block.",
-    )
-    quarantine_foreign_block.add_argument("archive_root", help="Archive root used for path safety and local context.")
-    quarantine_foreign_block.add_argument("--plan", required=True, help="Archive-relative JSON report from foreign-block-quarantine --dry-run.")
-    quarantine_foreign_block.add_argument("--dry-run", action="store_true", help="Preview the approved quarantine write without writing files.")
-    quarantine_foreign_block.add_argument("--approve", action="store_true", help="Approve the local quarantine case write.")
-    quarantine_foreign_block.add_argument("--reviewed-by", help="Safe actor id approving the quarantine write.")
-    quarantine_foreign_block.add_argument("--expected-case-id", help="Optional safe case id expected from the plan.")
-    quarantine_foreign_block.add_argument("--review-note", help="Optional short non-secret operator note. This is not trust or attestation.")
-    quarantine_foreign_block.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
-    quarantine_foreign_block.set_defaults(func=command_quarantine_foreign_block)
-
     quarantine_review = subcommands.add_parser(
         "quarantine-review",
         help="List and validate existing foreign block quarantine cases without writing files.",
@@ -46525,29 +45070,6 @@ def build_parser() -> argparse.ArgumentParser:
     quarantine_decision.add_argument("--review-note", help="Optional short safe note. Preview context only, not approval.")
     quarantine_decision.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     quarantine_decision.set_defaults(func=command_quarantine_decision)
-
-    record_quarantine_decision = subcommands.add_parser(
-        "record-quarantine-decision",
-        help="Preview or approve recording a local quarantine decision for a foreign block.",
-    )
-    record_quarantine_decision.add_argument("archive_root", help="Archive root used for path safety and local context.")
-    record_quarantine_decision.add_argument(
-        "--decision-preview",
-        required=True,
-        help="JSON file from quarantine-decision --dry-run --format json.",
-    )
-    record_quarantine_decision.add_argument("--dry-run", action="store_true", help="Preview the decision record write without writing files.")
-    record_quarantine_decision.add_argument("--approve", action="store_true", help="Approve writing the local quarantine decision record.")
-    record_quarantine_decision.add_argument("--reviewed-by", help="Safe actor id approving the decision record.")
-    record_quarantine_decision.add_argument("--expected-case-id", help="Optional safe case id expected from the decision preview.")
-    record_quarantine_decision.add_argument(
-        "--expected-decision",
-        choices=sorted(archive_services.FOREIGN_BLOCK_QUARANTINE_DECISIONS),
-        help="Optional quarantine decision expected from the decision preview.",
-    )
-    record_quarantine_decision.add_argument("--review-note", help="Optional short non-secret operator note. Only summary metadata is stored.")
-    record_quarantine_decision.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
-    record_quarantine_decision.set_defaults(func=command_record_quarantine_decision)
 
     quarantine_decision_review = subcommands.add_parser(
         "quarantine-decision-review",
@@ -48542,7 +47064,7 @@ def build_parser() -> argparse.ArgumentParser:
         "objet-capture",
         help="Dry-run or approve capturing selected staged files into the local content-addressed objet store.",
     )
-    objet_capture.add_argument("archive_root", help="Archive root (sandbox-marked, or enabled via objet-capture-enable).")
+    objet_capture.add_argument("archive_root", help="Archive root (sandbox-marked or with an existing capture-enablement record; objet-capture-selection and source-intake-chain need neither).")
     objet_capture.add_argument("--selection", required=True, help="B4 selection manifest JSON path.")
     objet_capture.add_argument("--dry-run", action="store_true", help="Preview the capture plan without writing files.")
     objet_capture.add_argument("--approve", action="store_true", help="Capture bytes, append manifest records, write a receipt.")
@@ -48984,124 +47506,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     notion_ancestor_fetch_contract.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     notion_ancestor_fetch_contract.set_defaults(func=command_notion_ancestor_fetch_adapter_execution_contract)
-
-    notion_ancestor_fetch_run = subcommands.add_parser(
-        "notion-ancestor-fetch-adapter-run",
-        aliases=["notion-ancestor-fetch-run", "notion-ancestor-live-fetch"],
-        help="Run the approval-gated local Notion ancestor structure fetch adapter.",
-    )
-    notion_ancestor_fetch_run.add_argument("archive_root", help="Archive root to update.")
-    notion_ancestor_fetch_run.add_argument(
-        "--tree",
-        required=True,
-        help="Archive-relative sanitized nested-tree fixture JSON path. Absolute paths and provider URLs are rejected.",
-    )
-    notion_ancestor_fetch_run.add_argument(
-        "--output",
-        default="workbench/notion-ancestor-result.live.json",
-        help="Archive-relative sanitized ancestor result fixture path under workbench/. Existing files are not overwritten.",
-    )
-    notion_ancestor_fetch_run.add_argument(
-        "--source",
-        required=True,
-        choices=sorted(archive_services.NOTION_NESTED_TREE_SOURCES),
-        help="External nested tree source declared by the fixture.",
-    )
-    notion_ancestor_fetch_run.add_argument(
-        "--credential-id",
-        default="cred:notion-readonly",
-        help="Safe non-secret credential label for the approval receipt.",
-    )
-    notion_ancestor_fetch_run.add_argument(
-        "--credential-ref",
-        help="Required with --approve. Must be an env: ref for the first live Notion ancestor fetch; exact value is never echoed.",
-    )
-    notion_ancestor_fetch_run.add_argument("--credential-kind", default="provider_api_key", help="Credential kind label.")
-    notion_ancestor_fetch_run.add_argument("--credential-provider", default="notion", help="Credential provider label.")
-    notion_ancestor_fetch_run.add_argument(
-        "--store-kind",
-        default="environment",
-        choices=sorted(archive_services.CREDENTIAL_ACCESS_BROKER_STORE_KINDS),
-        help="Credential store kind. First live run supports environment only.",
-    )
-    notion_ancestor_fetch_run.add_argument(
-        "--adapter-kind",
-        default="environment_injection",
-        choices=sorted(archive_services.CREDENTIAL_ADAPTER_KINDS),
-        help="Credential adapter kind. First live run supports environment_injection only.",
-    )
-    notion_ancestor_fetch_run.add_argument(
-        "--approval-decision",
-        default="needs_review",
-        choices=sorted(archive_services.CREDENTIAL_ACCESS_APPROVAL_DECISIONS),
-        help="Use approve_once with --approve after writing a matching credential-access-approval receipt.",
-    )
-    notion_ancestor_fetch_run.add_argument(
-        "--approval-receipt",
-        help="Archive-relative credential access approval receipt path. Required with --approve; not echoed in result details.",
-    )
-    notion_ancestor_fetch_run.add_argument(
-        "--consumer",
-        default="wom:adapter:notion-ancestor-fetch",
-        help="Safe consumer label that must match the approval receipt.",
-    )
-    notion_ancestor_fetch_run.add_argument("--reviewed-by", default="human:pending-review", help="Safe reviewer label.")
-    notion_ancestor_fetch_run.add_argument(
-        "--platform",
-        default="windows",
-        choices=sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS),
-        help="Credential platform policy label.",
-    )
-    notion_ancestor_fetch_run.add_argument(
-        "--notion-version",
-        default=archive_services.NOTION_API_DEFAULT_VERSION,
-        help="Notion API version header. Defaults to the conservative stable version.",
-    )
-    notion_ancestor_fetch_run.add_argument("--timeout-seconds", type=int, default=30, help="Provider request timeout, 1-120 seconds.")
-    notion_ancestor_fetch_run.add_argument(
-        "--max-items",
-        type=int,
-        default=1000,
-        help="Maximum fixture nodes to parse while deriving missing ancestor requests. Oversized fixtures block.",
-    )
-    notion_ancestor_fetch_run.add_argument(
-        "--max-depth",
-        type=int,
-        default=16,
-        help="Maximum parent-chain crawl depth per missing ancestor. Range 1-64.",
-    )
-    notion_ancestor_fetch_run.add_argument(
-        "--scope-generation-id",
-        action="append",
-        help="Optional generation id filter for broad workspace fixtures. Repeat to include more than one generation.",
-    )
-    notion_ancestor_fetch_run.add_argument(
-        "--scope-root-ref",
-        action="append",
-        help="Optional safe root/ref filter matched against request refs before the live adapter receives the queue. Repeatable.",
-    )
-    notion_ancestor_fetch_run.add_argument(
-        "--scope-ancestor-ref",
-        action="append",
-        help="Optional exact ancestor_ref filter. Repeatable.",
-    )
-    notion_ancestor_fetch_run.add_argument(
-        "--scope-leaf-ref",
-        action="append",
-        help="Optional exact affected leaf ref filter. Repeatable.",
-    )
-    notion_ancestor_fetch_run.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Preview without reading environment variables, calling Notion, or writing files.",
-    )
-    notion_ancestor_fetch_run.add_argument(
-        "--approve",
-        action="store_true",
-        help="Run the local Notion ancestor structure fetch and write sanitized fixture plus non-secret receipt.",
-    )
-    notion_ancestor_fetch_run.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
-    notion_ancestor_fetch_run.set_defaults(func=command_notion_ancestor_fetch_adapter_run)
 
     notion_page_recovery_plan = subcommands.add_parser(
         "notion-page-recovery-plan",
@@ -49657,25 +48061,6 @@ def build_parser() -> argparse.ArgumentParser:
     share.add_argument("--dry-run", action="store_true", help="Preview sharing without writing or sending files.")
     share.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     share.set_defaults(func=command_share)
-
-    delegate = subcommands.add_parser("delegate-zet", help="Preview or write delegated access to zets from a saved view.")
-    delegate.add_argument("archive_root", help="Source archive root.")
-    delegate.add_argument("--view", required=True, help="View id to delegate.")
-    delegate.add_argument("--target-archive", help="Target archive id. Required for counterparty_bound delegation.")
-    delegate.add_argument(
-        "--target-policy",
-        choices=sorted(archive_services.DELEGATE_TARGET_POLICIES),
-        default=archive_services.DELEGATE_DEFAULT_TARGET_POLICY,
-        help="Delegation target policy. claimable_once can defer the recipient until attestation.",
-    )
-    delegate.add_argument("--counterparty-id", help="Expected counterparty identity/archive/principal id.")
-    delegate.add_argument("--counterparty-fingerprint", help="Expected counterparty public key fingerprint.")
-    delegate.add_argument("--allow-sensitive", action="store_true", help="Allow sensitive categories in the delegation gate.")
-    delegate.add_argument("--dry-run", action="store_true", help="Preview delegation without writing or sending files.")
-    delegate.add_argument("--approve", action="store_true", help="Write a delegate receipt after dry-run gates pass.")
-    delegate.add_argument("--reviewed-by", help="Reviewer id required for real delegation, e.g. person:me.")
-    delegate.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
-    delegate.set_defaults(func=command_delegate_zet)
 
     attest = subcommands.add_parser("attest-zet", help="Dry-run attestation of a delegated foreign zet receipt.")
     attest.add_argument("archive_root", help="Attesting archive root.")
@@ -50954,20 +49339,6 @@ def build_parser() -> argparse.ArgumentParser:
     sources.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     sources.set_defaults(func=command_sources)
 
-    scan_source = subcommands.add_parser("scan-source", help="Metadata-only scan of a registered source into a source map.")
-    scan_source.add_argument("archive_root", help="Archive root to inspect.")
-    scan_source.add_argument("--source", required=True, help="source_id from source-bindings.yml.")
-    scan_source.add_argument(
-        "--source-root",
-        help="Real local/export folder or manifest path for this run. It is used at runtime and not written to source maps.",
-    )
-    scan_source.add_argument("--dry-run", action="store_true", help="Preview source scan without writing archive files.")
-    scan_source.add_argument("--approve", action="store_true", help="Write source map and receipt after dry-run gates pass.")
-    scan_source.add_argument("--reviewed-by", help="Reviewer id required for approved source scan.")
-    scan_source.add_argument("--limit", type=int, default=2000, help="Maximum metadata items to map.")
-    scan_source.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
-    scan_source.set_defaults(func=command_scan_source)
-
     add_source = subcommands.add_parser("add-source", help="Register a source without hand-editing source-bindings.yml.")
     add_source.add_argument("archive_root", help="Archive root to update.")
     add_source.add_argument("--source-id", required=True, help="Stable source id, e.g. local:documents or ssd:archive-drive.")
@@ -51231,38 +49602,6 @@ def build_parser() -> argparse.ArgumentParser:
     onboard.add_argument("--approve", action="store_true", help="Create the archive after the onboarding plan passes.")
     onboard.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     onboard.set_defaults(func=command_onboard)
-
-    transfer_ownership = subcommands.add_parser(
-        "transfer-ownership",
-        help="Preview or apply an archive ownership transfer.",
-    )
-    transfer_ownership.add_argument("archive_root", help="Archive root to inspect.")
-    transfer_ownership.add_argument("--new-owner", required=True, help="New owner id, e.g. person:child or company:spinout.")
-    transfer_ownership.add_argument(
-        "--new-owner-kind",
-        choices=sorted(archive_services.OWNER_KINDS),
-        help="New owner kind. Defaults to the id prefix when possible.",
-    )
-    transfer_ownership.add_argument("--new-owner-archive", help="Optional archive id for the new owner.")
-    transfer_ownership.add_argument(
-        "--operator-after",
-        action="append",
-        help="Operator id after transfer. Repeat for each post-transfer operator.",
-    )
-    transfer_ownership.add_argument(
-        "--approved-by",
-        action="append",
-        help="Current owner/operator id that approved the proposed transfer. Repeat as needed.",
-    )
-    transfer_ownership.add_argument("--subject", help="Subject of the transfer, e.g. person:child.")
-    transfer_ownership.add_argument("--counterparty-id", help="Trusted counterparty id to verify. Defaults to the new owner.")
-    transfer_ownership.add_argument("--counterparty-fingerprint", help="Expected public key fingerprint for the new owner.")
-    transfer_ownership.add_argument("--reason", help="Human-readable reason for the proposed transfer.")
-    transfer_ownership.add_argument("--dry-run", action="store_true", help="Preview transfer without writing archive files.")
-    transfer_ownership.add_argument("--approve", action="store_true", help="Apply the transfer after dry-run gates pass.")
-    transfer_ownership.add_argument("--reviewed-by", help="Reviewer id required for real transfer, e.g. person:me.")
-    transfer_ownership.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
-    transfer_ownership.set_defaults(func=command_transfer_ownership)
 
     identity_reconcile = subcommands.add_parser(
         "identity-reconcile",
@@ -51708,16 +50047,13 @@ def _project_write_runtime_guard(
 _UNAVAILABLE_WRITER_LIFECYCLE_ACTIONS = {
     "add-source": "add_source_binding",
     "credential-lifecycle": "authenticated_credential_lifecycle_decision",
-    "delegate-zet": "delegate",
     "discard-draft": "discard_draft_apply",
-    "github-repo": "approve_github_repository_setup_plan",
     "identity-reconcile": "archive_identity_reconcile",
     "import-external": "import_external_archive",
     "init": "archive_init",
     "migrate": "migrate_archive",
     "notion-page-recovery": "authenticated_notion_page_recovery_execute",
     "object-storage-upload": "object_storage_upload_run",
-    "object-storage-upload-evidence": "object_storage_upload_evidence_register",
     "objet-capture-selection": "objet_capture_selection_record",
     "objet-source-metadata-write": "private_objet_source_metadata_write",
     "pack": "pack_work_context",
@@ -51726,7 +50062,6 @@ _UNAVAILABLE_WRITER_LIFECYCLE_ACTIONS = {
     "relation-candidate-decide": "relation_candidate_accept",
     "revert-edge": "zettel_edge_revert",
     "revert-batch": "zettel_edge_batch_revert",
-    "transfer-ownership": "transfer_archive_ownership",
 }
 
 

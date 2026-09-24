@@ -141,13 +141,35 @@ CLI_ADDITIONS = {
     ("remint-reconcile-batch",),
     ("retire-draft-reconcile-batch",),
 }
-CURRENT_CLI_COUNT = 591
+# v0.4.40 (owner decision 2026-09-24): retired and replaced writers are
+# deleted outright instead of staying fixed closed.
+CLI_REMOVALS = {
+    (name,)
+    for name in (
+        "delegate-zet", "transfer-ownership", "quarantine-foreign-block", "record-quarantine-decision",
+        "github-repo", "objet-capture-enable", "capture-enable", "object-storage-upload-evidence",
+        "object-storage-external-upload-evidence", "objet-storage-upload-evidence",
+        "zet-abstract-backfill-recover", "abstract-backfill-recover", "zet-abstract-backfill-revert",
+        "abstract-backfill-revert", "zet-abstract-backfill-write", "abstract-backfill-write",
+        "credential-keepassxc-write", "keepassxc-write", "external-locator-revert",
+        "notion-ancestor-fetch-adapter-run", "notion-ancestor-fetch-run", "notion-ancestor-live-fetch",
+        "notion-objet-manifest-locator-label", "notion-objet-locator-label",
+        "object-storage-wom-location-reconcile", "object-storage-upload-location-reconcile",
+        "object-storage-manifest-reconcile", "objet-storage-wom-location-reconcile", "scan-source",
+        "tiro-lossless-recovery-capture", "tiro-recovery-capture",
+    )
+}
+MCP_REMOVALS = {
+    "delegate_zet_check", "ownership_transfer_check", "quarantine_foreign_block_check",
+    "record_quarantine_decision_check", "github_repository_setup_plan", "source_scan_plan",
+}
+CURRENT_CLI_COUNT = 560
 CURRENT_CLI_CANONICAL_SHA256 = (
-    "99c6a2c3ad2f0fd6a8b4566a31c1299d432bd653b8e2e46141c9de4c0665d541"
+    "858a2d915d74a69d85b2862ad5acb58315745bc2e121f9f757364d0721f2f6ca"
 )
-CURRENT_MCP_COUNT = 137
+CURRENT_MCP_COUNT = 131
 CURRENT_MCP_CANONICAL_SHA256 = (
-    "74e53bf6d52f2f2d67f0e560d29b00c666ed1ffd886f199a9b66f34008462554"  # v0.4.34: work-session request grant_hours/permission keys
+    "9e9a7727989f6b6335d3c65e26336af573d38baa2fbdfb2cc48975b785a6ebf4"  # v0.4.40: six retired check tools removed
 )
 MCP_ADDITIONS = {
     "zet_title_remap_write",
@@ -441,7 +463,7 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         self.assertFalse(CLI_ADDITIONS & predecessor_set)
         expected = [
             list(path)
-            for path in sorted(predecessor_set | CLI_ADDITIONS)
+            for path in sorted((predecessor_set | CLI_ADDITIONS) - CLI_REMOVALS)
         ]
         actual = current_cli_paths()
         self.assertEqual(actual, expected, path_diff_message(expected, actual))
@@ -482,7 +504,7 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         current_by_name = {row["name"]: row for row in current}
         self.assertEqual(
             set(current_by_name),
-            set(predecessor_by_name) | MCP_ADDITIONS,
+            (set(predecessor_by_name) | MCP_ADDITIONS) - MCP_REMOVALS,
         )
 
         changed = sorted(

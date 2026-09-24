@@ -763,20 +763,20 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/foreign-sharing-and-trust.md",
       "packaged": "templates/ai-runtime/wom-archive/references/foreign-sharing-and-trust.md",
-      "bytes": 2379,
-      "sha256": "27c8e78c72cd905aaac54ddaf1c91b8517b22534d53ca37f0267ed7fd631aff1"
+      "bytes": 2319,
+      "sha256": "3e6dcbd65a312de27ee0a779af4d72de9b96e201c3500d9752a2ab7c7c68960f"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/operator-contract.md",
       "packaged": "templates/ai-runtime/wom-archive/references/operator-contract.md",
-      "bytes": 77429,
-      "sha256": "5d06bd9bbe3ed797eb0e22ae116b49cd484569e63f625576cd2477b628f8b268"
+      "bytes": 73974,
+      "sha256": "ff448ba79e3f32ee9c966ce7cb76e58c7a5bf7cb59d2091297137bd1f3d9e965"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/reading-memory-and-revision.md",
       "packaged": "templates/ai-runtime/wom-archive/references/reading-memory-and-revision.md",
-      "bytes": 8232,
-      "sha256": "c7449ddfc92ed5ff5867ca0ad715a8f63e689ab141d673ac1fd782086ff2514c"
+      "bytes": 8199,
+      "sha256": "8e6449662b92f9b7583b7f056e4c138ca8621b4d5ddcefb1933d5b7d43bf4dd4"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/safety-results-and-human-language.md",
@@ -799,8 +799,8 @@
     {
       "source": "templates/company/AGENTS.md",
       "packaged": "templates/company/AGENTS.md",
-      "bytes": 11857,
-      "sha256": "a61b758369dff2012464c80cc178380b3cd6b6978ae9e81ba9b529d6787ffc59"
+      "bytes": 11843,
+      "sha256": "6821f498014c19a9f5f280d9b3173195deb37fbb76154a5a64f01b5951a3f280"
     },
     {
       "source": "templates/company/archive-identity.yml",
@@ -841,8 +841,8 @@
     {
       "source": "templates/company/ownership-transfer-examples/business-unit-spinout-preview.yml",
       "packaged": "templates/company/ownership-transfer-examples/business-unit-spinout-preview.yml",
-      "bytes": 1455,
-      "sha256": "96cb28bcb10e3ccc31ce42c520ef33d994ca97a953f7fa89baa60a24a2d6cf12"
+      "bytes": 1432,
+      "sha256": "47157f70d99c48cfb2c18f5b2fb5276c39ca8e0c4cccbdff6765b7f5cdfe23d3"
     },
     {
       "source": "templates/company/provider-bindings.yml",
@@ -871,8 +871,8 @@
     {
       "source": "templates/family/AGENTS.md",
       "packaged": "templates/family/AGENTS.md",
-      "bytes": 11997,
-      "sha256": "c258d64b09f7b278a8dff4bbf61590d4820ea80b81760473b3065f91114b4377"
+      "bytes": 11983,
+      "sha256": "ad3c124bf7d66d3d8922f717171b79e0e22600c9bbfc91aacaedc57dc521102d"
     },
     {
       "source": "templates/family/archive-identity.yml",
@@ -913,8 +913,8 @@
     {
       "source": "templates/family/ownership-transfer-examples/child-transfer-preview.yml",
       "packaged": "templates/family/ownership-transfer-examples/child-transfer-preview.yml",
-      "bytes": 1194,
-      "sha256": "e55d38659ec1c6a91a7106985311cace2c41609f3cb20f2565d66c4d6a36ce24"
+      "bytes": 1171,
+      "sha256": "85229a59a0ac0e63cfb2654218ebf9c244bbdb831b056213fd00da997e6da2da"
     },
     {
       "source": "templates/family/provider-bindings.yml",
@@ -943,8 +943,8 @@
     {
       "source": "templates/personal/AGENTS.md",
       "packaged": "templates/personal/AGENTS.md",
-      "bytes": 13075,
-      "sha256": "9617e480f4c1a224d67afb0f85843f6ff341e17edb9a71d1b4247219013dabb0"
+      "bytes": 13061,
+      "sha256": "211e622af1be463de989039ced7bc38e79703ec8e1c614b524a0770173197706"
     },
     {
       "source": "templates/personal/archive-identity.yml",

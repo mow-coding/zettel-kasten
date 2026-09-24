@@ -284,34 +284,13 @@ archive zet-abstract-backfill-plan <archive-root> --proposal .wom-scratch/abstra
 ```
 
 Treat `ready_for_human_review` as a preview only. A human must inspect every
-private proposed abstract. After that review, preview the separate writer with
-the exact `proposal.sha256` returned by the plan:
+private proposed abstract. The batch writer, its revert, and its recovery
+executor were removed in v0.4.40 (never usable after v0.4.0). Apply a reviewed
+abstract to one canonical zet with `zet-revision-write` (below); historical
+batch receipts, journals, and locks stay auditable with the read-only audit
+and recovery plan. Never hand-edit zets or infer removal authority.
 
-```bash
-archive zet-abstract-backfill-write <archive-root> --proposal .wom-scratch/abstract-backfill/<private>.jsonl --expected-proposal-sha256 <proposal.sha256> --dry-run --progress --format json
-```
-
-In v0.4.0 stop after the plan and writer dry-run. The apply approval branch is
-fixed fail-closed before private target read or mutation with
-`compound_exact_human_approval_binding_required`; an affirmation or reviewer
-label cannot authorize it. Historical v0.3 applies published a private
-hash-only transaction journal before mutation. Preserve any retained journal
-and lock for audit; their existence does not reactivate the executor.
-
-If a human later decides to remove that whole applied abstract batch, never
-hand-edit the zets and never infer removal authority. Retain the applied
-writer's `receipt.sha256`, then audit the receipt and exact inverse first:
-
-```bash
-archive zet-abstract-backfill-revert <archive-root> --receipt receipts/revisions/abstract-backfill/<digest>.zet-abstract-backfill.json --expected-receipt-sha256 <receipt.sha256> --dry-run --progress --format json
-```
-
-In v0.4.0 the revert approval branch is also fixed fail-closed before private
-target read or mutation with the same blocker. Preserve historical receipts,
-journals, and locks for audit. The scratch lock does not protect against
-external editors, and historical evidence does not grant new removal authority.
-
-After one or more abstract apply/revert batches, and at session handoff, audit
+After historical abstract apply/revert batches, and at session handoff, audit
 the whole bounded receipt lifecycle:
 
 ```bash
@@ -342,27 +321,9 @@ receipt. A divergent/invalid journal or any deterministic final receipt that
 exists but does not fully verify is a manual forensic hold. The planner itself
 never executes and no case is immediately safe to run.
 
-For one non-forensic case, bind the exact operation, basis SHA-256, complete
-plan digest, and fixed action to the separate executor preview:
-
-```bash
-archive zet-abstract-backfill-recover <archive-root> --operation <apply|revert> --basis-sha256 <case.basis_sha256> --expected-plan-digest <plan.plan_digest> --expected-action <case.recommended_action> --dry-run --max-receipts 5000 --max-locks 5000 --max-cases 100 --progress --format json
-```
-
-In v0.4.0 stop after the recovery plan and executor dry-run. Approval is fixed
-fail-closed before private target read or mutation with
-`compound_exact_human_approval_binding_required`; archive quiescence and
-affirmation flags cannot authorize recovery. The historical executor reran the
-complete plan under a recovery-only OS advisory guard, reacquired a missing
-matching basis lock, and revalidated every participant
-hash. It never executes `manual_forensic_hold`. Historical failure or forced
-termination retained the journal and lock and did not reverse already completed
-safe-direction recovery writes; in v0.4.0 use a fresh plan for diagnosis only
-and do not attempt resumption. The historical guard does not lock external editors, older WOM versions,
-or ordinary different-basis writers, so never infer archive quiescence from a
-lock filename. Recovery-produced revert receipts require WOM-kit v0.3.267 or
-newer for audit because they truthfully record
-`rollback_on_runtime_failure: false`.
+Recovery cases are diagnosis only: the executor was removed in v0.4.40, so
+preserve retained journals and locks and escalate any unresolved case to a
+human instead of attempting resumption.
 `--max-locks` independently caps locks and journals. Never auto-delete a lock or
 journal, and never edit an immutable receipt to silence this audit.
 
@@ -547,8 +508,8 @@ request, manifest, and reviewer. Ambiguous, absent, changed, or unauthenticated
 evidence blocks the resume.
 
 Follow returned `next_safe_actions` only. General/unscoped legacy
-`objet-capture-selection`, `objet-capture`, and `objet-capture-enable`
-approval branches remain fixed closed. The narrow v0.4.9 exact one-file chain
+`objet-capture-selection` and `objet-capture` approval branches remain
+fixed closed (`objet-capture-enable` was removed in v0.4.40). The narrow v0.4.9 exact one-file chain
 and the v0.4.10 authenticated batch chain are the only exceptions. A preview
 alone is never authority to copy, capture, import, or upload, and a raw in-root
 `objets/` folder is not an approved destination.
@@ -570,14 +531,12 @@ approval, invoke same-claim capture resume, or attempt bounded per-item replay.
 Neither decision authorizes provider access, upload, linking, drafting,
 minting, or cleanup.
 
-Object-storage plans and audits remain available, but v0.4.0 fixed-closes
-approval for `object-storage`, `prehashed-objet-ledger`,
-`object-storage-upload-evidence`, `object-storage-upload`,
-`object-storage-adopt-existing`, and
-`object-storage-wom-location-reconcile`. Each returns
-`compound_exact_human_approval_binding_required` before private ledger/object,
-credential, provider, or archive target read; provider call; mutation; or
-receipt publication. Do not present historical upload/adopt/reconcile commands
+Object-storage plans and audits remain available. `object-storage-upload`
+(v0.4.33) and `object-storage-adopt-existing` write under exact human approval:
+one native dialog, or none under a valid limited/allow_all session grant.
+`prehashed-objet-ledger` approval stays fixed closed. `object-storage-upload-evidence`
+and `object-storage-wom-location-reconcile` were removed in v0.4.40; use upload or
+adopt-existing, which verify the remote bytes. Do not present removed commands
 as runnable instructions.
 
 ## External Locators, Relation Review, And Markup Normalization
@@ -778,16 +737,9 @@ archive foreign-block-quarantine <archive-root> --stdin --dry-run --format json
 
 Even `ready_for_future_quarantine_write` is not trust, not import, not quarantine, and not approval. It only means a future explicit quarantine-write workflow could be shown to a human/operator.
 
-Preview a possible quarantine record through the CLI-only dry-run:
-
-```bash
-archive quarantine-foreign-block <archive-root> --plan <foreign-block-quarantine-plan.json> --dry-run --format json
-```
-
-In v0.4.0 quarantine approval is fixed fail-closed with
-`compound_exact_human_approval_binding_required` before private plan/archive
-read or mutation. It writes no case or receipt. MCP may only run
-`quarantine_foreign_block_check`; it must not write quarantine cases.
+Writing new quarantine cases was removed in v0.4.40 (`quarantine-foreign-block`
+and its MCP check); no foreign-block import path exists. Existing cases stay
+readable.
 
 After quarantine cases exist, list them for human review only:
 
@@ -806,16 +758,9 @@ archive quarantine-decision <archive-root> --case-id <safe-id> --dry-run --forma
 
 The decision preview may propose `keep_quarantined`, `reject_and_keep_record`, `eligible_for_attestation_review`, or `needs_more_review`. It records no decision. It does not trust, import, attest, mint, anchor, delegate, sign, execute, accept, apply, or write files. MCP may only run `foreign_block_quarantine_decision_check`; it must not expose decision apply/write/accept tools.
 
-Preview a possible local decision through CLI only:
-
-```bash
-archive record-quarantine-decision <archive-root> --decision-preview <json-file> --dry-run --format json
-```
-
-In v0.4.0 decision approval is fixed fail-closed with the same blocker before
-private decision/case read or mutation. It writes no decision or receipt. MCP
-may only run `record_quarantine_decision_check`; it must not expose decision
-write/apply/accept tools.
+Recording quarantine decisions was removed in v0.4.40
+(`record-quarantine-decision` and its MCP check). Existing decision records
+stay readable.
 
 After decision records exist, index them for human review only:
 
@@ -967,10 +912,8 @@ Prefer these actions:
 - run foreign-block-trust dry-run before any future foreign attestation discussion,
 - run foreign-block-attestation dry-run before any future human attestation review packet discussion,
 - run foreign-block-quarantine dry-run before any future quarantine write discussion,
-- use CLI-only quarantine-foreign-block approval for isolation writes; MCP remains check-only,
 - run quarantine-review to inventory existing untrusted quarantine cases without accepting them,
 - run quarantine-decision dry-run to preview candidate future decision paths without recording them,
-- use CLI-only record-quarantine-decision approval for local decision records; MCP remains check-only,
 - run quarantine-decision-review to inventory recorded decisions without accepting or applying them,
 - run quarantine-decision-outcome dry-run to plan recorded decision outcomes without accepting or applying them,
 - run attestation-review-candidate dry-run only after an eligible decision outcome, without creating attestations,
@@ -1013,10 +956,8 @@ Do not:
 - treat foreign-block-trust preview as actual trust or attestation approval,
 - treat foreign-block-attestation preview as actual trust, attestation, receipt write, or approval,
 - treat foreign-block-quarantine preview as an actual quarantine write, import, trust, receipt write, or approval,
-- treat quarantine-foreign-block as trust, import, mint, attestation, anchor, delegation, signing, execution, or acceptance,
 - treat quarantine-review as trust, import, mint, attestation, anchor, delegation, signing, execution, acceptance, apply approval, or a write path,
 - treat quarantine-decision as a recorded decision, approval, trust, import, mint, attestation, anchor, delegation, signing, execution, acceptance, apply approval, or a write path,
-- treat record-quarantine-decision as trust, import, mint, attestation, anchor, delegation, signing, execution, acceptance, apply approval, or sharing,
 - treat quarantine-decision-review as trust, import, mint, attestation, anchor, delegation, signing, execution, acceptance, apply approval, or a write path,
 - treat quarantine-decision-outcome as trust, import, mint, attestation, anchor, delegation, signing, execution, acceptance, apply approval, or a write path,
 - treat attestation-review-candidate as trust, import, mint, attestation, signature, anchor, delegation, execution, acceptance, apply approval, or a write path,
@@ -1180,8 +1121,8 @@ API failure or retry it automatically.
 ## Approved Notion Recovery Capability
 
 This section records the historical v0.3.320 capability design. In v0.4.0
-`notion-page-recovery`, `notion-recover`, and
-`notion-ancestor-fetch-adapter-run` execution are fixed fail-closed with
+`notion-page-recovery` and `notion-recover` execution are fixed fail-closed
+(`notion-ancestor-fetch-adapter-run` was removed in v0.4.40) with
 `compound_exact_human_approval_binding_required` before credential/private
 target read, provider call, object write, or receipt publication. Their
 read-only plan and dry-run surfaces remain available; the capability semantics

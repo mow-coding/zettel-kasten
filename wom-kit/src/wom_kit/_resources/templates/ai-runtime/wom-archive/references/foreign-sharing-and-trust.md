@@ -60,8 +60,6 @@ Useful search terms include:
 - `foreign-block-trust`
 - `foreign-block-attestation`
 - `foreign-block-quarantine`
-- `quarantine-foreign-block`
-- `record-quarantine-decision`
 - `attestation-review-candidate`
 - `attestation-statement-draft`
 - `shared-update-record-review`

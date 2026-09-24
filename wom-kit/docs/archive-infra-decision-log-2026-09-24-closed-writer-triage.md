@@ -1,6 +1,6 @@
 # Archive Infra Decision Log: Closed-Writer Triage (2026-09-24)
 
-Status: owner decision recorded; groups 1-5a implemented for v0.4.40.
+Status: owner decision recorded; groups 1-5a and the removals implemented for v0.4.40.
 
 ## Decision (owner, 2026-09-24)
 
@@ -134,3 +134,36 @@ A closed `restore-drill` left `preflight --require-restore-drill` and
   any archive. Where their approval record lives needs a design decision.
 
 Evidence: `wom-kit/tests/test_group5_restore_gitignore_identity_exact.py`.
+
+## Removal of Retired and Replaced Writers (v0.4.40)
+
+Owner direction (2026-09-24): a useless closed command is deleted outright, not
+kept closed; commands customers need are restored first.
+
+Removed from the CLI (with their aliases): `delegate-zet`, `transfer-ownership`,
+`quarantine-foreign-block`, `record-quarantine-decision`, `github-repo`,
+`objet-capture-enable`, `object-storage-upload-evidence`,
+`zet-abstract-backfill-write` / `-revert` / `-recover`,
+`credential-keepassxc-write` (use `credential-adopt`), `external-locator-revert`
+(use `external-locator-record --revert-recovery`),
+`notion-ancestor-fetch-adapter-run` (use `notion-recover`),
+`notion-objet-manifest-locator-label` (use `external-locator-record`),
+`object-storage-wom-location-reconcile` (use `object-storage-adopt-existing`),
+`scan-source` (use `source-intake-batch`), `tiro-lossless-recovery-capture`
+(use `source-intake-chain`). The six MCP check tools that only previewed those
+writers (`delegate_zet_check`, `ownership_transfer_check`,
+`quarantine_foreign_block_check`, `record_quarantine_decision_check`,
+`github_repository_setup_plan`, `source_scan_plan`) are removed too.
+
+Kept: their read-only companions (plans, audits, recovery plans, review
+indexes), shared services, receipt schemas and readers, so historical receipts
+stay auditable. Guidance that named a removed command now names its
+replacement.
+
+Reclassified: `zet-title-remap-recover` and `zet-title-remap-revert-recover`
+move from Retire to Reopen. A read-only investigation showed that no newer
+command adopts a legacy interrupted title-remap journal or lock, so deleting
+them would strand such an archive; the owner was told.
+
+Evidence: parser, capability inventory and MCP surface pins in
+`test_v03299_predecessor_surfaces.py`; `tests/removed_commands_v0440.py`.

@@ -1916,9 +1916,11 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
-        for text in (readme_text, readme_ko_text, kit_readme_text, upgrade_text, upgrade_ko_text, runtime_skill_text):
+        # The runtime skill dropped the command when it was removed in v0.4.40.
+        for text in (readme_text, readme_ko_text, kit_readme_text, upgrade_text, upgrade_ko_text):
             with self.subTest(document="operator-surface"):
                 self.assertIn("zet-abstract-backfill-write", text)
+        self.assertIn("removed in v0.4.40", " ".join(runtime_skill_text.split()))
         for text in (kit_readme_text, upgrade_text, upgrade_ko_text):
             with self.subTest(document="current-operator-boundary"):
                 self.assertIn("compound_exact_human_approval_binding_required", text)
@@ -1993,9 +1995,11 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
-        for text in (readme_text, readme_ko_text, kit_readme_text, upgrade_text, upgrade_ko_text, runtime_skill_text):
+        # The runtime skill dropped the command when it was removed in v0.4.40.
+        for text in (readme_text, readme_ko_text, kit_readme_text, upgrade_text, upgrade_ko_text):
             with self.subTest(document="operator-surface"):
                 self.assertIn("zet-abstract-backfill-revert", text)
+        self.assertIn("removed in v0.4.40", " ".join(runtime_skill_text.split()))
         for text in (kit_readme_text, upgrade_text, upgrade_ko_text):
             with self.subTest(document="current-operator-boundary"):
                 self.assertIn("compound_exact_human_approval_binding_required", text)
@@ -7478,16 +7482,14 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         for text in (operator_source_text, operator_resource_text):
             with self.subTest(document="runtime-operator-contract"):
                 normalized_text = " ".join(text.split())
+                # v0.4.40 removed the batch writer, revert and executor; the
+                # contract now says so instead of describing closed branches.
                 self.assertIn(
-                    "Historical v0.3 applies published a private hash-only",
+                    "The batch writer, its revert, and its recovery executor were removed in v0.4.40",
                     normalized_text,
                 )
                 self.assertIn(
-                    "the revert approval branch is also fixed fail-closed",
-                    normalized_text,
-                )
-                self.assertIn(
-                    "compound_exact_human_approval_binding_required",
+                    "historical batch receipts, journals, and locks stay auditable",
                     normalized_text,
                 )
                 self.assertNotIn(

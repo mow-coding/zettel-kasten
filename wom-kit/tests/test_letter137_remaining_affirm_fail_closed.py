@@ -397,27 +397,9 @@ class Letter137RemainingAffirmCliBoundaryTests(_RemainingAffirmAssertions):
                     "project_bytecode_repair",
                     "project_bytecode_repair",
                 ),
-                (
-                    [
-                        "identity-reconcile",
-                        root,
-                        "--approve",
-                        "--reviewed-by",
-                        PRIVATE_REVIEWER,
-                        "--expected-archive-sha256",
-                        PRIVATE_DIGEST,
-                        "--expected-identity-sha256",
-                        PRIVATE_DIGEST,
-                        "--expected-proposed-identity-sha256",
-                        PRIVATE_DIGEST,
-                        "--affirm-principal-metadata-reviewed",
-                        "--format",
-                        "json",
-                    ],
-                    archive_services,
-                    "reconcile_archive_identity",
-                    "archive_identity_reconcile",
-                ),
+                # identity-reconcile was reopened under exact approval on
+                # 2026-09-24 (triage group 5); test_group5_restore_gitignore_identity_exact
+                # covers its CLI route. The service stays blocked without it.
             )
             before = _snapshot(Path(root))
             for arguments, module, service, action in calls:

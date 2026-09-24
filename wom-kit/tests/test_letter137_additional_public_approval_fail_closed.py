@@ -14,6 +14,10 @@ from wom_kit import archive_cli, archive_services, mcp_server
 from wom_kit.exact_human_approval import (
     _ClaimedExactHumanApproval as ClaimedExactHumanApproval,
 )
+import sys as _removed_sys
+from pathlib import Path as _RemovedPath
+_removed_sys.path.insert(0, str(_RemovedPath(__file__).resolve().parent))
+from removed_commands_v0440 import REMOVED_COMMANDS_V0440  # noqa: E402
 
 
 BLOCKER = "compound_exact_human_approval_binding_required"
@@ -257,6 +261,8 @@ class Letter137AdditionalPublicCliBoundaryTests(_CliAssertions):
             ),
         )
         for service_name, lifecycle, argv in cases:
+            if argv[0] in REMOVED_COMMANDS_V0440:  # deleted in v0.4.40
+                continue
             with self.subTest(command=argv[0]), mock.patch.object(
                 archive_services,
                 service_name,
@@ -295,7 +301,8 @@ class Letter137AdditionalPublicCliBoundaryTests(_CliAssertions):
             ],
             "parcel": ["pack"],
         }
-        self.assertEqual(len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS), 41)  # v0.4.40: 2026-09-24 triage reopen
+        alias_groups = {key: value for key, value in alias_groups.items() if key not in REMOVED_COMMANDS_V0440}  # deleted in v0.4.40
+        self.assertEqual(len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS), 24)  # v0.4.40: 2026-09-24 triage
         for exact_batch_command in (
             "source-intake-batch",
             "objet-capture-batch",
@@ -400,6 +407,8 @@ class Letter137AdditionalPublicCliBoundaryTests(_CliAssertions):
             ),
         )
         for argv, service_name, lifecycle in cases:
+            if argv[0] in REMOVED_COMMANDS_V0440:  # deleted in v0.4.40
+                continue
             with self.subTest(lifecycle=lifecycle), mock.patch.object(
                 archive_services,
                 service_name,
@@ -580,6 +589,8 @@ class Letter137AdditionalPublicCliBoundaryTests(_CliAssertions):
             ),
         )
         for service_name, argv in cases:
+            if argv[0] in REMOVED_COMMANDS_V0440:  # deleted in v0.4.40
+                continue
             with self.subTest(command=argv[0]), mock.patch.object(
                 archive_services,
                 service_name,
@@ -1124,6 +1135,8 @@ class Letter137ExactJsonProjectionTests(_CliAssertions):
             (["retire-minted-draft", PRIVATE, "--path", PRIVATE, "--approve", "--format", "json"], "retire_minted_draft", "retire_reviewer_required"),
         )
         for argv, lifecycle, reason in cases:
+            if argv[0] in REMOVED_COMMANDS_V0440:  # deleted in v0.4.40
+                continue
             with self.subTest(command=argv[0], reason=reason):
                 code, stdout, stderr = self.run_cli(argv)
                 self.assert_fixed_json_block(
@@ -1260,6 +1273,8 @@ class Letter137ExactJsonProjectionTests(_CliAssertions):
             ),
         )
         for service_name, binding_name, argv, lifecycle, reason in cases:
+            if argv[0] in REMOVED_COMMANDS_V0440:  # deleted in v0.4.40
+                continue
             with self.subTest(command=argv[0]), mock.patch.object(
                 archive_services,
                 "require_current_zettel_index",
@@ -1360,6 +1375,8 @@ class Letter137ExactJsonProjectionTests(_CliAssertions):
             ),
         )
         for service_name, argv, lifecycle, reason in cases:
+            if argv[0] in REMOVED_COMMANDS_V0440:  # deleted in v0.4.40
+                continue
             with self.subTest(command=argv[0]), mock.patch.object(
                 archive_services,
                 service_name,

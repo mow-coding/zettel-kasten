@@ -18837,7 +18837,7 @@ def zet_catalog(
                 "Report missing or unreadable first-read text as an abstract gap; do not claim that every abstract was read or auto-write replacements."
             )
             next_safe_actions.append(
-                "For a selected missing-abstract zet, read its canonical body and integrity.file_sha256 with read-zettel, prepare a private .wom-scratch/abstract-backfill proposal row, run zet-abstract-backfill-plan, require human review, then preview and explicitly approve zet-abstract-backfill-write with the exact proposal SHA-256; never infer approval."
+                "For a selected missing-abstract zet, read its canonical body and integrity.file_sha256 with read-zettel, prepare a private .wom-scratch/abstract-backfill proposal row, run zet-abstract-backfill-plan, require human review, then apply the reviewed abstract to that one zet with zet-revision-write (preview first, then its exact approval); never infer approval."
             )
         if not identity_coverage["all_entries_uniquely_addressable"]:
             next_safe_actions.append(
@@ -69681,7 +69681,7 @@ def external_export_plan(
                 + " --export-goal targeted_pages --media-policy avoid_bulk_media --dry-run --format json"
             ),
             "scan_after_manual_export": (
-                "archive scan-source <archive-root> --source <source-id> --source-root <local-export-root> "
+                "archive source-intake-batch <archive-root> --manifest <intake-manifest-for-the-export> "
                 "--dry-run --format json"
             ),
             "import_after_review": import_after_review,
@@ -69830,7 +69830,7 @@ def external_export_large_media_trap(
             },
         ],
         "after_text_pass": [
-            "run scan-source on the manually exported text slice",
+            "run source-intake-batch on the manually exported text slice",
             "use source-intake or project-intake receipts to decide what matters",
             "route selected media to object-storage recommendation or objet-capture planning",
         ],
@@ -75034,7 +75034,7 @@ def tiro_lossless_recovery_plan(
             "would_change": [],
             "next_safe_actions": [
                 "Use an approved local adapter or Tiro CLI/API export to create the private raw bundle.",
-                "Run tiro-lossless-recovery-capture on the raw bundle before deriving text or drafting zets.",
+                "Preserve the raw bundle with source-intake-chain before deriving text or drafting zets.",
                 "Record gaps for audio bytes or undocumented surfaces instead of silently dropping them.",
             ],
             "warnings": unique_preserve_order(warnings),
@@ -76148,7 +76148,7 @@ def tiro_lossless_recovery_fetch_run(
                 "schema": TIRO_LOSSLESS_RECOVERY_BUNDLE_SCHEMA,
                 "summary": bundle_summary,
                 "raw_values_echoed": False,
-                "next_capture_command": f"archive tiro-lossless-recovery-capture <archive-root> --bundle {normalized_output_path} --dry-run --format json",
+                "next_capture_command": f"archive source-intake-chain <archive-root> --source-intake-plan <plan> --staged-path {normalized_output_path} --dry-run --format json",
             },
             "receipt": {
                 "proposed_receipt_path": None if receipt_written else receipt_relative,
@@ -76201,7 +76201,7 @@ def tiro_lossless_recovery_fetch_run(
             "would_change": would_change,
             "files_written": files_written,
             "next_safe_actions": [
-                "Run tiro-lossless-recovery-capture on the written raw bundle to store it as a WOM objet.",
+                "Preserve the written raw bundle with source-intake-chain to store it as a WOM objet.",
                 "Run derived-text capture only after the raw Tiro bundle object is preserved.",
                 "Keep speaker correction, relationship inference, and summary cleanup in a separate AI enrichment layer.",
             ],
@@ -80417,7 +80417,7 @@ def imap_mailbox_plan(
         },
         "future_workflow": [
             "Register imap_mailbox as a source only after reviewing the credential refs.",
-            "Future scan-source IMAP mode should SELECT the mailbox read-only and fetch headers only for dry-run.",
+            "A future IMAP intake mode should SELECT the mailbox read-only and fetch headers only for dry-run.",
             "Future approved fetch should preserve each RFC822 message as a .eml source objet.",
             "Future attachment handling should split MIME attachments into separate objets.",
             "Future derived-text capture should extract text/plain and reviewed text/html separately from the .eml source objet.",
@@ -87183,7 +87183,7 @@ def beginner_setup_manual(
                         "commands_preserved": [
                             "notion-ancestor-crawl-plan",
                             "credential-access-approval",
-                            "notion-ancestor-fetch-adapter-run",
+                            "notion-recover",
                             "notion-ancestor-merge-plan",
                         ],
                     },
@@ -87296,7 +87296,7 @@ def beginner_setup_manual(
                     "credential-ref-plan",
                     "credential-access-approval-plan",
                     "credential-keepassxc-command-plan",
-                    "credential-keepassxc-write",
+                    "credential-adopt",
                     "derive-text-doctor",
                     "derive-text-coverage",
                     "object-storage-recommendation" if include_object_storage else "",
@@ -87305,7 +87305,6 @@ def beginner_setup_manual(
                     "notion-recover" if include_notion_nested_recovery else "",
                     "notion-ancestor-crawl-plan" if include_notion_nested_recovery else "",
                     "credential-access-approval" if include_notion_nested_recovery else "",
-                    "notion-ancestor-fetch-adapter-run" if include_notion_nested_recovery else "",
                     "notion-ancestor-merge-plan" if include_notion_nested_recovery else "",
                 ]
                 if item
@@ -93758,8 +93757,8 @@ def shared_update_route_preview(
             route="delegate",
             candidate_route=candidate_route,
             reason=route_reason,
-            defer_to="delegate-zet",
-            related_lifecycle_preview="delegate-zet --dry-run",
+            defer_to="share",
+            related_lifecycle_preview="share --dry-run",
         ),
         "attest": shared_update_route_pointer(
             route="attest",
@@ -93856,7 +93855,7 @@ def shared_update_route_preview(
             "requires_dry_run": True,
             "mcp_write_apply_exposed": False,
             "approval_gate_performed": False,
-            "canonical_route_commands": ["delegate-zet", "attest-zet", "anchor-zet"],
+            "canonical_route_commands": ["share", "attest-zet", "anchor-zet"],
             "related_shared_update_review_command": "shared-update-attestation-review",
             "related_shared_update_review_required_flags": ["--approve", "--reviewed-by"],
             "related_shared_update_review_gate": "requires separate human review plus --approve and --reviewed-by",
@@ -97193,7 +97192,7 @@ def real_pilot_plan(
             "Create the team archive separately; do not nest it inside the personal archive.",
             "Run preflight on each archive before registering real sources.",
             "Register one narrow source at a time with add-source --dry-run first.",
-            "Run scan-source --dry-run and review the item count before any approved scan.",
+            "Run source-intake-batch --dry-run and review the item count before any approved intake.",
             "Run doctor --strict, index, then search to confirm the map is useful.",
         ],
         "do_not_do_yet": [
@@ -97249,9 +97248,7 @@ def pilot_source_suggestion(archive_root: str, item: dict[str, str]) -> dict[str
         f"--root-ref {root_ref} "
         "--dry-run"
     )
-    scan_command = f"archive scan-source {archive_root} --source {source_id} --dry-run"
-    if not root_ref.startswith("archive:"):
-        scan_command += " --source-root <real-local-or-export-path>"
+    scan_command = f"archive source-intake-batch {archive_root} --manifest <batch-request.json> --dry-run"
     return {
         "source_id": source_id,
         "source_type": source_type,
@@ -98797,7 +98794,7 @@ def provider_setup_next_safe_actions(status: str, managed_count: int) -> list[st
             "Run archive doctor --strict before any future provider sync design work.",
         ]
     return [
-        "Use github-repo --dry-run or object-storage --dry-run to plan local provider metadata.",
+        "Use git-backup-reconcile-plan or object-storage --dry-run to plan local provider metadata.",
         "Approve only after a human has reviewed the proposed local metadata and receipt path.",
     ]
 
@@ -104140,7 +104137,7 @@ def project_intake_next_session_questions(
 
 def project_intake_next_safe_actions(staging_convention: dict[str, Any]) -> list[str]:
     actions = [
-        "Review this dry-run plan with the user before running source-intake, create-draft, scan-source, or mint-zet.",
+        "Review this dry-run plan with the user before running source-intake, create-draft, source-intake-batch, or mint-zet.",
         "Run archive doctor --strict before approving any later write step.",
         "Inspect one project folder with the user; do not bulk-classify, bulk-upload, bulk-mint, or delete the staged folder.",
         "Preserve originals as objets only after explicit review and approval in a later capability.",
@@ -106012,11 +106009,11 @@ def preflight_next_actions(blockers: list[str], warnings: list[str]) -> list[str
         return [
             "Review warnings with the human owner/operator.",
             "Prefer one narrow source for the first scan.",
-            "Run scan-source --dry-run and check item_count before approving a scan.",
+            "Run source-intake-batch --dry-run and check the item count before approving an intake.",
         ]
     return [
         "Start with one narrow source registration dry-run.",
-        "Run metadata-only scan-source --dry-run.",
+        "Run source-intake-batch --dry-run.",
         "Approve only after reviewing item_count, source root, and receipt preview.",
     ]
 
@@ -144572,7 +144569,7 @@ def runtime_context_write_action_routes() -> list[dict[str, Any]]:
             "approved_command": "archive external-locator-record <archive-root> --zettel-id <id> --locator-type <type> --locator-ref <same-private-value> --expected-plan-sha256 <sha256> --approve --reviewed-by <human-actor> --format json",
             "deactivate_preview_command": "archive external-locator-deactivate-plan <archive-root> --zettel-id <id> --locator-id <duplicate> --keep-locator-id <keeper> --dry-run --format json",
             "deactivate_approved_command": "archive external-locator-deactivate <archive-root> --zettel-id <id> --locator-id <duplicate> --keep-locator-id <keeper> --expected-plan-sha256 <sha256> --approve --reviewed-by <human-actor> --format json",
-            "revert_command": "archive external-locator-revert <archive-root> --receipt <receipt> --dry-run --format json",
+            "revert_command": "archive external-locator-record <archive-root> --revert-recovery <receipt> --dry-run --format json",
             "requires_human_approval": True,
             "locator_value_echoed": False,
             "remote_reachability_claimed": False,
@@ -144866,7 +144863,7 @@ def runtime_context_ai_runtime_order() -> list[dict[str, Any]]:
             "step": 7,
             "action": "enumerate_zet_abstracts",
             "command": "archive zet-catalog-pass <archive-root> --status canonical --projection reading --output .wom-scratch/diagnostics/<new-name>.jsonl --dry-run --progress --format json",
-            "continuation": "require archive_wide_coverage_claim_ready=true and retain output.sha256 from the compact stdout summary; use zet-catalog-pass-read with that SHA-256 and page indexes from zero so a complete artifact is validated before at most one private page is returned; retain the first full diagnostics, check abstract and follow-up readiness separately, and when an abstract is missing use read-zettel to read that selected canonical body plus integrity.file_sha256 before preparing a private zet-abstract-backfill-plan proposal; never auto-write an abstract or infer approval from a green plan, require human review, then preview and explicitly approve zet-abstract-backfill-write with the exact proposal SHA-256; after any abstract apply/revert batch run zet-abstract-backfill-receipt-audit and never auto-delete reported locks or edit receipts; never load the whole catalog file into one response, never commit it, then preview and approve zet-catalog-pass-cleanup with the same SHA-256 after use; restart the complete pass if catalog_snapshot_changed",
+            "continuation": "require archive_wide_coverage_claim_ready=true and retain output.sha256 from the compact stdout summary; use zet-catalog-pass-read with that SHA-256 and page indexes from zero so a complete artifact is validated before at most one private page is returned; retain the first full diagnostics, check abstract and follow-up readiness separately, and when an abstract is missing use read-zettel to read that selected canonical body plus integrity.file_sha256 before preparing a private zet-abstract-backfill-plan proposal; never auto-write an abstract or infer approval from a green plan, require human review, then apply each reviewed abstract to its zet with zet-revision-write (preview, then its exact approval); after any abstract apply/revert batch run zet-abstract-backfill-receipt-audit and never auto-delete reported locks or edit receipts; never load the whole catalog file into one response, never commit it, then preview and approve zet-catalog-pass-cleanup with the same SHA-256 after use; restart the complete pass if catalog_snapshot_changed",
             "mcp_alternative": "use zet_catalog pages with cursor, snapshot id, continuation token, full first response, compact continuation responses, and completion revalidation",
             "optional_seed_order": "when the host goal already provides verified zet ids, add --order seeded_connection_walk and repeated --start-zettel-id values; the walk still includes every disconnected component",
             "optional_route_evidence": "keep projection=reading for compact coverage; switch to routed_reading only with seeded_connection_walk when per-item seed, tie-passage, and disconnected-component reasons are needed",
@@ -145186,9 +145183,15 @@ def source_mount_step(binding: dict[str, Any], *, local_profile_present: bool) -
     archive_relative = root_ref.startswith("archive:") or source_type == "object_manifest"
     if archive_relative:
         container_root = root_ref.removeprefix("archive:") if root_ref.startswith("archive:") else "objects/manifests/files.jsonl"
-    docker_command = f"docker compose run --rm archive-cli scan-source /archives/<archive-folder> --source {source_id} --dry-run"
+    docker_command = (
+        "docker compose run --rm archive-cli source-intake-batch /archives/<archive-folder> "
+        "--manifest <batch-request.json> --dry-run"
+    )
     if not archive_relative:
-        docker_command = f"docker compose run --rm archive-cli scan-source /archives/<archive-folder> --source {source_id} --source-root {container_root} --dry-run"
+        docker_command = (
+            "docker compose run --rm archive-cli source-intake-batch /archives/<archive-folder> "
+            f"--manifest <batch-request.json listing files under {container_root}> --dry-run"
+        )
     return {
         "source_id": source_id,
         "source_type": source_type,
@@ -145200,7 +145203,7 @@ def source_mount_step(binding: dict[str, Any], *, local_profile_present: bool) -
         "compose_volume_hint": None
         if archive_relative
         else f"${{{root_ref}}}:{container_root}:ro",
-        "host_native_scan_command": f"archive scan-source <archive> --source {source_id} --dry-run",
+        "host_native_scan_command": "archive source-intake-batch <archive> --manifest <batch-request.json> --dry-run",
         "docker_scan_command": docker_command,
         "manual_required": not archive_relative,
     }
@@ -146215,8 +146218,8 @@ def source_intake_next_safe_actions(result: dict[str, Any]) -> list[str]:
             "register or scan the source in metadata-only mode if needed",
             "stage the file inside the archive root, then prepare an approved selection with objet-capture-selection",
             "when a vendor transcript exists next to the original, build ONE paired selection with objet-capture-selection --derived-text-staged-path <archive-relative-transcript> so a single approval covers both halves",
-            "run objet-capture --selection <selection-path> --dry-run first; capture requires a sandbox-marked archive or an owner-approved capture-enablement record (inspect with `archive objet-capture-enable <archive-root> --dry-run`)",
-            "for bytes already stored externally, register evidence with prehashed-objet-ledger and object-storage-upload-evidence",
+            "run objet-capture --selection <selection-path> --dry-run first; on a real archive capture one file with source-intake-chain (one exact approval, or a valid session grant; no enablement record needed)",
+            "for bytes already stored externally, adopt the verified remote copy with object-storage-adopt-existing",
             *actions,
         ]
     if status == "provider_reference":
@@ -163059,12 +163062,12 @@ OBJET_CAPTURE_REFUSAL_HINTS = {
         "objet-capture runs on sandbox-marked archives (a .wom-sandbox marker file or top-level "
         "environment: sandbox in archive.yml), or on a real archive with a valid owner "
         "capture-enablement record; the owner can inspect eligibility with "
-        "'archive objet-capture-enable <archive-root> --dry-run' (read-only)"
+        "'archive objet-capture-selection' or 'archive source-intake-chain' (no enablement record needed)"
     ),
     "external_live_never_touch": (
         "this path matches the external live-store protection pattern; capture refuses it by design; "
         "if this is your own archive root, the owner can inspect enablement eligibility with "
-        "'archive objet-capture-enable <archive-root> --dry-run' (read-only)"
+        "'archive objet-capture-selection' or 'archive source-intake-chain' (no enablement record needed)"
     ),
 }
 
@@ -167189,9 +167192,8 @@ def objet_capture_enable(
 
     next_safe_actions = [
         "Review this eligibility report with the archive owner before approving.",
-        "Approve with: archive objet-capture-enable <archive-root> --approve --reviewed-by <actor>"
-        + (" --acknowledge-never-touch-name" if never_touch_match else ""),
-        "Revoke later with: archive objet-capture-enable <archive-root> --revoke --approve --reviewed-by <actor>",
+        "objet-capture-enable was removed in v0.4.40; capture on a real archive with source-intake-chain",
+        "an existing enablement record stays readable; no new record is needed",
         "Revocation is advisory and forward-only: already-captured bytes, manifest records, and capture receipts remain.",
     ]
 

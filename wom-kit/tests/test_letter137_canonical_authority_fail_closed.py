@@ -17,6 +17,10 @@ from wom_kit import (
     completion_workflows,
     saved_view_workflows,
 )
+import sys as _removed_sys
+from pathlib import Path as _RemovedPath
+_removed_sys.path.insert(0, str(_RemovedPath(__file__).resolve().parent))
+from removed_commands_v0440 import REMOVED_COMMANDS_V0440  # noqa: E402
 
 
 COMPOUND_APPROVAL_BLOCKER = (
@@ -718,6 +722,8 @@ class Letter137CanonicalAuthorityCliBoundaryTests(
             )
             before = _snapshot(root_path)
             for arguments, module, service, action in calls:
+                if arguments[0] in REMOVED_COMMANDS_V0440:  # deleted in v0.4.40
+                    continue
                 with self.subTest(action=action, command=arguments[0]):
                     self._assert_cli_block(
                         arguments=arguments,
@@ -1066,6 +1072,8 @@ class Letter137CanonicalAuthorityCliBoundaryTests(
             )
             before = _snapshot(root_path)
             for arguments, module, service_name in calls:
+                if arguments[0] in REMOVED_COMMANDS_V0440:  # deleted in v0.4.40
+                    continue
                 with self.subTest(command=arguments[0]), mock.patch.object(
                     module,
                     service_name,

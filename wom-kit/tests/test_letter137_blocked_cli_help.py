@@ -42,21 +42,16 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
 
     def test_every_fixed_closed_command_has_honest_approval_help(self) -> None:
         expected_additional_public_commands = {
-            "credential-keepassxc-write",
-            "github-repo",
             "imap-mailbox-adapter-manifest-write",
             "imap-mailbox-header-metadata-scan",
-            "notion-objet-manifest-locator-label",
             "onboard",
             "runtime-skill-install",
             "runtime-skill-uninstall",
-            "scan-source",
-            "tiro-lossless-recovery-capture",
             "tiro-lossless-recovery-fetch-run",
         }
         self.assertEqual(
             len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS),
-            41,
+            24,
         )
         for exact_batch_command in (
             "source-intake-batch",

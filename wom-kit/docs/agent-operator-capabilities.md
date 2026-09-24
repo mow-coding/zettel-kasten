@@ -208,18 +208,18 @@ continues to be parser-derived; history does not grant execution authority.
 For the current v0.4.40 working-tree parser, the inventory snapshot is:
 
 ```text
-canonical executable command paths: 328
+canonical executable command paths: 311
 alias invocation paths:              262
-all invocation paths:                590
+all invocation paths:                559
 approval_available:                   82
-approval_fixed_closed:                42
+approval_fixed_closed:                25
 approval_not_exposed:                204
 conditional approval paths:            10
-dry_run_exposed:                     283
+dry_run_exposed:                     266
 unmatched fixed-close entries:         0
 ```
 
-The 42 fixed-closed paths consist of 41 compound-approval migrations and
+The 25 fixed-closed paths consist of 24 compound-approval migrations and
 `operation-control`, whose reason is `operation_cancel_not_supported`.
 Its retained `--approve` syntax does not implement cancellation. Status, wait,
 and recovery-plan remain available with `--dry-run`; no cancel request is
