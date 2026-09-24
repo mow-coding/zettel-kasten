@@ -11,9 +11,10 @@ release report states the counts below and what changed since the last one.
 | Release | Approval available | Fixed closed | Reopened this release | Removed this release |
 |---|---|---|---|---|
 | v0.4.39 | 63 | 59 | 0 | 0 |
-| v0.4.40 | 92 | 19 (+1 conditional scope) | 27 writers + 2 new batch commands | 12 |
+| v0.4.40 | 92 | 20 | 27 writers + 2 new batch commands | 12 |
 
-The v0.4.40 decisions and evidence are in the
+The counts are the `archive capabilities --machine` inventory (approval-available and
+fixed-closed canonical paths). The v0.4.40 decisions and evidence are in the
 [closed-writer triage decision log](archive-infra-decision-log-2026-09-24-closed-writer-triage.md).
 
 ## Still closed in v0.4.40
