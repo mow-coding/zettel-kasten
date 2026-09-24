@@ -79,7 +79,6 @@ COMPOUND_APPROVAL_FIXED_CLOSED_COMMANDS = frozenset(
         "external-locator-deactivate",
         "external-locator-revert",
         "github-repo",
-        "identity-reconcile",
         "imap-mailbox-adapter-manifest-write",
         "imap-mailbox-header-metadata-scan",
         "import-external",
@@ -97,12 +96,10 @@ COMPOUND_APPROVAL_FIXED_CLOSED_COMMANDS = frozenset(
         "prehashed-objet-ledger",
         "project-bytecode-repair",
         "project-version-update-collision",
-        "repair-gitignore",
         "quarantine-foreign-block",
         "record-quarantine-decision",
         "runtime-skill-install",
         "runtime-skill-uninstall",
-        "restore-drill",
         "saved-view-revert",
         "saved-view-write",
         "scan-source",
@@ -160,6 +157,10 @@ EXACT_APPROVAL_REOPENED_WRITERS = frozenset({
     "activity-group-membership-removal-write",
     "activity-group-membership-recover",
     "activity-group-membership-removal-recover",
+    # Triage group 5: restore drill, .gitignore repair, identity reconcile.
+    "restore-drill",
+    "repair-gitignore",
+    "identity-reconcile",
 })
 
 # Public parser and dispatch exposure was audited at v0.3.320 and its explicit

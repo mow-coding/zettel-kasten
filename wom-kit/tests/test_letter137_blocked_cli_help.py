@@ -48,8 +48,6 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
             "imap-mailbox-header-metadata-scan",
             "notion-objet-manifest-locator-label",
             "onboard",
-            "repair-gitignore",
-            "restore-drill",
             "runtime-skill-install",
             "runtime-skill-uninstall",
             "scan-source",
@@ -58,7 +56,7 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
         }
         self.assertEqual(
             len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS),
-            44,
+            41,
         )
         for exact_batch_command in (
             "source-intake-batch",

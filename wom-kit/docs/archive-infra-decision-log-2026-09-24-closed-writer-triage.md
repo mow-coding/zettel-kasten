@@ -1,6 +1,6 @@
 # Archive Infra Decision Log: Closed-Writer Triage (2026-09-24)
 
-Status: owner decision recorded; groups 1-4 implemented for v0.4.40.
+Status: owner decision recorded; groups 1-5a implemented for v0.4.40.
 
 ## Decision (owner, 2026-09-24)
 
@@ -113,3 +113,24 @@ both were implemented and never usable after v0.4.0.
   dialog, so a legacy test can never open a window on the owner's desktop.
 
 Evidence: `wom-kit/tests/test_group_principal_exact.py`.
+
+## Group 5a: Restore Drill, .gitignore Repair, Identity Reconcile (v0.4.40)
+
+A closed `restore-drill` left `preflight --require-restore-drill` and
+`upgrade-check --require-restore-drill` unsatisfiable; `repair-gitignore` and
+`identity-reconcile` had been used successfully before v0.4.0.
+
+- These writers act from the CLI, so a shared route (`_cli_exact_route`)
+  binds the approval to a digest of the fresh plan, re-derives the plan inside
+  the approved writer, reauthenticates the claim, and only then writes. The
+  restore-drill digest leaves out the excluded-file count, because the
+  approval claim itself lands in the excluded `profiles/local/` area.
+- `identity-reconcile` binds the three reviewed digests (archive, identity,
+  proposed identity); a stale digest is refused before any dialog.
+- Refusals before any dialog now say in text mode that the write did not
+  start and name the reason code, instead of the generic "state uncertain".
+- `onboard` and `runtime-skill-install` / `-uninstall` stay closed for now:
+  a new archive has no claim store yet, and the skill installer writes outside
+  any archive. Where their approval record lives needs a design decision.
+
+Evidence: `wom-kit/tests/test_group5_restore_gitignore_identity_exact.py`.

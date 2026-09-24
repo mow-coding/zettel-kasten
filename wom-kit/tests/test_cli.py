@@ -53460,7 +53460,13 @@ state:
             plan = archive_services.archive_identity_reconcile_plan(archive_root)
             before = self.snapshot_archive_files(archive_root)
 
-            code, output = self.run_cli(
+            # 2026-09-24 reopen (triage group 5): approve asks for exact
+            # approval; a declined decision writes nothing.
+            def decline(*_args, **_kwargs):
+                raise archive_cli.ExactHumanApprovalWorkflowError("exact_human_approval_cancelled")
+
+            with patch.object(archive_cli, "_execute_exact_human_approved_write", side_effect=decline):
+                code, output = self.run_cli(
                 [
                     "identity-reconcile",
                     str(archive_root),
@@ -53484,7 +53490,7 @@ state:
             self.assertEqual(result["state"], "blocked")
             self.assertEqual(
                 result["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
+                ["archive_identity_reconcile_workflow_precondition_failed"],
             )
             self.assertFalse(result["private_values_echoed"])
             self.assertEqual(self.snapshot_archive_files(archive_root), before)
@@ -53544,7 +53550,7 @@ state:
             result = json.loads(output)
             self.assertEqual(
                 result["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
+                ["archive_identity_reconcile_preflight_blocked"]  # 2026-09-24 reopen: stale digest refused before any dialog,
             )
             self.assertFalse(result["private_values_echoed"])
             self.assertEqual(self.snapshot_archive_files(archive_root), before)
@@ -53605,7 +53611,7 @@ state:
             result = json.loads(output)
             self.assertEqual(
                 result["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
+                ["archive_identity_reconcile_preflight_blocked"]  # 2026-09-24 reopen: stale digest refused before any dialog,
             )
             self.assertFalse(result["private_values_echoed"])
             self.assertEqual(self.snapshot_archive_files(archive_root), before)
@@ -53836,6 +53842,7 @@ state:
             code, output = self.run_cli(["repair-gitignore", str(archive_root), "--approve"])
             self.assertEqual(code, 1, output)
             self.assertIn("write did not start", output)
+            self.assertIn("repair_gitignore_reviewer_required", output)
 
     def test_init_writes_archive_identity(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -75654,8 +75661,9 @@ state:
             self.assertEqual(blocked_code, 1, blocked_output)
             self.assertIn("restore_drill_required", blocked_output)
 
-            blocked_write = self.assert_cli_compound_writer_fails_closed(
-                archive_root,
+            # 2026-09-24 reopen (triage group 5): the approved restore drill
+            # itself copies the archive and records the receipt.
+            approved_code, approved_output = self.run_cli(
                 [
                     "restore-drill",
                     str(archive_root),
@@ -75664,20 +75672,12 @@ state:
                     "--approve",
                     "--reviewed-by",
                     "person:test",
-                ],
-                lifecycle_action="restore_drill",
+                    "--format",
+                    "json",
+                ]
             )
-            self.assertEqual(
-                blocked_write["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
-            )
-            self.assertFalse(target.exists())
-
-            historical = self.install_historical_restore_drill_fixture(
-                archive_root,
-                target,
-                copy_target=True,
-            )
+            self.assertEqual(approved_code, 0, approved_output)
+            historical = json.loads(approved_output)
             self.assertTrue((target / "archive.yml").is_file())
             self.assertTrue((target / "db" / "archive-index.sqlite").is_file())
             self.assertFalse((target / ".git").exists())

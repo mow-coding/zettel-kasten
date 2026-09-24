@@ -87,6 +87,21 @@
       "route": "environment",
       "evidence": ["test_group_principal_exact"]
     },
+    "restore-drill": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_group5_restore_gitignore_identity_exact"]
+    },
+    "repair-gitignore": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_group5_restore_gitignore_identity_exact"]
+    },
+    "identity-reconcile": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_group5_restore_gitignore_identity_exact"]
+    },
     "draft-revision-write": {
       "status": "session_integrated",
       "route": "environment",

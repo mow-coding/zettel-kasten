@@ -239,6 +239,10 @@ class ExactHumanApprovalOperation(Enum):
     activity_group_membership_removal_write = "activity_group_membership_removal_write"
     activity_group_membership_recover = "activity_group_membership_recover"
     activity_group_membership_removal_recover = "activity_group_membership_removal_recover"
+    # Triage group 5: restore drill, .gitignore repair, identity reconcile.
+    restore_drill = "restore_drill"
+    repair_gitignore = "repair_gitignore"
+    archive_identity_reconcile = "archive_identity_reconcile"
 
 
 def _validated_target_preview_text(value: str | None) -> str | None:
@@ -549,6 +553,9 @@ _OPERATION_LABELS = {
     ExactHumanApprovalOperation.activity_group_membership_removal_write: "사건 그룹 소속 제거",
     ExactHumanApprovalOperation.activity_group_membership_recover: "중단된 소속 추가 복구",
     ExactHumanApprovalOperation.activity_group_membership_removal_recover: "중단된 소속 제거 복구",
+    ExactHumanApprovalOperation.restore_drill: "복원 훈련",
+    ExactHumanApprovalOperation.repair_gitignore: ".gitignore 안전 패턴 추가",
+    ExactHumanApprovalOperation.archive_identity_reconcile: "아카이브 신원 파일 수리",
 }
 
 _OPERATION_QUESTIONS = {
@@ -692,6 +699,15 @@ _OPERATION_QUESTIONS = {
     ),
     ExactHumanApprovalOperation.activity_group_membership_removal_recover: (
         "중단된 소속 제거 작업을 검토한 복구 계획대로 끝낼까요?"
+    ),
+    ExactHumanApprovalOperation.restore_drill: (
+        "아카이브를 새 폴더에 복원해 점검할까요?"
+    ),
+    ExactHumanApprovalOperation.repair_gitignore: (
+        "빠진 안전 패턴을 .gitignore에 추가할까요?"
+    ),
+    ExactHumanApprovalOperation.archive_identity_reconcile: (
+        "검토한 대로 아카이브 신원 파일을 맞출까요?"
     ),
 }
 
@@ -904,6 +920,15 @@ _OPERATION_SUMMARIES = {
     ExactHumanApprovalOperation.activity_group_membership_removal_recover: (
         "복구 저널의 정확한 바이트로 중단된 소속 제거를 마무리하거나 되돌립니다."
     ),
+    ExactHumanApprovalOperation.restore_drill: (
+        "아카이브의 제어 영역을 새 대상 폴더에 복사해 doctor·색인·검색을 점검하고 영수증을 남깁니다. 원본은 바꾸지 않습니다."
+    ),
+    ExactHumanApprovalOperation.repair_gitignore: (
+        "빠진 안전 패턴만 .gitignore 끝에 추가합니다. 기존 줄은 지우거나 바꾸지 않습니다."
+    ),
+    ExactHumanApprovalOperation.archive_identity_reconcile: (
+        "archive.yml과 archive-identity.yml의 불일치를 검토한 제안대로 수리하고 영수증을 남깁니다."
+    ),
 }
 
 _OPERATION_APPROVE_BUTTONS = {
@@ -964,6 +989,9 @@ _OPERATION_APPROVE_BUTTONS = {
     ExactHumanApprovalOperation.activity_group_membership_removal_write: "소속 제거",
     ExactHumanApprovalOperation.activity_group_membership_recover: "복구 실행",
     ExactHumanApprovalOperation.activity_group_membership_removal_recover: "복구 실행",
+    ExactHumanApprovalOperation.restore_drill: "복원 훈련",
+    ExactHumanApprovalOperation.repair_gitignore: "패턴 추가",
+    ExactHumanApprovalOperation.archive_identity_reconcile: "신원 수리",
 }
 
 

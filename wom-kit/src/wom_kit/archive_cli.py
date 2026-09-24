@@ -13390,11 +13390,37 @@ def command_validate(args: argparse.Namespace) -> int:
 
 
 def command_repair_gitignore(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
+    if args.approve and not args.dry_run:
+        root = Path(args.archive_root)
+
+        def _preview() -> tuple[dict[str, Any], str | None]:
+            plan = _repair_gitignore_legacy_core(root, approve=False, reviewed_by=None)
+            if not plan.get("missing_patterns"):
+                return plan, None
+            gitignore = root / ".gitignore"
+            current = hashlib.sha256(gitignore.read_bytes()).hexdigest() if gitignore.is_file() else None
+            return plan, _plan_json_digest({
+                "missing_patterns": plan.get("missing_patterns"),
+                "planned_writes": plan.get("planned_writes"),
+                "gitignore_sha256": current,
+            })
+
+        def _print(result: dict[str, Any]) -> None:
+            if args.format == "json":
+                print_json(result)
+            else:
+                print(f"Gitignore repair {result.get('action') or result.get('write_status')}.")
+                for path in result.get("changed_paths", []):
+                    print(f"CHANGED: {path}")
+
+        return _cli_exact_route(
             args,
             lifecycle_action="repair_gitignore",
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.repair_gitignore,
+            reviewer=archive_services.safe_foreign_quarantine_actor_id(args.reviewed_by),
+            preview=_preview,
+            write=lambda reviewer: _repair_gitignore_legacy_core(root, approve=True, reviewed_by=reviewer),
+            printer=_print,
         )
     if args.dry_run and args.approve:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
@@ -28024,6 +28050,17 @@ def _bounded_preflight_blockers(blockers: Any) -> list[str]:
     return kept
 
 
+_PRE_DIALOG_REFUSAL_SUFFIXES = (
+    "_reviewer_required",
+    "_review_affirmation_required",
+    "_content_changed_ack_required",
+    "_preflight_blocked",
+    "_plan_changed",
+    "_mode_conflict",
+    "_workflow_precondition_failed",
+)
+
+
 def _exact_human_approval_cli_error(
     args: argparse.Namespace,
     *,
@@ -28112,6 +28149,15 @@ def _exact_human_approval_cli_error(
             "mode only.",
             file=sys.stderr,
         )
+    elif safe_reason.endswith(_PRE_DIALOG_REFUSAL_SUFFIXES):
+        # Refused before any dialog or write (2026-09-24 reopen routes).
+        print(
+            f"The write did not start: {safe_reason}. Fix the input and rerun; "
+            "the command's --dry-run shows what the approval would cover.",
+            file=sys.stderr,
+        )
+        for blocker in blockers:
+            print(f"BLOCKED: {blocker}", file=sys.stderr)
     else:
         print(
             "Exact human approval failed or its write state is uncertain; "
@@ -36887,12 +36933,126 @@ def print_project_intake_item_plan_result(result: dict[str, Any], output_format:
             print(f"- {action}")
 
 
-def command_restore_drill(args: argparse.Namespace) -> int:
-    if args.approve:
+def _plan_json_digest(value: Any) -> str:
+    """Hex digest of a content-free plan projection (exact approval binding)."""
+
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str).encode("utf-8")
+    ).hexdigest()
+
+
+def _cli_exact_route(
+    args: argparse.Namespace,
+    *,
+    lifecycle_action: str,
+    operation: ExactHumanApprovalOperation,
+    reviewer: str | None,
+    preview: Callable[[], tuple[dict[str, Any], str | None]],
+    write: Callable[[str], dict[str, Any]],
+    printer: Callable[[dict[str, Any]], None],
+) -> int:
+    """--approve for writers whose effects the CLI itself performs (triage group 5).
+
+    ``preview`` returns (plan, digest); a None digest means nothing to write.
+    The approval (dialog or a valid limited/allow_all session grant) binds the
+    digest; inside the writer the plan is re-derived, compared, and the claim
+    reauthenticated before ``write`` runs.
+    """
+
+    if reviewer is None:
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_reviewer_required",
+        )
+    archive_root = Path(args.archive_root)
+    try:
+        plan, digest = preview()
+        if plan.get("ok") is not True or plan.get("blockers"):
+            return _exact_human_approval_cli_error(
+                args,
+                lifecycle_action=lifecycle_action,
+                reason_code=f"{lifecycle_action}_preflight_blocked",
+                preflight_blockers=plan.get("blockers"),
+            )
+        if digest is None:
+            printer({**plan, "dry_run": False, "write_status": "nothing_to_write",
+                     "native_approval_dialog_opened": False})
+            return 0
+        binding = operation_approval_binding.plan_digest_approval_binding(operation, digest)
+        context = binding.context(
+            archive_id=archive_services.read_archive_id(archive_root), reviewer_claim=reviewer,
+        )
+
+        def _write(claim) -> dict[str, Any]:
+            _fresh, fresh_digest = preview()
+            if fresh_digest != digest:
+                raise archive_services.ArchiveServiceError(f"{lifecycle_action}_plan_changed")
+            archive_services._require_exact_human_operation_approval(
+                archive_root,
+                binding,
+                reviewer_claim=reviewer,
+                expected_plan_sha256=binding.plan_sha256,
+                expected_target_binding_sha256=binding.target_binding_sha256,
+                claim=claim,
+            )
+            return write(reviewer)
+
+        result = _execute_exact_human_approved_write(archive_root, context, _write)
+    except ExactHumanApprovalWorkflowError as error:
+        no_effect = error.code in {
+            "exact_human_approval_cancelled",
+            "exact_human_approval_operation_failed",
+            "exact_human_approval_writer_result_invalid",
+        }
         return _exact_human_approval_cli_error(
             args,
+            lifecycle_action=lifecycle_action,
+            reason_code=(
+                f"{lifecycle_action}_workflow_precondition_failed" if no_effect
+                else "exact_human_approval_state_unknown"
+            ),
+        )
+    except (
+        archive_services.ArchiveServiceError,
+        operation_approval_binding.OperationApprovalBindingError,
+        ExactHumanApprovalError,
+        ExactHumanApprovalWindowsError,
+        ArchivePathError,
+        OSError,
+        UnicodeError,
+        ValueError,
+        sqlite3.Error,
+    ):
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_workflow_failed_safely",
+        )
+    printer(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_restore_drill(args: argparse.Namespace) -> int:
+    if args.approve and not args.dry_run:
+        def _preview() -> tuple[dict[str, Any], str | None]:
+            plan = archive_services.restore_drill_dry_run(Path(args.archive_root), Path(args.target))
+            return plan, _plan_json_digest({
+                "archive_id": plan.get("archive_id"),
+                "target_root": plan.get("target_root"),
+                "target_exists": plan.get("target_exists"),
+                # The approval claim itself lands in the excluded
+                # profiles/local/ area, so the excluded count is not bound.
+                "copy_plan": {
+                    key: value for key, value in (plan.get("copy_plan") or {}).items()
+                    if key != "excluded_files"
+                },
+            })
+
+        return _cli_exact_route(
+            args,
             lifecycle_action="restore_drill",
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.restore_drill,
+            reviewer=archive_services.safe_foreign_quarantine_actor_id(args.reviewed_by),
+            preview=_preview,
+            write=lambda reviewer: _restore_drill_approved_write(args, reviewer),
+            printer=lambda result: print_restore_drill_result(result, args.format),
         )
     if args.dry_run and args.approve:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
@@ -36910,10 +37070,16 @@ def command_restore_drill(args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return 1
 
-    if args.dry_run or not plan["ok"]:
-        print_restore_drill_result(plan, args.format)
-        return 0 if plan["ok"] else 1
+    print_restore_drill_result(plan, args.format)
+    return 0 if plan["ok"] else 1
 
+
+def _restore_drill_approved_write(args: argparse.Namespace, reviewer: str) -> dict[str, Any]:
+    """The approved restore drill; the exact-approval route has verified the plan."""
+
+    plan = archive_services.restore_drill_dry_run(Path(args.archive_root), Path(args.target))
+    if not plan["ok"]:
+        raise archive_services.ArchiveServiceError("restore_drill_plan_changed")
     archive_root = Path(args.archive_root).resolve()
     target = Path(args.target).expanduser().resolve()
     reviewed_at = datetime.now().astimezone().replace(microsecond=0).isoformat()
@@ -36921,15 +37087,15 @@ def command_restore_drill(args: argparse.Namespace) -> int:
     receipt_relative = f"{archive_services.RESTORE_DRILL_RECEIPTS_DIR}/{timestamp_slug}.restore-drill.json"
 
     try:
-        changed_archive_paths = archive_services.copy_restore_drill_tree(archive_root, target)
+        # The public copy helper stays closed; this route verified the claim.
+        changed_archive_paths = archive_services._copy_restore_drill_tree_legacy_core(archive_root, target)
         diagnostics = Doctor(target).run()
         errors = [item for item in diagnostics if item.severity == "ERROR"]
         warnings = [item for item in diagnostics if item.severity == "WARN"]
         index_result = archive_services.index_archive(target)
         search_result = archive_services.search_archive(target, "archive", limit=3)
-    except (archive_services.ArchiveServiceError, OSError, sqlite3.Error) as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
+    except (archive_services.ArchiveServiceError, OSError, sqlite3.Error):
+        raise
 
     validation_ok = not errors and not warnings
     result_status = "passed" if validation_ok else "failed"
@@ -36940,7 +37106,7 @@ def command_restore_drill(args: argparse.Namespace) -> int:
             "receipt_id": f"receipt:restore-drill:{archive_services.safe_slug(plan['archive_id'])}:{timestamp_slug}",
             "dry_run": False,
             "timestamp": reviewed_at,
-            "reviewed_by": args.reviewed_by,
+            "reviewed_by": reviewer,
             "reviewed_at": reviewed_at,
             "validation": {
                 "doctor_strict": {
@@ -36983,8 +37149,7 @@ def command_restore_drill(args: argparse.Namespace) -> int:
         "blockers": blockers,
         "warnings": [],
     }
-    print_restore_drill_result(final, args.format)
-    return 0 if validation_ok else 1
+    return final
 
 
 def print_restore_drill_result(result: dict[str, Any], output_format: str) -> None:
@@ -37408,11 +37573,44 @@ def command_transfer_ownership(args: argparse.Namespace) -> int:
 
 
 def command_identity_reconcile(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
+    if args.approve and not args.dry_run:
+        root = Path(args.archive_root)
+        if not args.affirm_principal_metadata_reviewed:
+            return _exact_human_approval_cli_error(
+                args,
+                lifecycle_action="archive_identity_reconcile",
+                reason_code="archive_identity_reconcile_review_affirmation_required",
+            )
+
+        def _preview() -> tuple[dict[str, Any], str | None]:
+            plan = archive_services.archive_identity_reconcile_plan(root)
+            supplied = (args.expected_archive_sha256, args.expected_identity_sha256,
+                        args.expected_proposed_identity_sha256)
+            current = (plan.get("expected_archive_sha256"), plan.get("expected_identity_sha256"),
+                       plan.get("proposed_identity_sha256"))
+            if plan.get("status") != "repair_ready" or any(
+                value and str(value).strip().lower() != str(fresh or "").strip().lower()
+                for value, fresh in zip(supplied, current)
+            ):
+                return {**plan, "ok": False, "blockers": plan.get("blockers") or ["archive_identity_reconcile_plan_changed"]}, None
+            return plan, archive_services.activity_group_approval_digest(*current)
+
+        return _cli_exact_route(
             args,
             lifecycle_action="archive_identity_reconcile",
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.archive_identity_reconcile,
+            reviewer=archive_services.safe_foreign_quarantine_actor_id(args.reviewed_by),
+            preview=_preview,
+            write=lambda reviewer: archive_services.reconcile_archive_identity(
+                root,
+                reviewed_by=reviewer,
+                expected_archive_sha256=_preview()[0]["expected_archive_sha256"],
+                expected_identity_sha256=_preview()[0]["expected_identity_sha256"],
+                expected_proposed_identity_sha256=_preview()[0]["proposed_identity_sha256"],
+                affirm_principal_metadata_reviewed=True,
+                _exact_route_verified=True,
+            ),
+            printer=print_json,
         )
     if args.dry_run == args.approve:
         print("identity-reconcile requires exactly one of --dry-run or --approve.", file=sys.stderr)

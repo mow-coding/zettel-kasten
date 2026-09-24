@@ -263,11 +263,15 @@ class Letter137AdditionalPublicCliBoundaryTests(_CliAssertions):
                 side_effect=AssertionError("dispatch must stay closed"),
             ) as service:
                 code, stdout, stderr = self.run_cli(argv)
+                # 2026-09-24 reopen: these route through exact approval and are
+                # refused before any read because no reviewer was given.
+                reopened = {"restore_drill", "repair_gitignore", "archive_identity_reconcile"}
                 self.assert_fixed_json_block(
                     code,
                     stdout,
                     stderr,
                     lifecycle_action=lifecycle,
+                    **({"reason_code": f"{lifecycle}_reviewer_required"} if lifecycle in reopened else {}),
                 )
                 service.assert_not_called()
 
@@ -291,7 +295,7 @@ class Letter137AdditionalPublicCliBoundaryTests(_CliAssertions):
             ],
             "parcel": ["pack"],
         }
-        self.assertEqual(len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS), 44)  # v0.4.40: 2026-09-24 triage reopen
+        self.assertEqual(len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS), 41)  # v0.4.40: 2026-09-24 triage reopen
         for exact_batch_command in (
             "source-intake-batch",
             "objet-capture-batch",

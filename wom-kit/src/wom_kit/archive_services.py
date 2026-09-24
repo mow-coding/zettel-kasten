@@ -101425,10 +101425,14 @@ def reconcile_archive_identity(
     expected_identity_sha256: str,
     expected_proposed_identity_sha256: str,
     affirm_principal_metadata_reviewed: bool,
+    _exact_route_verified: bool = False,
 ) -> dict[str, Any]:
-    return _compound_exact_human_approval_blocked(
-        lifecycle_action="archive_identity_reconcile",
-    )
+    # Triage group 5 (2026-09-24): writable only from the CLI exact route,
+    # after the claim was reauthenticated against the fresh plan digests.
+    if _exact_route_verified is not True:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="archive_identity_reconcile",
+        )
 
     # Dormant legacy implementation retained for compatibility analysis.
     # It is not an approval authority.

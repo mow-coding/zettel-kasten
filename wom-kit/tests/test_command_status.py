@@ -405,7 +405,7 @@ class CommandStatusArchiveParserTests(unittest.TestCase):
         schema = json.loads(schema_path.read_text(encoding="utf-8"))
         self.assertEqual(list(Draft202012Validator(schema).iter_errors(legacy_inventory)), [])
         result = command_status.resolve_capability_availability(
-            legacy_inventory, "identity-reconcile", requested_mode="approve"
+            legacy_inventory, "credential-lifecycle", requested_mode="approve"
         )
         self.assertEqual(result["state"], "writer_unavailable")
         self.assertEqual(result["approval_exposure_history"], {
