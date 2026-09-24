@@ -6,6 +6,12 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.39 - 2026-09-24
+
+- Keep reviewed activity-cleanup plans stable when Windows reports folder-size changes without content changes; report no effects for refusals before approval; add content-free progress and a progress log.
+- Let Git backup proceed past an ignored attribute file that cannot reach committable paths, and name the fixed cause in the session backup route.
+- Prepare one deliverable feedback letter: two user states (before delivery / delivered), automatic next letter number, one compose approval, no command-less review stop. Synthetic validation is recorded separately from client acceptance.
+
 ## v0.4.38 - 2026-09-23
 
 - Resolve two activity-completion reports together: revise an unpublished zet while retaining its identity and earlier body, and build session storage lists from authenticated intake and actual zet use.

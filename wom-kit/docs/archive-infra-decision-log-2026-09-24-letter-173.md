@@ -1,0 +1,18 @@
+# Decision log — 2026-09-24 beta letter 173 and the one-letter request (v0.4.39)
+
+Status: implemented for v0.4.39 (A, B, C, E); D decided and scheduled for the next version.
+Evidence: synthetic development data and local Windows tests; customer acceptance is separate and unconfirmed.
+Implementation record: [meeting-minutes/2026-09-24-letter-173-implementation.md](../../meeting-minutes/2026-09-24-letter-173-implementation.md).
+
+| ID | Kind / status | Decision | Reason |
+|---|---|---|---|
+| L173-01 | Implementation choice / current | `activity-cleanup` plan fingerprints omit folder size and folder time; file rows keep size, time, identity and hash. | Windows reports folder sizes that change without content change (0 ↔ 4096). The listing already records every child, so the removed fields only caused `activity_cleanup_plan_changed` after a clean preview. |
+| L173-02 | Implementation choice / current | A refusal before the approval broker is entered reports `effects_state: none`; later failures stay `unknown`. `activity-cleanup` prints content-free stages, counts and heartbeats by default and accepts `--progress-log` outside the archive. | The letter asked to separate "refused before effects" from "result unknown" and to avoid silent multi-minute runs. |
+| L173-03 | Implementation choice / current | An ignored `.gitattributes` in a folder that holds no tracked and no committable untracked path no longer blocks `git-backup-plan`. Root-level, tracked, `.git/info`, pattern-ignored-next-to-tracked and unreadable cases still block before any filter runs. | Such a file cannot change bytes Git would commit. The safety boundary (no filter execution, no attribute deletion) is unchanged. |
+| L173-04 | Implementation choice / current | The session backup route keeps the ordinary plan's fixed blocker code as `cause_code` with a next action. The conservative `effects_state` after entering the session lock is unchanged. | "unavailable" alone hid the cause; free text is still never forwarded. Existing tests pin the conservative effects contract, and a preview under the session lock is not proven effect-free. |
+| L173-05 | User request / current | Feedback letters: two user states, before delivery (`전달 전`) and delivered (`전달 완료`); developer receipt stays separate. A new letter may omit `feedback_id` and receives the next standard number. The single compose approval is the human decision; the runtime route has no command-less review stop and no separate record approval; operators do not create review copies. | A client reported agents stopping at a review draft and inventing side files. The official route itself contained a required review gate without a command. |
+| L173-06 | Implementation choice / current | The AGENTS routing block stays byte-identical in this release. | Readiness compares it byte-for-byte in existing archives, which have no approved refresh path; a wording change would mark every existing archive incomplete. The compose result states that its approval completes the review. A block version transition needs its own decision. |
+| L173-07 | User decision (2026-09-24) / scheduled | D: session close becomes activity-scoped (explicit activity roots, full paging, objets already preserved count as preserved) and scratch disposal uses `activity-cleanup` extended to in-archive AI scratch, not a reopening of closed writers. Valid full access adds no dialogs. | One activity's completion must not depend on every other activity's scratch. |
+| L173-08 | User decision (2026-09-24) / current | Release A, B, C and E as v0.4.39 first; D follows in the next version. | The client is blocked on cleanup, backup and letters now. |
+
+No new approval dialog or full-access exception was added (2026-09-17 decision).

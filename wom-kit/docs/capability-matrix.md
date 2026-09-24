@@ -1,8 +1,8 @@
 ﻿# WOM-kit Capability Matrix
 
-Version: v0.4.38 implementation and release scope
+Version: v0.4.39 implementation and release scope
 
-Status: v0.4.38 activity completion and session-scoped storage; [activity contract](activity-completion.md).
+Status: v0.4.39 letter 173 cleanup reliability and one deliverable feedback letter; [feedback route](operator-feedback-lifecycle.md).
 
 Status: v0.4.36 no-dialog grants, letter-168, and session-owned writes truth
 Date: 2026-09-04

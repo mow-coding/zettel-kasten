@@ -24,6 +24,21 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.4.39 Letter 173 fixes and one deliverable letter
+
+Use the exact public wheel after publication. An approval after a clean `activity-cleanup` preview no longer fails because of Windows folder-size changes; rerun the preview and approve the returned plan. Git backup may proceed past an ignored attribute file that cannot reach committable paths. A feedback letter needs no hand-picked number and no separate review copy.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0439-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.39/wom_kit-0.4.39-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+The customer must still run the reviewed `project-version-update` workflow. Bootstrap installation alone does not update a pinned project runtime.
+
 ## v0.4.38 Activity completion
 
 Use the exact public wheel after publication. Review the [activity guide](wom-kit/docs/activity-completion.md) and make a private request for selected external files. The default object offload age is now zero; an explicit positive age limit still applies. Upload produces an exact list for a separate offload command. An unpublished zet uses `draft-revision-plan/write`, then a separate quality check and mint. Keep the original approval and request for interruption recovery.
