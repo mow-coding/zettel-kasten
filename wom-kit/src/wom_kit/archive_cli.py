@@ -24021,8 +24021,20 @@ def command_abstract_freshness(args: argparse.Namespace) -> int:
 
 def command_activity_cleanup(args: argparse.Namespace) -> int:
     from . import activity_cleanup
+    writer_entered = False
+    reporter = None
     try:
-        candidate = activity_cleanup.plan(Path(args.archive_root), args.request, resume=args.resume)
+        if getattr(args, "progress_log", None):
+            try:
+                _validate_doctor_progress_log_path(args.progress_log, Path(args.archive_root))
+            except ValueError:
+                raise activity_cleanup.ActivityCleanupError("activity_cleanup_progress_log_path_unsafe") from None
+        # Letter 173 B: large previews and approvals hash every selected file;
+        # report content-free stages, counts and heartbeats instead of silence.
+        reporter = CommandProgressReporter(bool(getattr(args, "progress", True)), label="activity-cleanup",
+            stage_order=("activity-cleanup-inventory", "activity-cleanup-hash", "activity-cleanup-items", "activity-cleanup-directories"),
+            progress_log_path=getattr(args, "progress_log", None))
+        candidate = activity_cleanup.plan(Path(args.archive_root), args.request, resume=args.resume, progress=reporter.progress)
         if getattr(args, "private_plan_output", None):
             activity_cleanup.write_private_plan(candidate, args.private_plan_output)
             candidate["public"]["private_plan_written"] = True
@@ -24060,19 +24072,26 @@ def command_activity_cleanup(args: argparse.Namespace) -> int:
                 approval = candidate["journal"].read("approval")
                 if not approval:
                     raise activity_cleanup.ActivityCleanupError("activity_cleanup_resume_approval_missing")
+                writer_entered = True
                 result = _resume_exact_human_approved_write_core(candidate["root"], context, approval["approval_id"],
                     lambda claim: (candidate["journal"].read("intent") == candidate["material"]
                         and approval["plan_sha256"] == binding.plan_sha256
                         and approval["target_binding_sha256"] == binding.target_binding_sha256), run)
         else:
+            writer_entered = True
             result = _execute_exact_human_approved_write(candidate["root"], context, run)
         print_json(result)
         return 0 if result.get("ok") else 1
     except (activity_cleanup.ActivityCleanupError, archive_services.ArchiveServiceError, OSError, ValueError,
             ExactHumanApprovalError, ExactHumanApprovalWorkflowError, ExactHumanApprovalWindowsError) as exc:
+        # Refusals before the approval broker is entered (plan mismatch, missing
+        # reviewer, platform) have no effects; only later failures are unknown.
         return _exact_human_approval_cli_error(args, lifecycle_action="activity_cleanup",
             reason_code=getattr(exc, "code", "activity_cleanup_failed_safely"),
-            effects_state="none" if args.dry_run else "unknown")
+            effects_state="unknown" if writer_entered else "none")
+    finally:
+        if reporter is not None:
+            reporter.close()
 
 
 def command_draft_revision(args: argparse.Namespace) -> int:
@@ -41287,6 +41306,12 @@ def build_parser() -> argparse.ArgumentParser:
     activity_cleanup_modes.add_argument("--resume", action="store_true")
     activity_cleanup_parser.add_argument("--expected-plan-sha256")
     activity_cleanup_parser.add_argument("--reviewed-by")
+    activity_cleanup_progress = activity_cleanup_parser.add_mutually_exclusive_group()
+    activity_cleanup_progress.add_argument("--progress", dest="progress", action="store_true",
+        help="Print content-free stages, counts and heartbeats to stderr (default).")
+    activity_cleanup_progress.add_argument("--no-progress", dest="progress", action="store_false", help="Disable progress output.")
+    activity_cleanup_parser.set_defaults(progress=True)
+    activity_cleanup_parser.add_argument("--progress-log", help="Write progress JSONL to a new file outside the archive; an existing name is preserved and .1, .2, ... is used.")
     activity_cleanup_parser.add_argument("--format", choices=["json"], default="json")
     activity_cleanup_parser.set_defaults(func=command_activity_cleanup)
 

@@ -134,8 +134,12 @@ def _inventory(root):
                 raise ActivityCleanupError("activity_cleanup_inventory_limit_exceeded")
             linked = stat.S_ISLNK(info.st_mode) or bool(getattr(info, "st_file_attributes", 0) & 1024)
             kind = "link" if linked else "directory" if stat.S_ISDIR(info.st_mode) else "file" if stat.S_ISREG(info.st_mode) else "other"
-            result.append({"relative": relative, "kind": kind, "size": info.st_size,
-                "identity": [info.st_dev, info.st_ino], "mtime_ns": info.st_mtime_ns,
+            # Windows reports folder sizes that change without any content change
+            # (letter 173). The listing already records every child's identity,
+            # size and mtime, so folder size and mtime add nothing but churn.
+            content = kind != "directory"
+            result.append({"relative": relative, "kind": kind, "size": info.st_size if content else None,
+                "identity": [info.st_dev, info.st_ino], "mtime_ns": info.st_mtime_ns if content else None,
                 "git_metadata": relative == ".git" or relative.startswith(".git/"),
                 "possible_secret_config": entry.name.startswith(".env") or entry.suffix.lower() in {".pem", ".key", ".p12", ".pfx"}})
             if kind == "directory":
@@ -171,7 +175,16 @@ def write_private_plan(candidate, destination):
         os.fsync(stream.fileno())
 
 
-def plan(root, request_path, *, resume=False, key_provider=None):
+def _notify(progress, stage, message, current=None, total=None):
+    """Observational only: content-free stage names and counts; never fails the caller."""
+    if progress is not None:
+        try:
+            progress(stage, message, current, total)
+        except Exception:
+            pass
+
+
+def plan(root, request_path, *, resume=False, key_provider=None, progress=None):
     root = services.require_existing_archive_root(root)
     request_path = _safe_path(Path(request_path))
     if request_path.stat().st_size > MAX_CONTROL_BYTES:
@@ -193,12 +206,13 @@ def plan(root, request_path, *, resume=False, key_provider=None):
         saved = store.read("intent")
         if saved is None or saved["request_sha256"] != request_sha:
             raise ActivityCleanupError("activity_cleanup_resume_request_changed")
-        return {"root": root, "material": saved, "journal": store, "public": public_plan(saved)}
+        return {"root": root, "material": saved, "journal": store, "public": public_plan(saved), "progress": progress}
     roots = request.get("roots")
     items = request.get("items")
     if not isinstance(roots, list) or not roots or not isinstance(items, list) or not 0 < len(items) <= MAX_ITEMS:
         raise ActivityCleanupError("activity_cleanup_request_invalid")
     scopes = []
+    _notify(progress, "activity-cleanup-inventory", "start", 0, len(roots))
     for value in roots:
         if not isinstance(value, str) or not Path(value).is_absolute():
             raise ActivityCleanupError("activity_cleanup_absolute_root_required")
@@ -209,7 +223,10 @@ def plan(root, request_path, *, resume=False, key_provider=None):
         if any(path.is_relative_to(scope["path"]) or Path(scope["path"]).is_relative_to(path) for scope in scopes):
             raise ActivityCleanupError("activity_cleanup_overlapping_roots")
         scopes.append({"path": str(path), "state": _directory_state(path), "git": _git_inventory(path), "inventory": _inventory(path)})
+        _notify(progress, "activity-cleanup-inventory", "root", len(scopes), len(roots))
+    _notify(progress, "activity-cleanup-inventory", "done", len(scopes), len(roots))
     selected, blockers, seen = [], [], set()
+    _notify(progress, "activity-cleanup-hash", "start", 0, len(items))
     for number, item in enumerate(items):
         if (not isinstance(item, dict) or item.get("role") not in ROLES
             or set(item) - {"path", "role", "reason", "disposition", "discard_intent"}):
@@ -235,6 +252,8 @@ def plan(root, request_path, *, resume=False, key_provider=None):
         selected.append({"number": number, "path": str(path), "root": matching[0]["path"],
             "role": role, "reason": reason, "disposition": disposition, "state": state,
             "object_id": "sha256:" + state["sha256"]})
+        _notify(progress, "activity-cleanup-hash", "file", len(selected), len(items))
+    _notify(progress, "activity-cleanup-hash", "done", len(selected), len(items))
     directories = []
     directory_requests = request.get("remove_empty_directories", [])
     if not isinstance(directory_requests, list) or any(not isinstance(v, str) or not Path(v).is_absolute() for v in directory_requests):
@@ -261,7 +280,7 @@ def plan(root, request_path, *, resume=False, key_provider=None):
     old = store.read("intent")
     if old is not None:
         raise ActivityCleanupError("activity_cleanup_use_resume_for_existing_activity")
-    return {"root": root, "material": material, "journal": store, "public": public_plan(material)}
+    return {"root": root, "material": material, "journal": store, "public": public_plan(material), "progress": progress}
 
 
 def public_plan(material):
@@ -377,7 +396,10 @@ def _execute_locked(candidate, *, reviewer, claim, backend):
         "plan_sha256": binding.plan_sha256, "target_binding_sha256": binding.target_binding_sha256,
         "mechanism": claim.public_summary().get("approval_mechanism")})
     results = []
+    progress = candidate.get("progress")
+    _notify(progress, "activity-cleanup-items", "start", 0, len(material["items"]))
     for item in material["items"]:
+        _notify(progress, "activity-cleanup-items", "file", len(results) + 1, len(material["items"]))
         number, path = item["number"], Path(item["path"])
         name = "item-" + str(number)
         deleted = journal.read(name + "-deleted")
@@ -417,6 +439,8 @@ def _execute_locked(candidate, *, reviewer, claim, backend):
             if not isinstance(code, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,127}", code):
                 code = "activity_cleanup_item_failed"
             results.append({"number": number, "state": "retained", "code": code})
+    _notify(progress, "activity-cleanup-items", "done", len(results), len(material["items"]))
+    _notify(progress, "activity-cleanup-directories", "start", 0, len(material["directories"]))
     directory_results = []
     for index, directory in sorted(enumerate(material["directories"]), key=lambda pair: len(Path(pair[1]["path"]).parts), reverse=True):
         path = Path(directory["path"])

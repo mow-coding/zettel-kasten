@@ -18,7 +18,7 @@ from . import __version__
 _PROGRESS_COMMANDS = """
 abstract-backfill-plan abstract-backfill-receipt-audit abstract-backfill-recover
 abstract-backfill-recovery-plan abstract-backfill-revert abstract-backfill-write
-abstract-catalog abstract-freshness activity-group-membership-plan
+abstract-catalog abstract-freshness activity-cleanup activity-group-membership-plan
 activity-group-membership-recover activity-group-membership-removal-plan
 activity-group-membership-removal-recover activity-group-membership-removal-write
 activity-group-membership-write ai-start-here canonical-revision-audit
@@ -53,7 +53,7 @@ zettel-objet-link work-session
 """.split()
 STARTUP_PROGRESS_DEFAULTS = {
     command: command in {
-        "doctor", "source-intake-batch", "source-intake-chain", "objet-capture-batch", "work-session",
+        "activity-cleanup", "doctor", "source-intake-batch", "source-intake-chain", "objet-capture-batch", "work-session",
     }
     for command in _PROGRESS_COMMANDS
 }
