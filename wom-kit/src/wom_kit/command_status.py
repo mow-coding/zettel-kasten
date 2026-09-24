@@ -85,6 +85,12 @@ COMPOUND_APPROVAL_FIXED_CLOSED_COMMANDS = frozenset(
         "runtime-skill-install",
         "runtime-skill-uninstall",
         "tiro-lossless-recovery-fetch-run",
+        # Restored 2026-09-25: ZET sharing and ownership (v0.5 design); preview only.
+        "delegate-zet",
+        "transfer-ownership",
+        "quarantine-foreign-block",
+        "record-quarantine-decision",
+        "github-repo",
     }
 )
 

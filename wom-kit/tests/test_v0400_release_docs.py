@@ -157,11 +157,6 @@ class V0400ReleaseDocsTests(unittest.TestCase):
                 "markup-normalization-recovery",  # reopened in v0.4.40
                 "markup-normalization-revert",  # reopened in v0.4.40
                 "zettel-objet-link-revert",  # reopened in v0.4.40
-                "delegate-zet",  # deleted in v0.4.40
-                "transfer-ownership",  # deleted in v0.4.40
-                "quarantine-foreign-block",  # deleted in v0.4.40
-                "record-quarantine-decision",  # deleted in v0.4.40
-                "github-repo",  # deleted in v0.4.40
                 "objet-capture-enable",  # deleted in v0.4.40
                 "object-storage-upload-evidence",  # deleted in v0.4.40
                 "zet-abstract-backfill-recover",  # deleted in v0.4.40
@@ -193,7 +188,7 @@ class V0400ReleaseDocsTests(unittest.TestCase):
                 "project-version-update-collision",  # reopened in v0.4.40
             }
         )
-        self.assertEqual(len(current_blocked), 14)  # 2026-09-24 triage reopen
+        self.assertEqual(len(current_blocked), 19)  # 2026-09-24 triage reopen
         self.assertEqual(len(historical_blocked), 79)
         self.assertNotIn("migrate", current_blocked)
         self.assertNotIn("zettel-objet-link", current_blocked)

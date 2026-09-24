@@ -145,13 +145,13 @@ class V0436ReleaseDocsTests(unittest.TestCase):
     def test_release_surfaces_are_documented(self) -> None:
         contract = (KIT / "docs" / "exact-human-approval-contract.md").read_text(encoding="utf-8")
         self.assertIn("Since v0.4.36 (beta letter 168 ⑥; the 2026-09-17 decision restored)", contract)
-        self.assertIn("92 approval-available, 15 fixed-closed", " ".join(contract.split()))
+        self.assertIn("92 approval-available, 20 fixed-closed", " ".join(contract.split()))
         capabilities = (KIT / "docs" / "agent-operator-capabilities.md").read_text(encoding="utf-8")
         self.assertIn("operator-feedback-archive", capabilities)
         self.assertIn("approval_available:                   92", capabilities)
         matrix = (KIT / "docs" / "capability-matrix.md").read_text(encoding="utf-8")
         self.assertIn("| Operator feedback archival (v0.4.36) |", matrix)
-        self.assertIn("92 approval-available, 15 fixed-closed", " ".join(matrix.split()))
+        self.assertIn("92 approval-available, 20 fixed-closed", " ".join(matrix.split()))
         register = (KIT / "docs" / "recovery-operations-acceptance.md").read_text(encoding="utf-8")
         for row in ("L168-01", "L168-02", "L168-03", "L168-04", "L168-05"):
             self.assertIn(f"| {row} | v0.4.36 |", register)

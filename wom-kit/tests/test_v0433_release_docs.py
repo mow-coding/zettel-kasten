@@ -144,7 +144,7 @@ class V0433ReleaseDocsTests(unittest.TestCase):
         self.assertIn("`writer_state`", contract)
         self.assertIn("`local_bytes_missing`", contract)
         approval = (KIT / "docs" / "exact-human-approval-contract.md").read_text(encoding="utf-8")
-        self.assertIn("92 approval-available, 15 fixed-closed", " ".join(approval.split()))  # current parser inventory
+        self.assertIn("92 approval-available, 20 fixed-closed", " ".join(approval.split()))  # current parser inventory
         matrix = (KIT / "docs" / "capability-matrix.md").read_text(encoding="utf-8")
         self.assertIn("upload reopened in v0.4.33 as preservation PUT + adoption projection", matrix)
         register = (KIT / "docs" / "recovery-operations-acceptance.md").read_text(encoding="utf-8")

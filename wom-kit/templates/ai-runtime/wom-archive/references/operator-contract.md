@@ -144,10 +144,10 @@ edit installed-version pins. Preview first:
 archive project-version-update <project-or-archive-root> --target vX.Y.Z --dry-run --progress --format json
 ```
 
-In v0.4.0 stop after the dry-run. `project-version-update` approval is fixed
-fail-closed before private project reads or mutation with
-`compound_exact_human_approval_binding_required`; editor quiescence or an
-affirmation flag cannot substitute for the missing exact-human binding.
+`project-version-update --approve` runs under exact human approval: one
+native dialog, or none under a valid limited/allow_all session grant. Editor
+quiescence and affirmation flags are required inputs, not a substitute for
+that approval.
 
 When a result carries `materialization_plan_sha256` and an opaque
 `update-entry:NNNN`, use only the separate CLI collision surface. For the
@@ -165,10 +165,10 @@ same target and materialization digest:
 archive project-bytecode-repair-plan <project-or-archive-root> --target vX.Y.Z --expected-materialization-plan-sha256 sha256:<digest> --dry-run --format json
 ```
 
-The repair planner remains read-only. In v0.4.0 the repair approval branch is
-fixed fail-closed with `compound_exact_human_approval_binding_required`; it
-removes no cache file, fetches nothing, changes no `HEAD`/pin, and does not
-retry or grant update approval.
+The repair planner remains read-only. Since v0.4.40
+`project-bytecode-repair --approve` removes exactly the reviewed cache files
+under exact human approval recorded in the project's archive; it fetches
+nothing, changes no `HEAD`/pin, and does not retry or grant update approval.
 Run a fresh updater preview and separate approval afterward. Counts alone do
 not authorize repair; mixed or unsupported sets remain unavailable.
 
@@ -380,10 +380,9 @@ current, proposal, and plan hashes to the separate writer preview:
 archive zet-revision-restore-write <archive-root> --receipt receipts/revisions/canonical/<digest>.zet-revision.json --expected-receipt-sha256 <sha256> --restore-proposal .wom-scratch/revisions/restores/<private>.md --expected-current-sha256 <sha256> --expected-restore-proposal-sha256 <sha256> --expected-restore-proposal-semantic-sha256 <sha256> --expected-restore-plan-digest <sha256> --revision-at <timezone-aware-event-time> --dry-run --format json
 ```
 
-In v0.4.0 stop after this writer preview. Restore approval is fixed fail-closed
-before private target read or mutation with
-`compound_exact_human_approval_binding_required`; review labels and affirmation
-flags cannot authorize it. Never delete the shared revision lock manually or
+`zet-revision-restore-write --approve` restores under exact human approval
+(one dialog, or none under a valid session grant) bound to the reviewed
+hashes; review labels and affirmation flags alone cannot authorize it. Never delete the shared revision lock manually or
 copy the proposal over the canonical zet. MCP has no restore writer.
 
 Use paged `zet-catalog` when the host needs one stdout page, manual continuation,
@@ -548,9 +547,10 @@ provider locator to appear more than once when each occurrence is distinct.
 Recovery output reveals only whether those coordinates exist, never their
 values. Multiple locators may coexist, but their presence proves neither live
 remote reachability nor global recoverability. Use the read-only
-`external-locator-recovery-plan` and mutation previews only. In v0.4.0 locator
-record, deactivate, and revert approvals are fixed fail-closed before private
-target read or mutation with `compound_exact_human_approval_binding_required`.
+`external-locator-recovery-plan` and mutation previews first. Since v0.4.40
+`external-locator-deactivate --approve` retires one reviewed duplicate under
+exact human approval bound to its plan digest; `external-locator-revert` was
+removed (use `external-locator-record --revert-recovery`).
 
 Use `relation-semantics-guide` before reviewing ambiguous continuation,
 recurrence, sequence, third-party Principal, or format-variant meaning.
@@ -593,8 +593,9 @@ archive principal-register-plan <archive-root> --principal-id company:example --
 archive principal-list <archive-root> --format json
 ```
 
-In v0.4.0 register and unregister approvals are fixed fail-closed before private
-target read or mutation with `compound_exact_human_approval_binding_required`.
+Since v0.4.40 `principal-register` / `principal-unregister --approve` run under
+exact human approval bound to the reviewed plan digest (one dialog, or none
+under a valid session grant).
 The generated SQLite `principals` table is a disposable projection;
 `archive.yml` plus `principals/*.yml` remain authoritative.
 
@@ -630,10 +631,10 @@ inspect it with:
 archive markup-normalization-recovery <archive-root> --journal <archive-relative-journal> --mode resume|rollback --dry-run --format json
 ```
 
-In v0.4.0 normalization apply, recovery, and revert approvals are fixed
-fail-closed before private target read or mutation with
-`compound_exact_human_approval_binding_required`. Do not delete a historical
-journal or edit affected zets by hand.
+Since v0.4.40 normalization apply, recovery, and revert run under exact human
+approval bound to each writer's reviewed plan digest (one dialog, or none under
+a valid session grant). Do not delete a historical journal or edit affected
+zets by hand.
 
 ```bash
 archive create-draft <archive-root> --dry-run --source-intake-plan <source-intake-plan.json> --prompt-boundary-report <prompt-boundary-report.json> --expected-archive-id <id> --expected-type <type> --profile-id <profile-id> --creation-mode ai_assisted --created-by ai_runtime:codex --assisted-by ai_runtime:codex --format json
@@ -678,10 +679,10 @@ To preview binding an already-manifested objet into structured zettel
 frontmatter, use `zettel-objet-link --dry-run`. In v0.4.1 this single link apply
 is available only as a fresh plan-digest-bound replay with native exact-human
 approval. The strict `assets` item is `{object_id, role, label?}`; `object_id`
-must be the complete `sha256:<64 hex>` value. `zettel-objet-link-revert`
-remains preview-only and fixed closed: its approval branch fails before private
-target read or mutation with `compound_exact_human_approval_binding_required`. Historical
-receipts remain auditable but grant no new write or revert authority. Mint
+must be the complete `sha256:<64 hex>` value. Since v0.4.40
+`zettel-objet-link-revert --approve` restores the exact prior bytes under exact
+human approval bound to its plan digest. Historical receipts remain auditable
+but grant no new write or revert authority. Mint
 review warns on truncated objet hashes and on likely tool traces or stale
 internal status claims.
 
@@ -737,9 +738,16 @@ archive foreign-block-quarantine <archive-root> --stdin --dry-run --format json
 
 Even `ready_for_future_quarantine_write` is not trust, not import, not quarantine, and not approval. It only means a future explicit quarantine-write workflow could be shown to a human/operator.
 
-Writing new quarantine cases was removed in v0.4.40 (`quarantine-foreign-block`
-and its MCP check); no foreign-block import path exists. Existing cases stay
-readable.
+Preview a possible quarantine record through the CLI-only dry-run:
+
+```bash
+archive quarantine-foreign-block <archive-root> --plan <foreign-block-quarantine-plan.json> --dry-run --format json
+```
+
+In v0.4.0 quarantine approval is fixed fail-closed with
+`compound_exact_human_approval_binding_required` before private plan/archive
+read or mutation. It writes no case or receipt. MCP may only run
+`quarantine_foreign_block_check`; it must not write quarantine cases.
 
 After quarantine cases exist, list them for human review only:
 
@@ -758,9 +766,16 @@ archive quarantine-decision <archive-root> --case-id <safe-id> --dry-run --forma
 
 The decision preview may propose `keep_quarantined`, `reject_and_keep_record`, `eligible_for_attestation_review`, or `needs_more_review`. It records no decision. It does not trust, import, attest, mint, anchor, delegate, sign, execute, accept, apply, or write files. MCP may only run `foreign_block_quarantine_decision_check`; it must not expose decision apply/write/accept tools.
 
-Recording quarantine decisions was removed in v0.4.40
-(`record-quarantine-decision` and its MCP check). Existing decision records
-stay readable.
+Preview a possible local decision through CLI only:
+
+```bash
+archive record-quarantine-decision <archive-root> --decision-preview <json-file> --dry-run --format json
+```
+
+In v0.4.0 decision approval is fixed fail-closed with the same blocker before
+private decision/case read or mutation. It writes no decision or receipt. MCP
+may only run `record_quarantine_decision_check`; it must not expose decision
+write/apply/accept tools.
 
 After decision records exist, index them for human review only:
 
@@ -912,8 +927,10 @@ Prefer these actions:
 - run foreign-block-trust dry-run before any future foreign attestation discussion,
 - run foreign-block-attestation dry-run before any future human attestation review packet discussion,
 - run foreign-block-quarantine dry-run before any future quarantine write discussion,
+- use CLI-only quarantine-foreign-block approval for isolation writes; MCP remains check-only,
 - run quarantine-review to inventory existing untrusted quarantine cases without accepting them,
 - run quarantine-decision dry-run to preview candidate future decision paths without recording them,
+- use CLI-only record-quarantine-decision approval for local decision records; MCP remains check-only,
 - run quarantine-decision-review to inventory recorded decisions without accepting or applying them,
 - run quarantine-decision-outcome dry-run to plan recorded decision outcomes without accepting or applying them,
 - run attestation-review-candidate dry-run only after an eligible decision outcome, without creating attestations,
@@ -956,8 +973,10 @@ Do not:
 - treat foreign-block-trust preview as actual trust or attestation approval,
 - treat foreign-block-attestation preview as actual trust, attestation, receipt write, or approval,
 - treat foreign-block-quarantine preview as an actual quarantine write, import, trust, receipt write, or approval,
+- treat quarantine-foreign-block as trust, import, mint, attestation, anchor, delegation, signing, execution, or acceptance,
 - treat quarantine-review as trust, import, mint, attestation, anchor, delegation, signing, execution, acceptance, apply approval, or a write path,
 - treat quarantine-decision as a recorded decision, approval, trust, import, mint, attestation, anchor, delegation, signing, execution, acceptance, apply approval, or a write path,
+- treat record-quarantine-decision as trust, import, mint, attestation, anchor, delegation, signing, execution, acceptance, apply approval, or sharing,
 - treat quarantine-decision-review as trust, import, mint, attestation, anchor, delegation, signing, execution, acceptance, apply approval, or a write path,
 - treat quarantine-decision-outcome as trust, import, mint, attestation, anchor, delegation, signing, execution, acceptance, apply approval, or a write path,
 - treat attestation-review-candidate as trust, import, mint, attestation, signature, anchor, delegation, execution, acceptance, apply approval, or a write path,

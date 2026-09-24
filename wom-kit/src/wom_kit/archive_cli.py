@@ -86,6 +86,8 @@ Commands:
           Audit or record a bounded, receipt-backed AI session handoff checkpoint.
   prompt-boundary
           Preview prompt-injection boundary risk for untrusted text.
+  github-repo
+          Plan GitHub repository metadata for a WOM profile.
   object-storage
           Plan object storage metadata for WOM objets.
   object-storage-recommendation
@@ -290,10 +292,14 @@ Commands:
           Preview a human-review attestation packet from a foreign-block trust report.
   foreign-block-quarantine
           Plan future isolated holding for a foreign block without writing quarantine files.
+  quarantine-foreign-block
+          Preview or approve an isolated quarantine case write for a foreign block.
   quarantine-review
           List and validate existing foreign block quarantine cases.
   quarantine-decision
           Preview a future decision path for one foreign block quarantine case.
+  record-quarantine-decision
+          Preview or approve recording a local quarantine decision without trusting a foreign block.
   quarantine-decision-review
           List and validate recorded foreign block quarantine decisions.
   quarantine-decision-outcome
@@ -331,6 +337,8 @@ Commands:
           Alias: mint-zettel.
   retire-draft
           Close an already minted inbox draft after evidence verification.
+  delegate-zet
+          Preview or write delegated zet access from a saved view.
   attest-zet
           Preview attestation of a delegated foreign zet receipt.
   anchor-zet
@@ -352,6 +360,8 @@ Commands:
           Plan a first real personal/team pilot without writing files.
   preflight
           Check an archive before connecting real personal or team data.
+  transfer-ownership
+          Preview or apply an archive ownership transfer.
   search  Search the generated local SQLite index.
 """
 
@@ -14375,6 +14385,76 @@ def command_ai_usage_report(args: argparse.Namespace) -> int:
 
     print_json(result)
     return 0 if result["ok"] else 1
+
+
+def command_github_repo(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="approve_github_repository_setup_plan",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
+    if args.dry_run and args.approve:
+        print("Use either --dry-run or --approve, not both.", file=sys.stderr)
+        return 1
+    if not args.dry_run and not args.approve:
+        print("GitHub repository setup requires --dry-run or --approve.", file=sys.stderr)
+        return 1
+    if args.approve and not args.reviewed_by:
+        print("GitHub repository setup requires --reviewed-by when --approve is used.", file=sys.stderr)
+        return 1
+
+    try:
+        if args.dry_run:
+            result = archive_services.github_repository_setup_plan(
+                Path(args.archive_root),
+                profile_id=args.profile_id,
+                profile_slug=args.profile_slug,
+                github_owner=args.github_owner,
+                github_account_ref=args.github_account_ref,
+                repo_name=args.repo_name,
+                visibility=args.visibility,
+                remote_protocol=args.remote_protocol,
+            )
+        else:
+            result = archive_services.approve_github_repository_setup_plan(
+                Path(args.archive_root),
+                reviewed_by=args.reviewed_by,
+                write_local_profile=args.write_local_profile,
+                profile_id=args.profile_id,
+                profile_slug=args.profile_slug,
+                github_owner=args.github_owner,
+                github_account_ref=args.github_account_ref,
+                repo_name=args.repo_name,
+                visibility=args.visibility,
+                remote_protocol=args.remote_protocol,
+            )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        mode = "dry-run" if result["dry_run"] else "approved"
+        state = "passed" if result["ok"] else "blocked"
+        print(f"GitHub repository setup {mode} {state}.")
+        print(f"Archive: {result['archive_id']}")
+        print(f"Profile: {result.get('profile_id') or '-'}")
+        print(f"Repository: {result.get('github_owner') or '-'}/{result.get('proposed_repo_name') or '-'}")
+        if result.get("receipt_path"):
+            print(f"Receipt: {result['receipt_path']}")
+        elif result.get("provider_setup_receipt_preview"):
+            print(f"Proposed receipt: {result['provider_setup_receipt_preview']['receipt_path']}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok", True) else 1
 
 
 def _object_storage_setup_registration_cli_error(
@@ -29867,6 +29947,52 @@ def command_foreign_block_quarantine(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def command_quarantine_foreign_block(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="quarantine_foreign_block",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
+    try:
+        result = archive_services.quarantine_foreign_block(
+            Path(args.archive_root),
+            plan_path=args.plan,
+            dry_run=args.dry_run,
+            approve=args.approve,
+            reviewed_by=args.reviewed_by,
+            expected_case_id=args.expected_case_id,
+            review_note=args.review_note,
+        )
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(f"Foreign block quarantine write: {result.get('quarantine_write_status') or '-'}")
+        print(f"Trust state: {result.get('trust_state') or '-'}")
+        if result.get("proposed_paths"):
+            print("Proposed paths:")
+            for key, value in result["proposed_paths"].items():
+                print(f"- {key}: {value}")
+        if result.get("files_written"):
+            print("Files written:")
+            for value in result["files_written"]:
+                print(f"- {value}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+        print("Foreign block quarantine write passed." if result.get("ok") else "Foreign block quarantine write blocked.")
+    return 0 if result.get("ok") else 1
+
+
 def command_quarantine_review(args: argparse.Namespace) -> int:
     try:
         result = archive_services.foreign_block_quarantine_review_index(
@@ -29917,6 +30043,53 @@ def command_quarantine_decision(args: argparse.Namespace) -> int:
         print(f"Foreign block quarantine decision preview: {result.get('proposed_decision') or '-'}")
         print(f"Trust state: {result.get('trust_state') or '-'}")
         print(f"Decision status: {result.get('decision_status') or '-'}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result.get("warnings"):
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result.get("ok") else 1
+
+
+def command_record_quarantine_decision(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="record_quarantine_decision",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
+    try:
+        result = archive_services.record_quarantine_decision(
+            Path(args.archive_root),
+            decision_preview_path=args.decision_preview,
+            dry_run=args.dry_run,
+            approve=args.approve,
+            reviewed_by=args.reviewed_by,
+            expected_case_id=args.expected_case_id,
+            expected_decision=args.expected_decision,
+            review_note=args.review_note,
+        )
+    except archive_services.ArchiveServiceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(f"Foreign block quarantine decision record: {result.get('decision') or '-'}")
+        print(f"Trust state: {result.get('trust_state') or '-'}")
+        print(f"Decision status: {result.get('decision_status') or '-'}")
+        if result.get("proposed_paths"):
+            print("Proposed paths:")
+            for key, value in result["proposed_paths"].items():
+                print(f"- {key}: {value}")
+        if result.get("files_written"):
+            print("Files written:")
+            for value in result["files_written"]:
+                print(f"- {value}")
         if result.get("blockers"):
             print("Blockers:")
             for blocker in result["blockers"]:
@@ -34611,6 +34784,78 @@ def command_share(args: argparse.Namespace) -> int:
     return 0 if result["ok"] else 1
 
 
+def command_delegate_zet(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="delegate",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
+    if args.dry_run and args.approve:
+        print("Use either --dry-run or --approve, not both.", file=sys.stderr)
+        return 1
+    if not args.dry_run and not args.approve:
+        print("zet delegation requires --dry-run or --approve. Use --dry-run to preview.", file=sys.stderr)
+        return 1
+    if args.approve and not args.reviewed_by:
+        print("Real zet delegation requires --reviewed-by.", file=sys.stderr)
+        return 1
+    try:
+        if args.dry_run:
+            result = archive_services.delegate_zets_dry_run(
+                Path(args.archive_root),
+                view_id=args.view,
+                target_archive=args.target_archive,
+                counterparty_id=args.counterparty_id,
+                counterparty_fingerprint=args.counterparty_fingerprint,
+                allow_sensitive=args.allow_sensitive,
+                target_policy=args.target_policy,
+            )
+        else:
+            result = archive_services.delegate_zets(
+                Path(args.archive_root),
+                view_id=args.view,
+                target_archive=args.target_archive,
+                counterparty_id=args.counterparty_id,
+                counterparty_fingerprint=args.counterparty_fingerprint,
+                allow_sensitive=args.allow_sensitive,
+                target_policy=args.target_policy,
+                reviewed_by=args.reviewed_by,
+            )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        if result["dry_run"]:
+            state = "passed" if result["ok"] else "blocked"
+            print(f"zet delegate dry-run {state}.")
+        else:
+            print("zet delegate receipt written.")
+        print(f"Source archive: {result['source_archive']}")
+        print(f"Target policy: {result['target_policy']}")
+        print(f"Target archive: {result['target_archive'] or '<deferred until attestation>'}")
+        print(f"View: {result['view_id']}")
+        print(f"Delegated zets: {len(result['delegated_zets'])}")
+        if result["dry_run"]:
+            print(f"Trust gate: {result['trust_gate']['status']}")
+            print(f"Proposed delegate receipt path: {result['proposed_delegate_receipt_path']}")
+        else:
+            print(f"Delegate receipt path: {result['delegate_receipt_path']}")
+            print(f"Reviewed by: {result['reviewed_by']}")
+        if result["blockers"]:
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+        if result["warnings"]:
+            print("Warnings:")
+            for warning in result["warnings"]:
+                print(f"- {warning}")
+    return 0 if result["ok"] else 1
+
+
 def command_attest_zet(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("Only --dry-run zet attestation is implemented. Real attestation writes are intentionally unavailable.", file=sys.stderr)
@@ -37040,6 +37285,94 @@ def print_onboarding_result(result: dict[str, Any], output_format: str) -> None:
         print("Warnings:")
         for warning in result["warnings"]:
             print(f"- {warning}")
+
+
+def command_transfer_ownership(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="transfer_archive_ownership",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
+    if args.dry_run and args.approve:
+        print("Use either --dry-run or --approve, not both.", file=sys.stderr)
+        return 1
+    if args.dry_run:
+        try:
+            result = archive_services.ownership_transfer_dry_run(
+                Path(args.archive_root),
+                new_owner=args.new_owner,
+                new_owner_kind=args.new_owner_kind,
+                new_owner_archive=args.new_owner_archive,
+                operators_after=args.operator_after,
+                approved_by=args.approved_by,
+                subject=args.subject,
+                counterparty_id=args.counterparty_id,
+                counterparty_fingerprint=args.counterparty_fingerprint,
+                reason=args.reason,
+            )
+        except (archive_services.ArchiveServiceError, OSError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+        if args.format == "json":
+            print_json(result)
+        else:
+            state = "passed" if result["ok"] else "blocked"
+            print(f"Ownership transfer dry-run {state}.")
+            print(f"Archive: {result['source_archive']}")
+            print(f"Previous owner: {result['previous_owner']}")
+            print(f"New owner: {result['new_owner']}")
+            print(f"Operators after: {', '.join(result['ownership_gate']['operators_after']) or '(none)'}")
+            print(f"Trust gate: {result['trust_gate']['status']}")
+            print(f"Provider changes: {result['provider_change_plan']['status']}")
+            print(f"Proposed receipt path: {result['proposed_receipt_path']}")
+            if result["blockers"]:
+                print("Blockers:")
+                for blocker in result["blockers"]:
+                    print(f"- {blocker}")
+            if result["warnings"]:
+                print("Warnings:")
+                for warning in result["warnings"]:
+                    print(f"- {warning}")
+        return 0 if result["ok"] else 1
+
+    if not args.approve:
+        print("Real ownership transfer requires --approve. Use --dry-run to preview.", file=sys.stderr)
+        return 1
+    if not args.reviewed_by:
+        print("Real ownership transfer requires --reviewed-by.", file=sys.stderr)
+        return 1
+
+    try:
+        result = archive_services.transfer_archive_ownership(
+            Path(args.archive_root),
+            new_owner=args.new_owner,
+            new_owner_kind=args.new_owner_kind,
+            new_owner_archive=args.new_owner_archive,
+            operators_after=args.operator_after,
+            approved_by=args.approved_by,
+            subject=args.subject,
+            counterparty_id=args.counterparty_id,
+            counterparty_fingerprint=args.counterparty_fingerprint,
+            reason=args.reason,
+            reviewed_by=args.reviewed_by,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print("Ownership transfer applied.")
+        print(f"Archive: {result['source_archive']}")
+        print(f"Previous owner: {result['previous_owner']}")
+        print(f"New owner: {result['new_owner']}")
+        print(f"Reviewed by: {result['reviewed_by']}")
+        print(f"Receipt path: {result['receipt_path']}")
+        print(f"Provider changes: {result['provider_change_plan']['status']} (manual)")
+    return 0
 
 
 def command_identity_reconcile(args: argparse.Namespace) -> int:
@@ -40709,6 +41042,43 @@ def build_parser() -> argparse.ArgumentParser:
     prompt_boundary.add_argument("--dry-run", action="store_true", help="Preview only; never execute inspected text.")
     prompt_boundary.add_argument("--format", choices=["json"], default="json", help="Output format.")
     prompt_boundary.set_defaults(func=command_prompt_boundary)
+
+    github_repo = subcommands.add_parser(
+        "github-repo",
+        help="Plan GitHub repository setup for a WOM profile without creating the repository.",
+    )
+    github_repo.add_argument("archive_root", help="Archive root to plan for.")
+    github_repo.add_argument("--dry-run", action="store_true", help="Preview local metadata and manual GitHub steps without writing files.")
+    github_repo.add_argument("--profile-id", help="Resolved WOM profile id.")
+    github_repo.add_argument("--profile-slug", help="ASCII profile slug used in the proposed repository name.")
+    github_repo.add_argument("--github-owner", help="GitHub user or organization name.")
+    github_repo.add_argument("--github-account-ref", help="Safe GitHub account reference such as github:account:example.")
+    github_repo.add_argument("--repo-name", help="Override repository name. Must keep the zettel-kasten- prefix.")
+    github_repo.add_argument(
+        "--visibility",
+        choices=sorted(archive_services.GITHUB_REPOSITORY_ALLOWED_VISIBILITIES),
+        default=archive_services.GITHUB_REPOSITORY_DEFAULT_VISIBILITY,
+        help="Proposed repository visibility. Defaults to private.",
+    )
+    github_repo.add_argument(
+        "--remote-protocol",
+        choices=sorted(archive_services.GITHUB_REPOSITORY_REMOTE_PROTOCOLS),
+        default=archive_services.GITHUB_REPOSITORY_DEFAULT_REMOTE_PROTOCOL,
+        help="Planned local remote protocol. Defaults to ssh.",
+    )
+    github_repo.add_argument(
+        "--approve",
+        action="store_true",
+        help="Write versioned provider metadata and a setup receipt only; never create or connect a GitHub repository.",
+    )
+    github_repo.add_argument("--reviewed-by", help="Reviewer id required with --approve.")
+    github_repo.add_argument(
+        "--write-local-profile",
+        action="store_true",
+        help="Write ignored local GitHub account hints under profiles/local/ when approving.",
+    )
+    github_repo.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    github_repo.set_defaults(func=command_github_repo)
 
     object_storage = subcommands.add_parser(
         "object-storage",
@@ -45536,6 +45906,20 @@ def build_parser() -> argparse.ArgumentParser:
     foreign_block_quarantine.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     foreign_block_quarantine.set_defaults(func=command_foreign_block_quarantine)
 
+    quarantine_foreign_block = subcommands.add_parser(
+        "quarantine-foreign-block",
+        help="Preview or approve a local isolated quarantine case write for a foreign block.",
+    )
+    quarantine_foreign_block.add_argument("archive_root", help="Archive root used for path safety and local context.")
+    quarantine_foreign_block.add_argument("--plan", required=True, help="Archive-relative JSON report from foreign-block-quarantine --dry-run.")
+    quarantine_foreign_block.add_argument("--dry-run", action="store_true", help="Preview the approved quarantine write without writing files.")
+    quarantine_foreign_block.add_argument("--approve", action="store_true", help="Approve the local quarantine case write.")
+    quarantine_foreign_block.add_argument("--reviewed-by", help="Safe actor id approving the quarantine write.")
+    quarantine_foreign_block.add_argument("--expected-case-id", help="Optional safe case id expected from the plan.")
+    quarantine_foreign_block.add_argument("--review-note", help="Optional short non-secret operator note. This is not trust or attestation.")
+    quarantine_foreign_block.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    quarantine_foreign_block.set_defaults(func=command_quarantine_foreign_block)
+
     quarantine_review = subcommands.add_parser(
         "quarantine-review",
         help="List and validate existing foreign block quarantine cases without writing files.",
@@ -45568,6 +45952,29 @@ def build_parser() -> argparse.ArgumentParser:
     quarantine_decision.add_argument("--review-note", help="Optional short safe note. Preview context only, not approval.")
     quarantine_decision.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     quarantine_decision.set_defaults(func=command_quarantine_decision)
+
+    record_quarantine_decision = subcommands.add_parser(
+        "record-quarantine-decision",
+        help="Preview or approve recording a local quarantine decision for a foreign block.",
+    )
+    record_quarantine_decision.add_argument("archive_root", help="Archive root used for path safety and local context.")
+    record_quarantine_decision.add_argument(
+        "--decision-preview",
+        required=True,
+        help="JSON file from quarantine-decision --dry-run --format json.",
+    )
+    record_quarantine_decision.add_argument("--dry-run", action="store_true", help="Preview the decision record write without writing files.")
+    record_quarantine_decision.add_argument("--approve", action="store_true", help="Approve writing the local quarantine decision record.")
+    record_quarantine_decision.add_argument("--reviewed-by", help="Safe actor id approving the decision record.")
+    record_quarantine_decision.add_argument("--expected-case-id", help="Optional safe case id expected from the decision preview.")
+    record_quarantine_decision.add_argument(
+        "--expected-decision",
+        choices=sorted(archive_services.FOREIGN_BLOCK_QUARANTINE_DECISIONS),
+        help="Optional quarantine decision expected from the decision preview.",
+    )
+    record_quarantine_decision.add_argument("--review-note", help="Optional short non-secret operator note. Only summary metadata is stored.")
+    record_quarantine_decision.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    record_quarantine_decision.set_defaults(func=command_record_quarantine_decision)
 
     quarantine_decision_review = subcommands.add_parser(
         "quarantine-decision-review",
@@ -48567,6 +48974,25 @@ def build_parser() -> argparse.ArgumentParser:
     share.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     share.set_defaults(func=command_share)
 
+    delegate = subcommands.add_parser("delegate-zet", help="Preview or write delegated access to zets from a saved view.")
+    delegate.add_argument("archive_root", help="Source archive root.")
+    delegate.add_argument("--view", required=True, help="View id to delegate.")
+    delegate.add_argument("--target-archive", help="Target archive id. Required for counterparty_bound delegation.")
+    delegate.add_argument(
+        "--target-policy",
+        choices=sorted(archive_services.DELEGATE_TARGET_POLICIES),
+        default=archive_services.DELEGATE_DEFAULT_TARGET_POLICY,
+        help="Delegation target policy. claimable_once can defer the recipient until attestation.",
+    )
+    delegate.add_argument("--counterparty-id", help="Expected counterparty identity/archive/principal id.")
+    delegate.add_argument("--counterparty-fingerprint", help="Expected counterparty public key fingerprint.")
+    delegate.add_argument("--allow-sensitive", action="store_true", help="Allow sensitive categories in the delegation gate.")
+    delegate.add_argument("--dry-run", action="store_true", help="Preview delegation without writing or sending files.")
+    delegate.add_argument("--approve", action="store_true", help="Write a delegate receipt after dry-run gates pass.")
+    delegate.add_argument("--reviewed-by", help="Reviewer id required for real delegation, e.g. person:me.")
+    delegate.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    delegate.set_defaults(func=command_delegate_zet)
+
     attest = subcommands.add_parser("attest-zet", help="Dry-run attestation of a delegated foreign zet receipt.")
     attest.add_argument("archive_root", help="Attesting archive root.")
     attest.add_argument("--delegate-receipt", required=True, help="Archive-relative or absolute delegate receipt JSON path.")
@@ -50108,6 +50534,38 @@ def build_parser() -> argparse.ArgumentParser:
     onboard.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     onboard.set_defaults(func=command_onboard)
 
+    transfer_ownership = subcommands.add_parser(
+        "transfer-ownership",
+        help="Preview or apply an archive ownership transfer.",
+    )
+    transfer_ownership.add_argument("archive_root", help="Archive root to inspect.")
+    transfer_ownership.add_argument("--new-owner", required=True, help="New owner id, e.g. person:child or company:spinout.")
+    transfer_ownership.add_argument(
+        "--new-owner-kind",
+        choices=sorted(archive_services.OWNER_KINDS),
+        help="New owner kind. Defaults to the id prefix when possible.",
+    )
+    transfer_ownership.add_argument("--new-owner-archive", help="Optional archive id for the new owner.")
+    transfer_ownership.add_argument(
+        "--operator-after",
+        action="append",
+        help="Operator id after transfer. Repeat for each post-transfer operator.",
+    )
+    transfer_ownership.add_argument(
+        "--approved-by",
+        action="append",
+        help="Current owner/operator id that approved the proposed transfer. Repeat as needed.",
+    )
+    transfer_ownership.add_argument("--subject", help="Subject of the transfer, e.g. person:child.")
+    transfer_ownership.add_argument("--counterparty-id", help="Trusted counterparty id to verify. Defaults to the new owner.")
+    transfer_ownership.add_argument("--counterparty-fingerprint", help="Expected public key fingerprint for the new owner.")
+    transfer_ownership.add_argument("--reason", help="Human-readable reason for the proposed transfer.")
+    transfer_ownership.add_argument("--dry-run", action="store_true", help="Preview transfer without writing archive files.")
+    transfer_ownership.add_argument("--approve", action="store_true", help="Apply the transfer after dry-run gates pass.")
+    transfer_ownership.add_argument("--reviewed-by", help="Reviewer id required for real transfer, e.g. person:me.")
+    transfer_ownership.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    transfer_ownership.set_defaults(func=command_transfer_ownership)
+
     identity_reconcile = subcommands.add_parser(
         "identity-reconcile",
         aliases=["archive-identity-reconcile", "reconcile-identity"],
@@ -50552,7 +51010,9 @@ def _project_write_runtime_guard(
 _UNAVAILABLE_WRITER_LIFECYCLE_ACTIONS = {
     "add-source": "add_source_binding",
     "credential-lifecycle": "authenticated_credential_lifecycle_decision",
+    "delegate-zet": "delegate",
     "discard-draft": "discard_draft_apply",
+    "github-repo": "approve_github_repository_setup_plan",
     "identity-reconcile": "archive_identity_reconcile",
     "import-external": "import_external_archive",
     "init": "archive_init",
@@ -50567,6 +51027,7 @@ _UNAVAILABLE_WRITER_LIFECYCLE_ACTIONS = {
     "relation-candidate-decide": "relation_candidate_accept",
     "revert-edge": "zettel_edge_revert",
     "revert-batch": "zettel_edge_batch_revert",
+    "transfer-ownership": "transfer_archive_ownership",
 }
 
 

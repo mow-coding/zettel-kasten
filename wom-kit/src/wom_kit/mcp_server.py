@@ -293,6 +293,32 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "github_repository_setup_plan",
+        "description": "Plan GitHub repository metadata for a WOM profile. Read-only; never creates repos, remotes, pushes, OAuth, or API calls.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string", "description": "Path to the archive root."},
+                "profile_id": {"type": "string"},
+                "profile_slug": {"type": "string"},
+                "github_owner": {"type": "string"},
+                "github_account_ref": {"type": "string"},
+                "repo_name": {"type": "string"},
+                "visibility": {
+                    "type": "string",
+                    "enum": sorted(archive_services.GITHUB_REPOSITORY_ALLOWED_VISIBILITIES),
+                    "default": archive_services.GITHUB_REPOSITORY_DEFAULT_VISIBILITY,
+                },
+                "remote_protocol": {
+                    "type": "string",
+                    "enum": sorted(archive_services.GITHUB_REPOSITORY_REMOTE_PROTOCOLS),
+                    "default": archive_services.GITHUB_REPOSITORY_DEFAULT_REMOTE_PROTOCOL,
+                },
+            },
+            "required": ["archive_root"],
+        },
+    },
+    {
         "name": "object_storage_setup_plan",
         "description": "Plan object storage metadata for WOM objets. Read-only; never creates buckets, uploads, syncs, copies, hashes, OAuth, or API calls.",
         "inputSchema": {
@@ -2873,6 +2899,23 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "quarantine_foreign_block_check",
+        "description": "Read-only dry-run check for an approved CLI-only foreign block quarantine write.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "path": {"type": "string"},
+                "quarantine_plan": {"type": "object"},
+                "expected_case_id": {"type": "string"},
+                "reviewed_by": {"type": "string"},
+                "review_note": {"type": "string"},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root"],
+        },
+    },
+    {
         "name": "foreign_block_quarantine_review_index",
         "description": "Read-only inventory and consistency check for existing foreign block quarantine cases.",
         "inputSchema": {
@@ -2905,6 +2948,27 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "dry_run": {"type": "boolean", "default": True},
             },
             "required": ["archive_root", "case_id"],
+        },
+    },
+    {
+        "name": "record_quarantine_decision_check",
+        "description": "Read-only dry-run check for a CLI-only foreign block quarantine decision record write.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "path": {"type": "string"},
+                "decision_preview": {"type": "object"},
+                "expected_case_id": {"type": "string"},
+                "expected_decision": {
+                    "type": "string",
+                    "enum": sorted(archive_services.FOREIGN_BLOCK_QUARANTINE_DECISIONS),
+                },
+                "reviewed_by": {"type": "string"},
+                "review_note": {"type": "string"},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+            "required": ["archive_root"],
         },
     },
     {
@@ -3363,6 +3427,23 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "delegate_zet_check",
+        "description": "Dry-run check whether zets from a saved view can be delegated. This never writes receipts or sends data.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "view": {"type": "string"},
+                "target_archive": {"type": "string"},
+                "target_policy": {"type": "string", "enum": sorted(archive_services.DELEGATE_TARGET_POLICIES)},
+                "counterparty_id": {"type": "string"},
+                "counterparty_fingerprint": {"type": "string"},
+                "allow_sensitive": {"type": "boolean", "default": False},
+            },
+            "required": ["archive_root", "view"],
+        },
+    },
+    {
         "name": "attest_zet_check",
         "description": "Dry-run check whether a delegated foreign zet receipt can be attested. This never writes receipts.",
         "inputSchema": {
@@ -3386,6 +3467,26 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "attestation_receipt": {"type": "string"},
             },
             "required": ["archive_root", "attestation_receipt"],
+        },
+    },
+    {
+        "name": "ownership_transfer_check",
+        "description": "Dry-run check whether archive ownership can be transferred. This never changes owners or writes receipts.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "new_owner": {"type": "string"},
+                "new_owner_kind": {"type": "string", "enum": sorted(archive_services.OWNER_KINDS)},
+                "new_owner_archive": {"type": "string"},
+                "operators_after": {"type": "array", "items": {"type": "string"}},
+                "approved_by": {"type": "array", "items": {"type": "string"}},
+                "subject": {"type": "string"},
+                "counterparty_id": {"type": "string"},
+                "counterparty_fingerprint": {"type": "string"},
+                "reason": {"type": "string"},
+            },
+            "required": ["archive_root", "new_owner"],
         },
     },
 ]
@@ -3588,6 +3689,8 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_archive_capabilities(arguments)
     if name == "prompt_boundary_check":
         return tool_prompt_boundary_check(arguments)
+    if name == "github_repository_setup_plan":
+        return tool_github_repository_setup_plan(arguments)
     if name == "object_storage_setup_plan":
         return tool_object_storage_setup_plan(arguments)
     if name == "provider_setup_status":
@@ -3802,10 +3905,14 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_foreign_block_attestation_packet_check(arguments)
     if name == "foreign_block_quarantine_plan":
         return tool_foreign_block_quarantine_plan(arguments)
+    if name == "quarantine_foreign_block_check":
+        return tool_quarantine_foreign_block_check(arguments)
     if name == "foreign_block_quarantine_review_index":
         return tool_foreign_block_quarantine_review_index(arguments)
     if name == "foreign_block_quarantine_decision_check":
         return tool_foreign_block_quarantine_decision_check(arguments)
+    if name == "record_quarantine_decision_check":
+        return tool_record_quarantine_decision_check(arguments)
     if name == "foreign_block_quarantine_decision_review_index":
         return tool_foreign_block_quarantine_decision_review_index(arguments)
     if name == "foreign_block_decision_outcome_plan":
@@ -3840,10 +3947,14 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_mint_zettel_check(arguments)
     if name == "share_check":
         return tool_share_check(arguments)
+    if name == "delegate_zet_check":
+        return tool_delegate_zet_check(arguments)
     if name == "attest_zet_check":
         return tool_attest_zet_check(arguments)
     if name == "anchor_zet_check":
         return tool_anchor_zet_check(arguments)
+    if name == "ownership_transfer_check":
+        return tool_ownership_transfer_check(arguments)
 
     raise InvalidParamsError("Unknown tool.")
 
@@ -4066,6 +4177,24 @@ def tool_prompt_boundary_check(arguments: dict[str, Any]) -> dict[str, Any]:
     )
     state = str(result.get("risk_level") or ("passed" if result["ok"] else "blocked"))
     return tool_success_result(f"prompt_boundary_check: {state}.", result)
+
+
+def tool_github_repository_setup_plan(arguments: dict[str, Any]) -> dict[str, Any]:
+    archive_root = require_path_arg(arguments, "archive_root")
+    result = call_service(
+        archive_services.github_repository_setup_plan,
+        archive_root,
+        profile_id=optional_string_arg(arguments, "profile_id"),
+        profile_slug=optional_string_arg(arguments, "profile_slug"),
+        github_owner=optional_string_arg(arguments, "github_owner"),
+        github_account_ref=optional_string_arg(arguments, "github_account_ref"),
+        repo_name=optional_string_arg(arguments, "repo_name"),
+        visibility=optional_string_arg(arguments, "visibility") or archive_services.GITHUB_REPOSITORY_DEFAULT_VISIBILITY,
+        remote_protocol=optional_string_arg(arguments, "remote_protocol")
+        or archive_services.GITHUB_REPOSITORY_DEFAULT_REMOTE_PROTOCOL,
+    )
+    state = "passed" if result["ok"] else "blocked"
+    return tool_success_result(f"github_repository_setup_plan: {state}.", result)
 
 
 def tool_object_storage_setup_plan(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -6524,6 +6653,32 @@ def tool_foreign_block_quarantine_plan(arguments: dict[str, Any]) -> dict[str, A
     return tool_success_result(f"foreign_block_quarantine_plan: {state}.", result)
 
 
+def tool_quarantine_foreign_block_check(arguments: dict[str, Any]) -> dict[str, Any]:
+    archive_root = require_path_arg(arguments, "archive_root")
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("quarantine_foreign_block_check is dry-run only.")
+    quarantine_plan = arguments.get("quarantine_plan") if isinstance(arguments.get("quarantine_plan"), dict) else None
+    if "quarantine_plan" in arguments and quarantine_plan is None:
+        raise ToolError("quarantine_plan must be a structured object.")
+    relative_path = optional_string_arg(arguments, "path")
+    expected_case_id = optional_string_arg(arguments, "expected_case_id")
+    reviewed_by = optional_string_arg(arguments, "reviewed_by")
+    review_note = optional_string_arg(arguments, "review_note")
+    result = call_service(
+        archive_services.quarantine_foreign_block,
+        archive_root,
+        plan_path=relative_path,
+        plan=quarantine_plan,
+        dry_run=True,
+        approve=False,
+        reviewed_by=reviewed_by,
+        expected_case_id=expected_case_id,
+        review_note=review_note,
+    )
+    state = "passed" if result["ok"] else "blocked"
+    return tool_success_result(f"quarantine_foreign_block_check: {state}.", result)
+
+
 def tool_foreign_block_quarantine_review_index(arguments: dict[str, Any]) -> dict[str, Any]:
     archive_root = require_path_arg(arguments, "archive_root")
     if arguments.get("dry_run", True) is not True:
@@ -6561,6 +6716,36 @@ def tool_foreign_block_quarantine_decision_check(arguments: dict[str, Any]) -> d
     )
     state = "passed" if result["ok"] else "blocked"
     return tool_success_result(f"foreign_block_quarantine_decision_check: {state}.", result)
+
+
+def tool_record_quarantine_decision_check(arguments: dict[str, Any]) -> dict[str, Any]:
+    archive_root = require_path_arg(arguments, "archive_root")
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("record_quarantine_decision_check is dry-run only.")
+    if arguments.get("approve") is not None:
+        raise ToolError("record_quarantine_decision_check does not approve or write.")
+    decision_preview = arguments.get("decision_preview")
+    if decision_preview is not None and not isinstance(decision_preview, dict):
+        raise ToolError("decision_preview must be a structured object.")
+    path = optional_string_arg(arguments, "path")
+    expected_case_id = optional_string_arg(arguments, "expected_case_id")
+    expected_decision = optional_string_arg(arguments, "expected_decision")
+    reviewed_by = optional_string_arg(arguments, "reviewed_by")
+    review_note = optional_string_arg(arguments, "review_note")
+    result = call_service(
+        archive_services.record_quarantine_decision,
+        archive_root,
+        decision_preview_path=path,
+        decision_preview=decision_preview,
+        dry_run=True,
+        approve=False,
+        reviewed_by=reviewed_by,
+        expected_case_id=expected_case_id,
+        expected_decision=expected_decision,
+        review_note=review_note,
+    )
+    state = "passed" if result["ok"] else "blocked"
+    return tool_success_result(f"record_quarantine_decision_check: {state}.", result)
 
 
 def tool_foreign_block_quarantine_decision_review_index(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -7061,6 +7246,28 @@ def tool_share_check(arguments: dict[str, Any]) -> dict[str, Any]:
     return tool_success_result(f"share_check: {state}.", result)
 
 
+def tool_delegate_zet_check(arguments: dict[str, Any]) -> dict[str, Any]:
+    archive_root = require_path_arg(arguments, "archive_root")
+    view_id = require_string_arg(arguments, "view")
+    target_archive = optional_string_arg(arguments, "target_archive")
+    target_policy = optional_string_arg(arguments, "target_policy")
+    counterparty_id = optional_string_arg(arguments, "counterparty_id")
+    counterparty_fingerprint = optional_string_arg(arguments, "counterparty_fingerprint")
+    allow_sensitive = bool(arguments.get("allow_sensitive", False))
+    result = call_service(
+        archive_services.delegate_zets_dry_run,
+        archive_root,
+        view_id=view_id,
+        target_archive=target_archive,
+        counterparty_id=counterparty_id,
+        counterparty_fingerprint=counterparty_fingerprint,
+        allow_sensitive=allow_sensitive,
+        target_policy=target_policy,
+    )
+    state = "passed" if result["ok"] else "blocked"
+    return tool_success_result(f"delegate_zet_check: {state}.", result)
+
+
 def tool_attest_zet_check(arguments: dict[str, Any]) -> dict[str, Any]:
     archive_root = require_path_arg(arguments, "archive_root")
     delegate_receipt = require_string_arg(arguments, "delegate_receipt")
@@ -7087,6 +7294,34 @@ def tool_anchor_zet_check(arguments: dict[str, Any]) -> dict[str, Any]:
     )
     state = "passed" if result["ok"] else "blocked"
     return tool_success_result(f"anchor_zet_check: {state}.", result)
+
+
+def tool_ownership_transfer_check(arguments: dict[str, Any]) -> dict[str, Any]:
+    archive_root = require_path_arg(arguments, "archive_root")
+    new_owner = require_string_arg(arguments, "new_owner")
+    new_owner_kind = optional_string_arg(arguments, "new_owner_kind")
+    new_owner_archive = optional_string_arg(arguments, "new_owner_archive")
+    operators_after = optional_string_list_arg(arguments, "operators_after")
+    approved_by = optional_string_list_arg(arguments, "approved_by")
+    subject = optional_string_arg(arguments, "subject")
+    counterparty_id = optional_string_arg(arguments, "counterparty_id")
+    counterparty_fingerprint = optional_string_arg(arguments, "counterparty_fingerprint")
+    reason = optional_string_arg(arguments, "reason")
+    result = call_service(
+        archive_services.ownership_transfer_dry_run,
+        archive_root,
+        new_owner=new_owner,
+        new_owner_kind=new_owner_kind,
+        new_owner_archive=new_owner_archive,
+        operators_after=operators_after,
+        approved_by=approved_by,
+        subject=subject,
+        counterparty_id=counterparty_id,
+        counterparty_fingerprint=counterparty_fingerprint,
+        reason=reason,
+    )
+    state = "passed" if result["ok"] else "blocked"
+    return tool_success_result(f"ownership_transfer_check: {state}.", result)
 
 
 class SimpleArgs:

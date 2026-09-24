@@ -104,7 +104,7 @@ class V0401ReleaseDocsTests(unittest.TestCase):
 
     def test_current_parser_combines_all_released_writers(self) -> None:
         blocked = archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS
-        self.assertEqual(len(blocked), 14)  # 2026-09-24 triage reopen
+        self.assertEqual(len(blocked), 19)  # 2026-09-24 triage reopen
         self.assertNotIn("object-storage-upload", blocked)  # v0.4.33
         self.assertNotIn("migrate", blocked)
         self.assertNotIn("discard-draft", blocked)
@@ -139,15 +139,15 @@ class V0401ReleaseDocsTests(unittest.TestCase):
         # read-only exact-approval-claims (one alias) and the always-dialog
         # exact-approval-claim-finalize writer, and makes revert-edge --approve
         # unconditional (one conditional scope fewer).
-        self.assertEqual(counts["canonical_executable_command_count"], 311)  # v0.4.40: two receipt reconcile batch commands
+        self.assertEqual(counts["canonical_executable_command_count"], 316)  # v0.4.40: two receipt reconcile batch commands
         self.assertEqual(counts["alias_invocation_path_count"], 248)  # v0.4.40: aliases of deleted writers removed
-        self.assertEqual(counts["invocation_path_count"], 559)
+        self.assertEqual(counts["invocation_path_count"], 564)
         # v0.4.33 reopened object-storage-upload (one path moves from fixed-closed to available).
         self.assertEqual(counts["approval_available_command_count"], 92)  # 2026-09-24 triage reopen
-        self.assertEqual(counts["approval_fixed_closed_command_count"], 15)
+        self.assertEqual(counts["approval_fixed_closed_command_count"], 20)
         self.assertEqual(counts["approval_not_exposed_command_count"], 204)
         self.assertEqual(counts["conditional_approval_command_count"], 10)
-        self.assertEqual(counts["dry_run_exposed_command_count"], 266)
+        self.assertEqual(counts["dry_run_exposed_command_count"], 271)
         self.assertEqual(counts["unmatched_fixed_closed_command_count"], 0)
         by_path = {
             row["canonical_path"]: row for row in inventory["commands"]
@@ -338,7 +338,10 @@ class V0401ReleaseDocsTests(unittest.TestCase):
             self.assertIn("v0.4.1", text)
             self.assertIn("zettel-objet-link", text)
             self.assertIn("revert", text)
-            self.assertIn("fixed closed", text)
+        # Link revert was reopened under exact approval in v0.4.40; other
+        # operator-contract writers remain fixed closed.
+        self.assertIn("fixed closed", operator)
+        self.assertIn("v0.4.40", capture)
         self.assertIn("native exact-human", operator)
         self.assertIn("exact-human-approved replay", capture)
         self.assertNotIn(

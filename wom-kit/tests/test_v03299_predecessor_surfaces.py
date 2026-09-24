@@ -142,12 +142,12 @@ CLI_ADDITIONS = {
     ("retire-draft-reconcile-batch",),
 }
 # v0.4.40 (owner decision 2026-09-24): retired and replaced writers are
-# deleted outright instead of staying fixed closed.
+# deleted outright instead of staying fixed closed. Five sharing/ownership
+# commands were restored on 2026-09-25 (owner ZET design) and stay closed.
 CLI_REMOVALS = {
     (name,)
     for name in (
-        "delegate-zet", "transfer-ownership", "quarantine-foreign-block", "record-quarantine-decision",
-        "github-repo", "objet-capture-enable", "capture-enable", "object-storage-upload-evidence",
+        "objet-capture-enable", "capture-enable", "object-storage-upload-evidence",
         "object-storage-external-upload-evidence", "objet-storage-upload-evidence",
         "zet-abstract-backfill-recover", "abstract-backfill-recover", "zet-abstract-backfill-revert",
         "abstract-backfill-revert", "zet-abstract-backfill-write", "abstract-backfill-write",
@@ -159,17 +159,18 @@ CLI_REMOVALS = {
         "tiro-lossless-recovery-capture", "tiro-recovery-capture",
     )
 }
+# 2026-09-25: the five ZET sharing/ownership commands and their MCP previews
+# were restored (owner design for v0.5); only source_scan_plan stays removed.
 MCP_REMOVALS = {
-    "delegate_zet_check", "ownership_transfer_check", "quarantine_foreign_block_check",
-    "record_quarantine_decision_check", "github_repository_setup_plan", "source_scan_plan",
+    "source_scan_plan",
 }
-CURRENT_CLI_COUNT = 560
+CURRENT_CLI_COUNT = 565
 CURRENT_CLI_CANONICAL_SHA256 = (
-    "858a2d915d74a69d85b2862ad5acb58315745bc2e121f9f757364d0721f2f6ca"
+    "0f41d099f1c891ed34d5cfa8a92dce84ae8d1cd81c799d32ac35693fd1f1de18"
 )
-CURRENT_MCP_COUNT = 131
+CURRENT_MCP_COUNT = 136
 CURRENT_MCP_CANONICAL_SHA256 = (
-    "9e9a7727989f6b6335d3c65e26336af573d38baa2fbdfb2cc48975b785a6ebf4"  # v0.4.40: six retired check tools removed
+    "39e09bca67b57398b9f8314a7e9241e911f581ff3f473225ea53d3069a779f26"  # v0.4.40: source_scan_plan removed; five sharing previews restored 2026-09-25
 )
 MCP_ADDITIONS = {
     "zet_title_remap_write",

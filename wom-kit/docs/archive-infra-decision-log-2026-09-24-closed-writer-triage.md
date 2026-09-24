@@ -1,6 +1,6 @@
 # Archive Infra Decision Log: Closed-Writer Triage (2026-09-24)
 
-Status: owner decision recorded; groups 1-5a, the title-remap reclassification, group 6 and the removals implemented for v0.4.40.
+Status: owner decision recorded; groups 1-5a, the title-remap reclassification, group 6 and the removals implemented for v0.4.40; five removals reversed on 2026-09-25 (see Correction).
 
 ## Decision (owner, 2026-09-24)
 
@@ -225,3 +225,28 @@ recovery tests (declined writes nothing, approved recovers once).
 
 Evidence: parser, capability inventory and MCP surface pins in
 `test_v03299_predecessor_surfaces.py`; `tests/removed_commands_v0440.py`.
+
+## Correction: Five Commands Restored (2026-09-25)
+
+After the removal, a read-only inventory of the owner's design documents
+(ideas, roadmap and backlog notes from 2026-05 to 2026-09) found that five
+removed commands carry the owner's ZET sharing and ownership design, the
+declared v0.5 roadmap line: `delegate-zet` is the only "share" step of
+publish -> share -> accept -> reflect (including the one-use claimable license
+the owner specified on 2026-05-23), `transfer-ownership` is composite-archive
+inheritance/split/transfer, `quarantine-foreign-block` and
+`record-quarantine-decision` are the receiving checkpoint, and `github-repo`
+is the planning tool the 2026-06-05 onboarding spec shows first. Claude had
+classified them as useless because they were never usable after v0.4.0; that
+judged availability, not the owner's intent.
+
+They are restored exactly as before the removal (dry-run previews available,
+approval still fixed closed) together with their MCP previews
+(`delegate_zet_check`, `ownership_transfer_check`,
+`quarantine_foreign_block_check`, `record_quarantine_decision_check`,
+`github_repository_setup_plan`). Their approval opens with the ZET sharing
+design, not by itself. v0.4.40 therefore removes 12 commands, not 17;
+`source_scan_plan` stays removed with `scan-source`.
+
+Lesson recorded: before removing a command, check the owner's design
+documents and roadmap, not only customer letters and current availability.

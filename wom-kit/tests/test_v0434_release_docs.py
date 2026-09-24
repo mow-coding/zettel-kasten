@@ -145,7 +145,7 @@ class V0434ReleaseDocsTests(unittest.TestCase):
     def test_release_surfaces_are_documented(self) -> None:
         approval = " ".join((KIT / "docs" / "exact-human-approval-contract.md").read_text(encoding="utf-8").split())
         for phrase in ("presenter-bound and time-boxed", "`presenter_token`", "work_session_presenter_mismatch",
-                       "`session_presenter`", "work_session_second_presenter_observed", "92 approval-available, 15 fixed-closed"):
+                       "`session_presenter`", "work_session_second_presenter_observed", "92 approval-available, 20 fixed-closed"):
             self.assertIn(phrase, approval)
         start_here = (KIT / "docs" / "ai-start-here.md").read_text(encoding="utf-8")
         self.assertIn("`session_permission_attention`", start_here)

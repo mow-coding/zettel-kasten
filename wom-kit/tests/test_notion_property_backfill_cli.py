@@ -319,7 +319,8 @@ class NotionPropertyBackfillCliTests(unittest.TestCase):
         # v0.4.36 added operator-feedback-archive; v0.4.38 adds
         # draft-revision-write and activity-cleanup. v0.4.40 reopens 27
         # writers (plus two new batch commands) from the 58-writer triage and
-        # deletes 17 closed commands.
+        # deletes 12 closed commands (five sharing/ownership commands were
+        # restored closed on 2026-09-25).
         self.assertEqual(
             inventory["counts"]["approval_available_command_count"],
             92,
@@ -330,7 +331,7 @@ class NotionPropertyBackfillCliTests(unittest.TestCase):
         )
         self.assertEqual(
             inventory["counts"]["approval_fixed_closed_command_count"],
-            15,
+            20,
         )
         # Unsupported cancellation is a separate fixed-close reason, not a
         # change to the sole approved Notion migration target above.

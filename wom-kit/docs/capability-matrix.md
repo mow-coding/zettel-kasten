@@ -119,7 +119,7 @@ revalidated dimension by dimension without exposing compared values, and
 noninteractive Windows child processes use the common no-console policy while
 native approval and credential interaction remain visible.
 
-The current parser inventory has 92 approval-available, 15 fixed-closed, and
+The current parser inventory has 92 approval-available, 20 fixed-closed, and
 204 not-exposed canonical paths, including ten conditional approval scopes.
 v0.4.40 reopened `remint-reconcile` and `retire-draft-reconcile` and added
 their batch commands (2026-09-24 58-writer triage, group 1), reopened
@@ -135,8 +135,9 @@ recovery), nested `derive-text capture`, `saved-view-write` /
 `saved-view-revert`, `objet-source-metadata-write`,
 `external-locator-deactivate`, `project-bytecode-repair`,
 `project-version-update-collision` and
-`zet-revision-restore-proposal-from-snapshot` (group 6), and removed 17 closed
-commands no customer path needs (see UPGRADE for their replacements).
+`zet-revision-restore-proposal-from-snapshot` (group 6), and removed 12 closed
+commands no customer path needs (see UPGRADE for their replacements); the five
+ZET sharing/ownership commands stay as closed previews for the v0.5 design.
 v0.4.36 added `operator-feedback-archive` (delivered letters leave the archive).
 v0.4.33 reopened `object-storage-upload` under the exact approval contract.
 v0.4.21 reopened `discard-draft`, `discard-draft-restore`, `zettel-edge-batch`,

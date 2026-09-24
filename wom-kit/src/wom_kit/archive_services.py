@@ -93809,8 +93809,8 @@ def shared_update_route_preview(
             route="delegate",
             candidate_route=candidate_route,
             reason=route_reason,
-            defer_to="share",
-            related_lifecycle_preview="share --dry-run",
+            defer_to="delegate-zet",
+            related_lifecycle_preview="delegate-zet --dry-run",
         ),
         "attest": shared_update_route_pointer(
             route="attest",
@@ -93907,7 +93907,7 @@ def shared_update_route_preview(
             "requires_dry_run": True,
             "mcp_write_apply_exposed": False,
             "approval_gate_performed": False,
-            "canonical_route_commands": ["share", "attest-zet", "anchor-zet"],
+            "canonical_route_commands": ["delegate-zet", "attest-zet", "anchor-zet"],
             "related_shared_update_review_command": "shared-update-attestation-review",
             "related_shared_update_review_required_flags": ["--approve", "--reviewed-by"],
             "related_shared_update_review_gate": "requires separate human review plus --approve and --reviewed-by",
@@ -98846,7 +98846,7 @@ def provider_setup_next_safe_actions(status: str, managed_count: int) -> list[st
             "Run archive doctor --strict before any future provider sync design work.",
         ]
     return [
-        "Use git-backup-reconcile-plan or object-storage --dry-run to plan local provider metadata.",
+        "Use github-repo --dry-run or object-storage --dry-run to plan local provider metadata.",
         "Approve only after a human has reviewed the proposed local metadata and receipt path.",
     ]
 

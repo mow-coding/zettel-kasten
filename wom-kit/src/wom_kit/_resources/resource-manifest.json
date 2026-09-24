@@ -757,20 +757,20 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
       "packaged": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
-      "bytes": 9615,
-      "sha256": "f197787aaaef21bdf8343524436ea834b8953fb943346276b987890dd3df7646"
+      "bytes": 9623,
+      "sha256": "ccca6ef814e4a3ce21d9328c5316cab11693de7be38ca5c05c2f98b002dae1be"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/foreign-sharing-and-trust.md",
       "packaged": "templates/ai-runtime/wom-archive/references/foreign-sharing-and-trust.md",
-      "bytes": 2319,
-      "sha256": "3e6dcbd65a312de27ee0a779af4d72de9b96e201c3500d9752a2ab7c7c68960f"
+      "bytes": 2379,
+      "sha256": "27c8e78c72cd905aaac54ddaf1c91b8517b22534d53ca37f0267ed7fd631aff1"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/operator-contract.md",
       "packaged": "templates/ai-runtime/wom-archive/references/operator-contract.md",
-      "bytes": 73974,
-      "sha256": "ff448ba79e3f32ee9c966ce7cb76e58c7a5bf7cb59d2091297137bd1f3d9e965"
+      "bytes": 75026,
+      "sha256": "a8ece3137de3e59aa8604c2855ec7f8710ceda8196ef47b5e4b39ddb68d25cc0"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/reading-memory-and-revision.md",
@@ -787,8 +787,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/startup-and-update.md",
       "packaged": "templates/ai-runtime/wom-archive/references/startup-and-update.md",
-      "bytes": 9260,
-      "sha256": "d5f3d069de42d6c6179c56720937904fadecfb2dc0c3d00bf2d3130c628dfb67"
+      "bytes": 9337,
+      "sha256": "827f2bb33b4aae57cfe7e53edc1aadfaa580e88f4f4d72c56c0b68cce6d85b12"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/storage-scope.md",
@@ -841,8 +841,8 @@
     {
       "source": "templates/company/ownership-transfer-examples/business-unit-spinout-preview.yml",
       "packaged": "templates/company/ownership-transfer-examples/business-unit-spinout-preview.yml",
-      "bytes": 1432,
-      "sha256": "47157f70d99c48cfb2c18f5b2fb5276c39ca8e0c4cccbdff6765b7f5cdfe23d3"
+      "bytes": 1455,
+      "sha256": "96cb28bcb10e3ccc31ce42c520ef33d994ca97a953f7fa89baa60a24a2d6cf12"
     },
     {
       "source": "templates/company/provider-bindings.yml",
@@ -913,8 +913,8 @@
     {
       "source": "templates/family/ownership-transfer-examples/child-transfer-preview.yml",
       "packaged": "templates/family/ownership-transfer-examples/child-transfer-preview.yml",
-      "bytes": 1171,
-      "sha256": "85229a59a0ac0e63cfb2654218ebf9c244bbdb831b056213fd00da997e6da2da"
+      "bytes": 1194,
+      "sha256": "e55d38659ec1c6a91a7106985311cace2c41609f3cb20f2565d66c4d6a36ce24"
     },
     {
       "source": "templates/family/provider-bindings.yml",

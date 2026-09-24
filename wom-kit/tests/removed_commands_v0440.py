@@ -3,12 +3,12 @@ writers are removed outright instead of staying fixed closed).
 
 Legacy boundary tests iterate over historical command tables; they skip these
 names because the parser no longer has them. `test_v03299_predecessor_surfaces`
-pins the exact removal set.
+pins the exact removal set. Five sharing/ownership commands were restored on
+2026-09-25 (owner ZET design) and are no longer listed here.
 """
 
 REMOVED_COMMANDS_V0440 = frozenset({
-    "delegate-zet", "transfer-ownership", "quarantine-foreign-block", "record-quarantine-decision",
-    "github-repo", "objet-capture-enable", "capture-enable", "object-storage-upload-evidence",
+    "objet-capture-enable", "capture-enable", "object-storage-upload-evidence",
     "object-storage-external-upload-evidence", "objet-storage-upload-evidence",
     "zet-abstract-backfill-recover", "abstract-backfill-recover", "zet-abstract-backfill-revert",
     "abstract-backfill-revert", "zet-abstract-backfill-write", "abstract-backfill-write",

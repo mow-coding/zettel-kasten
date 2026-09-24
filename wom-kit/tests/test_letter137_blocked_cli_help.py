@@ -42,6 +42,7 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
 
     def test_every_fixed_closed_command_has_honest_approval_help(self) -> None:
         expected_additional_public_commands = {
+            "github-repo",
             "imap-mailbox-adapter-manifest-write",
             "imap-mailbox-header-metadata-scan",
             "onboard",
@@ -51,7 +52,7 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
         }
         self.assertEqual(
             len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS),
-            14,
+            19,
         )
         for exact_batch_command in (
             "source-intake-batch",

@@ -26329,6 +26329,259 @@ state:
         self.assertEqual(code, 1, output)
         self.assertIn("requires --dry-run", output)
 
+    def test_github_repo_dry_run_generates_default_private_repo_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "github-repo",
+                    str(archive_root),
+                    "--dry-run",
+                    "--profile-id",
+                    "profile:personal:username",
+                    "--profile-slug",
+                    "username",
+                    "--github-owner",
+                    "example-user",
+                    "--github-account-ref",
+                    "github:account:username",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["lifecycle_action"], "github_repository_setup_plan")
+            self.assertEqual(result["proposed_repo_name"], "zettel-kasten-username")
+            self.assertEqual(result["proposed_visibility"], "private")
+            self.assertEqual(result["proposed_remote_protocol"], "ssh")
+            self.assertFalse(result["provider_setup_receipt_preview"]["external_actions"]["github_api_called"])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+    def test_github_repo_invalid_slugs_and_unsafe_repo_names_block(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            common = [
+                "github-repo",
+                str(archive_root),
+                "--dry-run",
+                "--profile-id",
+                "profile:personal:test",
+                "--github-owner",
+                "example-user",
+                "--github-account-ref",
+                "github:account:test",
+                "--format",
+                "json",
+            ]
+
+            for bad_slug in ["bad slug", "../bad", "person@example.com", "https-token", "secret-slug"]:
+                with self.subTest(slug=bad_slug):
+                    code, output = self.run_cli(common + ["--profile-slug", bad_slug])
+                    result = json.loads(output)
+                    self.assertEqual(code, 1, output)
+                    self.assertFalse(result["ok"])
+                    self.assertTrue(any("profile_slug" in blocker for blocker in result["blockers"]))
+
+            for bad_repo in ["wrong-username", "zettel-kasten-user/name", "zettel-kasten-user name", "zettel-kasten-" + "a" * 90]:
+                with self.subTest(repo=bad_repo):
+                    code, output = self.run_cli(common + ["--profile-slug", "username", "--repo-name", bad_repo])
+                    result = json.loads(output)
+                    self.assertEqual(code, 1, output)
+                    self.assertFalse(result["ok"])
+                    self.assertTrue(any("repo_name" in blocker for blocker in result["blockers"]))
+
+    def test_github_repo_rejects_unsafe_owner_and_account_ref(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            common = [
+                "github-repo",
+                str(archive_root),
+                "--dry-run",
+                "--profile-id",
+                "profile:personal:test",
+                "--profile-slug",
+                "username",
+                "--format",
+                "json",
+            ]
+
+            for bad_owner in ["bad/owner", "person@example.com", "https://example.com", "secret-owner"]:
+                with self.subTest(owner=bad_owner):
+                    code, output = self.run_cli(
+                        common + ["--github-owner", bad_owner, "--github-account-ref", "github:account:test"]
+                    )
+                    result = json.loads(output)
+                    self.assertEqual(code, 1, output)
+                    self.assertFalse(result["ok"])
+                    self.assertTrue(any("github_owner" in blocker for blocker in result["blockers"]))
+
+            for bad_ref in [
+                "person@example.com",
+                "https://example.com/private",
+                "example.com",
+                "http:foo",
+                "../secret",
+                "secret-account",
+            ]:
+                with self.subTest(account_ref=bad_ref):
+                    code, output = self.run_cli(
+                        common + ["--github-owner", "example-user", "--github-account-ref", bad_ref]
+                    )
+                    result = json.loads(output)
+                    self.assertEqual(code, 1, output)
+                    self.assertFalse(result["ok"])
+                    self.assertTrue(any("github_account_ref" in blocker for blocker in result["blockers"]))
+
+    def test_github_repo_non_ascii_profile_without_explicit_slug_blocks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+
+            code, output = self.run_cli(
+                [
+                    "github-repo",
+                    str(archive_root),
+                    "--dry-run",
+                    "--profile-id",
+                    "profile:personal:홍길동",
+                    "--github-owner",
+                    "example-user",
+                    "--github-account-ref",
+                    "github:account:username",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertTrue(any("Non-ASCII" in blocker for blocker in result["blockers"]))
+
+    def test_github_repo_approve_requires_reviewed_by(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.assert_cli_compound_writer_fails_closed(
+                archive_root,
+                [
+                    "github-repo",
+                    str(archive_root),
+                    "--approve",
+                    "--profile-id",
+                    "profile:personal:username",
+                    "--profile-slug",
+                    "username",
+                    "--github-owner",
+                    "example-user",
+                    "--github-account-ref",
+                    "github:account:username",
+                ],
+                lifecycle_action="approve_github_repository_setup_plan",
+            )
+
+    def test_github_repo_approve_writes_only_local_metadata_and_doctor_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:github-plan")
+            self.assertEqual(init_code, 0, init_output)
+            self.assert_cli_compound_writer_fails_closed(
+                archive_root,
+                [
+                    "github-repo",
+                    str(archive_root),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:me",
+                    "--write-local-profile",
+                    "--profile-id",
+                    "profile:personal:username",
+                    "--profile-slug",
+                    "username",
+                    "--github-owner",
+                    "example-user",
+                    "--github-account-ref",
+                    "github:account:username",
+                ],
+                lifecycle_action="approve_github_repository_setup_plan",
+            )
+            self.assertFalse((archive_root / ".git").exists())
+            self.assertFalse(
+                (archive_root / "profiles" / "local" / "github-accounts.local.yml").exists()
+            )
+
+    def test_github_repo_approve_local_profile_requires_gitignore_protection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:github-plan")
+            self.assertEqual(init_code, 0, init_output)
+            gitignore_path = archive_root / ".gitignore"
+            gitignore_path.write_text(
+                "\n".join(line for line in gitignore_path.read_text(encoding="utf-8").splitlines() if line.strip() != "profiles/local/") + "\n",
+                encoding="utf-8",
+            )
+            self.assert_cli_compound_writer_fails_closed(
+                archive_root,
+                [
+                    "github-repo",
+                    str(archive_root),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:me",
+                    "--write-local-profile",
+                    "--profile-id",
+                    "profile:personal:username",
+                    "--profile-slug",
+                    "username",
+                    "--github-owner",
+                    "example-user",
+                    "--github-account-ref",
+                    "github:account:username",
+                ],
+                lifecycle_action="approve_github_repository_setup_plan",
+            )
+
+    def test_github_repo_approve_rolls_back_provider_binding_when_local_profile_write_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = Path(tmp) / "archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:github-plan")
+            self.assertEqual(init_code, 0, init_output)
+            local_profile_parent = archive_root / "profiles" / "local"
+            local_profile_parent.parent.mkdir(parents=True, exist_ok=True)
+            local_profile_parent.write_text("not a directory\n", encoding="utf-8")
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
+                [
+                    "github-repo",
+                    str(archive_root),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:me",
+                    "--write-local-profile",
+                    "--profile-id",
+                    "profile:personal:username",
+                    "--profile-slug",
+                    "username",
+                    "--github-owner",
+                    "example-user",
+                    "--github-account-ref",
+                    "github:account:username",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(code, 1)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            self.assertFalse(
+                (archive_root / "receipts" / "providers" / "zettel_kasten_username.github-repository-setup.json").exists()
+            )
+
     def test_object_storage_dry_run_generates_bucket_prefix_and_writes_no_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -46964,7 +47217,7 @@ state:
 
     def test_shared_update_route_preview_selects_only_pointer_routes(self) -> None:
         cases = [
-            ("consider_delegate", "delegate", "share"),
+            ("consider_delegate", "delegate", "delegate-zet"),
             ("review_before_renewal", "attest", "attest-zet"),
             ("consider_anchor", "anchor", "anchor-zet"),
             ("hold_for_human", "none", None),
@@ -48889,6 +49142,197 @@ state:
                     self.assertNotIn("UNSAFE_QUARANTINE_OPTION", output)
                     self.assertNotIn("Traceback", output)
 
+    def test_quarantine_foreign_block_dry_run_valid_plan_writes_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            plan_path, _artifact_path = self.write_foreign_block_quarantine_plan_report(archive_root)
+            before = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+
+            code, output = self.run_cli(
+                [
+                    "quarantine-foreign-block",
+                    str(archive_root),
+                    "--plan",
+                    archive_cli.archive_relative_path(plan_path, archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+
+            result = json.loads(output)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(before, after)
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["lifecycle_action"], "quarantine_foreign_block")
+            self.assertTrue(result["approval_required"])
+            self.assertEqual(result["trust_state"], "untrusted_foreign")
+            self.assertEqual(result["quarantine_write_status"], "not_created")
+            self.assertEqual(
+                result["would_change"],
+                [
+                    "quarantine/foreign-blocks/case-review-001/quarantine-case.json",
+                    "receipts/quarantine/case-review-001.foreign-block-quarantine.json",
+                ],
+            )
+            for value in result["proposed_paths"].values():
+                self.assertFalse(Path(value).is_absolute())
+                self.assertNotIn("\\", value)
+            self.assertFalse((archive_root / "quarantine").exists())
+            self.assertNotIn(str(plan_path.resolve()), output)
+
+    def test_quarantine_foreign_block_approved_write_requires_approval_and_reviewer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.assert_quarantine_writer_fails_closed(
+                archive_root,
+                command="quarantine-foreign-block",
+                lifecycle_action="quarantine_foreign_block",
+            )
+
+    def test_quarantine_foreign_block_neither_mode_blocks_cleanly(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            plan_path, _artifact_path = self.write_foreign_block_quarantine_plan_report(archive_root)
+            before = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+
+            code, output = self.run_cli(
+                [
+                    "quarantine-foreign-block",
+                    str(archive_root),
+                    "--plan",
+                    archive_cli.archive_relative_path(plan_path, archive_root),
+                    "--format",
+                    "json",
+                ]
+            )
+            after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertEqual(before, after)
+            self.assertEqual(result["quarantine_write_status"], "not_created")
+            self.assertEqual(result["would_change"], [])
+            self.assertIn("exactly one mode", " ".join(result["blockers"]).lower())
+            self.assertFalse((archive_root / "quarantine").exists())
+            self.assertNotIn("Traceback", output)
+
+    def test_quarantine_foreign_block_approved_write_creates_only_case_and_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.assert_quarantine_writer_fails_closed(
+                archive_root,
+                command="quarantine-foreign-block",
+                lifecycle_action="quarantine_foreign_block",
+            )
+
+    def test_quarantine_foreign_block_default_case_id_approved_write(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.assert_quarantine_writer_fails_closed(
+                archive_root,
+                command="quarantine-foreign-block",
+                lifecycle_action="quarantine_foreign_block",
+            )
+
+    def test_quarantine_foreign_block_rolls_back_partial_write_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.assert_quarantine_writer_fails_closed(
+                archive_root,
+                command="quarantine-foreign-block",
+                lifecycle_action="quarantine_foreign_block",
+            )
+
+    def test_quarantine_foreign_block_refuses_hold_plan_and_existing_case(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.assert_quarantine_writer_fails_closed(
+                archive_root,
+                command="quarantine-foreign-block",
+                lifecycle_action="quarantine_foreign_block",
+            )
+
+    def test_quarantine_foreign_block_plan_archive_id_mismatch_blocks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.assert_quarantine_writer_fails_closed(
+                archive_root,
+                command="quarantine-foreign-block",
+                lifecycle_action="quarantine_foreign_block",
+            )
+
+    def test_quarantine_foreign_block_rejects_bad_inputs_without_echo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.assert_quarantine_writer_fails_closed(
+                archive_root,
+                command="quarantine-foreign-block",
+                lifecycle_action="quarantine_foreign_block",
+            )
+
+    def test_quarantine_foreign_block_bad_plan_paths_and_json_fail_cleanly(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            invalid_path = archive_root / "workbench" / "invalid-quarantine-plan.json"
+            invalid_path.parent.mkdir(parents=True, exist_ok=True)
+            invalid_path.write_text("{not valid json", encoding="utf-8")
+            cases = [
+                "workbench/invalid-quarantine-plan.json",
+                "workbench/missing-quarantine-plan.json",
+                "../outside-quarantine-plan.json",
+            ]
+            for path_arg in cases:
+                with self.subTest(path_arg=path_arg):
+                    code, output = self.run_cli(
+                        [
+                            "quarantine-foreign-block",
+                            str(archive_root),
+                            "--plan",
+                            path_arg,
+                            "--dry-run",
+                            "--format",
+                            "json",
+                        ]
+                    )
+                    result = json.loads(output)
+                    self.assertEqual(code, 1, output)
+                    self.assertFalse(result["ok"])
+                    self.assertEqual(result["quarantine_write_status"], "not_created")
+                    self.assertFalse((archive_root / "quarantine").exists())
+                    self.assertNotIn("Traceback", output)
+
+    def test_quarantine_foreign_block_rejects_unsafe_plan_without_echo_or_write(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            plan_path, _artifact_path = self.write_foreign_block_quarantine_plan_report(archive_root)
+            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            plan["source_attestation_packet_summary"]["unsafe_locator"] = "s3" + "://bucket.invalid/UNSAFE_QUARANTINE_PLAN.bin"
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "quarantine-foreign-block",
+                    str(archive_root),
+                    "--plan",
+                    archive_cli.archive_relative_path(plan_path, archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["would_change"], [])
+            self.assertFalse((archive_root / "quarantine").exists())
+            self.assertNotIn("UNSAFE_QUARANTINE_PLAN", output)
+            self.assertNotIn("Traceback", output)
+
     def test_quarantine_review_no_cases_returns_warning_and_writes_nothing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -49395,6 +49839,228 @@ state:
             self.assertEqual(before, after)
             self.assertFalse(result["ok"])
             self.assertIn("dry-run only", " ".join(result["blockers"]))
+
+    def test_record_quarantine_decision_dry_run_writes_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.write_foreign_block_quarantine_case(archive_root)
+            preview_path, _preview = self.write_foreign_block_quarantine_decision_preview(archive_root)
+            before = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*") if path.is_file())
+
+            code, output = self.run_cli(
+                [
+                    "record-quarantine-decision",
+                    str(archive_root),
+                    "--decision-preview",
+                    archive_cli.archive_relative_path(preview_path, archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*") if path.is_file())
+
+            result = json.loads(output)
+            expected_files = [
+                "quarantine/foreign-blocks/case-review-001/quarantine-decision.json",
+                "receipts/quarantine/case-review-001.foreign-block-quarantine-decision.json",
+            ]
+            self.assertEqual(code, 0, output)
+            self.assertEqual(before, after)
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["lifecycle_action"], "record_quarantine_decision")
+            self.assertEqual(result["decision_status"], "not_recorded")
+            self.assertEqual(result["case_id"], "case-review-001")
+            self.assertEqual(result["decision"], "eligible_for_attestation_review")
+            self.assertEqual(result["would_change"], expected_files)
+            self.assertEqual(result["proposed_paths"]["decision_record"], expected_files[0])
+            self.assertEqual(result["proposed_paths"]["receipt"], expected_files[1])
+            self.assertEqual(result["quarantine_decision_record_preview"]["reviewed_by"], "required_on_approve")
+            self.assertNotIn(str(archive_root.resolve()), output)
+
+    def test_record_quarantine_decision_approve_writes_two_files_and_doctor_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.assert_quarantine_writer_fails_closed(
+                archive_root,
+                command="record-quarantine-decision",
+                lifecycle_action="record_quarantine_decision",
+            )
+
+    def test_record_quarantine_decision_mode_and_approval_guards(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.assert_quarantine_writer_fails_closed(
+                archive_root,
+                command="record-quarantine-decision",
+                lifecycle_action="record_quarantine_decision",
+            )
+
+    def test_record_quarantine_decision_expected_mismatches_block(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.write_foreign_block_quarantine_case(archive_root)
+            preview_path, _preview = self.write_foreign_block_quarantine_decision_preview(archive_root)
+            before = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*") if path.is_file())
+
+            code, output = self.run_cli(
+                [
+                    "record-quarantine-decision",
+                    str(archive_root),
+                    "--decision-preview",
+                    archive_cli.archive_relative_path(preview_path, archive_root),
+                    "--expected-case-id",
+                    "case-other",
+                    "--expected-decision",
+                    "keep_quarantined",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*") if path.is_file())
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertEqual(before, after)
+            self.assertFalse(result["ok"])
+            self.assertIn("expected_case_id", " ".join(result["blockers"]))
+            self.assertIn("expected_decision", " ".join(result["blockers"]))
+            self.assertFalse((archive_root / "quarantine" / "foreign-blocks" / "case-review-001" / "quarantine-decision.json").exists())
+            self.assertFalse((archive_root / "receipts" / "quarantine" / "case-review-001.foreign-block-quarantine-decision.json").exists())
+
+    def test_record_quarantine_decision_blocks_tampered_and_stale_preview(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            _plan_path, _artifact_path, files_written = self.write_foreign_block_quarantine_case(archive_root)
+            preview_path, preview = self.write_foreign_block_quarantine_decision_preview(archive_root)
+            tampered = dict(preview)
+            tampered["lifecycle_action"] = "foreign_block_quarantine_decision_apply"
+            preview_path.write_text(json.dumps(tampered), encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "record-quarantine-decision",
+                    str(archive_root),
+                    "--decision-preview",
+                    archive_cli.archive_relative_path(preview_path, archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertIn("lifecycle_action", " ".join(result["blockers"]))
+
+            preview_path.write_text(json.dumps(preview), encoding="utf-8")
+            case_path = archive_root / files_written[0]
+            case_doc = json.loads(case_path.read_text(encoding="utf-8"))
+            case_doc["reviewed_at"] = "not-a-time"
+            case_path.write_text(json.dumps(case_doc), encoding="utf-8")
+            stale_code, stale_output = self.run_cli(
+                [
+                    "record-quarantine-decision",
+                    str(archive_root),
+                    "--decision-preview",
+                    archive_cli.archive_relative_path(preview_path, archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            stale = json.loads(stale_output)
+            self.assertEqual(stale_code, 1, stale_output)
+            self.assertFalse(stale["ok"])
+            self.assertIn("no longer matches", " ".join(stale["blockers"]))
+
+    def test_record_quarantine_decision_blocks_valid_but_changed_case_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            _plan_path, _artifact_path, files_written = self.write_foreign_block_quarantine_case(archive_root)
+            preview_path, _preview = self.write_foreign_block_quarantine_decision_preview(archive_root)
+            case_path = archive_root / files_written[0]
+            case_doc = json.loads(case_path.read_text(encoding="utf-8"))
+            case_doc["prompt_boundary_summary"]["risk_level"] = "medium"
+            case_path.write_text(json.dumps(case_doc), encoding="utf-8")
+
+            code, output = self.run_cli(
+                [
+                    "record-quarantine-decision",
+                    str(archive_root),
+                    "--decision-preview",
+                    archive_cli.archive_relative_path(preview_path, archive_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertIn("case summary no longer matches", " ".join(result["blockers"]))
+            self.assertFalse((archive_root / "quarantine" / "foreign-blocks" / "case-review-001" / "quarantine-decision.json").exists())
+            self.assertFalse((archive_root / "receipts" / "quarantine" / "case-review-001.foreign-block-quarantine-decision.json").exists())
+
+    def test_record_quarantine_decision_refuses_overwrite(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.assert_quarantine_writer_fails_closed(
+                archive_root,
+                command="record-quarantine-decision",
+                lifecycle_action="record_quarantine_decision",
+            )
+
+    def test_record_quarantine_decision_rolls_back_partial_receipt_write_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.assert_quarantine_writer_fails_closed(
+                archive_root,
+                command="record-quarantine-decision",
+                lifecycle_action="record_quarantine_decision",
+            )
+
+    def test_record_quarantine_decision_accepts_all_decision_values_in_dry_run(self) -> None:
+        decisions = [
+            "keep_quarantined",
+            "reject_and_keep_record",
+            "eligible_for_attestation_review",
+            "needs_more_review",
+        ]
+        for decision in decisions:
+            with self.subTest(decision=decision), tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                self.write_foreign_block_quarantine_case(archive_root)
+                preview_path, _preview = self.write_foreign_block_quarantine_decision_preview(archive_root, decision)
+                code, output = self.run_cli(
+                    [
+                        "record-quarantine-decision",
+                        str(archive_root),
+                        "--decision-preview",
+                        archive_cli.archive_relative_path(preview_path, archive_root),
+                        "--expected-decision",
+                        decision,
+                        "--dry-run",
+                        "--format",
+                        "json",
+                    ]
+                )
+                result = json.loads(output)
+                self.assertEqual(code, 0, output)
+                self.assertTrue(result["ok"])
+                self.assertEqual(result["decision"], decision)
+                self.assertEqual(len(result["would_change"]), 2)
+
+    def test_record_quarantine_decision_rejects_unsafe_reviewer_and_note_without_echo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            self.assert_quarantine_writer_fails_closed(
+                archive_root,
+                command="record-quarantine-decision",
+                lifecycle_action="record_quarantine_decision",
+            )
 
     def test_quarantine_decision_review_no_decisions_is_empty_read_only_index(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -76001,6 +76667,63 @@ state:
             self.assertEqual(result["scope_gate"]["excluded"][0]["path"], "zettels/zet_20260521_fake_medical_note.md")
             self.assertIn("medical", result["scope_gate"]["excluded"][0]["sensitive_categories"])
 
+    def test_delegate_zet_dry_run_previews_receipt_with_hashes(self) -> None:
+        archive_root = KIT_ROOT / "examples" / "fake-life-archive"
+        code, output = self.run_cli(
+            [
+                "delegate-zet",
+                str(archive_root),
+                "--view",
+                "view.fake.company.derived",
+                "--target-archive",
+                "archive:company:fake-blue",
+                "--counterparty-id",
+                "archive:company:fake-blue",
+                "--counterparty-fingerprint",
+                "SHA256:fake-company-blue",
+                "--dry-run",
+                "--format",
+                "json",
+            ]
+        )
+        self.assertEqual(code, 0, output)
+        result = json.loads(output)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["lifecycle_action"], "delegate")
+        self.assertEqual(result["target_policy"], "counterparty_bound")
+        self.assertTrue(result["proposed_delegate_receipt_path"].startswith("receipts/delegate/"))
+        self.assertEqual(result["delegate_receipt_preview"]["action"], "delegate_zet")
+        self.assertEqual(result["delegate_receipt_preview"]["lifecycle_action"], "delegate")
+        self.assertEqual(result["delegation_capability"]["target_policy"], "counterparty_bound")
+        self.assertEqual(result["delegation_capability"]["settlement_condition"]["mode"], "none")
+        self.assertEqual(len(result["delegated_zets"]), 1)
+        self.assertEqual(len(result["delegated_zets"][0]["sha256"]), 64)
+        self.assertEqual(
+            archive_cli.validate_schema(result["delegate_receipt_preview"], "delegate-receipt.schema.json"),
+            [],
+        )
+        self.assertFalse((archive_root / result["proposed_delegate_receipt_path"]).exists())
+
+    def test_delegate_zet_counterparty_bound_requires_target_archive(self) -> None:
+        archive_root = KIT_ROOT / "examples" / "fake-life-archive"
+        code, output = self.run_cli(
+            [
+                "delegate-zet",
+                str(archive_root),
+                "--view",
+                "view.fake.company.derived",
+                "--dry-run",
+                "--format",
+                "json",
+            ]
+        )
+        self.assertEqual(code, 1)
+        result = json.loads(output)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["target_policy"], "counterparty_bound")
+        self.assertTrue(any("target_archive is required" in blocker for blocker in result["blockers"]))
+        self.assertFalse((archive_root / result["proposed_delegate_receipt_path"]).exists())
+
     def test_delegate_zet_real_requires_approve_and_reviewed_by(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -76048,6 +76771,141 @@ state:
                 lifecycle_action="delegate",
             )
             self.assertEqual(self.archive_tree_snapshot(archive_root), before)
+
+    def test_delegate_zet_claimable_once_dry_run_defers_target_trust(self) -> None:
+        archive_root = KIT_ROOT / "examples" / "fake-life-archive"
+        code, output = self.run_cli(
+            [
+                "delegate-zet",
+                str(archive_root),
+                "--view",
+                "view.fake.company.derived",
+                "--target-policy",
+                "claimable_once",
+                "--dry-run",
+                "--format",
+                "json",
+            ]
+        )
+        self.assertEqual(code, 0, output)
+        result = json.loads(output)
+        self.assertTrue(result["ok"])
+        self.assertIsNone(result["target_archive"])
+        self.assertEqual(result["target_policy"], "claimable_once")
+        self.assertEqual(result["trust_gate"]["status"], "deferred_until_attestation")
+        capability = result["delegation_capability"]
+        self.assertEqual(capability["target_policy"], "claimable_once")
+        self.assertEqual(capability["claim_limit"], 1)
+        self.assertEqual(capability["claim_state"], "unclaimed_preview")
+        self.assertEqual(capability["spent_state"], "not_spent_preview")
+        self.assertEqual(capability["settlement_condition"]["mode"], "none")
+        self.assertEqual(
+            archive_cli.validate_schema(result["delegate_receipt_preview"], "delegate-receipt.schema.json"),
+            [],
+        )
+        self.assertFalse((archive_root / result["proposed_delegate_receipt_path"]).exists())
+
+    def test_delegate_zet_sensitive_policy_matches_share_dry_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            frontmatter = {
+                "id": "zet_20260521_fake_medical_note",
+                "title": "Fake medical note",
+                "created_at": "2026-05-21T00:00:00+09:00",
+                "updated_at": "2026-05-21T00:00:00+09:00",
+                "archive_id": "archive:personal:fake-life",
+                "status": "canonical",
+                "kind": "permanent_note",
+                "facets": {"domain": "medical", "record_type": "journal"},
+                "assets": [],
+                "edges": [],
+                "provenance": {
+                    "created_by": "test",
+                    "created_in": "archive:personal:fake-life",
+                    "source": "test",
+                    "derived_from": [],
+                },
+                "visibility": {"scope": "private", "allowed_archives": [], "source_visibility": "private"},
+                "promotion": {"stage": "promoted"},
+            }
+            (archive_root / "zettels" / "zet_20260521_fake_medical_note.md").write_text(
+                "---\n" + archive_cli.dump_yaml(frontmatter) + "---\n\nSensitive fake medical note.\n",
+                encoding="utf-8",
+            )
+            (archive_root / "views" / "sensitive.yml").write_text(
+                archive_cli.dump_yaml(
+                    {
+                        "id": "view.fake.sensitive.medical",
+                        "name": "Sensitive medical view",
+                        "for": "ai_context",
+                        "filters": {"facets.domain": "medical"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            blocked_code, blocked_output = self.run_cli(
+                [
+                    "delegate-zet",
+                    str(archive_root),
+                    "--view",
+                    "view.fake.sensitive.medical",
+                    "--target-archive",
+                    "archive:company:fake-blue",
+                    "--counterparty-id",
+                    "archive:company:fake-blue",
+                    "--counterparty-fingerprint",
+                    "SHA256:fake-company-blue",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(blocked_code, 1)
+            blocked = json.loads(blocked_output)
+            self.assertEqual(blocked["delegated_zets"], [])
+            self.assertEqual(blocked["scope_gate"]["excluded"][0]["path"], "zettels/zet_20260521_fake_medical_note.md")
+
+            allowed_code, allowed_output = self.run_cli(
+                [
+                    "delegate-zet",
+                    str(archive_root),
+                    "--view",
+                    "view.fake.sensitive.medical",
+                    "--target-archive",
+                    "archive:company:fake-blue",
+                    "--counterparty-id",
+                    "archive:company:fake-blue",
+                    "--counterparty-fingerprint",
+                    "SHA256:fake-company-blue",
+                    "--allow-sensitive",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(allowed_code, 0, allowed_output)
+            allowed = json.loads(allowed_output)
+            self.assertEqual(len(allowed["delegated_zets"]), 1)
+            self.assertTrue(any("Sensitive zettel allowed" in warning for warning in allowed["warnings"]))
+
+            claimable_blocked_code, claimable_blocked_output = self.run_cli(
+                [
+                    "delegate-zet",
+                    str(archive_root),
+                    "--view",
+                    "view.fake.sensitive.medical",
+                    "--target-policy",
+                    "claimable_once",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(claimable_blocked_code, 1)
+            claimable_blocked = json.loads(claimable_blocked_output)
+            self.assertEqual(claimable_blocked["delegated_zets"], [])
+            self.assertEqual(claimable_blocked["trust_gate"]["status"], "deferred_until_attestation")
 
     def test_attest_and_anchor_zet_dry_run_preview_receipts_without_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -76282,6 +77140,245 @@ state:
             self.assertEqual(anchor_mismatch_code, 1)
             anchor_mismatch = json.loads(anchor_mismatch_output)
             self.assertTrue(any("attesting_archive does not match" in blocker for blocker in anchor_mismatch["blockers"]))
+
+    def test_transfer_ownership_dry_run_previews_family_to_child_receipt_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.init_transfer_ready_family_archive(Path(tmp) / "family-archive")
+            code, output = self.run_cli(
+                [
+                    "transfer-ownership",
+                    str(archive_root),
+                    "--new-owner",
+                    "person:child-template",
+                    "--operator-after",
+                    "person:child-template",
+                    "--approved-by",
+                    "person:member-a",
+                    "--approved-by",
+                    "person:member-b",
+                    "--counterparty-id",
+                    "person:child-template",
+                    "--counterparty-fingerprint",
+                    "SHA256:example-child-primary",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["previous_owner"], "family:example-household")
+            self.assertEqual(result["new_owner"], "person:child-template")
+            self.assertEqual(result["new_owner_kind"], "person")
+            self.assertEqual(result["subject"], "person:child-template")
+            self.assertEqual(result["trust_gate"]["status"], "verified")
+            self.assertTrue(result["ownership_gate"]["ownership_transfer"])
+            self.assertEqual(result["ownership_gate"]["operators_before"], ["person:member-a", "person:member-b"])
+            self.assertEqual(result["ownership_gate"]["operators_after"], ["person:child-template"])
+            self.assertEqual(result["receipt_preview"]["action"], "transfer_archive_ownership")
+            self.assertEqual(result["receipt_preview"]["operators_after"], ["person:child-template"])
+            self.assertEqual(result["provider_change_plan"]["status"], "manual_required")
+            self.assertIn("provider_change_plan", result["receipt_preview"])
+            self.assertTrue(any(item["provider"] == "github" for item in result["provider_change_plan"]["providers"]))
+            schema_issues = archive_cli.validate_schema(
+                result["receipt_preview"],
+                "ownership-transfer-receipt.schema.json",
+            )
+            self.assertEqual(schema_issues, [])
+            for field in [
+                "receipt_id",
+                "action",
+                "dry_run",
+                "source_archive",
+                "previous_owner",
+                "new_owner",
+                "operators_before",
+                "operators_after",
+                "scope_manifest",
+                "approval_actors",
+                "trust_gate",
+                "ownership_gate",
+                "lineage",
+                "blockers",
+                "warnings",
+            ]:
+                self.assertIn(field, result["receipt_preview"])
+            self.assertFalse((archive_root / result["proposed_receipt_path"]).exists())
+
+            identity = archive_cli.load_yaml((archive_root / "archive-identity.yml").read_text(encoding="utf-8"))
+            self.assertEqual(identity["ownership"]["owner_id"], "family:example-household")
+
+    def test_transfer_ownership_dry_run_previews_business_unit_spinout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.init_transfer_ready_business_unit_archive(Path(tmp) / "business-unit-archive")
+            code, output = self.run_cli(
+                [
+                    "transfer-ownership",
+                    str(archive_root),
+                    "--new-owner",
+                    "company:fake-spinout",
+                    "--new-owner-kind",
+                    "company",
+                    "--new-owner-archive",
+                    "archive:company:fake-spinout",
+                    "--operator-after",
+                    "role:spinout-admin",
+                    "--operator-after",
+                    "person:fake-founder",
+                    "--approved-by",
+                    "role:business-unit-admin",
+                    "--subject",
+                    "business_unit:fake-space",
+                    "--counterparty-id",
+                    "company:fake-spinout",
+                    "--counterparty-fingerprint",
+                    "SHA256:fake-spinout-primary",
+                    "--reason",
+                    "business_unit_spinout",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["previous_owner"], "company:fake-blue")
+            self.assertEqual(result["new_owner"], "company:fake-spinout")
+            self.assertEqual(result["subject"], "business_unit:fake-space")
+            self.assertEqual(result["trust_gate"]["status"], "verified")
+            self.assertEqual(result["ownership_gate"]["operators_after"], ["role:spinout-admin", "person:fake-founder"])
+            self.assertEqual(result["lineage"]["reason"], "business_unit_spinout")
+            self.assertEqual(result["provider_change_plan"]["status"], "manual_required")
+            self.assertEqual(
+                archive_cli.validate_schema(result["receipt_preview"], "ownership-transfer-receipt.schema.json"),
+                [],
+            )
+            self.assertFalse((archive_root / result["proposed_receipt_path"]).exists())
+
+    def test_transfer_ownership_dry_run_blocks_missing_operator_and_trust(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.init_transfer_ready_family_archive(Path(tmp) / "family-archive")
+            code, output = self.run_cli(
+                [
+                    "transfer-ownership",
+                    str(archive_root),
+                    "--new-owner",
+                    "person:child-template",
+                    "--approved-by",
+                    "person:member-a",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 1)
+            result = json.loads(output)
+            self.assertFalse(result["ok"])
+            self.assertTrue(any("--operator-after" in blocker for blocker in result["blockers"]))
+            self.assertTrue(any("Counterparty fingerprint is required" in blocker for blocker in result["blockers"]))
+
+    def test_transfer_ownership_dry_run_blocks_fingerprint_mismatch_and_unknown_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.init_transfer_ready_family_archive(Path(tmp) / "family-archive")
+            code, output = self.run_cli(
+                [
+                    "transfer-ownership",
+                    str(archive_root),
+                    "--new-owner",
+                    "person:child-template",
+                    "--operator-after",
+                    "person:child-template",
+                    "--approved-by",
+                    "person:unknown",
+                    "--counterparty-id",
+                    "person:child-template",
+                    "--counterparty-fingerprint",
+                    "SHA256:attacker",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 1)
+            result = json.loads(output)
+            self.assertFalse(result["ok"])
+            self.assertTrue(any("Approval actor is not the current owner or an operator" in blocker for blocker in result["blockers"]))
+            self.assertTrue(any("Counterparty fingerprint does not match" in blocker for blocker in result["blockers"]))
+
+    def test_transfer_ownership_real_requires_approve_and_reviewed_by(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.init_transfer_ready_family_archive(
+                Path(tmp) / "family-archive"
+            )
+            code, output = self.run_cli(
+                [
+                    "transfer-ownership",
+                    str(archive_root),
+                    "--new-owner",
+                    "person:child-template",
+                    "--operator-after",
+                    "person:child-template",
+                    "--approved-by",
+                    "person:member-a",
+                    "--counterparty-id",
+                    "person:child-template",
+                    "--counterparty-fingerprint",
+                    "SHA256:example-child-primary",
+                ]
+            )
+            self.assertEqual(code, 1)
+            self.assertIn("requires --approve", output)
+            self.assert_transfer_ownership_fails_closed(archive_root)
+
+    def test_transfer_ownership_real_applies_family_to_child_and_writes_receipt(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.init_transfer_ready_family_archive(Path(tmp) / "family-archive")
+            self.assert_transfer_ownership_fails_closed(archive_root)
+
+    def test_transfer_ownership_real_applies_business_unit_spinout(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.init_transfer_ready_business_unit_archive(Path(tmp) / "business-unit-archive")
+            self.assert_transfer_ownership_fails_closed(archive_root)
+
+    def test_transfer_ownership_real_blocks_dry_run_failures_without_mutation(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.init_transfer_ready_family_archive(
+                Path(tmp) / "family-archive"
+            )
+            code, output = self.run_cli(
+                [
+                    "transfer-ownership",
+                    str(archive_root),
+                    "--new-owner",
+                    "person:child-template",
+                    "--approved-by",
+                    "person:member-a",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 1, output)
+            self.assertFalse(json.loads(output)["ok"])
+            self.assert_transfer_ownership_fails_closed(archive_root)
+
+    def test_transfer_ownership_real_blocks_existing_receipt_without_mutation(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.init_transfer_ready_family_archive(Path(tmp) / "family-archive")
+            self.assert_transfer_ownership_fails_closed(archive_root)
 
     def test_providers_cli_returns_binding_summary_and_manual_plan(self) -> None:
         archive_root = KIT_ROOT / "examples" / "fake-life-archive"

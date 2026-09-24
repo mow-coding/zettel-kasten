@@ -1735,6 +1735,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("archive_doctor", tool_names)
             self.assertIn("archive_runtime_context", tool_names)
             self.assertIn("prompt_boundary_check", tool_names)
+            self.assertIn("github_repository_setup_plan", tool_names)
             self.assertIn("object_storage_setup_plan", tool_names)
             self.assertIn("provider_setup_status", tool_names)
             self.assertIn("object_storage_adapter_readiness_plan", tool_names)
@@ -1918,7 +1919,7 @@ class McpServerTests(unittest.TestCase):
             share_required = tools_by_name["share_check"]["inputSchema"]["required"]
             self.assertIn("target_archive", share_required)
             self.assertNotIn("target_policy", tools_by_name["share_check"]["inputSchema"]["properties"])
-            self.assertNotIn("delegate_zet_check", tool_names)  # removed in v0.4.40
+            self.assertIn("delegate_zet_check", tool_names)  # restored 2026-09-25 (ZET sharing design)
             self.assertNotIn("promote_zettel", tool_names)
             self.assertNotIn("archive_promote", tool_names)
             self.assertNotIn("mint_zettel", tool_names)
@@ -2602,6 +2603,78 @@ class McpServerTests(unittest.TestCase):
             self.assert_tool_error_envelope(result)
         finally:
             self.stop_server(process)
+
+    def test_github_repository_setup_plan_tool_writes_nothing_and_respects_allowed_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            allowed_root = tmp_root / "allowed"
+            outside_root = tmp_root / "outside"
+            allowed_archive = self.copy_fake_archive(allowed_root / "archive")
+            outside_archive = self.copy_fake_archive(outside_root / "archive")
+            before = {
+                path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                for path in sorted(allowed_archive.rglob("*"))
+                if path.is_file()
+            }
+
+            process = self.start_server({"AI_ARCHIVE_MCP_ALLOWED_ROOTS": str(allowed_root)})
+            try:
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "github_repository_setup_plan",
+                            "arguments": {
+                                "archive_root": str(allowed_archive),
+                                "profile_id": "profile:personal:username",
+                                "profile_slug": "username",
+                                "github_owner": "example-user",
+                                "github_account_ref": "github:account:username",
+                            },
+                        },
+                    },
+                )
+                result = response["result"]
+                self.assertFalse(result["isError"])
+                structured = result["structuredContent"]
+                self.assertTrue(structured["ok"])
+                self.assertTrue(structured["dry_run"])
+                self.assertEqual(structured["lifecycle_action"], "github_repository_setup_plan")
+                self.assertEqual(structured["proposed_repo_name"], "zettel-kasten-username")
+                self.assertFalse(structured["provider_setup_receipt_preview"]["external_actions"]["github_api_called"])
+                after = {
+                    path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
+                    for path in sorted(allowed_archive.rglob("*"))
+                    if path.is_file()
+                }
+                self.assertEqual(after, before)
+
+                outside_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "github_repository_setup_plan",
+                            "arguments": {
+                                "archive_root": str(outside_archive),
+                                "profile_id": "profile:personal:username",
+                                "profile_slug": "username",
+                                "github_owner": "example-user",
+                                "github_account_ref": "github:account:username",
+                            },
+                        },
+                    },
+                )
+                outside_result = outside_response["result"]
+                self.assertTrue(outside_result["isError"])
+                self.assert_tool_error_envelope(outside_result)
+            finally:
+                self.stop_server(process)
 
     def test_object_storage_setup_plan_tool_writes_nothing_and_respects_allowed_roots(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -9638,6 +9711,142 @@ class McpServerTests(unittest.TestCase):
         finally:
             self.stop_server(process)
 
+    def test_quarantine_foreign_block_check_writes_nothing(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                before = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "quarantine_foreign_block_check",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "quarantine_plan": self.foreign_block_quarantine_plan_fixture(),
+                                "reviewed_by": "person:mcp-reviewer",
+                                "dry_run": True,
+                            },
+                        },
+                    },
+                )
+                after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+                self.assertFalse(response["result"]["isError"])
+                structured = response["result"]["structuredContent"]
+                self.assertEqual(before, after)
+                self.assertTrue(structured["ok"])
+                self.assertEqual(structured["lifecycle_action"], "quarantine_foreign_block")
+                self.assertEqual(structured["trust_state"], "untrusted_foreign")
+                self.assertEqual(structured["quarantine_write_status"], "not_created")
+                self.assertEqual(
+                    structured["would_change"],
+                    [
+                        "quarantine/foreign-blocks/mcp-case-001/quarantine-case.json",
+                        "receipts/quarantine/mcp-case-001.foreign-block-quarantine.json",
+                    ],
+                )
+        finally:
+            self.stop_server(process)
+
+    def test_quarantine_foreign_block_check_accepts_archive_relative_plan_path(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                report_path = archive_root / "workbench" / "foreign-block-quarantine-plan.json"
+                report_path.parent.mkdir(parents=True, exist_ok=True)
+                report_path.write_text(json.dumps(self.foreign_block_quarantine_plan_fixture()), encoding="utf-8")
+                before = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "quarantine_foreign_block_check",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "path": "workbench/foreign-block-quarantine-plan.json",
+                                "reviewed_by": "person:mcp-reviewer",
+                                "dry_run": True,
+                            },
+                        },
+                    },
+                )
+                after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+                self.assertFalse(response["result"]["isError"])
+                structured = response["result"]["structuredContent"]
+                self.assertEqual(before, after)
+                self.assertTrue(structured["ok"])
+                self.assertEqual(structured["case_id"], "mcp-case-001")
+        finally:
+            self.stop_server(process)
+
+    def test_quarantine_foreign_block_check_rejects_non_dry_run(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                for index, dry_run_value in enumerate([False, "yes", 1], start=1):
+                    with self.subTest(dry_run=dry_run_value):
+                        response = self.send(
+                            process,
+                            {
+                                "jsonrpc": "2.0",
+                                "id": index,
+                                "method": "tools/call",
+                                "params": {
+                                    "name": "quarantine_foreign_block_check",
+                                    "arguments": {
+                                        "archive_root": str(archive_root),
+                                        "quarantine_plan": self.foreign_block_quarantine_plan_fixture(),
+                                        "dry_run": dry_run_value,
+                                    },
+                                },
+                            },
+                        )
+                        self.assertTrue(response["result"]["isError"])
+        finally:
+            self.stop_server(process)
+
+    def test_quarantine_foreign_block_check_rejects_unsafe_plan_without_echo(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                plan = self.foreign_block_quarantine_plan_fixture()
+                plan["source_attestation_packet_summary"]["unsafe_locator"] = "s3" + "://redacted.example/UNSAFE_MCP_QUARANTINE_WRITE"
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "quarantine_foreign_block_check",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "quarantine_plan": plan,
+                                "reviewed_by": "person:mcp-reviewer",
+                                "dry_run": True,
+                            },
+                        },
+                    },
+                )
+                self.assertFalse(response["result"]["isError"])
+                structured = response["result"]["structuredContent"]
+                self.assertFalse(structured["ok"])
+                self.assertEqual(structured["quarantine_write_status"], "not_created")
+                self.assertEqual(structured["would_change"], [])
+                self.assertNotIn("UNSAFE_MCP_QUARANTINE_WRITE", json.dumps(response))
+        finally:
+            self.stop_server(process)
+
     def test_foreign_block_quarantine_review_index_writes_nothing(self) -> None:
         process = self.start_server()
         try:
@@ -9823,6 +10032,94 @@ class McpServerTests(unittest.TestCase):
                                         "case_id": "mcp-case-001",
                                         "dry_run": dry_run_value,
                                     },
+                                },
+                            },
+                        )
+                        self.assertTrue(response["result"]["isError"])
+        finally:
+            self.stop_server(process)
+
+    def test_record_quarantine_decision_check_writes_nothing(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                self.write_mcp_quarantine_case_fixture(archive_root, "mcp-case-001")
+                preview_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "foreign_block_quarantine_decision_check",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "case_id": "mcp-case-001",
+                                "decision_intent": "keep_quarantined",
+                                "dry_run": True,
+                            },
+                        },
+                    },
+                )
+                preview = preview_response["result"]["structuredContent"]
+                before = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "record_quarantine_decision_check",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "decision_preview": preview,
+                                "reviewed_by": "person:mcp-reviewer",
+                                "dry_run": True,
+                            },
+                        },
+                    },
+                )
+                after = sorted(path.relative_to(archive_root).as_posix() for path in archive_root.rglob("*"))
+                self.assertFalse(response["result"]["isError"])
+                structured = response["result"]["structuredContent"]
+                self.assertEqual(before, after)
+                self.assertTrue(structured["ok"])
+                self.assertEqual(structured["lifecycle_action"], "record_quarantine_decision")
+                self.assertEqual(structured["case_id"], "mcp-case-001")
+                self.assertEqual(structured["decision"], "keep_quarantined")
+                self.assertEqual(structured["decision_status"], "not_recorded")
+                self.assertEqual(len(structured["would_change"]), 2)
+                for flag in archive_services.FOREIGN_BLOCK_QUARANTINE_DECISION_FALSE_FLAGS:
+                    self.assertFalse(structured[flag])
+        finally:
+            self.stop_server(process)
+
+    def test_record_quarantine_decision_check_rejects_non_dry_run_and_approve(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+                for index, arguments in enumerate(
+                    [
+                        {"archive_root": str(archive_root), "dry_run": False},
+                        {"archive_root": str(archive_root), "dry_run": "yes"},
+                        {"archive_root": str(archive_root), "dry_run": 1},
+                        {"archive_root": str(archive_root), "dry_run": True, "approve": True},
+                    ],
+                    start=1,
+                ):
+                    with self.subTest(arguments=arguments):
+                        response = self.send(
+                            process,
+                            {
+                                "jsonrpc": "2.0",
+                                "id": index,
+                                "method": "tools/call",
+                                "params": {
+                                    "name": "record_quarantine_decision_check",
+                                    "arguments": arguments,
                                 },
                             },
                         )
@@ -11728,6 +12025,64 @@ class McpServerTests(unittest.TestCase):
                 self.assertFalse((target_root / claimable_anchored["proposed_anchor_metadata_path"]).exists())
         finally:
             self.stop_server(process)
+
+    def test_ownership_transfer_check_dry_run_never_writes_receipts(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = self.init_transfer_ready_family_archive(Path(tmp) / "family-archive")
+                response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "ownership_transfer_check",
+                            "arguments": {
+                                "archive_root": str(archive_root),
+                                "new_owner": "person:child-template",
+                                "operators_after": ["person:child-template"],
+                                "approved_by": ["person:member-a", "person:member-b"],
+                                "counterparty_id": "person:child-template",
+                                "counterparty_fingerprint": "SHA256:example-child-primary",
+                            },
+                        },
+                    },
+                )
+                result = response["result"]
+                self.assertFalse(result["isError"])
+                structured = result["structuredContent"]
+                self.assertTrue(structured["dry_run"])
+                self.assertTrue(structured["ok"])
+                self.assertEqual(structured["trust_gate"]["status"], "verified")
+                self.assertTrue(structured["ownership_gate"]["ownership_transfer"])
+                self.assertEqual(structured["provider_change_plan"]["status"], "manual_required")
+                self.assertEqual(structured["receipt_preview"]["action"], "transfer_archive_ownership")
+                self.assertIn("provider_change_plan", structured["receipt_preview"])
+                self.assertEqual(
+                    archive_cli.validate_schema(
+                        structured["receipt_preview"],
+                        "ownership-transfer-receipt.schema.json",
+                    ),
+                    [],
+                )
+                for field in [
+                    "scope_manifest",
+                    "trust_gate",
+                    "ownership_gate",
+                    "lineage",
+                    "operators_before",
+                    "operators_after",
+                ]:
+                    self.assertIn(field, structured["receipt_preview"])
+                self.assertFalse((archive_root / structured["proposed_receipt_path"]).exists())
+
+                identity = archive_cli.load_yaml((archive_root / "archive-identity.yml").read_text(encoding="utf-8"))
+                self.assertEqual(identity["ownership"]["owner_id"], "family:example-household")
+        finally:
+            self.stop_server(process)
+
 
 if __name__ == "__main__":
     unittest.main()

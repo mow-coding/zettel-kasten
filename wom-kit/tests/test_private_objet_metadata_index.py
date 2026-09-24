@@ -69,13 +69,13 @@ EMPTY_ALLOWLIST_SHA256 = (
 )
 
 # v0.4.36 adds only operator-feedback-archive to the previous pinned CLI paths.
-CLI_COUNT = 560  # v0.4.40: reconcile batch commands added, retired writers deleted
+CLI_COUNT = 565  # v0.4.40: reconcile batch commands added, retired writers deleted, five sharing commands restored
 CLI_CANONICAL_SHA256 = (
-    "858a2d915d74a69d85b2862ad5acb58315745bc2e121f9f757364d0721f2f6ca"
+    "0f41d099f1c891ed34d5cfa8a92dce84ae8d1cd81c799d32ac35693fd1f1de18"
 )
-MCP_COUNT = 131  # v0.4.40: six retired check tools removed
+MCP_COUNT = 136  # v0.4.40: source_scan_plan removed; five sharing previews restored
 MCP_CANONICAL_SHA256 = (
-    "9e9a7727989f6b6335d3c65e26336af573d38baa2fbdfb2cc48975b785a6ebf4"
+    "39e09bca67b57398b9f8314a7e9241e911f581ff3f473225ea53d3069a779f26"
 )
 DB_SOURCE_COUNT = 3
 DB_SOURCE_CANONICAL_SHA256 = (
