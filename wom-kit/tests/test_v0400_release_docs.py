@@ -183,9 +183,11 @@ class V0400ReleaseDocsTests(unittest.TestCase):
                 "restore-drill",  # reopened in v0.4.40
                 "repair-gitignore",  # reopened in v0.4.40
                 "identity-reconcile",  # reopened in v0.4.40
+                "zet-title-remap-recover",  # reopened in v0.4.40
+                "zet-title-remap-revert-recover",  # reopened in v0.4.40
             }
         )
-        self.assertEqual(len(current_blocked), 24)  # v0.4.40: 2026-09-24 triage
+        self.assertEqual(len(current_blocked), 22)  # 2026-09-24 triage reopen
         self.assertEqual(len(historical_blocked), 79)
         self.assertNotIn("migrate", current_blocked)
         self.assertNotIn("zettel-objet-link", current_blocked)

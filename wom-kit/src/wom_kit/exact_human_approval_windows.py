@@ -243,6 +243,9 @@ class ExactHumanApprovalOperation(Enum):
     restore_drill = "restore_drill"
     repair_gitignore = "repair_gitignore"
     archive_identity_reconcile = "archive_identity_reconcile"
+    # Reclassified 2026-09-24: legacy title-remap journal recovery.
+    zet_title_remap_recover = "zet_title_remap_recover"
+    zet_title_remap_revert_recover = "zet_title_remap_revert_recover"
 
 
 def _validated_target_preview_text(value: str | None) -> str | None:
@@ -556,6 +559,8 @@ _OPERATION_LABELS = {
     ExactHumanApprovalOperation.restore_drill: "복원 훈련",
     ExactHumanApprovalOperation.repair_gitignore: ".gitignore 안전 패턴 추가",
     ExactHumanApprovalOperation.archive_identity_reconcile: "아카이브 신원 파일 수리",
+    ExactHumanApprovalOperation.zet_title_remap_recover: "중단된 제목 변경 복구",
+    ExactHumanApprovalOperation.zet_title_remap_revert_recover: "중단된 제목 되돌리기 복구",
 }
 
 _OPERATION_QUESTIONS = {
@@ -708,6 +713,12 @@ _OPERATION_QUESTIONS = {
     ),
     ExactHumanApprovalOperation.archive_identity_reconcile: (
         "검토한 대로 아카이브 신원 파일을 맞출까요?"
+    ),
+    ExactHumanApprovalOperation.zet_title_remap_recover: (
+        "중단된 제목 변경 작업을 검토한 복구 계획대로 끝낼까요?"
+    ),
+    ExactHumanApprovalOperation.zet_title_remap_revert_recover: (
+        "중단된 제목 되돌리기 작업을 검토한 복구 계획대로 끝낼까요?"
     ),
 }
 
@@ -929,6 +940,12 @@ _OPERATION_SUMMARIES = {
     ExactHumanApprovalOperation.archive_identity_reconcile: (
         "archive.yml과 archive-identity.yml의 불일치를 검토한 제안대로 수리하고 영수증을 남깁니다."
     ),
+    ExactHumanApprovalOperation.zet_title_remap_recover: (
+        "남아 있는 옛 제목 변경 저널을 검토한 계획대로 마무리하거나 되돌리고 잠금을 정리합니다."
+    ),
+    ExactHumanApprovalOperation.zet_title_remap_revert_recover: (
+        "남아 있는 옛 제목 되돌리기 저널을 검토한 계획대로 마무리하거나 되돌리고 잠금을 정리합니다."
+    ),
 }
 
 _OPERATION_APPROVE_BUTTONS = {
@@ -992,6 +1009,8 @@ _OPERATION_APPROVE_BUTTONS = {
     ExactHumanApprovalOperation.restore_drill: "복원 훈련",
     ExactHumanApprovalOperation.repair_gitignore: "패턴 추가",
     ExactHumanApprovalOperation.archive_identity_reconcile: "신원 수리",
+    ExactHumanApprovalOperation.zet_title_remap_recover: "복구 실행",
+    ExactHumanApprovalOperation.zet_title_remap_revert_recover: "복구 실행",
 }
 
 

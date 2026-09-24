@@ -163,7 +163,11 @@ replacement.
 Reclassified: `zet-title-remap-recover` and `zet-title-remap-revert-recover`
 move from Retire to Reopen. A read-only investigation showed that no newer
 command adopts a legacy interrupted title-remap journal or lock, so deleting
-them would strand such an archive; the owner was told.
+them would strand such an archive; the owner was told. Both now write under
+exact approval bound to the case digest, plan digest and expected action
+(the activity-group multi-digest gate): one dialog, or none under a valid
+session grant. Evidence: `test_title_remap_recover_exact`, test_cli title
+recovery tests (declined writes nothing, approved recovers once).
 
 Evidence: parser, capability inventory and MCP surface pins in
 `test_v03299_predecessor_surfaces.py`; `tests/removed_commands_v0440.py`.

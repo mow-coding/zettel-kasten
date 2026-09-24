@@ -93,8 +93,6 @@ COMPOUND_APPROVAL_FIXED_CLOSED_COMMANDS = frozenset(
         "saved-view-write",
         "tiro-lossless-recovery-fetch-run",
         "zet-revision-restore-proposal-from-snapshot",
-        "zet-title-remap-recover",
-        "zet-title-remap-revert-recover",
     }
 )
 
@@ -144,6 +142,9 @@ EXACT_APPROVAL_REOPENED_WRITERS = frozenset({
     "restore-drill",
     "repair-gitignore",
     "identity-reconcile",
+    # Reclassified 2026-09-24: legacy title-remap journal recovery.
+    "zet-title-remap-recover",
+    "zet-title-remap-revert-recover",
 })
 
 # Public parser and dispatch exposure was audited at v0.3.320 and its explicit

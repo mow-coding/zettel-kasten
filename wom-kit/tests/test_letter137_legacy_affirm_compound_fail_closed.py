@@ -605,40 +605,8 @@ class Letter137LegacyAffirmCliBoundaryTests(_BoundaryAssertions):
                 "zet_title_remap_revert",
                 "zet_title_remap_revert",
             ),
-            (
-                [
-                    "zet-title-remap-recover",
-                    PRIVATE_CLI_ROOT,
-                    "--case-sha256",
-                    PRIVATE_DIGEST,
-                    "--expected-plan-digest",
-                    PRIVATE_DIGEST,
-                    "--expected-action",
-                    "cleanup_unstarted_title_transaction_evidence",
-                    "--affirm-recovery-reviewed",
-                    "--affirm-archive-quiescent",
-                    *approval,
-                ],
-                "zet_title_remap_recover",
-                "zet_title_remap_recover",
-            ),
-            (
-                [
-                    "zet-title-remap-revert-recover",
-                    PRIVATE_CLI_ROOT,
-                    "--case-sha256",
-                    PRIVATE_DIGEST,
-                    "--expected-plan-digest",
-                    PRIVATE_DIGEST,
-                    "--expected-action",
-                    "cleanup_unstarted_title_revert_transaction_evidence",
-                    "--affirm-recovery-reviewed",
-                    "--affirm-archive-quiescent",
-                    *approval,
-                ],
-                "zet_title_remap_revert_recover",
-                "zet_title_remap_revert_recover",
-            ),
+            # zet-title-remap-recover and -revert-recover were reopened under
+            # exact approval in v0.4.40 (test_title_remap_recover_exact).
         )
         for arguments, service, action in calls:
             if arguments[0] in REMOVED_COMMANDS_V0440:  # deleted in v0.4.40

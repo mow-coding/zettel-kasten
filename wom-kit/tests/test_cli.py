@@ -54618,6 +54618,32 @@ state:
                 exit_code=91,
             )
             before = self.archive_tree_snapshot(archive_root)
+            def decline(*_args, **_kwargs):
+                raise archive_cli.ExactHumanApprovalWorkflowError("exact_human_approval_cancelled")
+
+            with patch.object(archive_cli, "_execute_exact_human_approved_write", side_effect=decline):
+                code, output = self.run_cli(
+                    [
+                        "zet-title-remap-revert-recover",
+                        str(archive_root),
+                        "--case-sha256",
+                        retained["recovery_case"]["case_sha256"],
+                        "--expected-plan-digest",
+                        retained["recovery_plan"]["plan_digest"],
+                        "--expected-action",
+                        retained["recovery_case"]["recommended_action"],
+                        "--approve",
+                        "--reviewed-by",
+                        "person:revert-recovery-fixed-gate-reviewer",
+                        "--affirm-recovery-reviewed",
+                        "--affirm-archive-quiescent",
+                        "--format",
+                        "json",
+                    ]
+                )
+            self.assertEqual(code, 1, output)
+            self.assertEqual(json.loads(output)["reason_codes"], ["zet_title_remap_revert_recover_workflow_precondition_failed"])
+            self.assertEqual(self.archive_tree_snapshot(archive_root), before)
             code, output = self.run_cli(
                 [
                     "zet-title-remap-revert-recover",
@@ -54637,15 +54663,11 @@ state:
                     "json",
                 ]
             )
-            self.assertEqual(code, 1, output)
+            # Reopened 2026-09-24: approval runs the reviewed recovery once.
+            self.assertEqual(code, 0, output)
             result = json.loads(output)
-            self.assertEqual(
-                result["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
-            )
-            self.assertEqual(result["state"], "blocked")
-            self.assertFalse(result["private_values_echoed"])
-            self.assertEqual(self.archive_tree_snapshot(archive_root), before)
+            self.assertTrue(result["ok"], result)
+            self.assertNotEqual(self.archive_tree_snapshot(archive_root), before)
 
     def test_zet_title_remap_revert_recover_hard_exit_replans_then_finalizes(
         self,
@@ -55283,6 +55305,32 @@ state:
             )
             self.assertEqual(preview_code, 0, preview_output)
             self.assertEqual(self.archive_tree_snapshot(archive_root), before)
+            def decline(*_args, **_kwargs):
+                raise archive_cli.ExactHumanApprovalWorkflowError("exact_human_approval_cancelled")
+
+            with patch.object(archive_cli, "_execute_exact_human_approved_write", side_effect=decline):
+                code, output = self.run_cli(
+                    [
+                        "zet-title-remap-recover",
+                        str(archive_root),
+                        "--case-sha256",
+                        retained["recovery_case"]["case_sha256"],
+                        "--expected-plan-digest",
+                        retained["recovery_plan"]["plan_digest"],
+                        "--expected-action",
+                        retained["recovery_case"]["recommended_action"],
+                        "--approve",
+                        "--reviewed-by",
+                        "person:title-recovery-fixed-gate-reviewer",
+                        "--affirm-recovery-reviewed",
+                        "--affirm-archive-quiescent",
+                        "--format",
+                        "json",
+                    ]
+                )
+            self.assertEqual(code, 1, output)
+            self.assertEqual(json.loads(output)["reason_codes"], ["zet_title_remap_recover_workflow_precondition_failed"])
+            self.assertEqual(self.archive_tree_snapshot(archive_root), before)
             code, output = self.run_cli(
                 [
                     "zet-title-remap-recover",
@@ -55302,15 +55350,11 @@ state:
                     "json",
                 ]
             )
-            self.assertEqual(code, 1, output)
+            # Reopened 2026-09-24: approval runs the reviewed recovery once.
+            self.assertEqual(code, 0, output)
             result = json.loads(output)
-            self.assertEqual(
-                result["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
-            )
-            self.assertEqual(result["state"], "blocked")
-            self.assertFalse(result["private_values_echoed"])
-            self.assertEqual(self.archive_tree_snapshot(archive_root), before)
+            self.assertTrue(result["ok"], result)
+            self.assertNotEqual(self.archive_tree_snapshot(archive_root), before)
 
     def test_zet_title_remap_recover_cleans_prepared_case_and_reacquires_missing_lock(
         self,

@@ -23376,11 +23376,42 @@ def command_zet_title_remap_revert_recovery_plan(
 def command_zet_title_remap_recover(
     args: argparse.Namespace,
 ) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
+    if args.approve and not args.dry_run:
+        return _activity_group_exact_route(
             args,
             lifecycle_action="zet_title_remap_recover",
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.zet_title_remap_recover,
+            digests=(str(args.case_sha256), str(args.expected_plan_digest), str(args.expected_action)),
+            affirmed=bool(args.affirm_recovery_reviewed and args.affirm_archive_quiescent),
+            preview=lambda: archive_services.zet_title_remap_recover(
+                Path(args.archive_root),
+                case_sha256=str(args.case_sha256),
+                expected_plan_digest=str(args.expected_plan_digest),
+                expected_action=str(args.expected_action),
+                max_receipts=int(args.max_receipts),
+                max_journals=int(args.max_journals),
+                max_cases=int(args.max_cases),
+                dry_run=True,
+                approve=False,
+            ),
+            write=lambda binding, claim, reviewer: archive_services.zet_title_remap_recover(
+                Path(args.archive_root),
+                case_sha256=str(args.case_sha256),
+                expected_plan_digest=str(args.expected_plan_digest),
+                expected_action=str(args.expected_action),
+                max_receipts=int(args.max_receipts),
+                max_journals=int(args.max_journals),
+                max_cases=int(args.max_cases),
+                dry_run=False,
+                approve=True,
+                reviewed_by=reviewer,
+                affirm_recovery_reviewed=True,
+                affirm_archive_quiescent=True,
+                exact_human_approval_claim=claim,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+            ),
+            title="WOM title-remap recovery",
         )
     reporter = CommandProgressReporter(
         bool(getattr(args, "progress", False)),
@@ -23468,11 +23499,42 @@ def command_zet_title_remap_recover(
 def command_zet_title_remap_revert_recover(
     args: argparse.Namespace,
 ) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
+    if args.approve and not args.dry_run:
+        return _activity_group_exact_route(
             args,
             lifecycle_action="zet_title_remap_revert_recover",
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.zet_title_remap_revert_recover,
+            digests=(str(args.case_sha256), str(args.expected_plan_digest), str(args.expected_action)),
+            affirmed=bool(args.affirm_recovery_reviewed and args.affirm_archive_quiescent),
+            preview=lambda: archive_services.zet_title_remap_revert_recover(
+                Path(args.archive_root),
+                case_sha256=str(args.case_sha256),
+                expected_plan_digest=str(args.expected_plan_digest),
+                expected_action=str(args.expected_action),
+                max_receipts=int(args.max_receipts),
+                max_journals=int(args.max_journals),
+                max_cases=int(args.max_cases),
+                dry_run=True,
+                approve=False,
+            ),
+            write=lambda binding, claim, reviewer: archive_services.zet_title_remap_revert_recover(
+                Path(args.archive_root),
+                case_sha256=str(args.case_sha256),
+                expected_plan_digest=str(args.expected_plan_digest),
+                expected_action=str(args.expected_action),
+                max_receipts=int(args.max_receipts),
+                max_journals=int(args.max_journals),
+                max_cases=int(args.max_cases),
+                dry_run=False,
+                approve=True,
+                reviewed_by=reviewer,
+                affirm_recovery_reviewed=True,
+                affirm_archive_quiescent=True,
+                exact_human_approval_claim=claim,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+            ),
+            title="WOM title-remap revert recovery",
         )
     reporter = CommandProgressReporter(
         bool(getattr(args, "progress", False)),

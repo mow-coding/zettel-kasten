@@ -102,6 +102,16 @@
       "route": "environment",
       "evidence": ["test_group5_restore_gitignore_identity_exact"]
     },
+    "zet-title-remap-recover": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_title_remap_recover_exact"]
+    },
+    "zet-title-remap-revert-recover": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_title_remap_recover_exact"]
+    },
     "draft-revision-write": {
       "status": "session_integrated",
       "route": "environment",

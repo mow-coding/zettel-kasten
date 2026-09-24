@@ -119,7 +119,7 @@ revalidated dimension by dimension without exposing compared values, and
 noninteractive Windows child processes use the common no-console policy while
 native approval and credential interaction remain visible.
 
-The current parser inventory has 82 approval-available, 25 fixed-closed, and
+The current parser inventory has 84 approval-available, 23 fixed-closed, and
 204 not-exposed canonical paths, including ten conditional approval scopes.
 v0.4.40 reopened `remint-reconcile` and `retire-draft-reconcile` and added
 their batch commands (2026-09-24 58-writer triage, group 1), reopened

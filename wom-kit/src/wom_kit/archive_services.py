@@ -16537,10 +16537,27 @@ def zet_title_remap_recover(
         None,
     ]
     | None = None,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
 ) -> dict[str, Any]:
-    if type(dry_run) is not bool or type(approve) is not bool or approve:
+    # Reopened 2026-09-24 (reclassified from Retire): approve needs the
+    # exact approval claim bound to the case, plan digest and action.
+    if type(dry_run) is not bool or type(approve) is not bool or (
+        approve and exact_human_approval_claim is None
+    ):
         return _compound_exact_human_approval_blocked(
             lifecycle_action="zet_title_remap_recover",
+        )
+    if approve:
+        _activity_group_exact_gate(
+            archive_root,
+            operation=ExactHumanApprovalOperation.zet_title_remap_recover,
+            digests=(case_sha256, expected_plan_digest, expected_action),
+            reviewed_by=reviewed_by,
+            claim=exact_human_approval_claim,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
         )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
@@ -17406,10 +17423,27 @@ def zet_title_remap_revert_recover(
         None,
     ]
     | None = None,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
 ) -> dict[str, Any]:
-    if type(dry_run) is not bool or type(approve) is not bool or approve:
+    # Reopened 2026-09-24 (reclassified from Retire): approve needs the
+    # exact approval claim bound to the case, plan digest and action.
+    if type(dry_run) is not bool or type(approve) is not bool or (
+        approve and exact_human_approval_claim is None
+    ):
         return _compound_exact_human_approval_blocked(
             lifecycle_action="zet_title_remap_revert_recover",
+        )
+    if approve:
+        _activity_group_exact_gate(
+            archive_root,
+            operation=ExactHumanApprovalOperation.zet_title_remap_revert_recover,
+            digests=(case_sha256, expected_plan_digest, expected_action),
+            reviewed_by=reviewed_by,
+            claim=exact_human_approval_claim,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
         )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
