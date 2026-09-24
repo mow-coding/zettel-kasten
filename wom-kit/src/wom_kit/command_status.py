@@ -73,7 +73,6 @@ COMPOUND_APPROVAL_FIXED_CLOSED_COMMANDS = frozenset(
     {
         "add-source",
         "credential-lifecycle",
-        "external-locator-deactivate",
         "imap-mailbox-adapter-manifest-write",
         "imap-mailbox-header-metadata-scan",
         "import-external",
@@ -148,6 +147,8 @@ EXACT_APPROVAL_REOPENED_WRITERS = frozenset({
     "saved-view-revert",
     # Triage group 6 (2026-09-24): private objet source metadata.
     "objet-source-metadata-write",
+    # Triage group 6 (2026-09-24): external locator deactivation.
+    "external-locator-deactivate",
 })
 
 # Public parser and dispatch exposure was audited at v0.3.320 and its explicit

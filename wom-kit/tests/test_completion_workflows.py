@@ -2165,24 +2165,30 @@ class CompletionWorkflowTests(unittest.TestCase):
             )
             self.assertEqual(code, 1, output)
             self.assertEqual(record_path.read_bytes(), before)
-            code, output = self.run_cli(
-                [
-                    "external-locator-deactivate",
-                    *common,
-                    "--expected-plan-sha256",
-                    expected,
-                    "--reviewed-by",
-                    "person:test",
-                    "--approve",
-                    "--format",
-                    "json",
-                ]
-            )
+            # Reopened in v0.4.40: approve asks for exact approval; a declined
+            # decision writes nothing and echoes no private value.
+            def decline(*_args, **_kwargs):
+                raise archive_cli.ExactHumanApprovalWorkflowError("exact_human_approval_cancelled")
+
+            with mock.patch.object(archive_cli, "_execute_exact_human_approved_write", side_effect=decline):
+                code, output = self.run_cli(
+                    [
+                        "external-locator-deactivate",
+                        *common,
+                        "--expected-plan-sha256",
+                        expected,
+                        "--reviewed-by",
+                        "person:test",
+                        "--approve",
+                        "--format",
+                        "json",
+                    ]
+                )
             self.assertEqual(code, 1, output)
             blocked = json.loads(output)
             self.assertEqual(
                 blocked["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
+                ["external_locator_deactivate_workflow_precondition_failed"],
             )
             self.assertFalse(blocked["private_values_echoed"])
             self.assertEqual(record_path.read_bytes(), before)

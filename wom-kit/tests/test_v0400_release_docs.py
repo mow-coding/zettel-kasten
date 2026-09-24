@@ -188,9 +188,10 @@ class V0400ReleaseDocsTests(unittest.TestCase):
                 "saved-view-write",  # reopened in v0.4.40
                 "saved-view-revert",  # reopened in v0.4.40
                 "objet-source-metadata-write",  # reopened in v0.4.40
+                "external-locator-deactivate",  # reopened in v0.4.40
             }
         )
-        self.assertEqual(len(current_blocked), 18)  # 2026-09-24 triage reopen
+        self.assertEqual(len(current_blocked), 17)  # 2026-09-24 triage reopen
         self.assertEqual(len(historical_blocked), 79)
         self.assertNotIn("migrate", current_blocked)
         self.assertNotIn("zettel-objet-link", current_blocked)

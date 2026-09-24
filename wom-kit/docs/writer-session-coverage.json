@@ -132,6 +132,11 @@
       "route": "environment",
       "evidence": ["test_objet_source_metadata_exact"]
     },
+    "external-locator-deactivate": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_external_locator_deactivate_exact"]
+    },
     "draft-revision-write": {
       "status": "session_integrated",
       "route": "environment",

@@ -14,6 +14,7 @@ from types import ModuleType
 from unittest import mock
 
 import wom_kit
+from wom_kit import command_status  # noqa: E402
 from wom_kit import (
     archive_cli,
     archive_services,
@@ -555,7 +556,7 @@ class Letter137DurableExternalCliBoundaryTests(
             )
             before = _snapshot(root_path)
             for arguments, module, service, action in calls:
-                if arguments[0] in REMOVED_COMMANDS_V0440:  # deleted in v0.4.40
+                if arguments[0] in REMOVED_COMMANDS_V0440 or arguments[0] in command_status.EXACT_APPROVAL_REOPENED_WRITERS:  # deleted or reopened in v0.4.40
                     continue
                 with self.subTest(command=arguments[0], action=action):
                     self._assert_cli_block(

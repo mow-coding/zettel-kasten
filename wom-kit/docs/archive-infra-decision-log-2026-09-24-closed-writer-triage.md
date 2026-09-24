@@ -167,6 +167,12 @@ the engine's receipt schema pins `operator:<id>`; the CLI accepts either form
 and uses the same `<id>` in both, checked before the dialog so a malformed id
 never consumes an approval. Evidence: `test_objet_source_metadata_exact`.
 
+Letter 116 retired duplicate external locators with
+`external-locator-deactivate` (R-B4b-12). The dormant writer re-derived its
+plan under the per-zet locator lock; `--approve` now binds that plan digest
+(`--expected-plan-sha256` stays required). Evidence:
+`test_external_locator_deactivate_exact`.
+
 ## Removal of Retired and Replaced Writers (v0.4.40)
 
 Owner direction (2026-09-24): a useless closed command is deleted outright, not

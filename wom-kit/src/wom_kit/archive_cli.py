@@ -27006,10 +27006,29 @@ def command_external_locator_deactivate_plan(args: argparse.Namespace) -> int:
 
 def command_external_locator_deactivate(args: argparse.Namespace) -> int:
     if args.approve:
-        return _exact_human_approval_cli_error(
+        # Reopened 2026-09-24 (triage group 6): the group 3 plan-digest route.
+        return _plan_digest_exact_route(
             args,
             lifecycle_action="external_locator_deactivate",
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.external_locator_deactivate,
+            plan=lambda: completion_workflows.external_locator_deactivate_plan(
+                Path(args.archive_root),
+                zettel_id=args.zettel_id,
+                locator_id=args.locator_id,
+                keep_locator_id=args.keep_locator_id,
+            ),
+            write=lambda digest, reviewer, binding, claim: completion_workflows.external_locator_deactivate(
+                Path(args.archive_root),
+                zettel_id=args.zettel_id,
+                locator_id=args.locator_id,
+                keep_locator_id=args.keep_locator_id,
+                expected_plan_sha256=digest,
+                reviewed_by=reviewer,
+                exact_human_approval_claim=claim,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+            ),
+            printer=lambda result: _print_external_locator_result(result, args.format),
         )
     if not args.approve:
         print(

@@ -1855,13 +1855,16 @@ def external_locator_deactivate(
     keep_locator_id: str | None,
     expected_plan_sha256: str | None,
     reviewed_by: str | None,
+    exact_human_approval_claim: Any = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
 ) -> dict[str, Any]:
-    return archive_services._compound_exact_human_approval_blocked(
-        lifecycle_action="external_locator_deactivate",
-    )
-
-    # Dormant legacy implementation retained for compatibility analysis.
-    # It is not an approval authority.
+    # Reopened 2026-09-24 (triage group 6): only a reauthenticated exact
+    # approval bound to the reviewed plan digest reaches the writer.
+    if exact_human_approval_claim is None:
+        return archive_services._compound_exact_human_approval_blocked(
+            lifecycle_action="external_locator_deactivate",
+        )
     result, private = _external_locator_deactivate_plan_core(
         archive_root,
         zettel_id=zettel_id,
@@ -1894,6 +1897,19 @@ def external_locator_deactivate(
 
     root: Path = private["root"]
     safe_id: str = private["safe_id"]
+    try:
+        archive_services._require_exact_human_operation_approval(
+            root,
+            plan_digest_approval_binding(
+                ExactHumanApprovalOperation.external_locator_deactivate, expected
+            ),
+            reviewer_claim=reviewer,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+            claim=exact_human_approval_claim,
+        )
+    except OperationApprovalBindingError as exc:
+        raise archive_services.ArchiveServiceError(exc.code) from None
     with _LocatorLock(root, safe_id):
         fresh, fresh_private = _external_locator_deactivate_plan_core(
             root,

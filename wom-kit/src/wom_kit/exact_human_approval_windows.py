@@ -253,6 +253,8 @@ class ExactHumanApprovalOperation(Enum):
     saved_view_revert = "saved_view_revert"
     # Triage group 6 (2026-09-24): private objet source metadata.
     private_objet_source_metadata_write = "private_objet_source_metadata_write"
+    # Triage group 6 (2026-09-24): duplicate external locator deactivation.
+    external_locator_deactivate = "external_locator_deactivate"
 
 
 def _validated_target_preview_text(value: str | None) -> str | None:
@@ -572,6 +574,7 @@ _OPERATION_LABELS = {
     ExactHumanApprovalOperation.saved_view_write: "저장된 보기 만들기",
     ExactHumanApprovalOperation.saved_view_revert: "저장된 보기 되돌리기",
     ExactHumanApprovalOperation.private_objet_source_metadata_write: "원본 파일명 메타데이터 기록",
+    ExactHumanApprovalOperation.external_locator_deactivate: "중복 위치 기록 비활성화",
 }
 
 _OPERATION_QUESTIONS = {
@@ -742,6 +745,9 @@ _OPERATION_QUESTIONS = {
     ),
     ExactHumanApprovalOperation.private_objet_source_metadata_write: (
         "검토한 원본 파일명 관찰 1건을 비공개 메타데이터로 기록할까요?"
+    ),
+    ExactHumanApprovalOperation.external_locator_deactivate: (
+        "검토한 중복 외부 위치 기록 하나를 비활성으로 내릴까요?"
     ),
 }
 
@@ -981,6 +987,9 @@ _OPERATION_SUMMARIES = {
     ExactHumanApprovalOperation.private_objet_source_metadata_write: (
         "검토한 원본 파일명 관찰 한 건을 비공개 오브제 메타데이터 행과 영수증으로 남깁니다. 오브제 바이트와 zet은 바뀌지 않습니다."
     ),
+    ExactHumanApprovalOperation.external_locator_deactivate: (
+        "zet 하나의 외부 위치 기록 중 검토한 중복 항목 하나만 삭제 없이 비활성으로 표시하고 영수증을 남깁니다."
+    ),
 }
 
 _OPERATION_APPROVE_BUTTONS = {
@@ -1050,6 +1059,7 @@ _OPERATION_APPROVE_BUTTONS = {
     ExactHumanApprovalOperation.saved_view_write: "보기 만들기",
     ExactHumanApprovalOperation.saved_view_revert: "보기 제거",
     ExactHumanApprovalOperation.private_objet_source_metadata_write: "메타데이터 기록",
+    ExactHumanApprovalOperation.external_locator_deactivate: "비활성화",
 }
 
 
