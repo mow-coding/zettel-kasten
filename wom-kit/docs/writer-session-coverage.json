@@ -152,6 +152,74 @@
       "route": "environment",
       "evidence": ["test_cli"]
     },
+    "legacy-coordination-cleanup": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_legacy_coordination_retire"]
+    },
+    "onboard": {
+      "status": "legacy_exception",
+      "reason": "bootstrap: the archive does not exist yet, so no work session or grant can cover it; the one approval always shows the dialog (v0.4.41 new-user entry)"
+    },
+    "init": {
+      "status": "legacy_exception",
+      "reason": "bootstrap: the archive does not exist yet, so no work session or grant can cover it; the one approval always shows the dialog (v0.4.41 new-user entry); init --approve is onboard --approve"
+    },
+    "runtime-skill-install": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_runtime_skill_exact_approval"]
+    },
+    "runtime-skill-uninstall": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_runtime_skill_exact_approval"]
+    },
+    "notion-page-trash": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_notion_page_trash_cli"]
+    },
+    "import-external": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_import_external_exact"]
+    },
+    "credential-lifecycle": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_credential_lifecycle_exact"]
+    },
+    "prehashed-objet-ledger": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_prehashed_objet_ledger_exact"]
+    },
+    "notion-objet-link-convert": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_notion_objet_link_convert_exact"]
+    },
+    "tiro-lossless-recovery-fetch-run": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_cli"]
+    },
+    "add-source": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_cli"]
+    },
+    "imap-mailbox-adapter-manifest-write": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_cli"]
+    },
+    "notion-page-recovery": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_notion_page_recovery_exact"]
+    },
     "draft-revision-write": {
       "status": "session_integrated",
       "route": "environment",

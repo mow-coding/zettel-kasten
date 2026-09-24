@@ -323,7 +323,7 @@ class NotionPropertyBackfillCliTests(unittest.TestCase):
         # restored closed on 2026-09-25).
         self.assertEqual(
             inventory["counts"]["approval_available_command_count"],
-            92,
+            94,
         )
         self.assertEqual(
             by_path["operator-feedback-archive"]["approval_status"],
@@ -331,7 +331,7 @@ class NotionPropertyBackfillCliTests(unittest.TestCase):
         )
         self.assertEqual(
             inventory["counts"]["approval_fixed_closed_command_count"],
-            20,
+            18,
         )
         # Unsupported cancellation is a separate fixed-close reason, not a
         # change to the sole approved Notion migration target above.
@@ -349,7 +349,7 @@ class NotionPropertyBackfillCliTests(unittest.TestCase):
         )
         self.assertEqual(
             inventory["counts"]["conditional_approval_command_count"],
-            10,  # v0.4.30: revert-edge --approve is unconditional
+            11,  # v0.4.30: revert-edge unconditional; v0.4.41: legacy retire scope
         )
         self.assertEqual(by_path["create-draft"]["approval_scope"]["kind"], "namespace_predicate")
 

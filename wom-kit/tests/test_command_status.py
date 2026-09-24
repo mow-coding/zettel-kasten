@@ -405,7 +405,7 @@ class CommandStatusArchiveParserTests(unittest.TestCase):
         schema = json.loads(schema_path.read_text(encoding="utf-8"))
         self.assertEqual(list(Draft202012Validator(schema).iter_errors(legacy_inventory)), [])
         result = command_status.resolve_capability_availability(
-            legacy_inventory, "credential-lifecycle", requested_mode="approve"
+            legacy_inventory, "imap-mailbox-header-metadata-scan", requested_mode="approve"  # still closed
         )
         self.assertEqual(result["state"], "writer_unavailable")
         self.assertEqual(result["approval_exposure_history"], {
@@ -463,18 +463,8 @@ class CommandStatusArchiveParserTests(unittest.TestCase):
                 ),
             },
         )
-        self.assertEqual(
-            by_path["relation-candidate-decide"]["approval_scope"],
-            {
-                "kind": "argument_value_allowlist",
-                "argument": "--decision",
-                "allowed_values": ["reject"],
-                "outside_scope_status": "approval_fixed_closed",
-                "outside_scope_reason_code": (
-                    "compound_exact_human_approval_binding_required"
-                ),
-            },
-        )
+        # v0.4.41 (letter 108): accept reopened; no conditional scope remains.
+        self.assertIsNone(by_path["relation-candidate-decide"]["approval_scope"])
         expected_local_recovery_scopes = {
             "objet-capture": ["--exact-local"],
             "objet-capture-selection": ["--exact-existing-intake"],
@@ -515,7 +505,7 @@ class CommandStatusArchiveParserTests(unittest.TestCase):
         self.assertEqual(by_path["revert-edge"]["approval_status"], "approval_available")
         self.assertEqual(
             exposed["counts"]["conditional_approval_command_count"],
-            10,
+            10,  # v0.4.41: legacy-coordination-cleanup --destination in, relation accept unconditional
         )
         self.assertEqual(
             by_path["work-session"]["approval_scope"],

@@ -3663,6 +3663,14 @@ class ArchiveCliTests(unittest.TestCase):
         expected_codes = (
             [f"{lifecycle_action}_preflight_blocked"]
             if lifecycle_action in {"remint_reconcile", "retire_draft_reconcile"}
+            # v0.4.41: Notion page recovery plans first; a missing request is
+            # refused before any dialog.
+            else [f"{lifecycle_action}_workflow_failed_safely"]
+            if lifecycle_action == "authenticated_notion_page_recovery_execute"
+            # v0.4.41: onboard --approve opens; without --reviewed-by it is
+            # refused before the target is planned or any dialog opens.
+            else ["onboard_reviewer_required"]
+            if lifecycle_action == "onboard"
             else ["compound_exact_human_approval_binding_required"]
         )
         self.assertEqual(result["reason_codes"], expected_codes)
@@ -23693,18 +23701,22 @@ if __name__ == "__main__":
 
             approve_result = json.loads(approve_output)
             approve_serialized = json.dumps(approve_result, ensure_ascii=False)
-            self.assertEqual(approve_code, 1, approve_output)
-            self.assertFalse(approve_result["ok"], approve_result)
-            self.assertEqual(approve_result["state"], "blocked")
-            self.assertEqual(approve_result["lifecycle_action"], "tiro_lossless_recovery_fetch_run")
-            self.assertEqual(
-                approve_result["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
-            )
-            self.assertFalse(approve_result["private_values_echoed"])
-            self.assertEqual(called_paths, [])
-            self.assertFalse((archive_root / output_relative).exists())
-            self.assertEqual(self.snapshot_archive_files(archive_root), before_fetch)
+            self.assertEqual(approve_code, 0, approve_output)
+            self.assertTrue(approve_result["ok"], approve_result)
+            self.assertEqual(approve_result["fetch_state"], "fetched")
+            self.assertEqual(approve_result["execution_status"], "succeeded")
+            self.assertTrue(approve_result["current_capability"]["live_tiro_rest_fetch_adapter_implemented"])
+            self.assertTrue(approve_result["closed_actions"]["provider_api_called"])
+            self.assertTrue(approve_result["closed_actions"]["credential_value_read"])
+            self.assertTrue(approve_result["closed_actions"]["environment_read"])
+            self.assertTrue(approve_result["closed_actions"]["raw_bundle_written"])
+            self.assertTrue(approve_result["closed_actions"]["receipt_written"])
+            self.assertFalse(approve_result["closed_actions"]["object_manifest_updated"])
+            self.assertIn("/v1/external/workspaces", called_paths)
+            self.assertIn("/v1/external/workspaces/ws_fake_workspace/notes", called_paths)
+            self.assertIn("/v1/external/notes/note_fake_guid", called_paths)
+            self.assertIn("/v1/external/notes/note_fake_guid/paragraphs", called_paths)
+            self.assertIn("source-intake-chain", approve_result["bundle"]["next_capture_command"])  # capture removed in v0.4.40
             for secret_fragment in (
                 credential_ref,
                 "WOM_TEST_TIRO_TOKEN",
@@ -23719,6 +23731,36 @@ if __name__ == "__main__":
             ):
                 with self.subTest(secret_fragment=secret_fragment):
                     self.assertNotIn(secret_fragment, approve_serialized)
+
+            bundle_path = archive_root / output_relative
+            self.assertTrue(bundle_path.exists())
+            bundle_text = bundle_path.read_text(encoding="utf-8")
+            for raw_fragment in (
+                "Fake confidential meeting",
+                "Fake Speaker",
+                "Please keep this fake transcript intact.",
+                "tiro.example",
+                "Fake generated note document",
+                "Fake private wiki",
+                "Fake private workspace",
+            ):
+                with self.subTest(raw_fragment=raw_fragment):
+                    self.assertIn(raw_fragment, bundle_text)
+            self.assertNotIn(secret_value, bundle_text)
+
+            receipt_path = archive_root.joinpath(*approve_result["receipt"]["receipt_path"].split("/"))
+            receipt_text = receipt_path.read_text(encoding="utf-8")
+            for secret_fragment in (
+                credential_ref,
+                "WOM_TEST_TIRO_TOKEN",
+                secret_value,
+                "Fake confidential meeting",
+                "Fake Speaker",
+                "Please keep this fake transcript intact.",
+                "tiro.example",
+            ):
+                with self.subTest(secret_fragment=secret_fragment):
+                    self.assertNotIn(secret_fragment, receipt_text)
 
     def test_tiro_lossless_recovery_fetch_run_reads_windows_keyring_ref_without_echoing_values(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -23842,19 +23884,23 @@ if __name__ == "__main__":
 
             approve_result = json.loads(approve_output)
             approve_serialized = json.dumps(approve_result, ensure_ascii=False)
-            self.assertEqual(approve_code, 1, approve_output)
-            self.assertFalse(approve_result["ok"], approve_result)
-            self.assertEqual(approve_result["state"], "blocked")
-            self.assertEqual(approve_result["lifecycle_action"], "tiro_lossless_recovery_fetch_run")
-            self.assertEqual(
-                approve_result["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
-            )
-            self.assertFalse(approve_result["private_values_echoed"])
-            self.assertEqual(keyring_read.call_count, 0)
-            self.assertEqual(called_paths, [])
-            self.assertFalse((archive_root / output_relative).exists())
-            self.assertEqual(self.snapshot_archive_files(archive_root), before_fetch)
+            self.assertEqual(approve_code, 0, approve_output)
+            self.assertTrue(approve_result["ok"], approve_result)
+            self.assertEqual(approve_result["fetch_state"], "fetched")
+            self.assertEqual(approve_result["execution_status"], "succeeded")
+            self.assertTrue(approve_result["closed_actions"]["credential_value_read"])
+            self.assertFalse(approve_result["closed_actions"]["environment_read"])
+            self.assertTrue(approve_result["closed_actions"]["os_keyring_opened"])
+            self.assertTrue(approve_result["closed_actions"]["os_keyring_auto_detection_attempted"])
+            self.assertTrue(approve_result["closed_actions"]["provider_api_called"])
+            self.assertTrue(approve_result["current_capability"]["keyring_credential_ref_read_implemented"])
+            self.assertTrue(approve_result["current_capability"]["windows_credential_manager_ref_read_implemented"])
+            self.assertEqual(approve_result["credential_resolution"]["credential_read_source"], "os_keyring")
+            self.assertTrue(approve_result["credential_resolution"]["os_keyring_auto_detection_used"])
+            self.assertFalse(approve_result["credential_resolution"]["os_keyring_target_echoed"])
+            self.assertEqual(keyring_read.call_count, 1)
+            self.assertIn("/v1/external/workspaces", called_paths)
+            self.assertIn("/v1/external/notes/note_fake_guid/paragraphs", called_paths)
             for secret_fragment in (
                 credential_ref,
                 "tiro-test-token",
@@ -23864,6 +23910,14 @@ if __name__ == "__main__":
             ):
                 with self.subTest(secret_fragment=secret_fragment):
                     self.assertNotIn(secret_fragment, approve_serialized)
+
+            bundle_text = (archive_root / output_relative).read_text(encoding="utf-8")
+            self.assertIn("Fake confidential meeting", bundle_text)
+            self.assertNotIn(secret_value, bundle_text)
+            receipt_path = archive_root.joinpath(*approve_result["receipt"]["receipt_path"].split("/"))
+            receipt_text = receipt_path.read_text(encoding="utf-8")
+            self.assertNotIn(credential_ref, receipt_text)
+            self.assertNotIn(secret_value, receipt_text)
 
     def test_version_command_finds_parent_project_pin_from_archive_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -28218,7 +28272,9 @@ state:
             self.assertNotIn(private_duplicate, output)
             self.assertNotIn(request_relative, output)
 
-    def test_notion_page_recovery_cli_requires_full_577_plus_43_reviewed_batch(self) -> None:
+    def test_notion_page_recovery_cli_requires_a_self_consistent_reviewed_batch(self) -> None:
+        # v0.4.41: any self-consistent request is accepted; an item count that
+        # disagrees with expected_item_count is still refused.
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
             request_relative = "profiles/local/notion-page-recovery/incomplete.json"
@@ -28231,7 +28287,7 @@ state:
                         "schema": "wom-kit/notion-page-recovery-request/v0.1",
                         "batch_id": "letter118-incomplete",
                         "archive_id": "archive:personal:fake-life",
-                        "expected_item_count": 1,
+                        "expected_item_count": 2,
                         "groups": [
                             {
                                 "group_id": "zet_notion_db3",
@@ -28820,13 +28876,17 @@ state:
                 (pending_id,),
             )
 
-            before_approve = self.archive_tree_snapshot(archive_root)
+            # v0.4.41 (letter 119): approve records the reviewed plan after one
+            # exact approval (auto-approved here with a real claim, no UI).
             with patch(
                 "wom_kit.credential_secure_intake_windows._CtypesWindowsNativeFacade",
                 return_value=native,
             ), patch(
+                "wom_kit.credential_workflows.plan_authenticated_credential_lifecycle",
+                return_value=plan_result,
+            ), patch(
                 "wom_kit.credential_workflows.approve_authenticated_credential_lifecycle",
-                side_effect=AssertionError("credential lifecycle writer entered"),
+                return_value={**plan_result, "ok": True, "state": "recorded"},
             ) as approver:
                 approve_code, approve_output = self.run_cli(
                     [
@@ -28839,23 +28899,14 @@ state:
                     ]
                 )
             approved = json.loads(approve_output)
-            self.assertEqual(approve_code, 1, approve_output)
-            self.assertFalse(approved["ok"])
-            self.assertEqual(approved["state"], "blocked")
-            self.assertEqual(
-                approved["lifecycle_action"],
-                "authenticated_credential_lifecycle_decision",
-            )
-            self.assertEqual(
-                approved["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
-            )
-            self.assertFalse(approved["private_values_echoed"])
-            approver.assert_not_called()
-            self.assertEqual(
-                self.archive_tree_snapshot(archive_root),
-                before_approve,
-            )
+            self.assertEqual(approve_code, 0, approve_output)
+            self.assertTrue(approved["ok"])
+            self.assertFalse(approved["delete_performed"])
+            self.assertFalse(approved["revoke_performed"])
+            approver.assert_called_once()
+            self.assertEqual(approver.call_args.kwargs["expected_plan_sha256"], plan_sha256)
+            self.assertEqual(approver.call_args.kwargs["reviewed_by"], "human:operator")
+            self.assertIsNotNone(approver.call_args.kwargs["exact_human_approval_claim"])
 
     def test_notion_page_recovery_approval_uses_injected_exact_boundaries_without_echo(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -33286,8 +33337,7 @@ state:
             self.assertFalse(dry_result["privacy_guards"]["secret_values_echoed"])
             self.assertEqual(self.snapshot_archive_files(archive_root), before)
 
-            approve_result = self.assert_cli_compound_writer_fails_closed(
-                archive_root,
+            approve_code, approve_output = self.run_cli(
                 [
                     "imap-mailbox-adapter-manifest-write",
                     str(archive_root),
@@ -33304,25 +33354,55 @@ state:
                     "--reviewed-by",
                     "person:me",
                     "--approve",
-                ],
-                lifecycle_action="imap_mailbox_adapter_manifest_write",
+                    "--format",
+                    "json",
+                ]
             )
+            approve_result = json.loads(approve_output)
+            self.assertEqual(approve_code, 0, approve_output)
+            self.assertTrue(approve_result["ok"], approve_result)
+            self.assertFalse(approve_result["dry_run"])
+            self.assertTrue(approve_result["approved"])
             self.assertEqual(approve_result["lifecycle_action"], "imap_mailbox_adapter_manifest_write")
-            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            manifest_path = archive_root / approve_result["manifest_path"]
+            receipt_path = archive_root / approve_result["receipt_path"]
+            self.assertTrue(manifest_path.is_file())
+            self.assertTrue(receipt_path.is_file())
+            self.assertEqual(set(approve_result["files_written"]), {approve_result["manifest_path"], approve_result["receipt_path"]})
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["schema"], archive_services.IMAP_MAILBOX_ADAPTER_MANIFEST_SCHEMA)
+            self.assertEqual(manifest["adapter_id"], "local-imap")
+            self.assertEqual(manifest["supported_providers"], ["gmail", "naver"])
+            self.assertEqual(manifest["supported_operations"], ["header_metadata_scan"])
+            self.assertEqual(manifest["supported_selection_rules"], ["newest_first"])
+            self.assertEqual(receipt["receipt_kind"], "imap_mailbox_adapter_manifest_write")
+            self.assertEqual(receipt["manifest_path"], approve_result["manifest_path"])
+            self.assertEqual(receipt["review"]["reviewed_by"], "person:me")
+            self.assertFalse(receipt["closed_actions"]["imap_connection_opened"])
+            self.assertFalse(receipt["secret_material"]["secret_value_included"])
+            self.assertNotIn("imap:account:naver-personal", approve_output)
+            self.assertNotIn("keyring:naver-app-password", approve_output)
+            self.assertNotIn("Subject:", approve_output)
+            self.assertNotIn("Message-ID", approve_output)
 
-            missing_reviewer = self.assert_cli_compound_writer_fails_closed(
-                archive_root,
+            replay_code, replay_output = self.run_cli(
                 [
                     "imap-mailbox-adapter-manifest-write",
                     str(archive_root),
                     "--adapter-id",
                     "local-imap",
+                    "--reviewed-by",
+                    "person:me",
                     "--approve",
-                ],
-                lifecycle_action="imap_mailbox_adapter_manifest_write",
+                    "--format",
+                    "json",
+                ]
             )
-            self.assertFalse(missing_reviewer["private_values_echoed"])
-            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            replay_result = json.loads(replay_output)
+            self.assertEqual(replay_code, 1, replay_output)
+            self.assertFalse(replay_result["ok"])
+            self.assertTrue(any("already exists" in blocker for blocker in replay_result["blockers"]))
 
     def test_credential_ref_plan_is_read_only_and_redacts_raw_secret_inputs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -35728,6 +35808,7 @@ state:
                     "json",
                 ]
             )
+
             self.assertEqual(dry_code, 0, dry_output)
             dry = json.loads(dry_output)
             self.assertTrue(dry["ok"], dry)
@@ -35745,8 +35826,7 @@ state:
             self.assertNotIn(str(ledger_b), dry_output)
             self.assertNotIn("aid-dedup", dry_output)
 
-            self.assert_cli_compound_writer_fails_closed(
-                archive_root,
+            approve_code, approve_output = self.run_cli(
                 [
                     "prehashed-objet-ledger",
                     str(archive_root),
@@ -35761,20 +35841,50 @@ state:
                     "--approve",
                     "--reviewed-by",
                     "person:test",
-                ],
-                lifecycle_action="prehashed_objet_ledger_register",
+                    "--format",
+                    "json",
+                ]
             )
+
+            self.assertEqual(approve_code, 0, approve_output)
+            approved = json.loads(approve_output)
+            self.assertTrue(approved["ok"], approved)
+            self.assertEqual(approved["registration"]["appended_manifest_records"], 3)
+            self.assertEqual(approved["ledger"]["skipped_row_count"], 2)
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            records = [
+                json.loads(line)
+                for line in manifest_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            added = {
+                record["object_id"]
+                for record in records
+                if record.get("provenance", {}).get("store_ref") == "notion-export-20260614"
+            }
+            self.assertEqual(added, {f"sha256:{sha_a}", f"sha256:{sha_b}", f"sha256:{sha_c}"})
+            receipt = json.loads((archive_root / approved["registration"]["receipt_path"]).read_text(encoding="utf-8"))
+            self.assertEqual(receipt["summary"]["skipped_row_count"], 2)
+            self.assertEqual(receipt["summary"]["appended_manifest_records"], 3)
 
     def test_prehashed_objet_ledger_approve_appends_external_manifest_records_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
             ledger = Path(tmp) / "retrieval-ledger.jsonl"
+            sha_a = "c" * 64
+            sha_b = "d" * 64
             ledger.write_text(
-                json.dumps({"sha256": "c" * 64, "bytes": 12}) + "\n",
+                "\n".join(
+                    [
+                        json.dumps({"sha256": sha_a, "bytes": 12, "mime": "text/plain", "filename": "private-notion-export-name.pdf"}),
+                        json.dumps({"sha256": "sha256:" + sha_b, "bytes": "5", "mime": "application/pdf", "url": "https://example.com/private"}),
+                        json.dumps({"sha256": sha_a, "bytes": 12}),
+                    ]
+                ),
                 encoding="utf-8",
             )
-            self.assert_cli_compound_writer_fails_closed(
-                archive_root,
+
+            code, output = self.run_cli(
                 [
                     "prehashed-objet-ledger",
                     str(archive_root),
@@ -35787,9 +35897,43 @@ state:
                     "--approve",
                     "--reviewed-by",
                     "person:test",
-                ],
-                lifecycle_action="prehashed_objet_ledger_register",
+                    "--format",
+                    "json",
+                ]
             )
+
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["lifecycle_action"], "prehashed_objet_ledger_register")
+            self.assertFalse(result["dry_run"])
+            self.assertEqual(result["registration"]["appended_manifest_records"], 2)
+            self.assertFalse(result["registration"]["object_ids_echoed"])
+            self.assertNotIn(str(ledger), output)
+            self.assertNotIn("private-notion-export-name.pdf", output)
+            self.assertNotIn("https://example.com/private", output)
+
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            records = [json.loads(line) for line in manifest_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+            added = {record["object_id"]: record for record in records if record.get("provenance", {}).get("source") == "prehashed_external_objet_ledger"}
+            self.assertEqual(set(added), {f"sha256:{sha_a}", f"sha256:{sha_b}"})
+            record = added[f"sha256:{sha_a}"]
+            self.assertEqual(record["logical_key"], f"objects/external/prehashed/notion_source_export/{sha_a[:2]}/{sha_a}")
+            self.assertEqual(record["mime"], "text/plain")
+            self.assertFalse((archive_root / record["logical_key"]).exists())
+            self.assertEqual(record["locations"][0]["provider"], "external_prehashed")
+            self.assertEqual(record["locations"][0]["store_ref"], "notion-export-20260613")
+            self.assertFalse(record["locations"][0]["byte_verification_by_wom_kit"])
+            self.assertEqual(record["provenance"]["created_in"], "archive:personal:fake-life")
+
+            receipt_path = archive_root / Path(result["registration"]["receipt_path"])
+            self.assertTrue(receipt_path.is_file())
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            self.assertEqual(receipt["schema"], archive_services.PREHASHED_OBJET_LEDGER_RECEIPT_SCHEMA)
+            self.assertEqual(receipt["summary"]["appended_manifest_records"], 2)
+            self.assertEqual(receipt["summary"]["valid_mime_count"], 2)
+            self.assertFalse(receipt["ledger_path_included"])
+            self.assertFalse(receipt["privacy_guards"]["row_values_echoed"])
 
     def test_object_storage_upload_evidence_approve_writes_receipt_and_manifest_locations(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -44239,7 +44383,7 @@ state:
             self.assertEqual(no_dry_code, 1, no_dry_output)
             self.assertIn("requires --dry-run", no_dry_output)
 
-    def test_notion_objet_link_convert_is_dry_run_only_until_compound_binding_exists(self) -> None:
+    def test_notion_objet_link_convert_writes_embed_edge_after_exact_approval(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
             manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
@@ -44325,26 +44469,35 @@ state:
                     "json",
                 ]
             )
-            blocked = json.loads(approve_output)
-            self.assertEqual(approve_code, 1, approve_output)
-            self.assertEqual(
-                blocked["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
-            )
-            self.assertFalse(blocked["private_values_echoed"])
-            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+            # v0.4.41 (feature request 34): one exact approval (auto-approved
+            # here with a real claim) writes the embed edge and the receipt;
+            # the zettel body text is not rewritten.
+            written = json.loads(approve_output)
+            self.assertEqual(approve_code, 0, approve_output)
+            self.assertTrue(written["ok"], written)
+            self.assertRegex(dry_result["plan_sha256"], r"^sha256:[0-9a-f]{64}$")
+            receipts = list((archive_root / "receipts").rglob("*notion-objet-link-convert*"))
+            self.assertTrue(receipts)
+            self.assertIn(f'<embed url="{notion_url}">', zettel_path.read_text(encoding="utf-8"))
             self.assertNotIn(notion_url, approve_output)
             self.assertNotIn(str(archive_root), approve_output)
+
     def test_prehashed_objet_ledger_approve_blocks_invalid_rows_without_writing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
             ledger = Path(tmp) / "retrieval-ledger.jsonl"
             ledger.write_text(
-                json.dumps({"sha256": "not-a-sha", "bytes": 2}) + "\n",
+                "\n".join(
+                    [
+                        json.dumps({"sha256": "e" * 64, "bytes": 1}),
+                        json.dumps({"sha256": "not-a-sha", "bytes": 2}),
+                    ]
+                ),
                 encoding="utf-8",
             )
-            self.assert_cli_compound_writer_fails_closed(
-                archive_root,
+            before = self.snapshot_archive_files(archive_root)
+
+            code, output = self.run_cli(
                 [
                     "prehashed-objet-ledger",
                     str(archive_root),
@@ -44357,9 +44510,16 @@ state:
                     "--approve",
                     "--reviewed-by",
                     "person:test",
-                ],
-                lifecycle_action="prehashed_objet_ledger_register",
+                    "--format",
+                    "json",
+                ]
             )
+
+            result = json.loads(output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertIn("prehashed objet ledger registration blocks when any ledger row is invalid.", result["blockers"])
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
 
     def test_object_storage_invalid_provider_bucket_slug_and_secret_refs_block(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -53327,7 +53487,7 @@ state:
             self.assertIn("github", result["provider_bindings"]["enabled_providers"])
             self.assertFalse(archive_root.exists())
 
-    def test_onboard_approve_creates_archive_and_applies_provider_profile(self) -> None:
+    def test_onboard_approve_without_reviewer_writes_nothing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = Path(tmp) / "onboard-family"
             result = self.assert_cli_compound_writer_fails_closed(
@@ -72746,14 +72906,11 @@ state:
     def test_add_source_approve_writes_binding_and_ignored_local_profile(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = Path(tmp) / "archive"
-            init_code, init_output = self.init_personal_archive(
-                archive_root,
-                "archive:personal:add-source-approve",
-            )
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:add-source-approve")
             self.assertEqual(init_code, 0, init_output)
             source_root = Path(tmp) / "Desktop"
             source_root.mkdir()
-            before = self.archive_tree_snapshot(archive_root)
+
             code, output = self.run_cli(
                 [
                     "add-source",
@@ -72774,19 +72931,21 @@ state:
                     "json",
                 ]
             )
-            self.assertEqual(code, 1, output)
+            self.assertEqual(code, 0, output)
             result = json.loads(output)
-            self.assertEqual(result["state"], "blocked")
-            self.assertEqual(result["lifecycle_action"], "add_source_binding")
-            self.assertEqual(
-                result["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
-            )
-            self.assertFalse(result["private_values_echoed"])
-            self.assertEqual(self.archive_tree_snapshot(archive_root), before)
-            self.assertFalse(
-                (archive_root / "profiles" / "local" / "source-roots.local.yml").exists()
-            )
+            self.assertFalse(result["dry_run"])
+            self.assertEqual(result["source_id"], "local:desktop")
+            bindings = archive_cli.load_yaml((archive_root / "source-bindings.yml").read_text(encoding="utf-8"))
+            self.assertTrue(any(item["source_id"] == "local:desktop" for item in bindings["sources"]))
+            profile_path = archive_root / "profiles" / "local" / "source-roots.local.yml"
+            self.assertTrue(profile_path.is_file())
+            profile = archive_cli.load_yaml(profile_path.read_text(encoding="utf-8"))
+            self.assertEqual(profile["sources"]["local:desktop"]["path"], str(source_root.resolve()))
+
+            # scan-source was removed in v0.4.40; the local profile above is what
+            # source-intake-batch resolves the root from.
+            doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--strict"])
+            self.assertEqual(doctor_code, 0, doctor_output)
 
     def test_imap_mailbox_source_can_be_registered_but_scan_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -72830,25 +72989,15 @@ state:
                     "json",
                 ]
             )
-            self.assertEqual(add_code, 1, add_output)
-            blocked = json.loads(add_output)
-            self.assertEqual(blocked["lifecycle_action"], "add_source_binding")
-            self.assertEqual(
-                blocked["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
-            )
-            self.assertFalse(blocked["private_values_echoed"])
-            self.assertEqual(self.archive_tree_snapshot(archive_root), before)
-
-            source_bindings_path = archive_root / "source-bindings.yml"
+            # v0.4.41: add-source --approve registers the reviewed binding after
+            # one exact approval (auto-approved here with a real claim).
+            self.assertEqual(add_code, 0, add_output)
+            registered = json.loads(add_output)
+            self.assertEqual(registered["source_id"], "imap:gmail")
             source_bindings = archive_cli.load_yaml(
-                source_bindings_path.read_text(encoding="utf-8")
+                (archive_root / "source-bindings.yml").read_text(encoding="utf-8")
             )
-            source_bindings["sources"].append(plan["source_binding"])
-            source_bindings_path.write_text(
-                archive_cli.dump_yaml(source_bindings),
-                encoding="utf-8",
-            )
+            self.assertTrue(any(item["source_id"] == "imap:gmail" for item in source_bindings["sources"]))
 
             # scan-source was removed in v0.4.40; the binding stays registered
             # and no live IMAP scan command exists.
@@ -75290,10 +75439,7 @@ state:
                 ]
             )
             self.assertEqual(approve_code, 1, approve_output)
-            self.assertEqual(
-                json.loads(approve_output)["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
-            )
+            self.assertIn(expected_code, approve_output)
             self.assertNotIn(rejected_path_alias, approve_output)
             self.assertFalse(any((archive_root / "inbox").glob("*.md")))
             self.assertFalse(
@@ -75944,9 +76090,9 @@ state:
                             ]
                         )
                         self.assertEqual(approve_code, 1, approve_output)
-                        self.assertEqual(
-                            json.loads(approve_output)["reason_codes"],
-                            ["compound_exact_human_approval_binding_required"],
+                        self.assertIn(
+                            case["expected_code"],
+                            approve_output,
                         )
                         self.assertNotIn(
                             rejected_candidate,
@@ -75965,17 +76111,108 @@ state:
                             )
                         )
 
-    def test_import_external_notion_index_fallback_apply_is_inbox_only_and_does_not_project_index(
-        self,
-    ) -> None:
+    def test_import_external_notion_index_fallback_apply_is_inbox_only_and_does_not_project_index(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            archive_root = Path(tmp) / "archive"
+            tmp_root = Path(tmp)
+            archive_root = tmp_root / "archive"
             init_code, init_output = self.init_personal_archive(
                 archive_root,
-                "archive:personal:import-external-fixed-gate",
+                "archive:personal:notion-index-fallback-apply",
             )
             self.assertEqual(init_code, 0, init_output)
-            self.assert_import_external_fails_closed(archive_root)
+
+            canonical_path = archive_root / "zettels" / "zet_20260730_existing_sentinel.md"
+            canonical_bytes = (
+                b"---\n"
+                b"id: zet_20260730_existing_sentinel\n"
+                b"title: Existing Canonical Sentinel\n"
+                b"status: active\n"
+                b"---\n\n"
+                b"EXISTING_CANONICAL_SENTINEL_BYTES\n"
+            )
+            canonical_path.write_bytes(canonical_bytes)
+            index_path = archive_root / "db" / "archive-index.sqlite"
+            index_path.parent.mkdir(parents=True, exist_ok=True)
+            sqlite_sentinel = b"EXISTING_SQLITE_SENTINEL_BYTES"
+            index_path.write_bytes(sqlite_sentinel)
+            canonical_before = {
+                path.relative_to(archive_root).as_posix(): path.read_bytes()
+                for path in (archive_root / "zettels").rglob("*")
+                if path.is_file()
+            }
+
+            source_page_id = "PRIVATE_SOURCE_PAGE_ID_APPLY_SENTINEL"
+            selected_title = "Reviewed Notion Operating Agreement"
+            export_root = tmp_root / "notion-export"
+            export_root.mkdir()
+            manifest = export_root / "manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "source_system": "notion",
+                        "items": [
+                            {
+                                "external_id": "notion-index-apply",
+                                "title": "0123456789abcdef0123456789abcdef",
+                                "index": selected_title,
+                                "content": "# Imported source\n\nSanitized source body.\n",
+                                "facets": {
+                                    "domain": "research",
+                                    "source_page_id": source_page_id,
+                                },
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+
+            code, output = self.run_cli(
+                [
+                    "import-external",
+                    str(archive_root),
+                    "--source",
+                    "notion",
+                    "--export",
+                    str(manifest),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertEqual(result["imported_count"], 1)
+            draft_paths = [
+                archive_root / relative
+                for relative in result["created_paths"]
+                if relative.startswith("inbox/")
+            ]
+            self.assertEqual(len(draft_paths), 1)
+            draft_text = draft_paths[0].read_text(encoding="utf-8")
+            frontmatter, _body = archive_services.split_zettel_text(draft_text)
+            self.assertEqual(frontmatter["title"], selected_title)
+            self.assertEqual(frontmatter["facets"]["source_page_id"], source_page_id)
+            self.assertNotIn("index", frontmatter["facets"])
+            self.assertNotIn("source_index_path", draft_text)
+
+            receipt_bytes = (archive_root / result["receipt_path"]).read_bytes()
+            self.assertNotIn(source_page_id, output)
+            self.assertNotIn(source_page_id.encode("utf-8"), receipt_bytes)
+            self.assertEqual(canonical_path.read_bytes(), canonical_bytes)
+            self.assertEqual(index_path.read_bytes(), sqlite_sentinel)
+            self.assertEqual(
+                {
+                    path.relative_to(archive_root).as_posix(): path.read_bytes()
+                    for path in (archive_root / "zettels").rglob("*")
+                    if path.is_file()
+                },
+                canonical_before,
+            )
 
     def test_import_external_notion_source_page_path_alias_early_file_failures_are_content_free(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -76096,17 +76333,93 @@ state:
                         )
                     )
 
-    def test_import_external_notion_source_page_id_alias_is_withheld_from_output_and_receipt(
-        self,
-    ) -> None:
+    def test_import_external_notion_source_page_id_alias_is_withheld_from_output_and_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            archive_root = Path(tmp) / "archive"
+            tmp_root = Path(tmp)
+            archive_root = tmp_root / "archive"
             init_code, init_output = self.init_personal_archive(
                 archive_root,
-                "archive:personal:import-external-fixed-gate",
+                "archive:personal:notion-source-page-id-alias",
             )
             self.assertEqual(init_code, 0, init_output)
-            self.assert_import_external_fails_closed(archive_root)
+
+            private_source_page_id = (
+                "PRIVATE_SOURCE_PAGE_ID_MATCHING_EXTERNAL_ID"
+            )
+            selected_title = "Reviewed Notion Alias Privacy Record"
+            export_root = tmp_root / "notion-export"
+            export_root.mkdir()
+            manifest = export_root / "manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "source_system": "notion",
+                        "items": [
+                            {
+                                "external_id": private_source_page_id,
+                                "title": "0123456789abcdef0123456789abcdef",
+                                "index": selected_title,
+                                "content": "# Imported source\n\nSafe body.\n",
+                                "facets": {
+                                    "source_page_id": private_source_page_id,
+                                },
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+
+            code, output = self.run_cli(
+                [
+                    "import-external",
+                    str(archive_root),
+                    "--source",
+                    "notion",
+                    "--export",
+                    str(manifest),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            self.assertNotIn(private_source_page_id, output)
+            result = json.loads(output)
+            self.assertEqual(
+                result["receipt"]["items"][0]["external_id"],
+                "<withheld:private_metadata_alias>",
+            )
+
+            draft_relative = next(
+                path
+                for path in result["created_paths"]
+                if path.startswith("inbox/")
+            )
+            draft_text = (archive_root / draft_relative).read_text(
+                encoding="utf-8"
+            )
+            frontmatter, _body = archive_services.split_zettel_text(draft_text)
+            self.assertEqual(frontmatter["title"], selected_title)
+            self.assertEqual(
+                frontmatter["facets"]["source_page_id"],
+                private_source_page_id,
+            )
+            self.assertEqual(
+                frontmatter["external_import"]["external_id"],
+                private_source_page_id,
+            )
+            receipt_bytes = (
+                archive_root / result["receipt_path"]
+            ).read_bytes()
+            self.assertNotIn(
+                private_source_page_id.encode("utf-8"),
+                receipt_bytes,
+            )
 
     def test_import_external_blocks_source_page_id_that_would_become_public_target_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -76231,10 +76544,7 @@ state:
                 ]
             )
             self.assertEqual(approve_code, 1, approve_output)
-            self.assertEqual(
-                json.loads(approve_output)["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
-            )
+            self.assertIn(expected_code, approve_output)
             self.assertNotIn(private_source_page_id, approve_output)
             self.assertFalse(any((archive_root / "inbox").glob("*.md")))
             self.assertFalse(
@@ -76243,17 +76553,91 @@ state:
                 )
             )
 
-    def test_import_external_notion_source_page_id_content_hash_alias_is_withheld(
-        self,
-    ) -> None:
+    def test_import_external_notion_source_page_id_content_hash_alias_is_withheld(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            archive_root = Path(tmp) / "archive"
+            tmp_root = Path(tmp)
+            archive_root = tmp_root / "archive"
             init_code, init_output = self.init_personal_archive(
                 archive_root,
-                "archive:personal:import-external-fixed-gate",
+                "archive:personal:notion-source-page-id-sha-alias",
             )
             self.assertEqual(init_code, 0, init_output)
-            self.assert_import_external_fails_closed(archive_root)
+
+            content = "# Imported source\n\nSafe content hash alias body.\n"
+            private_source_page_id = hashlib.sha256(
+                content.encode("utf-8")
+            ).hexdigest()
+            export_root = tmp_root / "notion-export"
+            export_root.mkdir()
+            manifest = export_root / "manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "source_system": "notion",
+                        "items": [
+                            {
+                                "external_id": "notion-content-sha-alias",
+                                "title": "0123456789abcdef0123456789abcdef",
+                                "index": "Reviewed Content Hash Alias Record",
+                                "content": content,
+                                "facets": {
+                                    "source_page_id": private_source_page_id,
+                                },
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+
+            code, output = self.run_cli(
+                [
+                    "import-external",
+                    str(archive_root),
+                    "--source",
+                    "notion",
+                    "--export",
+                    str(manifest),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            self.assertNotIn(private_source_page_id, output)
+            result = json.loads(output)
+            self.assertEqual(
+                result["receipt"]["items"][0]["sha256"],
+                "<withheld:private_metadata_alias>",
+            )
+            receipt_bytes = (
+                archive_root / result["receipt_path"]
+            ).read_bytes()
+            self.assertNotIn(
+                private_source_page_id.encode("utf-8"),
+                receipt_bytes,
+            )
+            draft_relative = next(
+                path
+                for path in result["created_paths"]
+                if path.startswith("inbox/")
+            )
+            draft_text = (archive_root / draft_relative).read_text(
+                encoding="utf-8"
+            )
+            frontmatter, _body = archive_services.split_zettel_text(draft_text)
+            self.assertEqual(
+                frontmatter["facets"]["source_page_id"],
+                private_source_page_id,
+            )
+            self.assertEqual(
+                frontmatter["external_import"]["sha256"],
+                private_source_page_id,
+            )
 
     def test_import_external_blocks_generated_target_path_that_aliases_source_page_id(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -76323,13 +76707,7 @@ state:
                         ]
                     )
                     self.assertEqual(code, 1, output)
-                    if mode_args[0] == "--approve":
-                        self.assertEqual(
-                            json.loads(output)["reason_codes"],
-                            ["compound_exact_human_approval_binding_required"],
-                        )
-                    else:
-                        self.assertIn(expected_code, output)
+                    self.assertIn(expected_code, output)
                     self.assertNotIn(private_source_page_id, output)
                     self.assertFalse(
                         any((archive_root / "inbox").glob("*.md"))
@@ -76342,22 +76720,99 @@ state:
                         )
                     )
 
-    def test_import_external_approved_apply_uses_one_frozen_discovery_snapshot_and_rolls_back_partial_files(
-        self,
-    ) -> None:
+    def test_import_external_approved_apply_uses_one_frozen_discovery_snapshot_and_rolls_back_partial_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            archive_root = Path(tmp) / "archive"
+            tmp_root = Path(tmp)
+            archive_root = tmp_root / "archive"
             init_code, init_output = self.init_personal_archive(
                 archive_root,
                 "archive:personal:external-import-frozen-discovery",
             )
             self.assertEqual(init_code, 0, init_output)
+
+            export_root = tmp_root / "notion-export"
+            export_root.mkdir()
+            manifest = export_root / "manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "source_system": "notion",
+                        "items": [
+                            {
+                                "external_id": "notion-frozen-one",
+                                "title": "0123456789abcdef0123456789abcdef",
+                                "index": "Frozen Discovery First Item",
+                                "content": "# First item\n\nFirst body.\n",
+                            },
+                            {
+                                "external_id": "notion-frozen-two",
+                                "title": "fedcba9876543210fedcba9876543210",
+                                "index": "Frozen Discovery Second Item",
+                                "content": "# Second item\n\nSecond body.\n",
+                            },
+                        ],
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+            files_before = {
+                path.relative_to(archive_root).as_posix(): path.read_bytes()
+                for path in archive_root.rglob("*")
+                if path.is_file()
+            }
+            real_discovery = archive_services.discover_external_import_items
+            real_builder = archive_services.build_external_import_zettel_text
+            build_count = 0
+            # v0.4.41: the writer needs the reviewed plan digest and a verified
+            # claim; only the claim re-verification is stubbed here.
+            reviewed_plan = archive_services.external_import_dry_run(
+                archive_root, manifest, source_system="notion",
+            )["plan_sha256"]
+
+            def fail_second_build(**kwargs: Any) -> str:
+                nonlocal build_count
+                build_count += 1
+                if build_count == 2:
+                    raise archive_services.ArchiveServiceError(
+                        "synthetic second-item build failure"
+                    )
+                return real_builder(**kwargs)
+
             with patch(
                 "wom_kit.archive_services.discover_external_import_items",
-                side_effect=AssertionError("fixed gate must precede discovery"),
-            ) as discovery:
-                self.assert_import_external_fails_closed(archive_root)
-            discovery.assert_not_called()
+                wraps=real_discovery,
+            ) as discovery_mock, patch(
+                "wom_kit.archive_services.build_external_import_zettel_text",
+                side_effect=fail_second_build,
+            ), patch(
+                "wom_kit.archive_services._require_exact_human_operation_approval",
+                return_value={},
+            ):
+                with self.assertRaisesRegex(
+                    archive_services.ArchiveServiceError,
+                    "synthetic second-item build failure",
+                ):
+                    archive_services.import_external_archive(
+                        archive_root,
+                        manifest,
+                        source_system="notion",
+                        reviewed_by="person:test",
+                        exact_human_approval_claim=object(),
+                        expected_plan_sha256=reviewed_plan,
+                    )
+
+            self.assertEqual(discovery_mock.call_count, 1)
+            self.assertEqual(build_count, 2)
+            self.assertEqual(
+                {
+                    path.relative_to(archive_root).as_posix(): path.read_bytes()
+                    for path in archive_root.rglob("*")
+                    if path.is_file()
+                },
+                files_before,
+            )
 
     def test_import_external_notion_dry_run_previews_inbox_draft_without_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -76392,41 +76847,261 @@ state:
             self.assertFalse((archive_root / item["target_path"]).exists())
             self.assertFalse((archive_root / result["proposed_receipt_path"]).exists())
 
-    def test_import_external_google_drive_manifest_apply_writes_draft_and_receipt(
-        self,
-    ) -> None:
+    def test_import_external_google_drive_manifest_apply_writes_draft_and_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = Path(tmp) / "archive"
-            init_code, init_output = self.init_personal_archive(
-                archive_root,
-                "archive:personal:import-external-fixed-gate",
-            )
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:gdrive-import")
             self.assertEqual(init_code, 0, init_output)
-            self.assert_import_external_fails_closed(archive_root)
+            manifest = KIT_ROOT / "examples" / "external-imports" / "google-drive-export" / "manifest.json"
 
-    def test_import_external_manifest_preserves_safe_object_refs_in_source_refs(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            archive_root = Path(tmp) / "archive"
-            init_code, init_output = self.init_personal_archive(
-                archive_root,
-                "archive:personal:import-external-fixed-gate",
+            code, output = self.run_cli(
+                [
+                    "import-external",
+                    str(archive_root),
+                    "--source",
+                    "google_drive",
+                    "--export",
+                    str(manifest),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
             )
-            self.assertEqual(init_code, 0, init_output)
-            self.assert_import_external_fails_closed(archive_root)
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertTrue(result["ok"])
+            self.assertFalse(result["dry_run"])
+            self.assertEqual(result["imported_count"], 1)
+            draft_paths = [path for path in result["created_paths"] if path.startswith("inbox/")]
+            self.assertEqual(len(draft_paths), 1)
+            draft_path = archive_root / draft_paths[0]
+            self.assertTrue(draft_path.is_file())
+            draft_text = draft_path.read_text(encoding="utf-8")
+            self.assertIn("external_import:", draft_text)
+            self.assertIn("gdrive:file:fake-research-note", draft_text)
+            self.assertIn("https://drive.google.com/file/d/fake-research-note/view", draft_text)
+            receipt_path = archive_root / result["receipt_path"]
+            self.assertTrue(receipt_path.is_file())
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            self.assertEqual(receipt["action"], "import_external_archive")
+            self.assertEqual(receipt["source_system"], "google_drive")
+            self.assertFalse(receipt["source_export"]["external_api_called"])
 
-    def test_import_external_manifest_preserves_zettel_id_facets_and_safe_source_refs(
-        self,
-    ) -> None:
+            doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--strict"])
+            self.assertEqual(doctor_code, 0, doctor_output)
+
+    def test_import_external_manifest_preserves_safe_object_refs_in_source_refs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            archive_root = Path(tmp) / "archive"
-            init_code, init_output = self.init_personal_archive(
-                archive_root,
-                "archive:personal:import-external-fixed-gate",
-            )
+            tmp_root = Path(tmp)
+            archive_root = tmp_root / "archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:notion-import-source-refs")
             self.assertEqual(init_code, 0, init_output)
-            self.assert_import_external_fails_closed(archive_root)
+            export_root = tmp_root / "notion-export"
+            export_root.mkdir()
+            object_id = "sha256:" + "f" * 64
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "object_id": object_id,
+                        "sha256": "f" * 64,
+                        "logical_key": "objects/external/prehashed/notion_source_export/ff/" + "f" * 64,
+                        "locations": [{"provider": "external_prehashed", "store_kind": "notion_source_export"}],
+                        "provenance": {"source": "prehashed_external_objet_ledger"},
+                    },
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            manifest = export_root / "manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "source_system": "notion",
+                        "items": [
+                            {
+                                "external_id": "notion-page-with-material",
+                                "title": "Notion Material Import",
+                                "content": "# Notion Material Import\n\nBody text imported from Notion.\n",
+                                "object_id": object_id,
+                                "source_refs": [{"type": "OBJECT_ID", "value": object_id.upper()}],
+                                "source_locator_omitted_count": 1,
+                            }
+                        ],
+                    },
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+
+            dry_code, dry_output = self.run_cli(
+                [
+                    "import-external",
+                    str(archive_root),
+                    "--source",
+                    "notion",
+                    "--export",
+                    str(manifest),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(dry_code, 0, dry_output)
+            dry_result = json.loads(dry_output)
+            self.assertEqual(dry_result["items"][0]["source_ref_count"], 1)
+            self.assertTrue(dry_result["items"][0]["source_refs_preserved"])
+            self.assertNotIn(object_id, dry_output)
+
+            code, output = self.run_cli(
+                [
+                    "import-external",
+                    str(archive_root),
+                    "--source",
+                    "notion",
+                    "--export",
+                    str(manifest),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            draft_paths = [path for path in result["created_paths"] if path.startswith("inbox/")]
+            self.assertEqual(len(draft_paths), 1)
+            draft_text = (archive_root / draft_paths[0]).read_text(encoding="utf-8")
+            match = re.match(r"^---\n(.*?)\n---\n", draft_text, re.DOTALL)
+            self.assertIsNotNone(match)
+            frontmatter = archive_cli.load_yaml(match.group(1))
+            self.assertEqual(
+                frontmatter["source_refs"],
+                [{"type": "object_id", "value": object_id, "role": "primary_source"}],
+            )
+
+            doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--strict"])
+            self.assertEqual(doctor_code, 0, doctor_output)
+
+    def test_import_external_manifest_preserves_zettel_id_facets_and_safe_source_refs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            archive_root = tmp_root / "archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:notion-import-fidelity")
+            self.assertEqual(init_code, 0, init_output)
+            export_root = tmp_root / "notion-export"
+            export_root.mkdir()
+            object_id = "sha256:" + "e" * 64
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "object_id": object_id,
+                        "sha256": "e" * 64,
+                        "logical_key": "objects/external/prehashed/notion_source_export/ee/" + "e" * 64,
+                        "locations": [{"provider": "external_prehashed", "store_kind": "notion_source_export"}],
+                        "provenance": {"source": "prehashed_external_objet_ledger"},
+                    },
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            manifest = export_root / "manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "source_system": "notion",
+                        "items": [
+                            {
+                                "id": "zet_notion_db3_ZET0950",
+                                "external_id": "notion-page-0950",
+                                "title": "Structured Notion Memo",
+                                "content": "# Structured Notion Memo\n\nBody imported from a sanitized mirror.\n",
+                                "object_id": object_id,
+                                "facets": {
+                                    "domain": "study",
+                                    "record_type": "memo",
+                                    "origin_zet": "ZET0950",
+                                    "notion_status": "done",
+                                    "event_time": "2026-06-18T12:00:00+09:00",
+                                },
+                                "source_refs": [
+                                    {"type": "notion_page", "value": "notion:page:ZET0950", "role": "primary_source"}
+                                ],
+                            }
+                        ],
+                    },
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+
+            dry_code, dry_output = self.run_cli(
+                [
+                    "import-external",
+                    str(archive_root),
+                    "--source",
+                    "notion",
+                    "--export",
+                    str(manifest),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(dry_code, 0, dry_output)
+            dry_result = json.loads(dry_output)
+            dry_item = dry_result["items"][0]
+            self.assertEqual(dry_item["zettel_id"], "zet_notion_db3_ZET0950")
+            self.assertEqual(dry_item["zettel_id_source"], "id")
+            self.assertEqual(dry_item["target_path"], "inbox/zet_notion_db3_ZET0950.md")
+            self.assertTrue(dry_item["facets_preserved"])
+            self.assertGreaterEqual(dry_item["facet_count"], 7)
+            self.assertEqual(dry_item["source_ref_count"], 2)
+            self.assertTrue(dry_item["source_refs_preserved"])
+            self.assertNotIn(object_id, dry_output)
+
+            code, output = self.run_cli(
+                [
+                    "import-external",
+                    str(archive_root),
+                    "--source",
+                    "notion",
+                    "--export",
+                    str(manifest),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            self.assertIn("inbox/zet_notion_db3_ZET0950.md", result["created_paths"])
+            draft_text = (archive_root / "inbox" / "zet_notion_db3_ZET0950.md").read_text(encoding="utf-8")
+            frontmatter, body = archive_services.split_zettel_text(draft_text)
+            self.assertEqual(frontmatter["id"], "zet_notion_db3_ZET0950")
+            self.assertEqual(frontmatter["facets"]["source_system"], "notion")
+            self.assertEqual(frontmatter["facets"]["external_id"], "notion-page-0950")
+            self.assertEqual(frontmatter["facets"]["origin_zet"], "ZET0950")
+            self.assertEqual(frontmatter["facets"]["notion_status"], "done")
+            self.assertIn({"type": "object_id", "value": object_id, "role": "primary_source"}, frontmatter["source_refs"])
+            self.assertIn(
+                {"type": "notion_page", "value": "notion:page:ZET0950", "role": "primary_source"},
+                frontmatter["source_refs"],
+            )
+            self.assertIn("Body imported from a sanitized mirror.", body)
+
+            doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--strict"])
+            self.assertEqual(doctor_code, 0, doctor_output)
 
     def test_import_external_blocks_body_provider_locator_without_conversion_policy(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -76474,17 +77149,104 @@ state:
             self.assertNotIn("notion.so", output)
             self.assertFalse(any((archive_root / "inbox").glob("zet_import_notion_*.md")))
 
-    def test_import_external_object_ref_policy_converts_notion_body_locators(
-        self,
-    ) -> None:
+    def test_import_external_object_ref_policy_converts_notion_body_locators(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            archive_root = Path(tmp) / "archive"
-            init_code, init_output = self.init_personal_archive(
-                archive_root,
-                "archive:personal:import-external-fixed-gate",
-            )
+            tmp_root = Path(tmp)
+            archive_root = tmp_root / "archive"
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:notion-import-url-convert")
             self.assertEqual(init_code, 0, init_output)
-            self.assert_import_external_fails_closed(archive_root)
+            export_root = tmp_root / "notion-export"
+            export_root.mkdir()
+            object_id = "sha256:" + "d" * 64
+            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "object_id": object_id,
+                        "sha256": "d" * 64,
+                        "logical_key": "objects/external/prehashed/notion_source_export/dd/" + "d" * 64,
+                        "locations": [{"provider": "external_prehashed", "store_kind": "notion_source_export"}],
+                        "provenance": {"source": "prehashed_external_objet_ledger"},
+                    },
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            manifest = export_root / "manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "source_system": "notion",
+                        "items": [
+                            {
+                                "external_id": "notion-page-url-converted",
+                                "title": "Locator Note",
+                                "content": "# Locator Note\n\nSource page https://www.notion.so/Fake-Page-abcdef1234567890\n",
+                                "object_id": object_id,
+                            }
+                        ],
+                    },
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+
+            dry_code, dry_output = self.run_cli(
+                [
+                    "import-external",
+                    str(archive_root),
+                    "--source",
+                    "notion",
+                    "--export",
+                    str(manifest),
+                    "--provider-locator-policy",
+                    "object-ref",
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(dry_code, 0, dry_output)
+            dry_result = json.loads(dry_output)
+            self.assertEqual(dry_result["provider_locator_policy"], "object-ref")
+            self.assertEqual(dry_result["items"][0]["provider_locator_count"], 1)
+            self.assertEqual(dry_result["items"][0]["provider_locator_action"], "object_ref")
+            self.assertNotIn(object_id, dry_output)
+            self.assertNotIn("notion.so", dry_output)
+
+            code, output = self.run_cli(
+                [
+                    "import-external",
+                    str(archive_root),
+                    "--source",
+                    "notion",
+                    "--export",
+                    str(manifest),
+                    "--provider-locator-policy",
+                    "object-ref",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 0, output)
+            result = json.loads(output)
+            draft_paths = [path for path in result["created_paths"] if path.startswith("inbox/")]
+            self.assertEqual(len(draft_paths), 1)
+            draft_text = (archive_root / draft_paths[0]).read_text(encoding="utf-8")
+            frontmatter, body = archive_services.split_zettel_text(draft_text)
+            self.assertEqual(frontmatter["external_import"]["provider_locator_policy"], "object-ref")
+            self.assertEqual(frontmatter["external_import"]["provider_locator_count"], 1)
+            self.assertEqual(frontmatter["external_import"]["provider_locator_action"], "object_ref")
+            self.assertIn("objet:" + object_id, body)
+            self.assertNotIn("notion.so", body)
+
+            doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--strict"])
+            self.assertEqual(doctor_code, 0, doctor_output)
 
     def test_import_external_requires_explicit_mode_and_reviewer_for_apply(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -76518,24 +77280,49 @@ state:
                 ]
             )
             self.assertEqual(code, 1)
-            self.assertIn(
-                "Exact compound human-approval binding is not implemented",
-                output,
-            )
+            self.assertIn("import_external_archive_reviewer_required", output)  # v0.4.41 exact route
 
-    def test_import_external_second_run_blocks_on_existing_receipt_or_draft(
-        self,
-    ) -> None:
+    def test_import_external_second_run_blocks_on_existing_receipt_or_draft(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = Path(tmp) / "archive"
-            init_code, init_output = self.init_personal_archive(
-                archive_root,
-                "archive:personal:import-external-replay-fixed-gate",
-            )
+            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:external-duplicate")
             self.assertEqual(init_code, 0, init_output)
-            first = self.assert_import_external_fails_closed(archive_root)
-            second = self.assert_import_external_fails_closed(archive_root)
-            self.assertEqual(second, first)
+            export_root = KIT_ROOT / "examples" / "external-imports" / "notion-export"
+
+            first_code, first_output = self.run_cli(
+                [
+                    "import-external",
+                    str(archive_root),
+                    "--source",
+                    "notion",
+                    "--export",
+                    str(export_root),
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(first_code, 0, first_output)
+
+            code, output = self.run_cli(
+                [
+                    "import-external",
+                    str(archive_root),
+                    "--source",
+                    "notion",
+                    "--export",
+                    str(export_root),
+                    "--dry-run",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(code, 1)
+            result = json.loads(output)
+            self.assertFalse(result["ok"])
+            self.assertTrue(any("already has imported zettel id" in blocker for blocker in result["blockers"]))
 
     def test_share_dry_run_checks_scope_and_trust(self) -> None:
         archive_root = KIT_ROOT / "examples" / "fake-life-archive"

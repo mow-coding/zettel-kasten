@@ -1814,7 +1814,7 @@ Real minting reuses the dry-run checks as a gate. Blockers always stop the comma
 
 `archive admit --dry-run` previews target inbox writes, object manifest merges, conflicts, and an admit/import receipt. Real parcel/workpack admit remains unavailable until the dry-run path is proven safer. `archive import --dry-run` remains a v0.2 compatibility alias.
 
-`archive import-external --source notion --export <folder> --dry-run` previews a Notion Markdown export import. `archive import-external --source google_drive --export <manifest.json> --dry-run` does the same for Google Drive exports. In v0.4.0 the approval branch is fixed fail-closed before archive/export reads or mutation with `compound_exact_human_approval_binding_required`; it writes no inbox draft or import receipt. Historical v0.3 import receipts remain readable.
+`archive import-external --source notion --export <folder> --dry-run` previews a Notion Markdown export import. `archive import-external --source google_drive --export <manifest.json> --dry-run` does the same for Google Drive exports. Since v0.4.41 `--approve --reviewed-by <you>` creates the reviewed inbox drafts and the import receipt after one exact approval bound to the dry-run `plan_sha256` (the exact items, their source digests, the export and the receipt path); a changed export is refused before any dialog. Historical v0.3 import receipts remain readable.
 
 `archive share --dry-run` is the legacy dry-run for the older share language. It previews a GitHub-like archive share from a saved view, shows which zettels are included or excluded, blocks sensitive categories by default, verifies the target counterparty fingerprint against `archive-identity.yml`, and writes nothing. Product design should prefer `delegate-zet`.
 
@@ -1822,7 +1822,7 @@ Real minting reuses the dry-run checks as a gate. Blockers always stop the comma
 
 `archive onboard --dry-run` previews first setup for a new personal, family, or company archive. It shows the folder to create, selected provider profile, keyring guidance, and doctor plan. It writes nothing.
 
-`archive onboard --approve` is unavailable in v0.4.0. It returns `compound_exact_human_approval_binding_required` before target/template/provider reads and creates no folder, archive file, provider binding, identity record, or receipt. Use the dry-run only as a setup plan.
+`archive onboard --approve --reviewed-by <you>` creates the archive (since v0.4.41). The dry-run prints a `plan_sha256`; approval opens one Windows approval dialog bound to that plan (a new archive has no work session, so no session grant can skip it). After approval only the skeleton the approval record needs is created first and removed again if the record cannot be written; then the rest of the archive is created, strict Doctor runs, and `receipts/onboarding/<plan>.json` is written. The target must be empty or absent. `archive init <folder> ... --approve` is the same operation. The approval dialog is Windows-only; Linux and macOS stay at the dry-run.
 
 `archive pilot-plan` is the bridge from fake examples to real use. It plans a private personal life archive and a separate team/company archive, checks that their roots and ids do not overlap, and suggests first sources for local folders, SSDs, Notion exports, Google Drive exports, and object manifests. It writes nothing.
 

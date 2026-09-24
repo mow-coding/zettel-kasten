@@ -230,7 +230,6 @@ function Get-OnboardingReady {
 }
 
 function Build-OnboardArgs {
-    param([switch]$Approve)
     $targetInContainer = "/archives/$ArchiveType"
     $args = @(
         "compose", "run", "--rm", "archive-cli", "onboard",
@@ -243,11 +242,7 @@ function Build-OnboardArgs {
     if ($PrincipalName) {
         $args += @("--principal-name", $PrincipalName)
     }
-    if ($Approve) {
-        $args += "--approve"
-    } else {
-        $args += "--dry-run"
-    }
+    $args += "--dry-run"
     return $args
 }
 
@@ -348,8 +343,29 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 if ($ShouldApproveOnboarding) {
-    $approveArgs = Build-OnboardArgs -Approve
-    & docker @approveArgs
+    # v0.4.41: creating the archive needs one Windows approval dialog, which a
+    # Linux container cannot show. The approval runs with the Windows-native
+    # archive command against the same host folder the container mounts.
+    $nativeArchive = Get-Command archive -ErrorAction SilentlyContinue
+    if ($null -eq $nativeArchive) {
+        Write-Host "Creating the archive needs the Windows 'archive' command (pip install the WOM-kit wheel), then run:"
+        Write-Host "  archive onboard --target-root `"$(Join-Path $ArchiveRoot $ArchiveType)`" --type $ArchiveType --archive-id $ArchiveId --principal-id $PrincipalId --provider-profile $ProviderProfile --approve --reviewed-by $PrincipalId"
+        exit 1
+    }
+    $approveArgs = @(
+        "onboard",
+        "--target-root", (Join-Path $ArchiveRoot $ArchiveType),
+        "--type", $ArchiveType,
+        "--archive-id", $ArchiveId,
+        "--principal-id", $PrincipalId,
+        "--provider-profile", $ProviderProfile,
+        "--approve",
+        "--reviewed-by", $PrincipalId
+    )
+    if ($PrincipalName) {
+        $approveArgs += @("--principal-name", $PrincipalName)
+    }
+    & $nativeArchive.Source @approveArgs
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }

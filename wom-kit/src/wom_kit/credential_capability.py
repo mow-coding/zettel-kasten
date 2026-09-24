@@ -40,6 +40,25 @@ CREDENTIAL_CAPABILITY_REQUIRED_REGISTERED_CAPABILITIES = (
     "retrieve_page_as_markdown",
 )
 
+# v0.4.41: one capability document per workflow operation. The recovery
+# profile above is unchanged; the trash profile may read a page and send the
+# single in_trash PATCH, nothing else.
+CREDENTIAL_CAPABILITY_TRASH_OPERATION = "notion_page_trash_write"
+CREDENTIAL_CAPABILITY_PROFILES: dict[str, dict[str, Any]] = {
+    CREDENTIAL_CAPABILITY_OPERATION: {
+        "consumer": CREDENTIAL_CAPABILITY_CONSUMER,
+        "allowed_methods": CREDENTIAL_CAPABILITY_ALLOWED_METHODS,
+        "endpoint_classes": CREDENTIAL_CAPABILITY_ENDPOINT_CLASSES,
+        "required_registered_capabilities": CREDENTIAL_CAPABILITY_REQUIRED_REGISTERED_CAPABILITIES,
+    },
+    CREDENTIAL_CAPABILITY_TRASH_OPERATION: {
+        "consumer": "wom:workflow:notion-page-trash",
+        "allowed_methods": ("GET", "PATCH"),
+        "endpoint_classes": ("retrieve_page", "move_page_to_trash"),
+        "required_registered_capabilities": ("read_content", "retrieve_page"),
+    },
+}
+
 DEFAULT_CAPABILITY_TTL_SECONDS = 900
 MIN_CAPABILITY_TTL_SECONDS = 30
 MAX_CAPABILITY_TTL_SECONDS = 3600
@@ -285,12 +304,13 @@ class _CredentialCapability:
             raise _fail("credential_capability_provider_invalid")
         if (
             not _is_exact_string(self.operation)
-            or self.operation != CREDENTIAL_CAPABILITY_OPERATION
+            or self.operation not in CREDENTIAL_CAPABILITY_PROFILES
         ):
             raise _fail("credential_capability_operation_invalid")
+        profile = CREDENTIAL_CAPABILITY_PROFILES[self.operation]
         if (
             not _is_exact_string(self.consumer)
-            or self.consumer != CREDENTIAL_CAPABILITY_CONSUMER
+            or self.consumer != profile["consumer"]
         ):
             raise _fail("credential_capability_consumer_invalid")
         if (
@@ -307,13 +327,13 @@ class _CredentialCapability:
         if (
             type(self.allowed_methods) is not tuple
             or any(not _is_exact_string(item) for item in self.allowed_methods)
-            or self.allowed_methods != CREDENTIAL_CAPABILITY_ALLOWED_METHODS
+            or self.allowed_methods != profile["allowed_methods"]
         ):
             raise _fail("credential_capability_methods_invalid")
         if (
             type(self.endpoint_classes) is not tuple
             or any(not _is_exact_string(item) for item in self.endpoint_classes)
-            or self.endpoint_classes != CREDENTIAL_CAPABILITY_ENDPOINT_CLASSES
+            or self.endpoint_classes != profile["endpoint_classes"]
         ):
             raise _fail("credential_capability_endpoints_invalid")
         if (
@@ -323,7 +343,7 @@ class _CredentialCapability:
                 for item in self.required_registered_capabilities
             )
             or self.required_registered_capabilities
-            != CREDENTIAL_CAPABILITY_REQUIRED_REGISTERED_CAPABILITIES
+            != profile["required_registered_capabilities"]
         ):
             raise _fail("credential_capability_registered_capabilities_invalid")
         if (
@@ -365,7 +385,7 @@ class _CredentialCapability:
     def __repr__(self) -> str:
         return (
             "<_CredentialCapability provider=notion "
-            "operation=notion_page_recovery_read bindings=redacted>"
+            f"operation={self.operation} bindings=redacted>"
         )
 
     @classmethod
@@ -379,8 +399,13 @@ class _CredentialCapability:
         max_provider_requests: int,
         issued_at: datetime | None = None,
         ttl_seconds: int = DEFAULT_CAPABILITY_TTL_SECONDS,
+        operation: str = CREDENTIAL_CAPABILITY_OPERATION,
     ) -> "_CredentialCapability":
         """Issue a fresh 128-bit parent-side capability after approval."""
+
+        if operation not in CREDENTIAL_CAPABILITY_PROFILES:
+            raise _fail("credential_capability_operation_invalid")
+        profile = CREDENTIAL_CAPABILITY_PROFILES[operation]
 
         if issued_at is None:
             issued_at = datetime.now(timezone.utc)
@@ -401,15 +426,13 @@ class _CredentialCapability:
             schema=CREDENTIAL_CAPABILITY_SCHEMA,
             capability_id=capability_id,
             provider=CREDENTIAL_CAPABILITY_PROVIDER,
-            operation=CREDENTIAL_CAPABILITY_OPERATION,
-            consumer=CREDENTIAL_CAPABILITY_CONSUMER,
+            operation=operation,
+            consumer=profile["consumer"],
             approval_decision=CREDENTIAL_CAPABILITY_APPROVAL_DECISION,
             reviewed_by=reviewed_by,
-            allowed_methods=CREDENTIAL_CAPABILITY_ALLOWED_METHODS,
-            endpoint_classes=CREDENTIAL_CAPABILITY_ENDPOINT_CLASSES,
-            required_registered_capabilities=(
-                CREDENTIAL_CAPABILITY_REQUIRED_REGISTERED_CAPABILITIES
-            ),
+            allowed_methods=profile["allowed_methods"],
+            endpoint_classes=profile["endpoint_classes"],
+            required_registered_capabilities=profile["required_registered_capabilities"],
             request_sha256=request_sha256,
             plan_sha256=plan_sha256,
             scopes=sorted_scopes,
@@ -637,8 +660,10 @@ __all__ = [
     "CREDENTIAL_CAPABILITY_CONSUMER",
     "CREDENTIAL_CAPABILITY_ENDPOINT_CLASSES",
     "CREDENTIAL_CAPABILITY_OPERATION",
+    "CREDENTIAL_CAPABILITY_PROFILES",
     "CREDENTIAL_CAPABILITY_PROVIDER",
     "CREDENTIAL_CAPABILITY_REQUIRED_REGISTERED_CAPABILITIES",
+    "CREDENTIAL_CAPABILITY_TRASH_OPERATION",
     "CREDENTIAL_CAPABILITY_SCHEMA",
     "CredentialCapabilityError",
     "CredentialCapabilityScope",

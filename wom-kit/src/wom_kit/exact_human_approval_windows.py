@@ -261,6 +261,33 @@ class ExactHumanApprovalOperation(Enum):
     project_version_update_collision = "project_version_update_collision"
     # Triage group 6 (2026-09-24): restore proposal from a retained snapshot.
     zet_revision_restore_proposal_from_snapshot = "zet_revision_restore_proposal_from_snapshot"
+    # v0.4.41 (letters 142/148/156): retire the old coordination folder by moving it.
+    legacy_coordination_retire = "legacy_coordination_retire"
+    # v0.4.41 new-user entry: create a new archive after one approval.
+    onboard_archive = "onboard_archive"
+    # v0.4.41: install or remove the WOM agent skill after one approval.
+    runtime_skill_install = "runtime_skill_install"
+    runtime_skill_uninstall = "runtime_skill_uninstall"
+    # v0.4.41 (letter 108): accept one relation candidate (edge + judgment).
+    relation_candidate_accept = "relation_candidate_accept"
+    # v0.4.41: move verified-recovered Notion pages to the Notion trash.
+    notion_page_trash = "notion_page_trash"
+    # v0.4.41 (letter 141): import a reviewed external export as inbox drafts.
+    import_external = "import_external"
+    # v0.4.41 (letter 119): record the default adopted credential.
+    credential_lifecycle = "credential_lifecycle"
+    # v0.4.41 (letters 038-039, 164, 168): register a reviewed hash-only ledger.
+    prehashed_objet_ledger = "prehashed_objet_ledger"
+    # v0.4.41 (feature request 34): convert one reviewed Notion locator to an embed edge.
+    notion_objet_link_convert = "notion_objet_link_convert"
+    # v0.4.41 (feature request 13): fetch reviewed Tiro notes into a private bundle.
+    tiro_lossless_recovery_fetch = "tiro_lossless_recovery_fetch"
+    # v0.4.41: register one reviewed source binding.
+    add_source = "add_source"
+    # v0.4.41: the IMAP adapter manifest and header scan run after one approval.
+    imap_mailbox_adapter_manifest = "imap_mailbox_adapter_manifest"
+    # v0.4.41 (letters 116-118, 142/148/156): Notion page recovery.
+    notion_page_recovery = "notion_page_recovery"
 
 
 def _validated_target_preview_text(value: str | None) -> str | None:
@@ -584,6 +611,20 @@ _OPERATION_LABELS = {
     ExactHumanApprovalOperation.project_bytecode_repair: "업데이트 뒤 캐시 파일 정리",
     ExactHumanApprovalOperation.project_version_update_collision: "업데이트 충돌 파일 보존 이동",
     ExactHumanApprovalOperation.zet_revision_restore_proposal_from_snapshot: "수정 전 스냅샷으로 복원 제안 만들기",
+    ExactHumanApprovalOperation.legacy_coordination_retire: "옛 협업 폴더 보존 이동",
+    ExactHumanApprovalOperation.onboard_archive: "새 아카이브 만들기",
+    ExactHumanApprovalOperation.runtime_skill_install: "에이전트 스킬 설치",
+    ExactHumanApprovalOperation.runtime_skill_uninstall: "에이전트 스킬 제거",
+    ExactHumanApprovalOperation.relation_candidate_accept: "관계 후보 수락",
+    ExactHumanApprovalOperation.notion_page_trash: "Notion 휴지통 정리",
+    ExactHumanApprovalOperation.import_external: "외부 내보내기 가져오기",
+    ExactHumanApprovalOperation.credential_lifecycle: "자격증명 기본값 지정",
+    ExactHumanApprovalOperation.prehashed_objet_ledger: "해시 목록으로 오브제 등록",
+    ExactHumanApprovalOperation.notion_objet_link_convert: "Notion 링크를 오브제 연결로",
+    ExactHumanApprovalOperation.tiro_lossless_recovery_fetch: "Tiro 원본 가져오기",
+    ExactHumanApprovalOperation.add_source: "소스 등록",
+    ExactHumanApprovalOperation.imap_mailbox_adapter_manifest: "메일 어댑터 정책 기록",
+    ExactHumanApprovalOperation.notion_page_recovery: "Notion 페이지 회수",
 }
 
 _OPERATION_QUESTIONS = {
@@ -766,6 +807,48 @@ _OPERATION_QUESTIONS = {
     ),
     ExactHumanApprovalOperation.zet_revision_restore_proposal_from_snapshot: (
         "보관된 수정 전 스냅샷을 비공개 복원 제안 파일로 만들까요?"
+    ),
+    ExactHumanApprovalOperation.legacy_coordination_retire: (
+        "검토한 옛 .mow-harness 폴더를 지정한 보존 위치로 통째로 옮길까요?"
+    ),
+    ExactHumanApprovalOperation.onboard_archive: (
+        "검토한 설정 그대로 새 아카이브 폴더를 만들까요?"
+    ),
+    ExactHumanApprovalOperation.runtime_skill_install: (
+        "검토한 계획 그대로 WOM 에이전트 스킬을 설치하거나 갱신할까요?"
+    ),
+    ExactHumanApprovalOperation.runtime_skill_uninstall: (
+        "검토한 계획 그대로 WOM이 설치한 에이전트 스킬을 제거할까요?"
+    ),
+    ExactHumanApprovalOperation.relation_candidate_accept: (
+        "검토한 관계 후보를 수락해 두 zet 사이에 연결을 만들까요?"
+    ),
+    ExactHumanApprovalOperation.notion_page_trash: (
+        "회수가 검증된 Notion 페이지를 Notion 휴지통으로 옮길까요?"
+    ),
+    ExactHumanApprovalOperation.import_external: (
+        "검토한 내보내기 항목을 그대로 초안(inbox)으로 가져올까요?"
+    ),
+    ExactHumanApprovalOperation.credential_lifecycle: (
+        "검토한 대로 이 작업공간의 기본 Notion 자격증명을 기록할까요?"
+    ),
+    ExactHumanApprovalOperation.prehashed_objet_ledger: (
+        "검토한 해시 목록의 오브제를 외부 저장소 기록으로 등록할까요?"
+    ),
+    ExactHumanApprovalOperation.notion_objet_link_convert: (
+        "검토한 Notion 링크를 해당 오브제에 대한 embed 연결로 기록할까요?"
+    ),
+    ExactHumanApprovalOperation.tiro_lossless_recovery_fetch: (
+        "검토한 범위로 Tiro에서 원본을 가져와 비공개 번들로 저장할까요?"
+    ),
+    ExactHumanApprovalOperation.add_source: (
+        "검토한 소스 연결을 source-bindings.yml에 등록할까요?"
+    ),
+    ExactHumanApprovalOperation.imap_mailbox_adapter_manifest: (
+        "검토한 IMAP 메일 어댑터 정책을 이 아카이브에 기록할까요?"
+    ),
+    ExactHumanApprovalOperation.notion_page_recovery: (
+        "검토한 Notion 페이지 목록을 저장된 자격증명으로 읽어 아카이브에 보존할까요?"
     ),
 }
 
@@ -1017,6 +1100,48 @@ _OPERATION_SUMMARIES = {
     ExactHumanApprovalOperation.zet_revision_restore_proposal_from_snapshot: (
         "수정 영수증이 가리키는 수정 전 스냅샷을 비공개 복원 제안 파일 하나로 복사합니다. zet 본문은 바뀌지 않으며, 실제 복원은 zet-revision-restore-write로 따로 승인합니다."
     ),
+    ExactHumanApprovalOperation.legacy_coordination_retire: (
+        "옛 협업 폴더 전체(협업 기록과 안쪽 Git 저장소 포함)를 지우지 않고 지정한 폴더로 한 번에 옮긴 뒤, 같은 폴더인지 확인하고 아카이브에 영수증을 남깁니다."
+    ),
+    ExactHumanApprovalOperation.onboard_archive: (
+        "비어 있거나 없는 폴더에 새 아카이브(기본 파일, 폴더, 안전한 .gitignore)를 만들고 엄격 점검(doctor --strict)을 돌린 뒤 영수증을 남깁니다. 기존 파일은 건드리지 않습니다."
+    ),
+    ExactHumanApprovalOperation.runtime_skill_install: (
+        "검토한 매니페스트의 파일만 스킬 폴더에 쓰고, 설치 뒤 바이트를 다시 확인합니다. WOM이 관리하지 않는 스킬은 건드리지 않습니다."
+    ),
+    ExactHumanApprovalOperation.runtime_skill_uninstall: (
+        "WOM 설치 매니페스트와 바이트가 그대로인 파일만 제거합니다. 바뀐 파일이 있으면 아무것도 지우지 않습니다."
+    ),
+    ExactHumanApprovalOperation.relation_candidate_accept: (
+        "검토한 후보 한 쌍에 선택한 종류의 연결(edge)을 쓰고, 같은 승인으로 판단 기록과 영수증을 남깁니다. 후보나 두 zet가 바뀌었으면 아무것도 쓰지 않습니다."
+    ),
+    ExactHumanApprovalOperation.notion_page_trash: (
+        "아카이브에 회수·검증된 페이지 가운데 회수 뒤 바뀌지 않은 것만 Notion 휴지통으로 옮깁니다. 완전 삭제는 하지 않으며 Notion에서 되살릴 수 있습니다."
+    ),
+    ExactHumanApprovalOperation.import_external: (
+        "검토한 목록의 항목만 inbox 초안으로 새로 만들고 가져오기 영수증을 남깁니다. 기존 zet는 바꾸지 않으며, 내보내기가 바뀌었으면 아무것도 쓰지 않습니다."
+    ),
+    ExactHumanApprovalOperation.credential_lifecycle: (
+        "채택된 자격증명 가운데 하나를 이 작업공간의 기본값으로 기록하고, 고른 것은 폐기 예정으로 표시합니다. 비밀값을 읽거나 지우지 않으며 Notion을 부르지 않습니다."
+    ),
+    ExactHumanApprovalOperation.prehashed_objet_ledger: (
+        "검토한 목록에 있는 해시·크기만 오브제 manifest에 외부 저장 기록으로 추가하고 영수증을 남깁니다. 파일 바이트를 읽거나 옮기지 않으며, WOM이 바이트를 검증하지 않았다는 사실도 함께 기록합니다."
+    ),
+    ExactHumanApprovalOperation.notion_objet_link_convert: (
+        "zet 안의 Notion 링크 하나에 대해, 검토한 오브제를 가리키는 embed 연결과 변환 영수증을 같은 승인으로 씁니다. 본문 글자는 바꾸지 않습니다."
+    ),
+    ExactHumanApprovalOperation.tiro_lossless_recovery_fetch: (
+        "지정한 자격 참조로 Tiro REST API를 읽기 전용으로 호출해, 검토한 워크스페이스·노트 범위의 원본을 workbench 아래 비공개 번들과 영수증으로 저장합니다. 토큰 값은 기록하거나 보여 주지 않습니다."
+    ),
+    ExactHumanApprovalOperation.add_source: (
+        "검토한 소스 하나를 source-bindings.yml에 추가하거나 바꾸고, 요청했다면 이 PC 전용 로컬 경로 프로필도 씁니다. 소스 파일은 읽거나 옮기지 않습니다."
+    ),
+    ExactHumanApprovalOperation.imap_mailbox_adapter_manifest: (
+        "검토한 메일 어댑터 정책(허용 공급자, 작업, 선택 규칙)을 로컬 문서로 씁니다. 메일 서버에 연결하거나 비밀값을 읽지 않습니다."
+    ),
+    ExactHumanApprovalOperation.notion_page_recovery: (
+        "검토한 요청 목록의 Notion 페이지만 읽기 전용 GET으로 가져와 오브제와 영수증으로 보존합니다. Notion 쪽은 바뀌지 않으며 중단되면 이어서 할 수 있습니다."
+    ),
 }
 
 _OPERATION_APPROVE_BUTTONS = {
@@ -1090,6 +1215,20 @@ _OPERATION_APPROVE_BUTTONS = {
     ExactHumanApprovalOperation.project_bytecode_repair: "캐시 정리",
     ExactHumanApprovalOperation.project_version_update_collision: "보존 이동",
     ExactHumanApprovalOperation.zet_revision_restore_proposal_from_snapshot: "제안 만들기",
+    ExactHumanApprovalOperation.legacy_coordination_retire: "보존 이동",
+    ExactHumanApprovalOperation.onboard_archive: "아카이브 만들기",
+    ExactHumanApprovalOperation.runtime_skill_install: "스킬 설치",
+    ExactHumanApprovalOperation.runtime_skill_uninstall: "스킬 제거",
+    ExactHumanApprovalOperation.relation_candidate_accept: "연결 수락",
+    ExactHumanApprovalOperation.notion_page_trash: "휴지통으로 이동",
+    ExactHumanApprovalOperation.import_external: "초안으로 가져오기",
+    ExactHumanApprovalOperation.credential_lifecycle: "기본값 기록",
+    ExactHumanApprovalOperation.prehashed_objet_ledger: "해시로 등록",
+    ExactHumanApprovalOperation.notion_objet_link_convert: "연결 기록",
+    ExactHumanApprovalOperation.tiro_lossless_recovery_fetch: "가져오기",
+    ExactHumanApprovalOperation.add_source: "소스 등록",
+    ExactHumanApprovalOperation.imap_mailbox_adapter_manifest: "정책 기록",
+    ExactHumanApprovalOperation.notion_page_recovery: "회수 실행",
 }
 
 

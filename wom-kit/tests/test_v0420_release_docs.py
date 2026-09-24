@@ -145,11 +145,11 @@ class V0420ReleaseDocsTests(unittest.TestCase):
         # Current manifest facts move with the train (v0.4.21 reopened two
         # writers and classified them as pending session integration); the
         # v0.4.20 note above keeps its historical 21-pending claim.
-        self.assertEqual(len(statuses), 92)  # 2026-09-24 triage reopen
+        self.assertEqual(len(statuses), 106)  # v0.4.41: IMAP adapter manifest reopened
         self.assertEqual(statuses.count("session_integrated") - routed, 6)
-        self.assertEqual(routed, 38)  # 2026-09-24 triage reopen
+        self.assertEqual(routed, 50)  # v0.4.41: IMAP adapter manifest reopened
         self.assertEqual(statuses.count("pending"), 29)  # v0.4.36: five rows integrated through the environment route
-        self.assertEqual(statuses.count("legacy_exception"), 19)
+        self.assertEqual(statuses.count("legacy_exception"), 21)  # v0.4.41: onboard and init bootstrap exceptions
 
     def test_current_docs_are_private_safe(self) -> None:
         combined = "\n".join(path.read_text(encoding="utf-8") for path in CURRENT_PUBLIC_DOCUMENTS)

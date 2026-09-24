@@ -2411,12 +2411,45 @@ def approve_authenticated_credential_lifecycle(
     revocation_pending_credential_ids: Sequence[str] = (),
     native: WindowsSecureIntakeNative,
     key_provider: _StableArchiveFingerprintKeyProvider | None = None,
+    exact_human_approval_claim: Any = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
 ) -> dict[str, Any]:
-    """Fixed-close the legacy label-only lifecycle writer before key access."""
+    """Record one reviewed lifecycle decision after a reauthenticated exact
+    approval bound to its plan digest (v0.4.41, letter 119); without the
+    claim it stays fixed closed before key access."""
 
-    return _workflow_failure(
-        "authenticated_credential_lifecycle_decision",
-        "compound_exact_human_approval_binding_required",
+    if exact_human_approval_claim is None:
+        return _workflow_failure(
+            "authenticated_credential_lifecycle_decision",
+            "compound_exact_human_approval_binding_required",
+        )
+    from . import archive_services
+    from .exact_human_approval_windows import ExactHumanApprovalOperation
+    from .operation_approval_binding import OperationApprovalBindingError, plan_digest_approval_binding
+
+    root = archive_services.require_existing_archive_root(archive_root)
+    try:
+        archive_services._require_exact_human_operation_approval(
+            root,
+            plan_digest_approval_binding(ExactHumanApprovalOperation.credential_lifecycle, expected_plan_sha256),
+            reviewer_claim=reviewed_by,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+            claim=exact_human_approval_claim,
+        )
+    except OperationApprovalBindingError as exc:
+        raise archive_services.ArchiveServiceError(exc.code) from None
+    return _approve_authenticated_credential_lifecycle_core(
+        root,
+        provider=provider,
+        workspace_fingerprint=workspace_fingerprint,
+        selected_default_credential_id=selected_default_credential_id,
+        expected_plan_sha256=expected_plan_sha256,
+        reviewed_by=reviewed_by,
+        revocation_pending_credential_ids=revocation_pending_credential_ids,
+        native=native,
+        key_provider=key_provider,
     )
 
 
@@ -3067,7 +3100,11 @@ def _spawned_recovery_entry(
 
 @dataclass(repr=False)
 class _SpawnNotionRecoveryWorkerSpawner:
-    """Production recovery boundary using a fresh Windows spawn child."""
+    """Production recovery boundary using a fresh Windows spawn child.
+
+    v0.4.41: ``target`` selects the child entry (recovery or trash)."""
+
+    target: Callable[..., None] = field(default=_spawned_recovery_entry, repr=False)
 
     def run_worker(
         self,
@@ -3081,7 +3118,7 @@ class _SpawnNotionRecoveryWorkerSpawner:
             context = multiprocessing.get_context("spawn")
             receive_connection, send_connection = context.Pipe(duplex=False)
             process = context.Process(
-                target=_spawned_recovery_entry,
+                target=self.target,
                 args=(send_connection, invocation),
                 daemon=False,
             )
@@ -3726,13 +3763,51 @@ def execute_spawned_authenticated_notion_page_recovery(
     approved: bool = True,
     worker_spawner: _NotionRecoveryWorkerSpawner | None = None,
     capability_clock: Callable[[], datetime] | None = None,
+    exact_human_approval_claim: Any = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
 ) -> dict[str, Any]:
-    """Fail closed before spawning until an exact-human claim is available."""
+    """Run the reviewed recovery only after a reauthenticated exact approval.
+
+    Reopened in v0.4.41: the approval binds the recovery plan digest (which
+    covers the exact page list); the credential capability is issued
+    in-process and adds no dialog."""
 
     from . import archive_services
+    from .exact_human_approval_windows import ExactHumanApprovalOperation
+    from .operation_approval_binding import OperationApprovalBindingError, plan_digest_approval_binding
 
-    return archive_services._compound_exact_human_approval_blocked(
-        lifecycle_action="authenticated_notion_page_recovery_execute",
+    if exact_human_approval_claim is None:
+        return archive_services._compound_exact_human_approval_blocked(
+            lifecycle_action="authenticated_notion_page_recovery_execute",
+        )
+    reviewer = archive_services.safe_project_intake_actor_id(reviewed_by)
+    if reviewer is None:
+        raise archive_services.ArchiveServiceError("notion_page_recovery_reviewer_invalid")
+    root = archive_services.require_existing_archive_root(archive_root)
+    try:
+        archive_services._require_exact_human_operation_approval(
+            root,
+            plan_digest_approval_binding(
+                ExactHumanApprovalOperation.notion_page_recovery, expected_plan_sha256
+            ),
+            reviewer_claim=reviewer,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+            claim=exact_human_approval_claim,
+        )
+    except OperationApprovalBindingError as exc:
+        raise archive_services.ArchiveServiceError(exc.code) from None
+    return _execute_spawned_authenticated_notion_page_recovery_core(
+        root,
+        manifest,
+        expected_plan_sha256=expected_plan_sha256,
+        reviewed_by=reviewer,
+        max_items=max_items,
+        offset=offset,
+        approved=approved,
+        worker_spawner=worker_spawner,
+        capability_clock=capability_clock,
     )
 
 
@@ -3866,6 +3941,268 @@ def _execute_spawned_authenticated_notion_page_recovery_core(
     )
 
 
+@dataclass(frozen=True)
+class _NotionTrashWorkerInvocation:
+    """Pickle-safe, secret-free request sent to a trash child process."""
+
+    archive_root: str = field(repr=False)
+    manifest: Mapping[str, Any] = field(repr=False)
+    credential_capability: Mapping[str, Any] = field(repr=False)
+    expected_plan_sha256: str
+    reviewed_by: str = field(repr=False)
+    max_items: int
+    offset: int
+    restore: bool
+
+
+_TRASH_PUBLIC_KEYS = (
+    "ok", "dry_run", "lifecycle_action", "mode", "request_sha256", "plan_sha256", "counts",
+    "stop_reason", "reason_code", "blockers", "receipt_path", "permanent_delete", "provider_calls",
+    "credentials_closed", "privacy_guards", "next_step",
+)
+
+
+def _execute_authenticated_notion_page_trash_core(
+    archive_root: Path | str,
+    manifest: Mapping[str, Any],
+    *,
+    expected_plan_sha256: str,
+    reviewed_by: str,
+    max_items: int,
+    offset: int,
+    restore: bool,
+    native: WindowsSecureIntakeNative,
+    credential_capability: Mapping[str, Any] | None,
+    notion_adapter: _NotionHttpAdapter | None = None,
+    key_provider: _StableArchiveFingerprintKeyProvider | None = None,
+    request_pacer: Any = None,
+    capability_clock: Callable[[], datetime] | None = None,
+) -> dict[str, Any]:
+    """Child-side trash run: validate the trash capability, claim it once,
+    resolve the adopted credential through the receipt-backed broker, and
+    run the journaled trash engine with the one-attempt adapter."""
+
+    from . import notion_page_trash
+    from .credential_capability import CREDENTIAL_CAPABILITY_TRASH_OPERATION
+
+    action = "authenticated_notion_page_trash_execute"
+    preview = notion_page_trash.plan_trash(
+        archive_root, manifest, max_items=max_items, offset=offset, restore=restore,
+    )
+    actual = preview.get("plan_sha256")
+    if not (
+        isinstance(actual, str)
+        and isinstance(expected_plan_sha256, str)
+        and hmac.compare_digest(actual, expected_plan_sha256)
+    ):
+        return _workflow_failure(action, "notion_page_trash_plan_changed")
+    try:
+        if type(credential_capability) is not dict:
+            raise CredentialCapabilityError("credential_capability_required")
+        capability = _CredentialCapability.from_document(credential_capability)
+        if capability.operation != CREDENTIAL_CAPABILITY_TRASH_OPERATION:
+            raise CredentialCapabilityError("credential_capability_operation_invalid")
+        capability.validate_recovery_binding(
+            request_sha256=str(preview["request_sha256"]),
+            plan_sha256=str(preview["plan_sha256"]),
+            scopes=_credential_capability_scopes(manifest, max_items=max_items, offset=offset),
+            reviewed_by=reviewed_by,
+            now_utc=capability_clock() if capability_clock is not None else datetime.now(timezone.utc),
+        )
+    except Exception as exc:
+        return _workflow_failure(action, _credential_capability_blocker(getattr(exc, "code", None)))
+    provider = notion_adapter if notion_adapter is not None else _NotionHttpAdapter()
+    if not (
+        type(provider) is _NotionHttpAdapter
+        and provider.capability_transport_attempts_per_call == 1
+    ):
+        return _workflow_failure(action, "credential_capability_invalid")
+    selected = _key_provider(native, key_provider)
+
+    def trash_with_archive_key(key_view: memoryview) -> dict[str, Any]:
+        claimed_use = _claim_credential_capability_use(
+            archive_root,
+            capability,
+            key_view,
+            clock=capability_clock or (lambda: datetime.now(timezone.utc)),
+        )
+        fingerprint_key: bytearray | None = None
+        try:
+            fingerprint_key = derive_windows_fingerprint_key(key_view, current_windows_owner_binding(native))
+            broker = _ReceiptBackedNotionCredentialBroker(
+                archive_root=archive_root,
+                native=native,
+                receipt_authentication_key=key_view,
+                secret_fingerprint_key=fingerprint_key,
+                claimed_use=claimed_use,
+            )
+            result = notion_page_trash.execute_trash(
+                archive_root,
+                manifest,
+                expected_plan_sha256=expected_plan_sha256,
+                max_items=max_items,
+                offset=offset,
+                restore=restore,
+                provider=provider,
+                credential_broker=broker,
+                request_pacer=request_pacer if request_pacer is not None else ArchiveInterprocessRequestPacer(archive_root),
+            )
+            code = result.get("reason_code")
+            if not (type(code) is str and _FIXED_CODE_RE.fullmatch(code) is not None):
+                code = "notion_page_trash_result_invalid"
+            if result.get("ok") is True:
+                claimed_use.finalize_succeeded()
+            else:
+                claimed_use.finalize_failed(code)
+            return {key: result[key] for key in _TRASH_PUBLIC_KEYS if key in result}
+        except Exception:
+            if claimed_use.status == "started":
+                try:
+                    claimed_use.finalize_failed("notion_page_trash_execution_failed")
+                except Exception:
+                    pass
+            raise
+        finally:
+            if fingerprint_key is not None:
+                for index in range(len(fingerprint_key)):
+                    fingerprint_key[index] = 0
+
+    try:
+        result = selected.use_key(archive_root, trash_with_archive_key, create_if_missing=False)
+    except Exception as exc:
+        return _workflow_failure(action, _exception_code(exc, "notion_page_trash_execution_failed"))
+    return result if isinstance(result, dict) else _workflow_failure(action, "notion_page_trash_result_invalid")
+
+
+def _spawned_trash_entry(send_connection: Any, invocation: _NotionTrashWorkerInvocation) -> None:
+    """Top-level spawn entry; the live bearer exists only in this process."""
+
+    try:
+        native = _CtypesWindowsNativeFacade(cli_live_approved=True)
+        result = _execute_authenticated_notion_page_trash_core(
+            invocation.archive_root,
+            invocation.manifest,
+            expected_plan_sha256=invocation.expected_plan_sha256,
+            reviewed_by=invocation.reviewed_by,
+            max_items=invocation.max_items,
+            offset=invocation.offset,
+            restore=invocation.restore,
+            native=native,
+            credential_capability=invocation.credential_capability,
+            notion_adapter=_NotionHttpAdapter(),
+            key_provider=_StableArchiveFingerprintKeyProvider(native),
+        )
+    except Exception:
+        result = _recovery_worker_transport_marker()
+    try:
+        send_connection.send(result)
+    except Exception:
+        pass
+    finally:
+        try:
+            send_connection.close()
+        except Exception:
+            pass
+
+
+def execute_spawned_authenticated_notion_page_trash(
+    archive_root: Path | str,
+    manifest: Mapping[str, Any],
+    *,
+    expected_plan_sha256: str,
+    reviewed_by: str,
+    max_items: int,
+    offset: int = 0,
+    restore: bool = False,
+    exact_human_approval_claim: Any = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
+    worker_spawner: Any = None,
+    capability_clock: Callable[[], datetime] | None = None,
+) -> dict[str, Any]:
+    """v0.4.41: move verified-recovered pages to the Notion trash (or back)
+    after one reauthenticated exact approval bound to the trash plan digest.
+    The trash capability is issued in-process and adds no dialog; the live
+    credential exists only in a spawned child."""
+
+    from . import archive_services, notion_page_trash
+    from .credential_capability import CREDENTIAL_CAPABILITY_TRASH_OPERATION
+    from .exact_human_approval_windows import ExactHumanApprovalOperation
+    from .operation_approval_binding import OperationApprovalBindingError, plan_digest_approval_binding
+
+    action = "authenticated_notion_page_trash_execute"
+    if exact_human_approval_claim is None:
+        return archive_services._compound_exact_human_approval_blocked(lifecycle_action=action)
+    reviewer = archive_services.safe_project_intake_actor_id(reviewed_by)
+    if reviewer is None:
+        raise archive_services.ArchiveServiceError("notion_page_trash_reviewer_invalid")
+    root = archive_services.require_existing_archive_root(archive_root)
+    try:
+        archive_services._require_exact_human_operation_approval(
+            root,
+            plan_digest_approval_binding(ExactHumanApprovalOperation.notion_page_trash, expected_plan_sha256),
+            reviewer_claim=reviewer,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+            claim=exact_human_approval_claim,
+        )
+    except OperationApprovalBindingError as exc:
+        raise archive_services.ArchiveServiceError(exc.code) from None
+    preview = notion_page_trash.plan_trash(root, manifest, max_items=max_items, offset=offset, restore=restore)
+    actual = preview.get("plan_sha256")
+    if preview.get("ok") is not True or not (
+        isinstance(actual, str) and hmac.compare_digest(actual, str(expected_plan_sha256))
+    ):
+        return _workflow_failure(action, "notion_page_trash_plan_changed")
+    if preview["counts"]["provider_pending_count"] == 0:
+        return {**preview, "dry_run": False, "lifecycle_action": action, "reason_code": "notion_page_trash_nothing_pending"}
+    try:
+        issue_kwargs: dict[str, Any] = {}
+        if capability_clock is not None:
+            issue_kwargs["issued_at"] = capability_clock()
+        capability = _CredentialCapability.issue(
+            request_sha256=str(preview["request_sha256"]),
+            plan_sha256=str(preview["plan_sha256"]),
+            scopes=_credential_capability_scopes(manifest, max_items=max_items, offset=offset),
+            reviewed_by=reviewer,
+            # GET, PATCH and a confirming GET per pending page.
+            max_provider_requests=3 * int(preview["counts"]["provider_pending_count"]),
+            operation=CREDENTIAL_CAPABILITY_TRASH_OPERATION,
+            **issue_kwargs,
+        )
+        invocation = _NotionTrashWorkerInvocation(
+            archive_root=str(Path(root).resolve()),
+            manifest=dict(manifest),
+            credential_capability=capability.canonical_document(),
+            expected_plan_sha256=str(expected_plan_sha256),
+            reviewed_by=reviewer,
+            max_items=max_items,
+            offset=offset,
+            restore=bool(restore),
+        )
+    except Exception:
+        return _workflow_failure(action, "credential_capability_invalid")
+    spawner = worker_spawner or _SpawnNotionRecoveryWorkerSpawner(target=_spawned_trash_entry)
+    try:
+        outcome = spawner.run_worker(invocation)
+    except Exception:
+        outcome = _NotionRecoveryWorkerRunOutcome(worker_started=True)
+    if isinstance(outcome, _NotionRecoveryWorkerRunOutcome):
+        if outcome.worker_started is not True:
+            return _workflow_failure(action, "notion_page_trash_worker_launch_failed")
+        raw = outcome.result
+    else:
+        raw = outcome
+    if not isinstance(raw, Mapping) or "reason_code" not in raw:
+        # The child may have sent some PATCHes; the journal records each one,
+        # so rerunning the same reviewed plan resumes without repeating them.
+        return {
+            **_workflow_failure(action, "notion_page_trash_outcome_unknown"),
+            "next_step": "Rerun the same reviewed plan; the journal resumes and settled pages are skipped.",
+        }
+    return {key: raw[key] for key in _TRASH_PUBLIC_KEYS if key in raw}
+
+
 __all__ = [
     "WORKFLOW_PLAN_SCHEMA_VERSION",
     "WORKFLOW_RESULT_SCHEMA_VERSION",
@@ -3873,6 +4210,7 @@ __all__ = [
     "decide_authenticated_credential_lifecycle",
     "execute_authenticated_notion_page_recovery",
     "execute_spawned_authenticated_notion_page_recovery",
+    "execute_spawned_authenticated_notion_page_trash",
     "execute_windows_notion_credential_adoption",
     "list_authenticated_secure_credentials",
     "plan_authenticated_credential_lifecycle",

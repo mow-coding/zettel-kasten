@@ -47,6 +47,7 @@ from .credential_secure_intake_windows import windows_credential_target
 from .credential_capability import (
     CREDENTIAL_CAPABILITY_CONSUMER,
     CREDENTIAL_CAPABILITY_OPERATION,
+    CREDENTIAL_CAPABILITY_PROFILES,
     CREDENTIAL_CAPABILITY_PROVIDER,
     CREDENTIAL_CAPABILITY_REQUIRED_REGISTERED_CAPABILITIES,
     _CredentialCapability,
@@ -2398,8 +2399,8 @@ def _validate_capability_claim_document(
         raise _fail("credential_capability_claim_document_invalid")
     if (
         result.get("provider") != CREDENTIAL_CAPABILITY_PROVIDER
-        or result.get("operation") != CREDENTIAL_CAPABILITY_OPERATION
-        or result.get("consumer") != CREDENTIAL_CAPABILITY_CONSUMER
+        or result.get("operation") not in CREDENTIAL_CAPABILITY_PROFILES
+        or result.get("consumer") != CREDENTIAL_CAPABILITY_PROFILES[result.get("operation")]["consumer"]
         or type(result.get("max_uses")) is not int
         or result["max_uses"] != 1
         or type(result.get("max_provider_requests")) is not int

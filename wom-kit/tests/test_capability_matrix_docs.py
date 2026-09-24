@@ -4338,13 +4338,13 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "authenticated exact-human local writer in v0.4.10",
             "Bounded multi-item Objet capture",
             "Notion objet locator bridge",
-            "read-only in v0.4.0",
-            "index/plan/rewrite-plan, label preview, and conversion preview write nothing",
+            # v0.4.41: the conversion writes one embed edge after exact approval.
+            "exact-approval conversion since v0.4.41",
+            "index/plan/rewrite-plan and previews write nothing",
             "notion-objet-manifest-locator-label",
             "notion-objet-link-convert",
-            "compound_exact_human_approval_binding_required",
-            "before private manifest/zettel reads or mutation",
-            "creates no manifest row, edge, locator-label receipt, or conversion receipt",
+            "recovered objet as a candidate",
+            "the zettel body is not rewritten",
             "continues to omit provider locators, titles, bodies, paths, account data, and secrets",
             "MCP exposes no writer",
         ):

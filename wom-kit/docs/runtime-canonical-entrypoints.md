@@ -458,8 +458,9 @@ unavailable in v0.4.0 and directs the operator to the command-specific dry-run,
 plan, preview, or audit surface; the exact list is published in the v0.4.0
 release note and enforced against parser construction.
 
-Nested `derive-text capture`, non-exact/non-AI `create-draft`, non-dry-run
-CLI/MCP `init`, and `parcel`/`pack` are separately fixed closed. The existing
+Nested `derive-text capture`, non-exact/non-AI `create-draft`, MCP
+non-dry-run `init`, and `parcel`/`pack` are separately fixed closed; CLI
+`init --approve` is `onboard --approve` since v0.4.41. The existing
 exact reviewed AI draft route and read-only previews remain available.
 
 Compound writes have no complete target-set approval in v0.4.0.
@@ -473,6 +474,10 @@ title remap; `discard-draft`, `discard-draft-restore`, `remint-reconcile`, and
 remain available. The `accept` branch of `relation-candidate-decide` is also
 closed. Any affected approve request fails before private target read or mutation with
 `compound_exact_human_approval_binding_required`.
+Historical v0.4.0 list: since then most of these reopened under operation-specific
+exact approval (see the [closed-command tracker](closed-command-tracker.md)); in
+v0.4.41 `notion-objet-link-convert` and the `accept` branch of
+`relation-candidate-decide` joined them.
 
 The same fixed blocker covers project update/collision mutation, bytecode
 repair, saved-view write/revert, private objet source-metadata write, identity
@@ -743,7 +748,7 @@ secret reader, provider caller, or archive writer:
 | --- | --- |
 | `credential-adopt` | First enrollment or explicit replacement only. Dry-run hashes the helper AI's public-safe task/reason with the stable request and opens no popup. Exact digest approval starts one isolated child and separate native Windows popup. Production hard-codes `CredentialPopupInputIntent.live_registration` and the blue `실제 자격 증명 등록` banner. A standard password EDIT retains ordinary editing/paste while an opaque sibling hides value, mask, caret, count, and length; WOM never reads the clipboard. The child detaches and sends `popup_child_detached` before live work. The parent restores its start-signal lease, accepts acknowledgement → final mapping → EOF, and joins every normally started child. A matching registration returns without another popup only after authenticated receipt, exact saved-secret fingerprint, provider/workspace-scope, and reviewed-anchor revalidation; no PAT/token/secret command option exists. |
 | `credential-secure-list` | Lists unauthenticated content-free receipt metadata by default. `--verify` reads only the exact archive authentication-key target and verifies receipt/lifecycle MACs; it neither enumerates the native vault nor resolves a provider credential. |
-| `credential-lifecycle` | Authenticates and digest-plans one selected active/current/default credential for an exact provider/workspace scope. In v0.4.0 the legacy approval writer is fixed closed before archive-key or credential access; it never records, deletes, or revokes a credential. |
+| `credential-lifecycle` | Authenticates and digest-plans one selected active/current/default credential for an exact provider/workspace scope. Since v0.4.41 `--approve` records the reviewed default after one exact approval bound to the plan digest; it never deletes or revokes a credential. |
 | `notion-page-recovery-plan` | Validates the exact ignored-local two-group request of 577 plus 43 unique page UUIDs, exactly 620, and digest-plans a bounded slice with zero credential reads, provider calls, or writes. |
 | `notion-page-recovery` | Dry-run/verified local replay only in v0.4.0. The approval branch is fixed fail-closed before credential read, provider call, or archive mutation with `compound_exact_human_approval_binding_required`. Historical v0.3.320 capability and recovery receipts remain auditable. |
 

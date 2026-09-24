@@ -3018,14 +3018,16 @@ class InstalledRuntimeJourneyHookTests(unittest.TestCase):
         }
         for name, arguments in commands.items():
             output, errors = io.StringIO(), io.StringIO()
+            # v0.4.41: these writers are open, so the shared runtime guard runs
+            # first (here: passes); each probe is then refused before any
+            # dialog or write (no --archive-root / no reviewer).
             with self.subTest(command=name), mock.patch.object(
-                archive_cli, "_project_write_runtime_guard", side_effect=AssertionError("must stop before runtime/filesystem guard"),
-            ) as guard, redirect_stdout(output), redirect_stderr(errors):
+                archive_cli, "_project_write_runtime_guard", return_value=None,
+            ), redirect_stdout(output), redirect_stderr(errors):
                 code = archive_cli.main([name, *arguments, "--approve", "--format", "json"])
             self.assertEqual(code, 1)
             self.assertEqual(errors.getvalue(), "")
             self.assertEqual(json.loads(output.getvalue()), check_wheel_install._expected_fixed_closed_writer_result(name))
-            guard.assert_not_called()
             self.assertFalse(skills.exists())
             self.assertFalse(archive.exists())
 

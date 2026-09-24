@@ -208,3 +208,41 @@ not certify this WOM implementation:
 - [v0.3.307 release note](releases/v0.3.307.md)
 - [v0.3.306 retired-integration decision](archive-infra-decision-log-2026-08-08-v03306-mow-harness-sunset.md)
 - [Artifact Hygiene](artifact-hygiene.md)
+
+## Retire By Moving (v0.4.41)
+
+Letters 142, 148 and 156 were blocked three times: the delete-only writer
+refused a `collab/` folder, a nested Git repository, and a Git check that could
+not run, and the customer asked for a narrow contract that preserves those and
+ends the old structure. `--destination` retires the folder instead of
+deleting it:
+
+```text
+archive legacy-coordination-cleanup <workspace-root> --destination <absolute-folder> --dry-run --format json
+archive legacy-coordination-cleanup <workspace-root> --destination <absolute-folder> --approve --reviewed-by <actor> --format json
+```
+
+- The whole `.mow-harness` folder, including `collab/` and nested Git
+  repositories, moves in one same-volume rename to
+  `<destination>/mow-harness-retired-<8 hex>`. Nothing is deleted; removing the
+  preserved copy later is the owner's own choice.
+- The preview reports `preserved_classes` instead of blocking on
+  collaboration records, nested repositories, or unknown top-level entries.
+  Links, alternate data streams, hardlinks, cross-mount entries, limits, and a
+  folder that a parent repository tracks still block.
+- The Git check keeps the user's global configuration (for example
+  `safe.directory`) and names its cause: `git_executable_unavailable`,
+  `git_safe_directory_refused`, `git_toplevel_mismatch`,
+  `git_ancestor_marker_unsafe`, or `git_tracked_target`.
+- The destination must be an absolute existing plain folder outside the
+  workspace, on the same volume, and outside any Git worktree; the final name
+  must not exist.
+- `--approve` binds the plan digest under one exact approval (a native dialog,
+  or none under a valid session grant), recorded in the workspace archive. The
+  writer re-plans under the cleanup lock, refuses
+  `legacy_coordination_retire_plan_changed` on any drift, verifies the moved
+  folder is the same one, and writes
+  `archive/receipts/legacy-coordination-retirements/<plan16>.json` with no
+  names or paths.
+- `--approve` without `--destination` (the delete-only write) stays fixed
+  closed.

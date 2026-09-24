@@ -419,6 +419,7 @@ from . import (
     git_backup_writer,
     human_artifact_registry,
     legacy_coordination_cleanup as legacy_cleanup,
+    legacy_coordination_retire as legacy_retire,
     local_recovery_sha_evolution,
     notion_property_backfill,
     objet_capture_batch_exact,
@@ -9103,13 +9104,57 @@ def command_runtime_guidance_readiness(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def _runtime_skill_exact_route(args: argparse.Namespace, op: str) -> int:
+    """v0.4.41: install or remove the WOM agent skill after one exact approval
+    (a native dialog, or none under a valid session grant) recorded in the
+    archive named by --archive-root and bound to the dry-run
+    operation_plan_sha256; the writer re-derives the plan under its lock."""
+
+    lifecycle_action = f"runtime_skill_{op}"
+    if not getattr(args, "archive_root", None):
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action=lifecycle_action, reason_code="runtime_skill_archive_root_required",
+        )
+    service = runtime_skill_install.runtime_skill_install if op == "install" else runtime_skill_install.runtime_skill_uninstall
+    target = runtime_skill_target_kwargs(args)
+
+    def plan() -> dict[str, Any]:
+        preview = service(dry_run=True, approve=False, **target)
+        return {**preview, "plan_sha256": preview.get("operation_plan_sha256")}
+
+    def write(digest: str, reviewer: str, binding: Any, claim: Any) -> dict[str, Any]:
+        return service(
+            dry_run=False,
+            approve=True,
+            reviewed_by=reviewer,
+            expected_plan_sha256=digest,
+            approval_archive_root=Path(args.archive_root),
+            exact_human_approval_claim=claim,
+            expected_exact_approval_plan_sha256=binding.plan_sha256,
+            expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+            **target,
+        )
+
+    def printer(result: dict[str, Any]) -> None:
+        if args.format == "json":
+            print_json(result)
+        else:
+            print_runtime_skill_result_text(result)
+
+    return _plan_digest_exact_route(
+        args,
+        lifecycle_action=lifecycle_action,
+        operation=ExactHumanApprovalOperation(lifecycle_action),
+        plan=plan,
+        write=write,
+        printer=printer,
+        nothing_to_do=lambda preview: not preview.get("would_write"),
+    )
+
+
 def command_runtime_skill_install(args: argparse.Namespace) -> int:
     if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="runtime_skill_install",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
+        return _runtime_skill_exact_route(args, "install")
     result = runtime_skill_install.runtime_skill_install(
         dry_run=bool(args.dry_run),
         approve=bool(args.approve),
@@ -9126,11 +9171,7 @@ def command_runtime_skill_install(args: argparse.Namespace) -> int:
 
 def command_runtime_skill_uninstall(args: argparse.Namespace) -> int:
     if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="runtime_skill_uninstall",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
+        return _runtime_skill_exact_route(args, "uninstall")
     result = runtime_skill_install.runtime_skill_uninstall(
         dry_run=bool(args.dry_run),
         approve=bool(args.approve),
@@ -9191,7 +9232,115 @@ def print_legacy_coordination_cleanup_result_text(
         print(f"BLOCKED: {blocker}")
 
 
+def _legacy_coordination_retire_route(args: argparse.Namespace) -> int:
+    """v0.4.41 (letters 142/148/156): retire the old coordination folder by
+    moving it to --destination; nothing is deleted. --dry-run previews the
+    plan; --approve runs after one exact approval (a native dialog, or none
+    under a valid session grant) recorded in the workspace archive and bound
+    to the plan digest. The delete-only --approve stays fixed closed."""
+
+    lifecycle_action = "legacy_coordination_retire"
+    workspace = Path(args.workspace_root)
+    limits = _legacy_coordination_cleanup_limit_kwargs(args)
+
+    def emit(result: dict[str, Any]) -> int:
+        if args.format == "json":
+            print_json(result)
+        else:
+            print(f"Legacy coordination retire: {result.get('status', 'blocked')}")
+            classes = result.get("preserved_classes") or {}
+            for name, present in sorted(classes.items()):
+                if present:
+                    print(f"- preserved: {name}")
+            if result.get("plan_sha256"):
+                print(f"- plan: {result['plan_sha256']}")
+            for blocker in result.get("blockers", []):
+                print(f"BLOCKED: {blocker}")
+            print("Nothing is deleted; names and paths are not echoed.")
+        return 0 if result.get("ok") or result.get("status") in {"ready", "target_absent", "retired"} else 1
+
+    if args.dry_run:
+        try:
+            preview = legacy_retire.legacy_coordination_retire_plan(workspace, args.destination, **limits)
+        except Exception:
+            print("legacy-coordination-cleanup failed safely.", file=sys.stderr)
+            return 1
+        return emit(preview)
+    reviewer = archive_services.safe_project_intake_actor_id(getattr(args, "reviewed_by", None))
+    if reviewer is None:
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_reviewer_required",
+        )
+    try:
+        preview = legacy_retire.legacy_coordination_retire_plan(workspace, args.destination, **limits)
+        digest = preview.get("plan_sha256")
+        if preview.get("status") == "target_absent":
+            return emit({**preview, "dry_run": False, "state": "nothing_to_write",
+                         "write_status": "nothing_to_write", "native_approval_dialog_opened": False})
+        if preview.get("ok") is not True or preview.get("blockers") or not isinstance(digest, str):
+            return _exact_human_approval_cli_error(
+                args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_preflight_blocked",
+                preflight_blockers=preview.get("blockers"),
+            )
+        supplied = str(getattr(args, "expected_plan_sha256", None) or "").strip().lower()
+        if supplied and supplied != digest:
+            return _exact_human_approval_cli_error(
+                args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_plan_changed",
+            )
+        approval_root = archive_services.require_existing_archive_root(workspace / "archive")
+        binding = operation_approval_binding.plan_digest_approval_binding(
+            ExactHumanApprovalOperation.legacy_coordination_retire, digest,
+        )
+        context = binding.context(
+            archive_id=archive_services.read_archive_id(approval_root), reviewer_claim=reviewer,
+        )
+        result = _execute_exact_human_approved_write(
+            approval_root,
+            context,
+            lambda claim: legacy_retire.legacy_coordination_retire(
+                workspace,
+                args.destination,
+                expected_plan_sha256=digest,
+                reviewed_by=reviewer,
+                exact_human_approval_claim=claim,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+                **limits,
+            ),
+        )
+    except ExactHumanApprovalWorkflowError as error:
+        no_effect = error.code in {
+            "exact_human_approval_cancelled",
+            "exact_human_approval_operation_failed",
+            "exact_human_approval_writer_result_invalid",
+        }
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code=(
+                f"{lifecycle_action}_workflow_precondition_failed" if no_effect
+                else "exact_human_approval_state_unknown"
+            ),
+        )
+    except (
+        archive_services.ArchiveServiceError,
+        operation_approval_binding.OperationApprovalBindingError,
+        ExactHumanApprovalError,
+        ExactHumanApprovalWindowsError,
+        ArchivePathError,
+        OSError,
+        UnicodeError,
+        ValueError,
+    ):
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_workflow_failed_safely",
+        )
+    return emit(result)
+
+
 def command_legacy_coordination_cleanup(args: argparse.Namespace) -> int:
+    if getattr(args, "destination", None):
+        return _legacy_coordination_retire_route(args)
     if args.approve:
         return _exact_human_approval_cli_error(
             args,
@@ -17948,11 +18097,39 @@ def _print_revert_batch_text(result: dict[str, Any]) -> None:
 
 
 def command_prehashed_objet_ledger(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
+    if args.approve and not args.dry_run:
+        # v0.4.41 (letters 038-039, 164, 168): one fresh dry-run, one exact
+        # approval (a native dialog, or none under a valid session grant).
+        common = dict(
+            store_kind=args.store_kind,
+            store_ref=args.store_ref,
+            sha256_field=args.sha256_field,
+            size_field=args.size_field,
+            mime_field=args.mime_field,
+            max_rows=args.max_rows,
+        )
+        ledgers = [Path(item) for item in args.ledger]
+        return _plan_digest_exact_route(
             args,
             lifecycle_action="prehashed_objet_ledger_register",
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.prehashed_objet_ledger,
+            plan=lambda: archive_services.prehashed_objet_ledger_register(
+                Path(args.archive_root), ledgers, dry_run=True, approve=False, preview_for_approval=True, **common,
+            ),
+            write=lambda digest, reviewer, binding, claim: archive_services.prehashed_objet_ledger_register(
+                Path(args.archive_root),
+                ledgers,
+                dry_run=False,
+                approve=True,
+                reviewed_by=reviewer,
+                exact_human_approval_claim=claim,
+                expected_plan_sha256=digest,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+                **common,
+            ),
+            printer=lambda result: print_prehashed_objet_ledger_result(result, args.format),
+            nothing_to_do=lambda preview: not (preview.get("registration") or {}).get("would_append_manifest_records"),
         )
     if args.dry_run == args.approve:
         print("prehashed-objet-ledger requires exactly one of --dry-run or --approve.", file=sys.stderr)
@@ -19745,11 +19922,42 @@ def command_credential_secure_list(args: argparse.Namespace) -> int:
 
 def command_credential_lifecycle(args: argparse.Namespace) -> int:
     action = "authenticated_credential_lifecycle_decision"
-    if args.approve:
-        return _exact_human_approval_cli_error(
+    if args.approve and not args.dry_run:
+        # v0.4.41 (letter 119): one fresh plan, one exact approval (a native
+        # dialog, or none under a valid session grant) bound to its digest.
+        from . import credential_workflows
+        from .credential_secure_intake_windows import _CtypesWindowsNativeFacade
+
+        def common() -> dict[str, Any]:
+            return {
+                "provider": args.provider,
+                "workspace_fingerprint": args.workspace_fingerprint,
+                "selected_default_credential_id": args.default_credential_id,
+                "revocation_pending_credential_ids": tuple(args.revocation_pending_credential_id or []),
+                "native": _CtypesWindowsNativeFacade(cli_live_approved=True),
+            }
+
+        def printer(result: dict[str, Any]) -> None:
+            result = {**result, "delete_performed": False, "revoke_performed": False}
+            _print_credential_command_result(result, args.format)
+
+        return _plan_digest_exact_route(
             args,
             lifecycle_action=action,
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.credential_lifecycle,
+            plan=lambda: credential_workflows.plan_authenticated_credential_lifecycle(
+                archive_services.require_existing_archive_root(Path(args.archive_root)), **common(),
+            ),
+            write=lambda digest, reviewer, binding, claim: credential_workflows.approve_authenticated_credential_lifecycle(
+                Path(args.archive_root),
+                expected_plan_sha256=digest,
+                reviewed_by=reviewer,
+                exact_human_approval_claim=claim,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+                **common(),
+            ),
+            printer=printer,
         )
     if args.dry_run == args.approve:
         result = _credential_cli_blocked(
@@ -19857,51 +20065,39 @@ def _notion_page_recovery_request_blocked(code: str) -> dict[str, Any]:
 
 
 def _require_letter118_reviewed_batch_contract(request: dict[str, Any]) -> None:
-    """Require the full reviewed 577+43 request; pilots slice this full set."""
+    """Require a self-consistent reviewed request (v0.4.41).
+
+    Until v0.4.40 only the letter-118 577+43 batch was accepted, so no other
+    request could run (letters 142/148/156 produced none). v0.4.41 accepts
+    any self-consistent reviewed request: unique groups, each group's
+    expected_count equal to its items, the total equal to expected_item_count,
+    and every group bound to a credential and a workspace fingerprint.
+    """
 
     groups = request.get("groups")
     items = request.get("items")
-    if (
-        request.get("expected_item_count") != LETTER118_NOTION_EXPECTED_ITEM_COUNT
-        or not isinstance(groups, list)
-        or not isinstance(items, list)
-        or len(groups) != len(LETTER118_NOTION_GROUP_COUNTS)
-        or len(items) != LETTER118_NOTION_EXPECTED_ITEM_COUNT
-    ):
+    if not isinstance(groups, list) or not groups or not isinstance(items, list) or not items:
         raise ValueError("notion_page_recovery_reviewed_batch_contract_mismatch")
-    group_by_id: dict[str, dict[str, Any]] = {}
+    expected_counts: dict[str, int] = {}
     for group in groups:
         if not isinstance(group, dict) or not isinstance(group.get("group_id"), str):
             raise ValueError("notion_page_recovery_reviewed_batch_contract_mismatch")
-        group_id = group["group_id"]
-        if group_id in group_by_id:
-            raise ValueError("notion_page_recovery_reviewed_batch_contract_mismatch")
-        group_by_id[group_id] = group
-    if set(group_by_id) != set(LETTER118_NOTION_GROUP_COUNTS):
-        raise ValueError("notion_page_recovery_reviewed_batch_contract_mismatch")
-    actual_counts = {group_id: 0 for group_id in LETTER118_NOTION_GROUP_COUNTS}
-    credential_ids: set[str] = set()
-    workspace_fingerprints: set[str] = set()
-    for group_id, expected_count in LETTER118_NOTION_GROUP_COUNTS.items():
-        group = group_by_id[group_id]
         scope = group.get("scope_binding")
-        if group.get("expected_count") != expected_count or not isinstance(scope, dict):
+        if (
+            group["group_id"] in expected_counts
+            or type(group.get("expected_count")) is not int
+            or not isinstance(scope, dict)
+            or not isinstance(scope.get("credential_id"), str)
+            or not isinstance(scope.get("workspace_fingerprint"), str)
+        ):
             raise ValueError("notion_page_recovery_reviewed_batch_contract_mismatch")
-        credential_id = scope.get("credential_id")
-        workspace_fingerprint = scope.get("workspace_fingerprint")
-        if not isinstance(credential_id, str) or not isinstance(workspace_fingerprint, str):
-            raise ValueError("notion_page_recovery_reviewed_batch_contract_mismatch")
-        credential_ids.add(credential_id)
-        workspace_fingerprints.add(workspace_fingerprint)
+        expected_counts[group["group_id"]] = group["expected_count"]
+    actual_counts = {group_id: 0 for group_id in expected_counts}
     for item in items:
         if not isinstance(item, dict) or item.get("group_id") not in actual_counts:
             raise ValueError("notion_page_recovery_reviewed_batch_contract_mismatch")
         actual_counts[item["group_id"]] += 1
-    if (
-        actual_counts != LETTER118_NOTION_GROUP_COUNTS
-        or len(credential_ids) != len(LETTER118_NOTION_GROUP_COUNTS)
-        or len(workspace_fingerprints) != len(LETTER118_NOTION_GROUP_COUNTS)
-    ):
+    if actual_counts != expected_counts or request.get("expected_item_count") != len(items):
         raise ValueError("notion_page_recovery_reviewed_batch_contract_mismatch")
 
 
@@ -20103,6 +20299,84 @@ def _require_notion_page_recovery_request_ignored(
         raise ValueError("notion_page_recovery_request_not_ignored")
 
 
+def command_notion_page_trash(args: argparse.Namespace) -> int:
+    """v0.4.41: move verified-recovered Notion pages to the Notion trash
+    (never a permanent delete), or back with --restore. --dry-run plans;
+    --approve runs after one exact approval (a native dialog, or none under a
+    valid session grant) bound to the plan digest."""
+
+    from . import notion_page_trash
+
+    def load() -> tuple[Path, dict[str, Any]]:
+        root = archive_services.require_existing_archive_root(Path(args.archive_root))
+        request = _load_notion_page_recovery_request(root, args.request)
+        if request.get("archive_id") != archive_services.read_archive_id(root):
+            raise archive_services.ArchiveServiceError("notion_page_trash_archive_identity_mismatch")
+        return root, request
+
+    def printer(result: dict[str, Any]) -> None:
+        if args.format == "json":
+            print_json(result)
+            return
+        counts = result.get("counts") if isinstance(result.get("counts"), dict) else {}
+        mode = "restore" if args.restore else "trash"
+        print(f"Notion page {mode}: " + ("ready." if result.get("ok") else "blocked."))
+        for key in sorted(counts):
+            print(f"- {key}: {counts[key]}")
+        if result.get("plan_sha256"):
+            print(f"Plan digest: {result['plan_sha256']}")
+        for blocker in result.get("blockers") or []:
+            print(f"BLOCKED: {blocker}")
+        print("Permanent delete: never. Page ids and titles shown: no.")
+
+    if args.approve and not args.dry_run:
+        def plan() -> dict[str, Any]:
+            root, request = load()
+            return notion_page_trash.plan_trash(
+                root, request, max_items=args.max_items, offset=args.offset, restore=args.restore,
+            )
+
+        def write(digest, reviewer, binding, claim):
+            from . import credential_workflows
+
+            root, request = load()
+            return credential_workflows.execute_spawned_authenticated_notion_page_trash(
+                root,
+                request,
+                expected_plan_sha256=digest,
+                reviewed_by=reviewer,
+                max_items=args.max_items,
+                offset=args.offset,
+                restore=args.restore,
+                exact_human_approval_claim=claim,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+            )
+
+        return _plan_digest_exact_route(
+            args,
+            lifecycle_action="notion_page_trash",
+            operation=ExactHumanApprovalOperation.notion_page_trash,
+            plan=plan,
+            write=write,
+            printer=printer,
+            nothing_to_do=lambda preview: (preview.get("counts") or {}).get("provider_pending_count") == 0,
+        )
+    if not args.dry_run or args.approve:
+        printer({"ok": False, "blockers": ["notion_page_trash_choose_dry_run_or_approve"]})
+        return 1
+    try:
+        root, request = load()
+        result = notion_page_trash.plan_trash(
+            root, request, max_items=args.max_items, offset=args.offset, restore=args.restore,
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        code = str(exc)
+        result = {"ok": False, "blockers": [code if re.fullmatch(r"[a-z0-9_]+", code) else "notion_page_trash_request_invalid"]}
+    printer(result)
+    return 0 if result.get("ok") else 1
+
+
 def command_notion_page_recovery_plan(args: argparse.Namespace) -> int:
     if not args.dry_run:
         result = _notion_page_recovery_request_blocked(
@@ -20165,6 +20439,81 @@ def command_notion_page_recovery_plan(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def _notion_request_build_credentials(root: Path) -> list[dict[str, Any]]:
+    """Authenticated credential rows (scope bindings) for the request builder."""
+
+    from . import credential_workflows
+    from .credential_secure_intake_windows import _CtypesWindowsNativeFacade
+
+    native = _CtypesWindowsNativeFacade(cli_live_approved=True)
+    listing = credential_workflows.list_authenticated_secure_credentials(root, native=native)
+    rows = listing.get("credentials") if isinstance(listing, dict) else None
+    return [row for row in rows or [] if isinstance(row, dict)]
+
+
+def command_notion_page_recovery_request_build(args: argparse.Namespace) -> int:
+    """v0.4.41 (letters 142/148/156): build one reviewed recovery request from a
+    private page list and a group -> adopted credential mapping. Reads no
+    Notion data; --write creates the request under the ignored request folder.
+    """
+
+    from . import notion_recovery_request_builder as builder
+
+    def emit(result: dict[str, Any]) -> int:
+        if args.format == "json":
+            print_json(result)
+        else:
+            print("Notion recovery request " + ("ready." if result.get("ok") else "blocked."))
+            print(f"Pages: {result.get('page_count', 0)}")
+            for group, state in sorted((result.get("credential_state") or {}).items()):
+                print(f"- group {group}: {state}")
+            for blocker in result.get("blockers") or []:
+                print(f"BLOCKED: {blocker}")
+            print("Page ids, paths and secrets shown: no")
+        return 0 if result.get("ok") else 1
+
+    try:
+        root = archive_services.require_existing_archive_root(Path(args.archive_root))
+        mapping: dict[str, str] = {}
+        for entry in args.group or []:
+            name, sep, credential_id = str(entry).partition("=")
+            if not sep or not name.strip() or not credential_id.strip():
+                return emit(builder._blocked(["notion_request_group_mapping_invalid"]))
+            mapping[name.strip()] = credential_id.strip()
+        pages_relative = str(args.pages or "").strip().replace("\\", "/")
+        if not pages_relative.startswith(NOTION_PAGE_RECOVERY_REQUEST_PREFIX) or not pages_relative.endswith(".jsonl"):
+            return emit(builder._blocked(["notion_request_pages_path_invalid"]))
+        _require_notion_page_recovery_request_ignored(root, pages_relative)
+        pages_path = resolve_archive_relative_path(root, pages_relative)
+        if not is_path_within_root(pages_path, root) or not pages_path.is_file():
+            return emit(builder._blocked(["notion_request_pages_unavailable"]))
+        if pages_path.stat().st_size > NOTION_PAGE_RECOVERY_REQUEST_MAX_BYTES:
+            return emit(builder._blocked(["notion_request_pages_too_large"]))
+        pages_text = pages_path.read_text(encoding="utf-8")
+        request, summary = builder.build_request(
+            archive_services.read_archive_id(root),
+            pages_text,
+            mapping,
+            _notion_request_build_credentials(root),
+            batch_id=str(args.batch_id or ""),
+        )
+        if request is None or args.dry_run:
+            return emit({**summary, "dry_run": bool(args.dry_run), "writes": 0})
+        output_relative = f"{NOTION_PAGE_RECOVERY_REQUEST_PREFIX}{request['batch_id']}.json"
+        _require_notion_page_recovery_request_ignored(root, output_relative)
+        target = resolve_archive_relative_path(root, output_relative)
+        if target.exists():
+            return emit(builder._blocked(["notion_request_output_exists"]))
+        builder.write_request(target, request)
+        return emit({**summary, "dry_run": False, "writes": 1, "request_written": True,
+                     "next_step": "notion-page-recovery-plan --request <the new request> --dry-run"})
+    except (archive_services.ArchiveServiceError, ArchivePathError, OSError, UnicodeError, ValueError) as exc:
+        code = str(exc)
+        if not re.fullmatch(r"[a-z0-9_]+", code):
+            code = "notion_request_build_failed_safely"
+        return emit(builder._blocked([code]))
+
+
 def _notion_page_recovery_execute_blocked(code: str) -> dict[str, Any]:
     result = _notion_page_recovery_request_blocked(code)
     result["dry_run"] = False
@@ -20173,11 +20522,53 @@ def _notion_page_recovery_execute_blocked(code: str) -> dict[str, Any]:
 
 
 def command_notion_page_recovery(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
+    if args.approve and not args.dry_run:
+        # Reopened in v0.4.41 (letters 116-118, 142/148/156): one fresh plan,
+        # one exact approval (a native dialog, or none under a valid session
+        # grant) bound to its digest, which covers the exact page list.
+        def _plan() -> dict[str, Any]:
+            root = archive_services.require_existing_archive_root(Path(args.archive_root))
+            request = _load_notion_page_recovery_request(root, args.request)
+            _require_letter118_reviewed_batch_contract(request)
+            if request.get("archive_id") != archive_services.read_archive_id(root):
+                raise archive_services.ArchiveServiceError("notion_page_recovery_archive_identity_mismatch")
+            from .notion_page_recovery import plan_recovery
+
+            return plan_recovery(root, request, max_items=args.max_items, offset=args.offset)
+
+        def _write(digest, reviewer, binding, claim):
+            from . import credential_workflows
+
+            root = archive_services.require_existing_archive_root(Path(args.archive_root))
+            request = _load_notion_page_recovery_request(root, args.request)
+            _require_letter118_reviewed_batch_contract(request)
+            raw = credential_workflows.execute_spawned_authenticated_notion_page_recovery(
+                root,
+                request,
+                expected_plan_sha256=digest,
+                reviewed_by=reviewer,
+                max_items=args.max_items,
+                approved=True,
+                offset=args.offset,
+                exact_human_approval_claim=claim,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+            )
+            if not isinstance(raw, dict):
+                raise ValueError("notion_page_recovery_result_invalid")
+            result = dict(raw)
+            result.setdefault("privacy_guards", {})["request_path_included"] = False
+            return result
+
+        return _plan_digest_exact_route(
             args,
             lifecycle_action="authenticated_notion_page_recovery_execute",
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.notion_page_recovery,
+            plan=_plan,
+            write=_write,
+            printer=print_json if args.format == "json" else (lambda result: print(
+                "Notion page recovery " + ("succeeded." if result.get("ok") else "blocked.")
+            )),
         )
     if args.dry_run and args.approve:
         result = _notion_page_recovery_execute_blocked(
@@ -21552,11 +21943,49 @@ def command_tiro_lossless_recovery_plan(args: argparse.Namespace) -> int:
 
 
 def command_tiro_lossless_recovery_fetch_run(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
+    if args.approve and not args.dry_run:
+        # v0.4.41 (feature request 13): one fresh preview, one exact approval
+        # (a native dialog, or none under a valid session grant).
+        common = dict(
+            credential_ref=args.credential_ref,
+            workspace_guid=args.workspace_guid,
+            note_guid=args.note_guid,
+            output_path=args.output,
+            max_notes=args.max_notes,
+            timeout_seconds=args.timeout_seconds,
+        )
+
+        def plan() -> dict[str, Any]:
+            preview = archive_services.tiro_lossless_recovery_fetch_run(
+                Path(args.archive_root), dry_run=True, approve=False, **common,
+            )
+            # The approval preview applies the approve-only credential check.
+            if not str(args.credential_ref or "").strip():
+                preview = {**preview, "ok": False, "blockers": [
+                    *list(preview.get("blockers") or []),
+                    "tiro-lossless-recovery-fetch-run requires an env:, keyring:, or credential-manager: credential ref for approved live fetch.",
+                ]}
+            return preview
+
+        return _plan_digest_exact_route(
             args,
             lifecycle_action="tiro_lossless_recovery_fetch_run",
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.tiro_lossless_recovery_fetch,
+            plan=plan,
+            write=lambda digest, reviewer, binding, claim: archive_services.tiro_lossless_recovery_fetch_run(
+                Path(args.archive_root),
+                dry_run=False,
+                approve=True,
+                reviewed_by=reviewer,
+                exact_human_approval_claim=claim,
+                expected_plan_sha256=digest,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+                **common,
+            ),
+            printer=print_json if args.format == "json" else (lambda result: print(
+                f"Tiro lossless recovery fetch {result.get('fetch_state') or '-'}."
+            )),
         )
     try:
         result = archive_services.tiro_lossless_recovery_fetch_run(
@@ -27353,11 +27782,40 @@ def command_notion_objet_link_rewrite_plan(args: argparse.Namespace) -> int:
 
 
 def command_notion_objet_link_convert(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
+    if args.approve and not args.dry_run:
+        # v0.4.41 (feature request 34): one fresh preview, one exact approval
+        # (a native dialog, or none under a valid session grant) for the edge
+        # and the conversion receipt together.
+        common = dict(
+            zettel_id=args.zettel_id,
+            relative_path=args.path,
+            locator_fingerprint=args.locator_fingerprint,
+            object_id=args.object_id,
+            target_mode=args.target_mode,
+            expected_occurrence_count=args.expected_occurrence_count,
+            visibility=args.visibility,
+        )
+        return _plan_digest_exact_route(
             args,
             lifecycle_action="notion_objet_link_convert",
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.notion_objet_link_convert,
+            plan=lambda: archive_services.notion_objet_link_convert(
+                Path(args.archive_root), dry_run=True, approve=False, **common,
+            ),
+            write=lambda digest, reviewer, binding, claim: archive_services.notion_objet_link_convert(
+                Path(args.archive_root),
+                dry_run=False,
+                approve=True,
+                reviewed_by=reviewer,
+                exact_human_approval_claim=claim,
+                expected_plan_sha256=digest,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+                **common,
+            ),
+            printer=print_json if args.format == "json" else (lambda result: print(
+                "Notion objet link convert: " + str(result.get("write_status") or ("written" if result.get("ok") else "blocked"))
+            )),
         )
     try:
         result = archive_services.notion_objet_link_convert(
@@ -33857,16 +34315,67 @@ def command_relation_candidate_plan(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def _relation_candidate_accept_route(args: argparse.Namespace) -> int:
+    """v0.4.41 (letter 108): accept one relation candidate after one exact
+    approval (a native dialog, or none under a valid session grant) that
+    covers both the edge and the judgment record. --expected-plan-sha256 stays
+    the reviewed relation plan; the approval binds the accept digest."""
+
+    common = dict(
+        from_zettel=args.from_zettel,
+        candidate_id=args.candidate_id,
+        decision=args.decision,
+        edge_type=args.edge_type,
+        visibility=args.visibility,
+        reason=args.reason,
+        confidence=args.confidence,
+        expected_plan_sha256=args.expected_plan_sha256,
+        reviewed_by=args.reviewed_by,
+        max_candidates=args.max_candidates,
+        include_rejected=args.include_rejected,
+    )
+    route_args = argparse.Namespace(**vars(args))
+    route_args.expected_plan_sha256 = None  # the relation plan digest is checked by the service
+
+    def printer(result: dict[str, Any]) -> None:
+        if args.format == "json":
+            print_json(result)
+            return
+        print(f"Relation judgment: {result.get('state') or '-'}")
+        print(f"- candidate: {result.get('candidate_id') or '-'}")
+        print(f"- decision: {result.get('decision') or '-'}")
+        print(f"- judgment: {result.get('judgment_path') or '-'}")
+        edge = result.get("edge_result") if isinstance(result.get("edge_result"), dict) else {}
+        if edge:
+            print(f"- edge: {edge.get('edge_id') or '-'}")
+            print(f"- edge receipt: {edge.get('receipt_path') or '-'}")
+        for blocker in result.get("blockers", []):
+            print(f"BLOCKED: {blocker}")
+
+    return _plan_digest_exact_route(
+        route_args,
+        lifecycle_action="relation_candidate_accept",
+        operation=ExactHumanApprovalOperation.relation_candidate_accept,
+        plan=lambda: completion_workflows.relation_candidate_decide(
+            Path(args.archive_root), _accept_preview_only=True, **common,
+        ),
+        write=lambda digest, reviewer, binding, claim: completion_workflows.relation_candidate_decide(
+            Path(args.archive_root),
+            exact_human_approval_claim=claim,
+            expected_exact_approval_plan_sha256=binding.plan_sha256,
+            expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+            **common,
+        ),
+        printer=printer,
+    )
+
+
 def command_relation_candidate_decide(args: argparse.Namespace) -> int:
     if not args.approve:
         print("relation-candidate-decide requires --approve.", file=sys.stderr)
         return 1
     if str(args.decision or "").strip().lower() == "accept":
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="relation_candidate_accept",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
+        return _relation_candidate_accept_route(args)
     try:
         result = completion_workflows.relation_candidate_decide(
             Path(args.archive_root),
@@ -34706,11 +35215,42 @@ def command_derive_text_doctor(args: argparse.Namespace) -> int:
 
 
 def command_import_external(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
+    if args.approve and not args.dry_run:
+        # v0.4.41 (letter 141): one fresh dry-run, one exact approval (a native
+        # dialog, or none under a valid session grant) bound to its digest.
+        common = dict(
+            source_system=args.source,
+            limit=args.limit,
+            provider_locator_policy=args.provider_locator_policy,
+        )
+
+        def printer(result: dict[str, Any]) -> None:
+            if args.format == "json":
+                print_json(result)
+            else:
+                print("External import " + ("applied." if result.get("ok") else "blocked."))
+                print(f"Imported drafts: {result.get('imported_count', 0)}")
+                if result.get("receipt_path"):
+                    print(f"Receipt: {result['receipt_path']}")
+
+        return _plan_digest_exact_route(
             args,
             lifecycle_action="import_external_archive",
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.import_external,
+            plan=lambda: archive_services.external_import_dry_run(
+                Path(args.archive_root), Path(args.export), **common,
+            ),
+            write=lambda digest, reviewer, binding, claim: archive_services.import_external_archive(
+                Path(args.archive_root),
+                Path(args.export),
+                reviewed_by=reviewer,
+                exact_human_approval_claim=claim,
+                expected_plan_sha256=digest,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+                **common,
+            ),
+            printer=printer,
         )
     if args.dry_run and args.approve:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
@@ -35513,6 +36053,9 @@ def command_imap_mailbox_adapter_execution_contract(args: argparse.Namespace) ->
 
 def command_imap_mailbox_header_metadata_scan(args: argparse.Namespace) -> int:
     if args.approve:
+        # Stays closed in v0.4.41: its legacy credential-access approval
+        # receipt no longer exists; the IMAP chain is redesigned around a
+        # full-message fetch under exact approval (decision log).
         return _exact_human_approval_cli_error(
             args,
             lifecycle_action="imap_mailbox_header_metadata_scan",
@@ -35999,13 +36542,52 @@ def command_imap_mailbox_adapter_manifest_plan(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
+def _args_exact_route(
+    args: argparse.Namespace,
+    lifecycle_action: str,
+    operation: ExactHumanApprovalOperation,
+    label: str,
+    arguments: dict[str, Any],
+) -> int:
+    """v0.4.41: --approve for an argument-bound legacy writer: the preview is
+    its own dry-run on the same arguments, and the approval binds their digest."""
+
+    service = getattr(archive_services, lifecycle_action)
+
+    def printer(result: dict[str, Any]) -> None:
+        if args.format == "json":
+            print_json(result)
+        else:
+            print(f"{label}: " + ("done." if result.get("ok") else "blocked."))
+
+    return _plan_digest_exact_route(
+        args,
+        lifecycle_action=lifecycle_action,
+        operation=operation,
+        plan=lambda: service(Path(args.archive_root), **arguments, dry_run=True, approve=False),
+        write=lambda digest, reviewer, binding, claim: service(
+            Path(args.archive_root),
+            **arguments,
+            dry_run=False,
+            approve=True,
+            reviewed_by=reviewer,
+            exact_human_approval_claim=claim,
+            expected_plan_sha256=digest,
+            expected_exact_approval_plan_sha256=binding.plan_sha256,
+            expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+        ),
+        printer=printer,
+    )
+
+
 def command_imap_mailbox_adapter_manifest_write(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="imap_mailbox_adapter_manifest_write",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
+    if args.approve and not args.dry_run:
+        # v0.4.41: one fresh dry-run, one exact approval (a native dialog,
+        # or none under a valid session grant) bound to the argument digest.
+        return _args_exact_route(args, "imap_mailbox_adapter_manifest_write", ExactHumanApprovalOperation.imap_mailbox_adapter_manifest, "IMAP adapter manifest", dict(
+            adapter_id=args.adapter_id, providers=args.provider, operations=args.operation,
+            selection_rules=args.selection_rule, consumer=args.consumer, platform=args.platform,
+        ))
     if args.dry_run == args.approve:
         print("Choose exactly one mode: --dry-run or --approve.", file=sys.stderr)
         return 1
@@ -36076,11 +36658,57 @@ def command_sources(args: argparse.Namespace) -> int:
 
 
 def command_add_source(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
+    if args.approve and not args.dry_run:
+        # v0.4.41: one fresh dry-run, one exact approval (a native dialog, or
+        # none under a valid session grant) bound to its digest.
+        common = dict(
+            source_id=args.source_id,
+            source_type=args.source_type,
+            description=args.description,
+            root_ref=args.root_ref,
+            local_root=args.local_root,
+            write_local_profile=args.write_local_profile,
+            include=args.include,
+            exclude=args.exclude,
+            max_items=args.max_items,
+            visibility_scope=args.visibility_scope,
+            source_visibility=args.source_visibility,
+            replace=args.replace,
+        )
+
+        def plan() -> dict[str, Any]:
+            root = archive_services.require_existing_archive_root(Path(args.archive_root))
+            preview = archive_services.add_source_dry_run(root, **common)
+            return {
+                **preview,
+                "ok": not preview.get("blockers"),
+                "plan_sha256": archive_services.add_source_plan_sha256(
+                    root, preview, local_root=args.local_root, replace=args.replace,
+                ),
+            }
+
+        def printer(result: dict[str, Any]) -> None:
+            if args.format == "json":
+                print_json(result)
+            else:
+                print("Source registration " + ("applied." if result.get("ok") else "blocked."))
+                print(f"Source: {result.get('source_id') or '-'}")
+
+        return _plan_digest_exact_route(
             args,
             lifecycle_action="add_source_binding",
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.add_source,
+            plan=plan,
+            write=lambda digest, reviewer, binding, claim: archive_services.add_source_binding(
+                Path(args.archive_root),
+                reviewed_by=reviewer,
+                exact_human_approval_claim=claim,
+                expected_plan_sha256=digest,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+                **common,
+            ),
+            printer=printer,
         )
     if args.dry_run and args.approve:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
@@ -36108,6 +36736,11 @@ def command_add_source(args: argparse.Namespace) -> int:
                 visibility_scope=args.visibility_scope,
                 source_visibility=args.source_visibility,
                 replace=args.replace,
+            )
+            # v0.4.41: the digest `--approve` binds (see add_source_plan_sha256).
+            result["plan_sha256"] = archive_services.add_source_plan_sha256(
+                archive_services.require_existing_archive_root(Path(args.archive_root)),
+                result, local_root=args.local_root, replace=args.replace,
             )
         else:
             result = archive_services.add_source_binding(
@@ -37174,12 +37807,6 @@ def docker_runtime_check_from_state(state: str) -> dict[str, Any]:
 
 
 def command_onboard(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="onboard",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
     require_yaml()
     if args.guided:
         fill_guided_onboarding_args(args)
@@ -37194,6 +37821,11 @@ def command_onboard(args: argparse.Namespace) -> int:
     if args.dry_run and args.approve:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
         return 1
+    if args.approve and archive_services.safe_project_intake_actor_id(getattr(args, "reviewed_by", None)) is None:
+        # v0.4.41: refused before the target is planned or read.
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action="onboard", reason_code="onboard_reviewer_required",
+        )
 
     principal_kind = args.principal_kind or archive_services.default_principal_kind_for_archive_type(args.archive_type)
     try:
@@ -37214,22 +37846,47 @@ def command_onboard(args: argparse.Namespace) -> int:
     if not args.approve:
         print_onboarding_result(plan, args.format)
         return 0 if plan["ok"] else 1
-    if not plan["ok"]:
-        print_onboarding_result(plan, args.format)
-        return 1
+    return _onboard_exact_route(args, plan, principal_kind)
 
-    target = Path(args.target_root).resolve()
-    if target.exists() and not target.is_dir():
-        print(f"Target archive root must be a folder or absent: {target}.", file=sys.stderr)
-        return 1
-    if target.exists() and any(target.iterdir()):
-        print(f"Target archive folder must be empty or absent: {target}.", file=sys.stderr)
-        return 1
+
+def _onboard_exact_route(args: argparse.Namespace, plan: dict[str, Any], principal_kind: str) -> int:
+    """v0.4.41 new-user entry: create the archive after one exact approval.
+
+    The native dialog binds the dry-run plan digest (target folder, type,
+    ids, principal, name, provider profile). A new archive has no work
+    session, so no session grant can exist for it and the dialog always
+    opens. After the decision the target is re-planned; only the skeleton the
+    archive key and the approval claim need (folder, archive.yml, .gitignore)
+    is created, and removed again if the claim cannot be written. The writer
+    then creates the rest, runs strict Doctor and leaves a receipt.
+    """
+
+    lifecycle_action = "onboard"
+    reviewer = archive_services.safe_project_intake_actor_id(getattr(args, "reviewed_by", None))
+    if reviewer is None:
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action=lifecycle_action, reason_code="onboard_reviewer_required",
+        )
+    digest = plan.get("plan_sha256")
+    if plan.get("ok") is not True or plan.get("blockers") or not isinstance(digest, str):
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action=lifecycle_action, reason_code="onboard_preflight_blocked",
+            preflight_blockers=plan.get("blockers"),
+        )
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:+/-]{0,255}", str(args.archive_id)) is None:
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action=lifecycle_action, reason_code="onboard_archive_id_invalid",
+        )
+    supplied = str(getattr(args, "expected_plan_sha256", None) or "").strip().lower()
+    if supplied and supplied not in {digest, digest.removeprefix("sha256:")}:
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action=lifecycle_action, reason_code="onboard_plan_changed",
+        )
     template = TEMPLATES_ROOT / args.archive_type
     if not template.is_dir():
         print(f"Unknown archive type: {args.archive_type}", file=sys.stderr)
         return 2
-
+    target = Path(plan["target_root"])
     namespace = argparse.Namespace(
         archive_root=str(target),
         type=args.archive_type,
@@ -37240,37 +37897,146 @@ def command_onboard(args: argparse.Namespace) -> int:
         name=args.name or plan["name"],
         dry_run=False,
     )
-    target.mkdir(parents=True, exist_ok=True)
-    _copy_template(template, target)
-    _copy_zettel_kasten_layer(target)
-    _create_recommended_dirs(target)
-    _write_safe_gitignore(target)
-    _update_archive_yml(target, namespace)
-    _update_archive_identity_yml(target, namespace)
-    _update_provider_bindings_yml(target, namespace)
-    _update_source_bindings_yml(target, namespace)
-    _apply_provider_profile(target, args.provider_profile)
+    state = {"writer_started": False}
 
-    doctor = Doctor(target)
-    diagnostics = doctor.run()
-    errors = [item for item in diagnostics if item.severity == "ERROR"]
-    warnings = [item for item in diagnostics if item.severity == "WARN"]
-    result = dict(plan)
-    result.update(
-        {
-            "ok": not errors and not warnings,
-            "dry_run": False,
-            "created_paths": plan["would_create"],
-            "doctor": {
-                "strict": True,
-                "errors": len(errors),
-                "warnings": len(warnings),
-                "diagnostics": [item.as_dict() for item in diagnostics],
-            },
+    def fresh_digest() -> str | None:
+        fresh = archive_services.onboarding_plan(
+            target, archive_type=args.archive_type, archive_id=args.archive_id,
+            principal_id=args.principal_id, principal_name=args.principal_name,
+            principal_kind=principal_kind, name=args.name, provider_profile=args.provider_profile,
+        )
+        return fresh.get("plan_sha256") if fresh.get("ok") is True and not fresh.get("blockers") else None
+
+    @contextmanager
+    def post_decision():
+        if fresh_digest() != digest or _onboard_target_is_link(target):
+            raise archive_services.ArchiveServiceError("onboard_target_changed")
+        existed = target.exists()
+        target.mkdir(parents=True, exist_ok=True)
+        try:
+            shutil.copy2(template / "archive.yml", target / "archive.yml")
+            _write_safe_gitignore(target)
+            _update_archive_yml(target, namespace)
+            yield None
+        except BaseException:
+            if not state["writer_started"]:
+                _onboard_remove_skeleton(target, existed=existed)
+            raise
+
+    def writer(claim: Any) -> dict[str, Any]:
+        state["writer_started"] = True
+        if claim is None:
+            raise archive_services.ArchiveServiceError(command_status.COMPOUND_APPROVAL_REASON_CODE)
+        _copy_template(template, target)
+        _copy_zettel_kasten_layer(target)
+        _create_recommended_dirs(target)
+        _write_safe_gitignore(target)
+        _update_archive_yml(target, namespace)
+        _update_archive_identity_yml(target, namespace)
+        _update_provider_bindings_yml(target, namespace)
+        _update_source_bindings_yml(target, namespace)
+        _apply_provider_profile(target, args.provider_profile)
+        diagnostics = Doctor(target).run()
+        errors = [item for item in diagnostics if item.severity == "ERROR"]
+        warnings = [item for item in diagnostics if item.severity == "WARN"]
+        receipt_relative = f"receipts/onboarding/{digest.removeprefix('sha256:')[:16]}.json"
+        receipt = {
+            "schema": "wom-kit/onboarding-receipt/v0.1",
+            "plan_sha256": digest,
+            "archive_id": args.archive_id,
+            "archive_type": args.archive_type,
+            "principal_id": args.principal_id,
+            "provider_profile": plan["provider_profile"],
+            "reviewed_by": reviewer,
+            "created_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+            "doctor": {"strict": True, "errors": len(errors), "warnings": len(warnings)},
         }
-    )
+        receipt_path = target.joinpath(*receipt_relative.split("/"))
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        receipt_path.write_text(json.dumps(receipt, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        result = dict(plan)
+        result.update(
+            {
+                "ok": not errors and not warnings,
+                "dry_run": False,
+                "created_paths": plan["would_create"],
+                "receipt_path": receipt_relative,
+                "doctor": {
+                    "strict": True,
+                    "errors": len(errors),
+                    "warnings": len(warnings),
+                    "diagnostics": [item.as_dict() for item in diagnostics],
+                },
+            }
+        )
+        return result
+
+    try:
+        binding = operation_approval_binding.plan_digest_approval_binding(
+            ExactHumanApprovalOperation.onboard_archive, digest,
+        )
+        context = binding.context(archive_id=args.archive_id, reviewer_claim=reviewer)
+        result = _execute_exact_human_approved_write_core(
+            target, context, writer, post_decision_boundary=post_decision, session_permission=None,
+        )
+    except ExactHumanApprovalWorkflowError as error:
+        no_effect = not state["writer_started"] and error.code in {
+            "exact_human_approval_cancelled",
+            "exact_human_approval_operation_failed",
+            "exact_human_approval_writer_result_invalid",
+            "exact_human_approval_key_unavailable",
+            "exact_human_approval_claim_failed",
+        }
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code="onboard_workflow_precondition_failed" if no_effect else "exact_human_approval_state_unknown",
+        )
+    except (
+        archive_services.ArchiveServiceError,
+        operation_approval_binding.OperationApprovalBindingError,
+        ExactHumanApprovalError,
+        ExactHumanApprovalWindowsError,
+        ArchivePathError,
+        OSError,
+        UnicodeError,
+        ValueError,
+    ):
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action=lifecycle_action, reason_code="onboard_workflow_failed_safely",
+        )
     print_onboarding_result(result, args.format)
-    return 0 if result["ok"] else 1
+    return 0 if result.get("ok") else 1
+
+
+def _onboard_target_is_link(target: Path) -> bool:
+    try:
+        info = os.lstat(target)
+    except FileNotFoundError:
+        return False
+    return stat.S_ISLNK(info.st_mode) or bool(getattr(info, "st_file_attributes", 0) & 0x400)
+
+
+def _onboard_remove_skeleton(target: Path, *, existed: bool) -> None:
+    """Remove what the approved onboarding created before its claim existed.
+
+    The target was re-verified empty or absent right before the skeleton was
+    written, so everything inside it now came from this onboarding attempt.
+    """
+
+    if _onboard_target_is_link(target) or not target.is_dir():
+        return
+    if not existed:
+        shutil.rmtree(target, ignore_errors=True)
+        return
+    for child in list(target.iterdir()):
+        if child.is_dir() and not child.is_symlink():
+            shutil.rmtree(child, ignore_errors=True)
+        else:
+            try:
+                child.unlink()
+            except OSError:
+                pass
 
 
 def fill_guided_onboarding_args(args: argparse.Namespace) -> None:
@@ -37489,6 +38255,27 @@ def command_identity_reconcile(args: argparse.Namespace) -> int:
 
 
 def command_init(args: argparse.Namespace) -> int:
+    if getattr(args, "approve", False) and not args.dry_run:
+        # v0.4.41: init --approve is onboard --approve with the same values.
+        return command_onboard(
+            argparse.Namespace(
+                target_root=args.archive_root,
+                archive_type=args.type,
+                archive_id=args.archive_id,
+                principal_id=args.principal_id,
+                principal_name=args.principal_name,
+                principal_kind=args.principal_kind,
+                name=args.name,
+                provider_profile="local_only",
+                guided=False,
+                dry_run=False,
+                approve=True,
+                reviewed_by=args.reviewed_by,
+                expected_plan_sha256=args.expected_plan_sha256,
+                format=args.format,
+                command="onboard",
+            )
+        )
     if not args.dry_run:
         return _exact_human_approval_cli_error(
             args,
@@ -39819,6 +40606,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--expected-plan-sha256",
         help="Exact operation_plan_sha256 from the reviewed dry-run; required with --approve.",
     )
+    runtime_skill_install_parser.add_argument(
+        "--archive-root",
+        help="Archive whose approval record covers --approve (v0.4.41); the skill itself is written outside it.",
+    )
     runtime_skill_install_parser.set_defaults(func=command_runtime_skill_install)
 
     runtime_skill_uninstall_parser = subcommands.add_parser(
@@ -39846,14 +40637,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--expected-plan-sha256",
         help="Exact operation_plan_sha256 from the reviewed dry-run; required with --approve.",
     )
+    runtime_skill_uninstall_parser.add_argument(
+        "--archive-root",
+        help="Archive whose approval record covers --approve (v0.4.41); the skill itself is written outside it.",
+    )
     runtime_skill_uninstall_parser.set_defaults(func=command_runtime_skill_uninstall)
 
     legacy_coordination_cleanup_parser = subcommands.add_parser(
         "legacy-coordination-cleanup",
         help=(
-            f"Preview retired .mow-harness local state. Unavailable in v{__version__}: "
-            "the write needs an exact compound human-approval binding; "
-            "collab/ is never traversed or changed."
+            "Preview retired .mow-harness local state, or retire it by moving it with "
+            "--destination (never deletes; one exact approval). The delete-only write is "
+            f"unavailable in v{__version__}: it needs an exact compound human-approval "
+            "binding; collab/ is never traversed or changed."
         ),
     )
     legacy_coordination_cleanup_parser.add_argument(
@@ -39877,8 +40673,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--approve",
         action="store_true",
         help=(
-            "On Windows only, destructively apply the unchanged reviewed "
-            "cleanup plan; POSIX platforms support dry-run preview only."
+            "With --destination: move the reviewed folder under one exact approval "
+            "(a native dialog, or none under a valid session grant). Without it: "
+            f"unavailable in v{__version__}; use the dry-run, plan, or audit mode."
         ),
     )
     legacy_coordination_cleanup_parser.add_argument(
@@ -39927,8 +40724,22 @@ def build_parser() -> argparse.ArgumentParser:
         default="text",
         help="Output format.",
     )
+    legacy_coordination_cleanup_parser.add_argument(
+        "--destination",
+        help=(
+            "Retire by moving instead of deleting (v0.4.41): an absolute existing folder outside the "
+            "workspace on the same volume. The whole .mow-harness folder, including collaboration "
+            "records and nested Git repositories, moves there in one step; nothing is deleted."
+        ),
+    )
     legacy_coordination_cleanup_parser.set_defaults(
-        func=command_legacy_coordination_cleanup
+        func=command_legacy_coordination_cleanup,
+        _wom_approval_scope={
+            "kind": "argument_flag_any_allowlist",
+            "allowed_flags": ["--destination"],
+            "outside_scope_status": "approval_fixed_closed",
+            "outside_scope_reason_code": command_status.COMPOUND_APPROVAL_REASON_CODE,
+        },
     )
 
     project_version_update = subcommands.add_parser(
@@ -41722,8 +42533,9 @@ def build_parser() -> argparse.ArgumentParser:
     prehashed_objet_ledger.add_argument("--mime-field", default="mime", help="Optional JSONL field containing a safe MIME type.")
     prehashed_objet_ledger.add_argument("--max-rows", type=int, default=100000, help="Maximum rows to inspect.")
     prehashed_objet_ledger.add_argument("--dry-run", action="store_true", help="Preview ledger registration without writing.")
-    prehashed_objet_ledger.add_argument("--approve", action="store_true", help="Append reviewed external manifest records and write a receipt.")
+    prehashed_objet_ledger.add_argument("--approve", action="store_true", help="Append the reviewed external manifest records and a receipt after one exact approval (v0.4.41).")
     prehashed_objet_ledger.add_argument("--reviewed-by", help="Reviewer id required when --approve is used.")
+    prehashed_objet_ledger.add_argument("--expected-plan-sha256", help="Optional plan_sha256 from the reviewed dry-run (v0.4.41).")
     prehashed_objet_ledger.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     prehashed_objet_ledger.set_defaults(func=command_prehashed_objet_ledger)
 
@@ -42573,14 +43385,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     credential_lifecycle.add_argument(
         "--expected-plan-sha256",
-        help=f"Legacy compatibility input only; v{__version__} approval is unavailable.",
+        help="Optional plan_sha256 from the reviewed dry-run; --approve refuses if the plan changed.",
     )
     credential_lifecycle.add_argument(
         "--reviewed-by",
-        help=f"Legacy compatibility input only; a reviewer label is not v{__version__} write authority.",
+        help="Reviewer id for --approve, e.g. person:me; the exact approval is the authority.",
     )
     credential_lifecycle.add_argument("--dry-run", action="store_true", help="Authenticate receipts and return the complete decision plan without writing it.")
-    credential_lifecycle.add_argument("--approve", action="store_true", help=f"Unavailable in v{__version__}; use the authenticated dry-run plan only.")
+    credential_lifecycle.add_argument(
+        "--approve", action="store_true",
+        help="Record the reviewed decision after one exact approval bound to the plan_sha256 (v0.4.41).",
+    )
     credential_lifecycle.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     credential_lifecycle.set_defaults(func=command_credential_lifecycle)
 
@@ -43294,8 +44109,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     tiro_lossless_recovery_fetch_run.add_argument("--timeout-seconds", type=int, default=30, help="Provider request timeout, 1-120 seconds.")
     tiro_lossless_recovery_fetch_run.add_argument("--dry-run", action="store_true", help="Preview provider/bundle writes without reading credentials.")
-    tiro_lossless_recovery_fetch_run.add_argument("--approve", action="store_true", help="Run the approved live fetch and write the raw bundle.")
+    tiro_lossless_recovery_fetch_run.add_argument("--approve", action="store_true", help="Run the live fetch and write the raw bundle after one exact approval (v0.4.41).")
     tiro_lossless_recovery_fetch_run.add_argument("--reviewed-by", help="Safe reviewer id required with --approve.")
+    tiro_lossless_recovery_fetch_run.add_argument("--expected-plan-sha256", help="Optional plan_sha256 from the reviewed dry-run (v0.4.41).")
     tiro_lossless_recovery_fetch_run.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     tiro_lossless_recovery_fetch_run.set_defaults(func=command_tiro_lossless_recovery_fetch_run)
 
@@ -45726,8 +46542,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     notion_objet_link_convert.add_argument("--visibility", default="private", help="Safe edge visibility label. Default: private.")
     notion_objet_link_convert.add_argument("--dry-run", action="store_true", help="Preview the embed edge and conversion receipt without writing files.")
-    notion_objet_link_convert.add_argument("--approve", action="store_true", help="Write the reviewed embed edge and conversion receipt.")
+    notion_objet_link_convert.add_argument("--approve", action="store_true", help="Write the reviewed embed edge and conversion receipt after one exact approval (v0.4.41).")
     notion_objet_link_convert.add_argument("--reviewed-by", help="Safe reviewer id required with --approve.")
+    notion_objet_link_convert.add_argument("--expected-plan-sha256", help="Optional plan_sha256 from the reviewed dry-run (v0.4.41).")
     notion_objet_link_convert.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     notion_objet_link_convert.set_defaults(func=command_notion_objet_link_convert)
 
@@ -47779,15 +48596,6 @@ def build_parser() -> argparse.ArgumentParser:
     relation_candidate_decide.add_argument("--format", choices=["text", "json"], default="text")
     relation_candidate_decide.set_defaults(
         func=command_relation_candidate_decide,
-        _wom_approval_scope={
-            "kind": "argument_value_allowlist",
-            "argument": "--decision",
-            "allowed_values": ["reject"],
-            "outside_scope_status": "approval_fixed_closed",
-            "outside_scope_reason_code": (
-                command_status.COMPOUND_APPROVAL_REASON_CODE
-            ),
-        },
     )
 
     markup_style_guide = subcommands.add_parser(
@@ -48455,6 +49263,60 @@ def build_parser() -> argparse.ArgumentParser:
     notion_ancestor_fetch_contract.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     notion_ancestor_fetch_contract.set_defaults(func=command_notion_ancestor_fetch_adapter_execution_contract)
 
+    notion_page_recovery_request_build = subcommands.add_parser(
+        "notion-page-recovery-request-build",
+        help=(
+            "Build one reviewed Notion page recovery request from a private page list and a "
+            "group=credential mapping (v0.4.41). Reads no Notion data; never echoes page ids."
+        ),
+    )
+    notion_page_recovery_request_build.add_argument("archive_root", help="Archive root.")
+    notion_page_recovery_request_build.add_argument(
+        "--pages",
+        required=True,
+        help="Archive-relative JSONL under profiles/local/notion-page-recovery/ with one {\"page_id\", \"group\"} per line.",
+    )
+    notion_page_recovery_request_build.add_argument(
+        "--group",
+        action="append",
+        help="Repeatable GROUP=CREDENTIAL_ID naming the adopted Notion credential for each group.",
+    )
+    notion_page_recovery_request_build.add_argument("--batch-id", required=True, help="Safe id; also the request file name.")
+    notion_page_recovery_request_build_mode = notion_page_recovery_request_build.add_mutually_exclusive_group(required=True)
+    notion_page_recovery_request_build_mode.add_argument("--dry-run", action="store_true", help="Validate and summarize without writing.")
+    notion_page_recovery_request_build_mode.add_argument(
+        "--write", action="store_true",
+        help="Create profiles/local/notion-page-recovery/<batch-id>.json (never overwrites).",
+    )
+    notion_page_recovery_request_build.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    notion_page_recovery_request_build.set_defaults(func=command_notion_page_recovery_request_build)
+
+    notion_page_trash_parser = subcommands.add_parser(
+        "notion-page-trash",
+        help=(
+            "Move verified-recovered Notion pages to the Notion trash (never a permanent delete), "
+            "or back with --restore (v0.4.41). --dry-run plans; --approve runs after one exact approval."
+        ),
+    )
+    notion_page_trash_parser.add_argument("archive_root", help="Archive root.")
+    notion_page_trash_parser.add_argument(
+        "--request", required=True,
+        help="The recovery request under profiles/local/notion-page-recovery/ whose recovered pages qualify.",
+    )
+    notion_page_trash_parser.add_argument("--max-items", type=int, default=50, help="Pages per run (1-200).")
+    notion_page_trash_parser.add_argument("--offset", type=int, default=0, help="First request item of this run.")
+    notion_page_trash_parser.add_argument(
+        "--restore", action="store_true",
+        help="Move pages this workflow trashed back out of the Notion trash.",
+    )
+    notion_page_trash_mode = notion_page_trash_parser.add_mutually_exclusive_group(required=True)
+    notion_page_trash_mode.add_argument("--dry-run", action="store_true", help="Plan only; no provider call.")
+    notion_page_trash_mode.add_argument("--approve", action="store_true", help="Run after one exact approval.")
+    notion_page_trash_parser.add_argument("--reviewed-by", help="Reviewer id for --approve, e.g. person:me.")
+    notion_page_trash_parser.add_argument("--expected-plan-sha256", help="Optional plan digest from the dry-run.")
+    notion_page_trash_parser.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    notion_page_trash_parser.set_defaults(func=command_notion_page_trash)
+
     notion_page_recovery_plan = subcommands.add_parser(
         "notion-page-recovery-plan",
         aliases=["notion-reviewed-page-recovery-plan"],
@@ -48989,6 +49851,7 @@ def build_parser() -> argparse.ArgumentParser:
     import_external.add_argument("--dry-run", action="store_true", help="Preview import without writing archive files.")
     import_external.add_argument("--approve", action="store_true", help="Write imported items to inbox and record a receipt.")
     import_external.add_argument("--reviewed-by", help="Reviewer id required for approved import.")
+    import_external.add_argument("--expected-plan-sha256", help="Optional plan_sha256 from the reviewed dry-run (v0.4.41).")
     import_external.add_argument("--limit", type=int, default=200, help="Maximum number of external items to import.")
     import_external.add_argument(
         "--provider-locator-policy",
@@ -50337,8 +51200,9 @@ def build_parser() -> argparse.ArgumentParser:
     add_source.add_argument("--source-visibility", default="private", help="Source visibility recorded for mapped items.")
     add_source.add_argument("--replace", action="store_true", help="Replace an existing source with the same source id.")
     add_source.add_argument("--dry-run", action="store_true", help="Preview source registration without writing files.")
-    add_source.add_argument("--approve", action="store_true", help="Write source-bindings.yml after review.")
+    add_source.add_argument("--approve", action="store_true", help="Write source-bindings.yml after one exact approval bound to the dry-run plan_sha256 (v0.4.41).")
     add_source.add_argument("--reviewed-by", help="Reviewer id required for approved registration.")
+    add_source.add_argument("--expected-plan-sha256", help="Optional plan_sha256 from the reviewed dry-run (v0.4.41).")
     add_source.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     add_source.set_defaults(func=command_add_source)
 
@@ -50566,7 +51430,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     onboard.add_argument("--guided", action="store_true", help="Ask beginner-friendly questions for missing values.")
     onboard.add_argument("--dry-run", action="store_true", help="Preview onboarding without writing files.")
-    onboard.add_argument("--approve", action="store_true", help="Create the archive after the onboarding plan passes.")
+    onboard.add_argument(
+        "--approve",
+        action="store_true",
+        help="Create the archive after one exact approval bound to the dry-run plan_sha256 (v0.4.41).",
+    )
+    onboard.add_argument("--reviewed-by", help="Reviewer id for --approve, e.g. person:me.")
+    onboard.add_argument(
+        "--expected-plan-sha256",
+        help="Optional plan_sha256 from the reviewed dry-run; --approve refuses if the plan changed.",
+    )
     onboard.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     onboard.set_defaults(func=command_onboard)
 
@@ -50633,14 +51506,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     init = subcommands.add_parser(
         "init",
-        help=(
-            "Dry-run archive initialization only; real initialization is "
-            f"unavailable in v{__version__} pending exact compound human approval."
-        ),
+        help="Preview archive initialization, or create it with --approve (same as onboard --approve).",
         description=(
-            "Dry-run archive initialization only. Real initialization is "
-            f"unavailable in v{__version__} and is blocked before the target is read "
-            "or written."
+            "Preview archive initialization with --dry-run. --approve creates the archive "
+            "exactly like onboard --approve: one exact approval bound to the plan digest."
         ),
     )
     init.add_argument("archive_root", help="Target archive root. Must be absent or empty.")
@@ -50658,8 +51527,16 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument(
         "--dry-run",
         action="store_true",
-        help=f"Required in v{__version__}. Preview initialization without writing files.",
+        help="Preview initialization without writing files.",
     )
+    init.add_argument(
+        "--approve",
+        action="store_true",
+        help="Create the archive exactly like onboard --approve (one exact approval; v0.4.41).",
+    )
+    init.add_argument("--reviewed-by", help="Reviewer id for --approve, e.g. person:me.")
+    init.add_argument("--expected-plan-sha256", help="Optional plan_sha256 from onboard --dry-run.")
+    init.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     init.set_defaults(func=command_init)
 
     work_session = subcommands.add_parser(

@@ -140,6 +140,10 @@ CLI_ADDITIONS = {
     # 2026-09-24 reopen (58-writer triage, group 1): batch receipt reconcile.
     ("remint-reconcile-batch",),
     ("retire-draft-reconcile-batch",),
+    # v0.4.41 (letters 142/148/156): build one reviewed Notion recovery request.
+    ("notion-page-recovery-request-build",),
+    # v0.4.41: move verified-recovered Notion pages to the Notion trash.
+    ("notion-page-trash",),
 }
 # v0.4.40 (owner decision 2026-09-24): retired and replaced writers are
 # deleted outright instead of staying fixed closed. Five sharing/ownership
@@ -164,9 +168,9 @@ CLI_REMOVALS = {
 MCP_REMOVALS = {
     "source_scan_plan",
 }
-CURRENT_CLI_COUNT = 565
+CURRENT_CLI_COUNT = 567  # v0.4.41: notion-page-trash
 CURRENT_CLI_CANONICAL_SHA256 = (
-    "0f41d099f1c891ed34d5cfa8a92dce84ae8d1cd81c799d32ac35693fd1f1de18"
+    "ce61971b26b05701929b823e3f6f02867816e9fbd3ba4c71326a2fa9526ce36e"
 )
 CURRENT_MCP_COUNT = 136
 CURRENT_MCP_CANONICAL_SHA256 = (

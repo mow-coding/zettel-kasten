@@ -69,9 +69,9 @@ EMPTY_ALLOWLIST_SHA256 = (
 )
 
 # v0.4.36 adds only operator-feedback-archive to the previous pinned CLI paths.
-CLI_COUNT = 565  # v0.4.40: reconcile batch commands added, retired writers deleted, five sharing commands restored
+CLI_COUNT = 567  # v0.4.41: notion-page-trash added
 CLI_CANONICAL_SHA256 = (
-    "0f41d099f1c891ed34d5cfa8a92dce84ae8d1cd81c799d32ac35693fd1f1de18"
+    "ce61971b26b05701929b823e3f6f02867816e9fbd3ba4c71326a2fa9526ce36e"
 )
 MCP_COUNT = 136  # v0.4.40: source_scan_plan removed; five sharing previews restored
 MCP_CANONICAL_SHA256 = (

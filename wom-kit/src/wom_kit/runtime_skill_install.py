@@ -763,6 +763,45 @@ def safe_reviewer(value: str | None) -> str | None:
     return candidate if SAFE_REVIEWER_RE.fullmatch(candidate) else None
 
 
+def _require_runtime_skill_approval(
+    operation_name: str,
+    *,
+    approval_archive_root: Path | None,
+    reviewed_by: str | None,
+    expected_plan_sha256: str | None,
+    claim: object,
+    expected_exact_approval_plan_sha256: str | None,
+    expected_exact_approval_target_binding_sha256: str | None,
+) -> bool:
+    """v0.4.41: reauthenticate the approval claim before any host write.
+
+    Returns False when there is no claim or approval archive, so the caller
+    stays fixed closed exactly as before.
+    """
+
+    if claim is None or approval_archive_root is None:
+        return False
+    from . import archive_services
+    from .exact_human_approval_windows import ExactHumanApprovalOperation
+    from .operation_approval_binding import OperationApprovalBindingError, plan_digest_approval_binding
+
+    reviewer = safe_reviewer(reviewed_by)
+    if reviewer is None or not isinstance(expected_plan_sha256, str) or not SHA256_RE.fullmatch(expected_plan_sha256):
+        raise archive_services.ArchiveServiceError(f"{operation_name}_approval_binding_invalid")
+    try:
+        archive_services._require_exact_human_operation_approval(
+            archive_services.require_existing_archive_root(approval_archive_root),
+            plan_digest_approval_binding(ExactHumanApprovalOperation(operation_name), expected_plan_sha256),
+            reviewer_claim=reviewer,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+            claim=claim,
+        )
+    except OperationApprovalBindingError as exc:
+        raise archive_services.ArchiveServiceError(exc.code) from None
+    return True
+
+
 def runtime_skill_install(
     *,
     dry_run: bool,
@@ -776,13 +815,30 @@ def runtime_skill_install(
     redact_local_paths: bool = True,
     source_root: Path | None = None,
     package_version: str = __version__,
+    approval_archive_root: Path | None = None,
+    exact_human_approval_claim: object = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
 ) -> dict[str, object]:
-    if type(dry_run) is not bool or type(approve) is not bool or approve:
+    if type(dry_run) is not bool or type(approve) is not bool:
         return _compound_approval_blocked(
             schema=INSTALL_SCHEMA,
             lifecycle_action="runtime_skill_install",
         )
-    if not dry_run:
+    if approve and not _require_runtime_skill_approval(
+        "runtime_skill_install",
+        approval_archive_root=approval_archive_root,
+        reviewed_by=reviewed_by,
+        expected_plan_sha256=expected_plan_sha256,
+        claim=exact_human_approval_claim,
+        expected_exact_approval_plan_sha256=expected_exact_approval_plan_sha256,
+        expected_exact_approval_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+    ):
+        return _compound_approval_blocked(
+            schema=INSTALL_SCHEMA,
+            lifecycle_action="runtime_skill_install",
+        )
+    if not dry_run and not approve:
         return blocked_result(
             schema=INSTALL_SCHEMA,
             operation="runtime_skill_install",
@@ -1030,13 +1086,30 @@ def runtime_skill_uninstall(
     redact_local_paths: bool = True,
     source_root: Path | None = None,
     package_version: str = __version__,
+    approval_archive_root: Path | None = None,
+    exact_human_approval_claim: object = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
 ) -> dict[str, object]:
-    if type(dry_run) is not bool or type(approve) is not bool or approve:
+    if type(dry_run) is not bool or type(approve) is not bool:
         return _compound_approval_blocked(
             schema=UNINSTALL_SCHEMA,
             lifecycle_action="runtime_skill_uninstall",
         )
-    if not dry_run:
+    if approve and not _require_runtime_skill_approval(
+        "runtime_skill_uninstall",
+        approval_archive_root=approval_archive_root,
+        reviewed_by=reviewed_by,
+        expected_plan_sha256=expected_plan_sha256,
+        claim=exact_human_approval_claim,
+        expected_exact_approval_plan_sha256=expected_exact_approval_plan_sha256,
+        expected_exact_approval_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+    ):
+        return _compound_approval_blocked(
+            schema=UNINSTALL_SCHEMA,
+            lifecycle_action="runtime_skill_uninstall",
+        )
+    if not dry_run and not approve:
         return blocked_result(
             schema=UNINSTALL_SCHEMA,
             operation="runtime_skill_uninstall",

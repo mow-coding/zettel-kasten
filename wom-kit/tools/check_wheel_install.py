@@ -4979,26 +4979,21 @@ def _validate_v0419_runtime_evidence(
 
 
 def _expected_fixed_closed_writer_result(command: str) -> dict[str, Any]:
-    """Exact v0.4.19 dispatch contract, including the shared availability gate."""
-    if command not in {"runtime-skill-install", "runtime-skill-uninstall", "onboard"}:
+    """v0.4.41: these writers open through one exact approval, which an
+    installed smoke cannot give; each probe is refused before any dialog
+    (no --archive-root for the skill writers, no --reviewed-by for onboard)."""
+    reasons = {
+        "runtime-skill-install": "runtime_skill_archive_root_required",
+        "runtime-skill-uninstall": "runtime_skill_archive_root_required",
+        "onboard": "onboard_reviewer_required",
+    }
+    if command not in reasons:
         raise WheelCheckError("Unexpected fixed-closed smoke command.")
-    detail = "compound_exact_human_approval_binding_required"
     return {
         "schema": "wom-kit/cli-error/v0.1", "ok": False, "state": "blocked",
-        "status_class": "blocked", "capability_state": "writer_unavailable",
-        "command": command, "canonical_command_path": command,
+        "status_class": "blocked", "command": command,
         "lifecycle_action": command.replace("-", "_"), "error_class": "policy",
-        "reason_codes": [detail], "capability_reason_codes": ["writer_unavailable", detail],
-        "capability_availability": {
-            "schema": "wom-kit/capability-availability/v0.1", "canonical_path": command,
-            "requested_mode": "approve", "state": "writer_unavailable", "available": False,
-            "reason_code": "writer_unavailable", "detail_reason_code": detail,
-            "approval_status": "approval_fixed_closed",
-            "approval_exposure_history": {"state": "history_not_audited", "successful_use_verified": False},
-            "dry_run_exposed": True, "parser_derived": True, "argument_scope_evaluated": True,
-            "prerequisites_evaluated": False, "private_values_echoed": False,
-            "external_effects_performed": False,
-        },
+        "reason_codes": [reasons[command]], "blockers": [],
         "exit_code": 1, "effects_state": "none", "files_written": [], "private_values_echoed": False,
     }
 
@@ -5475,7 +5470,7 @@ def check_wheel(
             "runtime-skill-install"
         ) or skills_root.exists() or skill_target.exists():
             raise WheelCheckError(
-                "Installed runtime skill write was not fixed-closed without effects."
+                "Installed runtime skill write was not refused before the approval dialog without effects."
             )
         skill_status = run(
             [str(archive), "runtime-skill-status", *common_skill_target[1:]],
@@ -5528,7 +5523,7 @@ def check_wheel(
             "runtime-skill-uninstall"
         ) or skills_root.exists() or skill_target.exists():
             raise WheelCheckError(
-                "Installed runtime skill uninstall was not fixed-closed without effects."
+                "Installed runtime skill uninstall was not refused before the approval dialog without effects."
             )
 
         target = temp_root / "archive"
@@ -5565,7 +5560,7 @@ def check_wheel(
         )
         if blocked_write != _expected_fixed_closed_writer_result("onboard") or target.exists():
             raise WheelCheckError(
-                "Installed onboarding write was not fixed-closed without effects."
+                "Installed onboarding write was not refused before the approval dialog without effects."
             )
 
         doctor_fixture = temp_root / "checked-in-fake-archive"

@@ -221,11 +221,12 @@ class Letter137CompoundApprovalCliTests(unittest.TestCase):
         for private in ("C:/private/archive", "private-edge-plan"):
             self.assertNotIn(private, stdout + stderr)
 
-    def test_notion_objet_link_convert_approve_is_blocked_before_service(
+    def test_notion_objet_link_convert_previews_before_any_write(
         self,
     ) -> None:
-        self._assert_compound_approve_is_blocked_before_service(
-            [
+        # v0.4.41 (feature request 34): the service is only asked for the
+        # read-only preview; a preview that cannot be planned opens no dialog.
+        argv = [
                 "notion-objet-link-convert",
                 "C:/private/archive",
                 "--path",
@@ -243,14 +244,23 @@ class Letter137CompoundApprovalCliTests(unittest.TestCase):
                 "person:reviewer",
                 "--format",
                 "json",
-            ],
+            ]
+        with mock.patch.object(
             archive_cli.archive_services,
             "notion_objet_link_convert",
-        )
+            return_value={"ok": False, "blockers": ["synthetic_preview_blocked"]},
+        ) as service:
+            code, stdout, _stderr = self._run(argv)
+        self.assertEqual(code, 1)
+        self.assertEqual(json.loads(stdout)["reason_codes"], ["notion_objet_link_convert_preflight_blocked"])
+        for call in service.call_args_list:
+            self.assertIs(call.kwargs.get("approve"), False)
 
-    def test_relation_candidate_accept_is_blocked_before_service(self) -> None:
-        self._assert_compound_approve_is_blocked_before_service(
-            [
+    def test_relation_candidate_accept_previews_before_any_write(self) -> None:
+        # v0.4.41 (letter 108): accept opens through exact approval. A plan
+        # that cannot be previewed is refused before any dialog; the service
+        # is only ever asked for the read-only accept preview.
+        argv = [
                 "relation-candidate-decide",
                 "C:/private/archive",
                 "--from-zettel",
@@ -274,10 +284,18 @@ class Letter137CompoundApprovalCliTests(unittest.TestCase):
                 "person:reviewer",
                 "--format",
                 "json",
-            ],
+            ]
+        with mock.patch.object(
             archive_cli.completion_workflows,
             "relation_candidate_decide",
-        )
+            return_value={"ok": False, "state": "blocked", "blockers": ["synthetic_preview_blocked"]},
+        ) as service:
+            code, stdout, _stderr = self._run(argv)
+        self.assertEqual(code, 1)
+        self.assertEqual(json.loads(stdout)["reason_codes"], ["relation_candidate_accept_preflight_blocked"])
+        self.assertTrue(service.called)
+        for call in service.call_args_list:
+            self.assertIs(call.kwargs.get("_accept_preview_only"), True)
 
     def test_non_ai_create_approve_is_rejected_before_service(self) -> None:
         with mock.patch.object(

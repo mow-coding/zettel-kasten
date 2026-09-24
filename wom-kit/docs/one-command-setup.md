@@ -28,12 +28,13 @@ macOS/Linux:
 sh scripts/setup-unix.sh --dry-run
 ```
 
-In v0.4.0 stop after the dry-run. Real `onboard` is fixed closed before
-target/template/provider reads and creates no archive. Do not remove the dry-run
-flag expecting archive creation.
-
-Historical non-dry-run setup examples are intentionally omitted in v0.4.0.
-Supply onboarding values only to the dry-run if you need a complete preview.
+Since v0.4.41, `-ApproveOnboarding` (or `-Yes`) on Windows creates the archive
+after the dry-run: the Docker dry-run shows the plan, then the Windows-native
+`archive onboard --approve --reviewed-by <principal>` opens one approval dialog
+(a Linux container cannot show it). The `archive` command must be installed on
+Windows (the WOM-kit wheel); if it is missing the script prints the exact
+command and stops. On macOS/Linux there is no approval dialog yet, so
+`--approve-onboarding` explains that and stops after the dry-run.
 
 If the script is running in a real interactive terminal and onboarding values are missing, it asks beginner-friendly questions:
 

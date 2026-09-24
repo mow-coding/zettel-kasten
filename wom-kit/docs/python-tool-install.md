@@ -343,9 +343,10 @@ manifested resource, and installs it in a fresh virtual environment. It
 executes both CLI version probes and performs initialize/list/EOF handshakes
 against both MCP aliases, requiring strict UTF-8, empty stderr, bounded
 output/runtime, descendant-process containment, and byte-identical complete
-tool inventories. It then previews/installs/verifies/uninstalls the Agent Skill
-in a disposable host directory, previews archive onboarding, proves the real
-onboarding write is fixed-closed with zero files written, and runs strict
+tool inventories. It then previews the Agent Skill install and uninstall in a
+disposable host directory, previews archive onboarding, proves the skill and
+onboarding writes are refused before any approval dialog with zero files
+written (no `--archive-root` / no reviewer; v0.4.41), and runs strict
 Doctor against the checked-in fake archive through the installed entrypoint.
 For v0.4.1 it also copies that synthetic fixture into a second temporary
 archive and uses only the isolated installed wheel to prove one ready
