@@ -111778,6 +111778,115 @@ def session_handoff_checkpoint_receipt_matches(
     )
 
 
+SESSION_HANDOFF_ACTIVITY_SCOPE_SCHEMA = "wom-kit/session-handoff-activity-scope/v1"
+SESSION_HANDOFF_ACTIVITY_MAX_PAGES = 1000
+
+
+def _objet_manifest_sha256_set(root: Path) -> set[str] | None:
+    """Content hashes the objet manifest already holds; None when unreadable."""
+
+    manifest = root / ZETTEL_OBJET_LINK_MANIFEST_RELATIVE_PATH
+    hashes: set[str] = set()
+    if not manifest.is_file():
+        return hashes
+    try:
+        if manifest.stat().st_size > ZETTEL_OBJET_LINK_MANIFEST_MAX_BYTES:
+            return None
+        with manifest.open("r", encoding="utf-8") as stream:
+            for line in stream:
+                line = line.strip()
+                if not line:
+                    continue
+                row = json.loads(line)
+                value = row.get("sha256") if isinstance(row, dict) else None
+                if isinstance(value, str) and SHA256_RE.match(value.removeprefix("sha256:")):
+                    hashes.add(value.removeprefix("sha256:"))
+    except (OSError, UnicodeError, ValueError):
+        return None
+    return hashes
+
+
+def session_handoff_activity_scope(root: Path, activity_roots: list[str]) -> dict[str, Any]:
+    """Letter 173 D: every artifact under the named activity roots, all pages.
+
+    A file whose bytes the objet manifest already holds is counted as
+    ``preserved_as_objet`` instead of waiting for a separate fate review. The
+    result is content-free: artifact refs, fates and counts only.
+    """
+
+    items: list[dict[str, Any]] = []
+    cursor: str | None = None
+    snapshot_sha: str | None = None
+    generation_sha: str | None = None
+    roots: list[str] = []
+    complete = True
+    blockers: list[str] = []
+    for _page in range(SESSION_HANDOFF_ACTIVITY_MAX_PAGES):
+        page = ai_artifact_inventory(
+            root, include_roots=list(activity_roots), max_items=1000, cursor=cursor,
+            show_relative_paths=True, dry_run=True,
+        )
+        pagination = page.get("pagination") if isinstance(page.get("pagination"), dict) else {}
+        if not page.get("ok") or page.get("blockers"):
+            complete = False
+            blockers.extend(str(item) for item in page.get("blockers") or [])
+            break
+        if snapshot_sha is None:
+            snapshot_sha = pagination.get("snapshot_sha256")
+            generation_sha = pagination.get("generation_sha256")
+            roots = list((page.get("scan_policy") or {}).get("roots") or [])
+        elif pagination.get("snapshot_sha256") != snapshot_sha:
+            complete = False
+            blockers.append("session_handoff_activity_inventory_changed_between_pages")
+            break
+        items.extend(item for item in page.get("items") or [] if isinstance(item, dict))
+        cursor = pagination.get("next_cursor")
+        if not cursor:
+            complete = complete and pagination.get("state") == "complete"
+            break
+    else:
+        complete = False
+        blockers.append("session_handoff_activity_inventory_too_many_pages")
+    preserved = _objet_manifest_sha256_set(root)
+    if preserved is None:
+        complete = False
+        blockers.append("session_handoff_objet_manifest_unreadable")
+        preserved = set()
+    fate_rows: list[list[Any]] = []
+    fate_counts: dict[str, int] = {}
+    kind_counts: dict[str, int] = {}
+    for item in items:
+        fate = str(item.get("fate_state") or "unknown")
+        relative = item.get("relative_path")
+        if fate == "unreviewed_ai_artifact" and isinstance(relative, str) and preserved:
+            try:
+                path = resolve_archive_relative_path(root, relative)
+                if path.is_file() and sha256_path(path) in preserved:
+                    fate = "preserved_as_objet"
+            except (ArchivePathError, OSError):
+                pass
+        fate_counts[fate] = fate_counts.get(fate, 0) + 1
+        kind = str(item.get("artifact_kind") or "unknown")
+        kind_counts[kind] = kind_counts.get(kind, 0) + 1
+        fate_rows.append([item.get("artifact_ref"), fate, item.get("bytes")])
+    fate_rows.sort(key=lambda row: str(row[0]))
+    snapshot = {
+        "schema": SESSION_HANDOFF_ACTIVITY_SCOPE_SCHEMA,
+        "activity_roots": roots,
+        "complete": complete,
+        "snapshot_sha256": snapshot_sha,
+        "generation_sha256": generation_sha,
+        "total_candidate_count": len(items),
+        "item_count": len(items),
+        "truncated": False,
+        "skipped_non_plain_file_count": 0,
+        "fate_counts": dict(sorted(fate_counts.items())),
+        "artifact_kind_counts": dict(sorted(kind_counts.items())),
+        "fate_rows_sha256": sha256_json_value(fate_rows),
+    }
+    return {"complete": complete, "blockers": sorted(set(blockers)), "snapshot": snapshot}
+
+
 def session_handoff_checkpoint(
     archive_root: Path | str,
     *,
@@ -111786,12 +111895,14 @@ def session_handoff_checkpoint(
     reviewed_by: str | None = None,
     confirm_chat_reviewed: bool = False,
     expected_state_digest: str | None = None,
+    activity_roots: list[str] | None = None,
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     blockers: list[str] = []
     warnings: list[str] = []
     reviewer = safe_foreign_quarantine_actor_id(reviewed_by)
+    activity_roots = [str(value) for value in (activity_roots or []) if str(value).strip()]
 
     if dry_run is approve:
         blockers.append("Choose exactly one mode: --dry-run or --approve.")
@@ -111834,6 +111945,16 @@ def session_handoff_checkpoint(
     inventory_digest = sha256_json_value(inventory_snapshot)
     fate_counts = inventory_snapshot["fate_counts"]
     unreviewed_count = int(fate_counts.get("unreviewed_ai_artifact") or 0)
+    # Letter 173 D: with explicit activity roots the checkpoint covers exactly
+    # that activity, reads every page, and counts objet-preserved copies as
+    # preserved. Without roots the legacy page-projection contract is unchanged.
+    activity_scope: dict[str, Any] | None = None
+    if activity_roots:
+        activity_scope = session_handoff_activity_scope(root, activity_roots)
+        inventory_snapshot = activity_scope["snapshot"]
+        inventory_digest = sha256_json_value(inventory_snapshot)
+        fate_counts = inventory_snapshot["fate_counts"]
+        unreviewed_count = int(fate_counts.get("unreviewed_ai_artifact") or 0)
 
     durable_gaps: list[str] = []
     if operational_context.get("status") != "present" or not operational_context.get("ok"):
@@ -111842,6 +111963,8 @@ def session_handoff_checkpoint(
         durable_gaps.append("the current operational context bytes do not match an approval receipt.")
     if inventory_snapshot["truncated"]:
         durable_gaps.append("AI artifact inventory is truncated; a full fate review is not proven.")
+    if activity_scope is not None and not activity_scope["complete"]:
+        durable_gaps.append("the activity-scope inventory is incomplete: " + ", ".join(activity_scope["blockers"] or ["unknown"]))
     if unreviewed_count:
         durable_gaps.append(f"{unreviewed_count} AI artifact candidate(s) still need a reviewed fate.")
 
@@ -111853,6 +111976,8 @@ def session_handoff_checkpoint(
         "ai_artifact_fate_counts": fate_counts,
         "ai_artifact_inventory_truncated": inventory_snapshot["truncated"],
     }
+    if activity_scope is not None:
+        state_evidence["activity_roots"] = inventory_snapshot["activity_roots"]
     state_digest = sha256_json_value(state_evidence)
     proposed_receipt_path = session_handoff_checkpoint_receipt_relative_path(state_digest)
     checkpoint_root = archive_internal_path(root, SESSION_HANDOFF_CHECKPOINT_RECEIPTS_DIR)
@@ -111896,7 +112021,7 @@ def session_handoff_checkpoint(
         "operational_context_receipt_ref": context_evidence.get("matching_receipt_ref"),
         "ai_artifact_inventory_generation_digest": full_inventory_digest,
     })
-    if not full_complete:
+    if not full_complete and activity_scope is None:
         # Unknown current observations cannot be promoted by an old receipt.
         durable_gaps.append("AI artifact generation is incomplete or unavailable; counts and absence remain unknown.")
         current_checkpoint_verified = False
@@ -111953,6 +112078,14 @@ def session_handoff_checkpoint(
             "reviewed_by": reviewer,
             "reviewed_at": reviewed_at,
             "ready_for_context_reset": True,
+            **({"activity_scope": {
+                "activity_roots": inventory_snapshot["activity_roots"],
+                "total_candidate_count": inventory_snapshot["total_candidate_count"],
+                "fate_counts": fate_counts,
+                "fate_rows_sha256": inventory_snapshot["fate_rows_sha256"],
+                "all_pages_read": True,
+                "objet_preserved_copies_counted": True,
+            }} if activity_scope is not None else {}),
             "closed_actions": {
                 "chat_transcript_body_read_by_wom": False,
                 "ai_artifact_bodies_read": False,
@@ -111995,6 +112128,11 @@ def session_handoff_checkpoint(
         next_safe_actions = ["Resolve blockers and rerun the dry-run before approval."]
 
     ready_for_context_reset = bool(current_checkpoint_verified and not durable_gaps and not blockers)
+    if activity_scope is None and inventory_snapshot.get("truncated"):
+        next_safe_actions.append(
+            "More than one page of AI artifacts exists; rerun with --activity-root <archive-relative folder> "
+            "(repeatable) to check exactly this activity across every page."
+        )
     return {
         "ok": not blockers,
         "dry_run": bool(dry_run),
@@ -112019,6 +112157,10 @@ def session_handoff_checkpoint(
             "next_safe_action": "Review the full-generation summary separately; never substitute diagnostic_state_digest for the legacy expected_state_digest.",
         },
         "ready_for_context_reset": ready_for_context_reset,
+        "activity_scope": (
+            {**activity_scope["snapshot"], "blockers": activity_scope["blockers"]}
+            if activity_scope is not None else None
+        ),
         "readiness_scope": {
             "bounded_ai_artifact_inventory": True,
             "archive_wide_ai_artifact_absence_proven": False,

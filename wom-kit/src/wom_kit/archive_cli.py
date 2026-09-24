@@ -14216,6 +14216,7 @@ def command_session_handoff_checkpoint(args: argparse.Namespace) -> int:
             reviewed_by=args.reviewed_by,
             confirm_chat_reviewed=args.confirm_chat_reviewed,
             expected_state_digest=args.expected_state_digest,
+            activity_roots=list(getattr(args, "activity_root", None) or []),
         )
     except (archive_services.ArchiveServiceError, OSError) as exc:
         print(str(exc), file=sys.stderr)
@@ -40639,6 +40640,14 @@ def build_parser() -> argparse.ArgumentParser:
     session_handoff_checkpoint.add_argument(
         "--expected-state-digest",
         help="Exact state_digest from a fresh dry-run; required for approval.",
+    )
+    session_handoff_checkpoint.add_argument(
+        "--activity-root",
+        action="append",
+        help=(
+            "Archive-relative AI scratch folder of this activity (repeatable). Checks every page of exactly these "
+            "folders and counts files already preserved as objets as preserved."
+        ),
     )
     session_handoff_checkpoint.add_argument("--format", choices=["json"], default="json", help="Output format.")
     session_handoff_checkpoint.set_defaults(func=command_session_handoff_checkpoint)
