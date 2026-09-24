@@ -20290,12 +20290,12 @@ if __name__ == "__main__":
         )
         self.assertEqual(write_result["files_written"], [])
         self.assertNotIn("mixed-state-lock-body", write_output)
-        # The parser-known closed writer is rejected without inspecting an
-        # incomplete runtime.  The live index writer above still hits its lock.
-        self.assertEqual(collision_code, 1, collision_output)
+        # Reopened in v0.4.40: the collision writer is a real project writer
+        # now, so the incomplete update lock stops it like the index writer.
+        self.assertEqual(collision_code, 3, collision_output)
         self.assertEqual(
             json.loads(collision_output)["reason_codes"],
-            ["compound_exact_human_approval_binding_required"],
+            ["project_update_recovery_required"],
         )
         self.assertEqual(json.loads(collision_output)["effects_state"], "none")
         self.assertNotIn("mixed-state-lock-body", collision_output)
