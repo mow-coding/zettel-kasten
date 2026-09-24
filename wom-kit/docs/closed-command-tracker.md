@@ -33,6 +33,7 @@ path can open; an approval alone would not make these usable.
 | `github-repo` | onboarding spec 2026-06-05 | Planning tool the onboarding spec shows first | Onboarding extension (`onboard` is open since v0.4.41) |
 | `notion-recover` | 156 (dry-run and capability disagreed) | Wraps the page-recovery binding | Reopen with notion-page-recovery |
 | `imap-mailbox-header-metadata-scan` | earlier letters | Needs a legacy approval receipt that no longer exists; headers alone do not meet the request to keep full messages and attachments | Full-message IMAP fetch under exact approval (decision log) |
+| `operation-control` | none | Cancelling a running operation is not supported (`operation_cancel_not_supported`); `--action status`, `wait` and `recovery-plan` stay available | Operation cancel design when requested |
 | `migrate` (targets other than `notion-source-properties`) | owner concern 2026-06-06 (safe upgrade) | Conditional scope; one target is open | Per-target design when requested |
 
 ## Notion trash cleanup (v0.4.41)

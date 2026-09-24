@@ -14,6 +14,7 @@ This project uses semantic versioning for public compatibility checkpoints.
 - New `notion-page-trash` moves verified-recovered pages to the Notion trash (never a permanent delete) and back with `--restore`.
 - `legacy-coordination-cleanup --destination` retires the old coordination folder by moving it.
 - `relation-candidate-decide --decision accept` (letter 108) and `import-external --approve` (letter 141) run again under exact approval.
+- `prehashed-objet-ledger`, `notion-objet-link-convert`, `tiro-lossless-recovery-fetch-run`, `add-source` and `imap-mailbox-adapter-manifest-write` run again under exact approval; eight commands stay fixed closed (see `wom-kit/docs/closed-command-tracker.md`).
 
 ## v0.4.40 - 2026-09-25
 
