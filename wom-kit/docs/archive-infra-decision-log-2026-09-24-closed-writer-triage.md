@@ -250,3 +250,26 @@ design, not by itself. v0.4.40 therefore removes 12 commands, not 17;
 
 Lesson recorded: before removing a command, check the owner's design
 documents and roadmap, not only customer letters and current availability.
+
+## Independent Review Before Release (2026-09-25)
+
+A separate review context read the v0.4.40 diff for paths where a reopened
+writer could write without a reauthenticated claim. It found none, and no
+added dialog under a valid session grant. Fixed before release:
+
+- `derive-text capture` now re-plans each item from the exact bytes it
+  writes and refuses `derived_text_capture_item_changed_after_approval` when
+  they differ from the approved item.
+- `identity-reconcile` passes the values bound into the approval to the
+  writer instead of re-reading them.
+- A reconcile batch that contains `content_change` items needs
+  `--content-changed-ack`, like one zet (a flag, not an extra dialog).
+- A blank `--zettel-id` is refused; duplicated calls and dead code left by
+  patch scripts are removed.
+
+Known limitation kept: several reopened writers do not name their approval in
+a receipt, so `exact-approval-claim-finalize` can only warn
+(`exact_approval_claim_write_evidence_receipts_only`) for a started claim of
+theirs, as for earlier receipt-less operations. In-process flags such as
+`_exact_verified` are reachable only from Python callers, not from the CLI or
+MCP.

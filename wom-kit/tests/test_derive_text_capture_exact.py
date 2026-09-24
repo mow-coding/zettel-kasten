@@ -120,6 +120,39 @@ class DeriveTextCaptureExactTests(unittest.TestCase):
         self.assertEqual(self.native.calls, 1)
         self.assertEqual(len(self._derived_lines()), before + 3)
 
+    def test_a_text_changed_after_approval_is_not_written(self) -> None:
+        # Independent review 2026-09-25: each manifest item is re-planned from
+        # the exact bytes it writes and must equal the approved item.
+        rows = []
+        for index in range(2):
+            source = self._source(f"synthetic late source {index}".encode())
+            self._text(f"late{index}.txt", f"Approved text {index}\n")
+            rows.append({"item_id": f"late-{index}", "source_object_id": source, "text_file": f"late{index}.txt",
+                         "derivation_kind": "parser", "tool_name": "fake-parser", "tool_version": "1.0",
+                         "review_status": "unreviewed"})
+        manifest = self.tmp / "late.jsonl"
+        manifest.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+        real = archive_services.derived_text_capture_manifest_dry_run
+        calls = {"count": 0}
+
+        def swap_after_fresh_plan(*args, **kwargs):
+            result = real(*args, **kwargs)
+            calls["count"] += 1
+            if calls["count"] == 2:  # the writer's fresh plan, after the dialog
+                (self.tmp / "late1.txt").write_text("Swapped after approval\n", encoding="utf-8")
+            return result
+
+        before = len(self._derived_lines())
+        with patch.object(archive_services, "derived_text_capture_manifest_dry_run", side_effect=swap_after_fresh_plan):
+            code, result = self.run_cli("derive-text", "capture", str(self.root), "--from-manifest", str(manifest),
+                                        "--approve", "--reviewed-by", REVIEWER)
+        self.assertEqual(code, 1, result)
+        self.assertEqual(self.native.calls, 1)
+        blocked = [item for item in result["items"] if item.get("blockers")]
+        self.assertEqual([item["item_id"] for item in blocked], ["late-1"])
+        self.assertEqual(blocked[0]["blockers"], ["derived_text_capture_item_changed_after_approval"])
+        self.assertEqual(len(self._derived_lines()), before + 1)
+
     def test_a_changed_text_after_review_is_refused_before_the_dialog(self) -> None:
         source = self._source(b"synthetic page two")
         text = self._text("page.txt", "Reviewed text\n")

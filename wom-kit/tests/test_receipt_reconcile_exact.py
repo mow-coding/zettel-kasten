@@ -76,7 +76,12 @@ class ReceiptReconcileExactTests(unittest.TestCase):
         self.assertEqual({item["zettel_id"]: item["drift_class"] for item in dry["items"]},
                          {ALPHA: "format_drift", BETA: "content_change"})
         self.assertNotIn("Batch alpha body", json.dumps(dry, ensure_ascii=False))
-        code, result = self.run_cli("remint-reconcile-batch", str(self.root), "--approve", "--reviewed-by", REVIEWER)
+        # A list with a content change needs the same acknowledgement as one item.
+        code, error = self.run_cli("remint-reconcile-batch", str(self.root), "--approve", "--reviewed-by", REVIEWER)
+        self.assertEqual(error["reason_codes"], ["remint_reconcile_batch_content_changed_ack_required"])
+        self.assertEqual(self.native.calls, 1)  # only the mint dialog so far
+        code, result = self.run_cli("remint-reconcile-batch", str(self.root), "--approve", "--reviewed-by", REVIEWER,
+                                    "--content-changed-ack")
         self.assertEqual(code, 0, result)
         self.assertEqual(result["write_status"], "written")
         self.assertEqual(result["reconciled_count"], 2)
@@ -112,14 +117,16 @@ class ReceiptReconcileExactTests(unittest.TestCase):
         code, retired = self.run_cli("retire-draft-batch", str(self.root), "--plan", plan, "--approve", "--reviewed-by", REVIEWER)
         self.assertEqual(code, 0, retired)
         self.add_assets_after_mint(ALPHA)
-        code, mint_fix = self.run_cli("remint-reconcile-batch", str(self.root), "--approve", "--reviewed-by", REVIEWER)
+        code, mint_fix = self.run_cli("remint-reconcile-batch", str(self.root), "--approve", "--reviewed-by", REVIEWER,
+                                      "--content-changed-ack")
         self.assertEqual(code, 0, mint_fix)
         self.assertTrue(any("retire-draft-reconcile-batch" in action for action in mint_fix["next_safe_actions"]))
         code, dry = self.run_cli("retire-draft-reconcile-batch", str(self.root), "--dry-run")
         self.assertEqual(code, 0, dry)
         self.assertEqual([item["zettel_id"] for item in dry["items"]], [ALPHA])
         self.assertIn("mint_receipt", dry["items"][0]["changed_refs"])
-        code, result = self.run_cli("retire-draft-reconcile-batch", str(self.root), "--approve", "--reviewed-by", REVIEWER)
+        code, result = self.run_cli("retire-draft-reconcile-batch", str(self.root), "--approve", "--reviewed-by", REVIEWER,
+                                    "--content-changed-ack")
         self.assertEqual(code, 0, result)
         self.assertEqual(self.receipt(result["batch_receipt_path"])["exact_human_approval"]["operation"],
                          "retire_draft_reconcile")
@@ -155,7 +162,8 @@ class ReceiptReconcileExactTests(unittest.TestCase):
         watched = sorted((self.root / "receipts" / "mint").rglob("*.json"))
         before = {path: path.read_bytes() for path in watched}
         self.native.approve = False
-        code, error = self.run_cli("remint-reconcile-batch", str(self.root), "--approve", "--reviewed-by", REVIEWER)
+        code, error = self.run_cli("remint-reconcile-batch", str(self.root), "--approve", "--reviewed-by", REVIEWER,
+                                   "--content-changed-ack")
         self.assertEqual(code, 1)
         self.assertEqual(error["reason_codes"], ["remint_reconcile_batch_workflow_precondition_failed"])
         self.assertEqual({path: path.read_bytes() for path in watched}, before)
@@ -174,7 +182,8 @@ class ReceiptReconcileExactTests(unittest.TestCase):
             return real(root, kind, plan, approval, strip_bom=strip_bom)
 
         with patch.object(archive_services, "_receipt_reconcile_require_item", side_effect=drift_then_check):
-            code, result = self.run_cli("remint-reconcile-batch", str(self.root), "--approve", "--reviewed-by", REVIEWER)
+            code, result = self.run_cli("remint-reconcile-batch", str(self.root), "--approve", "--reviewed-by", REVIEWER,
+                                        "--content-changed-ack")
         self.assertEqual(code, 1, result)
         self.assertEqual(result["write_status"], "partial")
         failed = [item for item in result["items"] if item["write_status"] == "failed"]

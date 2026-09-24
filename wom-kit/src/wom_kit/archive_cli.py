@@ -31473,6 +31473,7 @@ def _receipt_reconcile_exact_route(
     max_items: int,
     reviewed_plan_sha256: str | None,
     single_content_ack: bool | None,
+    batch_content_ack: bool | None = None,
 ) -> int:
     """--approve for the reopened receipt reconcilers (2026-09-24 triage group 1).
 
@@ -31547,6 +31548,24 @@ def _receipt_reconcile_exact_route(
                     lifecycle_action=lifecycle_action,
                     reason_code=f"{lifecycle_action}_content_changed_ack_required",
                 )
+        if batch_content_ack is False:
+            # Independent review 2026-09-25: a batch that contains content
+            # changes needs the same --content-changed-ack as one item (a flag,
+            # not an extra dialog).
+            try:
+                preview = _plan()
+            except (archive_services.ArchiveServiceError, OSError):
+                return _exact_human_approval_cli_error(
+                    args,
+                    lifecycle_action=lifecycle_action,
+                    reason_code=f"{lifecycle_action}_workflow_failed_safely",
+                )
+            if any(item.get("drift_class") == "content_change" for item in preview.get("items") or []):
+                return _exact_human_approval_cli_error(
+                    args,
+                    lifecycle_action=lifecycle_action,
+                    reason_code=f"{lifecycle_action}_content_changed_ack_required",
+                )
         return _exact_batch_approval_route(
             args,
             lifecycle_action=lifecycle_action,
@@ -31570,6 +31589,12 @@ def command_receipt_reconcile_batch(args: argparse.Namespace) -> int:
             lifecycle_action=lifecycle_action,
             reason_code=f"{lifecycle_action}_mode_conflict",
         )
+    if args.zettel_id is not None and any(not str(value).strip() for value in args.zettel_id):
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code=f"{lifecycle_action}_zettel_id_blank",
+        )
     zettel_ids = list(args.zettel_id or []) or None
     if args.approve:
         return _receipt_reconcile_exact_route(
@@ -31581,6 +31606,7 @@ def command_receipt_reconcile_batch(args: argparse.Namespace) -> int:
             max_items=int(args.max_items),
             reviewed_plan_sha256=None,
             single_content_ack=None,
+            batch_content_ack=bool(getattr(args, "content_changed_ack", False)),
         )
     reporter = CommandProgressReporter(bool(getattr(args, "progress", False)), label=args.command)
     try:
@@ -37385,6 +37411,8 @@ def command_identity_reconcile(args: argparse.Namespace) -> int:
                 reason_code="archive_identity_reconcile_review_affirmation_required",
             )
 
+        bound: dict[str, Any] = {}
+
         def _preview() -> tuple[dict[str, Any], str | None]:
             plan = archive_services.archive_identity_reconcile_plan(root)
             supplied = (args.expected_archive_sha256, args.expected_identity_sha256,
@@ -37396,6 +37424,9 @@ def command_identity_reconcile(args: argparse.Namespace) -> int:
                 for value, fresh in zip(supplied, current)
             ):
                 return {**plan, "ok": False, "blockers": plan.get("blockers") or ["archive_identity_reconcile_plan_changed"]}, None
+            # Independent review 2026-09-25: the writer must receive the exact
+            # values bound into the approval, not a fresh re-read.
+            bound["current"] = current
             return plan, archive_services.activity_group_approval_digest(*current)
 
         return _cli_exact_route(
@@ -37407,9 +37438,9 @@ def command_identity_reconcile(args: argparse.Namespace) -> int:
             write=lambda reviewer: archive_services.reconcile_archive_identity(
                 root,
                 reviewed_by=reviewer,
-                expected_archive_sha256=_preview()[0]["expected_archive_sha256"],
-                expected_identity_sha256=_preview()[0]["expected_identity_sha256"],
-                expected_proposed_identity_sha256=_preview()[0]["proposed_identity_sha256"],
+                expected_archive_sha256=bound["current"][0],
+                expected_identity_sha256=bound["current"][1],
+                expected_proposed_identity_sha256=bound["current"][2],
                 affirm_principal_metadata_reviewed=True,
                 _exact_route_verified=True,
             ),
@@ -47185,6 +47216,11 @@ def build_parser() -> argparse.ArgumentParser:
             choices=list(archive_services.RECEIPT_RECONCILE_DRIFT_FILTERS),
             default="all",
             help="List only format drift, only content changes, or all (default).",
+        )
+        batch_parser.add_argument(
+            "--content-changed-ack",
+            action="store_true",
+            help="Required with --approve when the list contains content changes (canonical body changed since mint).",
         )
         batch_parser.add_argument(
             "--max-items",

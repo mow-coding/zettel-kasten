@@ -11,7 +11,7 @@ reconcile receipts remain readable.
 ```text
 archive remint-reconcile <archive-root> (--zettel-id <id> | --path <rel>) (--dry-run | --approve --reviewed-by <actor> [--content-changed-ack --reviewed-plan-sha256 <sha>]) [--strip-bom] [--diagnostic-only] [--format text|json]
 archive retire-draft-reconcile <archive-root> --zettel-id <id> (--dry-run | --approve --reviewed-by <actor> [--content-changed-ack --reviewed-plan-sha256 <sha>]) [--strip-bom] [--format text|json]
-archive remint-reconcile-batch <archive-root> (--dry-run | --approve --reviewed-by <actor>) [--zettel-id <id> ...] [--drift-class all|format_drift|content_change] [--max-items N] [--strip-bom] [--progress] [--format text|json]
+archive remint-reconcile-batch <archive-root> (--dry-run | --approve --reviewed-by <actor> [--content-changed-ack]) [--zettel-id <id> ...] [--drift-class all|format_drift|content_change] [--max-items N] [--strip-bom] [--progress] [--format text|json]
 archive retire-draft-reconcile-batch <archive-root> (--dry-run | --approve --reviewed-by <actor>) [same selection options]
 ```
 
@@ -30,9 +30,10 @@ class, review-plan digest, current bytes of every receipt ref) is bound into
 the approval and re-derived immediately before that item writes; an item that
 moved after approval is refused as `receipt_reconcile_item_changed_after_approval`.
 Run the mint batch first, then the retired-draft batch: a retired-draft receipt
-points at the mint receipt, so the mint repair changes that pointer. A single-zet
-`content_change` approve still needs `--content-changed-ack` (and the reviewed
-plan digest when given) before any dialog opens.
+points at the mint receipt, so the mint repair changes that pointer. A
+`content_change` approve, for one zet or a list that contains any, needs
+`--content-changed-ack` (a flag, not an extra dialog) before any dialog opens;
+a single zet also takes the reviewed plan digest when given.
 
 ## Historical v0.3 Governing Doctrine (R0)
 

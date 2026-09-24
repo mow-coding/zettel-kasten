@@ -52838,8 +52838,6 @@ def remint_reconcile_apply(
 
     _receipt_reconcile_require_item(root, "mint", plan, _exact_approval, strip_bom=strip_bom)
 
-    _receipt_reconcile_require_item(root, "mint", plan, _exact_approval, strip_bom=strip_bom)
-
     receipt_relative = plan["mint_receipt_path"]
     canonical_relative = plan["canonical_path"]
     snapshot_relative = plan["draft_snapshot_path"]
@@ -53467,8 +53465,6 @@ def retire_draft_reconcile_apply(
             raise ArchiveServiceError(
                 "Retire-draft reconcile blocked: archive evidence changed after the human review dry-run; rerun the dry-run and review the new plan."
             )
-
-    _receipt_reconcile_require_item(root, "retire_draft", plan, _exact_approval, strip_bom=strip_bom)
 
     _receipt_reconcile_require_item(root, "retire_draft", plan, _exact_approval, strip_bom=strip_bom)
 
@@ -162134,6 +162130,7 @@ def _derived_text_write_receipt(root: Path, receipt: dict[str, Any], captured_at
 def _derived_text_capture_run(
     archive_root: Path | str,
     *,
+    _verified_basis: Mapping[str, Any] | None = None,
     text_file: Path | str,
     source_object_id: str,
     derivation_kind: str,
@@ -162153,6 +162150,40 @@ def _derived_text_capture_run(
     archive_id = read_archive_id(root)
     captured_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     raw_bytes, file_blockers = _derived_text_read_source_file(text_file)
+    if _verified_basis is not None:
+        # Independent review 2026-09-25: plan these exact bytes first and
+        # refuse unless they are the approved item, then write the same bytes.
+        check = _derived_text_capture_core(
+            root,
+            archive_id,
+            raw_bytes=raw_bytes,
+            file_blockers=file_blockers,
+            text_filename=Path(text_file).name,
+            source_object_id=source_object_id,
+            derivation_kind=derivation_kind,
+            tool_name=tool_name,
+            tool_version=tool_version,
+            review_status=review_status,
+            approve=False,
+            reviewed_by=None,
+            captured_at=captured_at,
+            model_name=model_name,
+            model_version=model_version,
+            confidence=confidence,
+            language=language,
+            born_digital=born_digital,
+            source_presence="manifest_lookup",
+        )
+        if any(check.get(key) != _verified_basis.get(key) for key in DERIVED_TEXT_IDENTITY_FIELDS):
+            return {
+                **check,
+                "ok": False,
+                "dry_run": False,
+                "item_status": "blocked",
+                "action": "blocked",
+                "blockers": ["derived_text_capture_item_changed_after_approval"],
+                "would_change": [],
+            }
     return _derived_text_capture_core(
         root,
         archive_id,
@@ -162663,14 +162694,24 @@ def derived_text_capture_dry_run(
     if digest is not None:
         result["plan_sha256"] = digest
     return result
-    digest = derived_text_capture_plan_sha256(result)
-    if digest is not None:
-        result["plan_sha256"] = digest
-    return result
 
 # Reopened 2026-09-24 (triage group 6): the exact effect set of a capture is
 # the stored text identity, its source objet and derivation metadata, and the
 # planned action. The approval binds this digest; the writer re-derives it.
+# The identity of one capture item; the planned action may legitimately move
+# (for example to skip_already_present) after earlier batch items are written.
+DERIVED_TEXT_IDENTITY_FIELDS = (
+    "archive_id",
+    "source_object_id",
+    "derived_text_id",
+    "derivation_kind",
+    "review_status",
+    "text_sha256",
+    "text_logical_key",
+    "size_bytes",
+    "source_text_encoding",
+    "source_text_sha256",
+)
 DERIVED_TEXT_PLAN_FIELDS = (
     "archive_id",
     "source_object_id",
@@ -162779,6 +162820,7 @@ def derived_text_capture_approved(
         approve=True,
         reviewed_by=reviewer,
         _exact_verified=True,
+        _verified_basis=fresh,
         **capture,
     )
 
@@ -162810,6 +162852,9 @@ def derived_text_capture_manifest_approved(
         approve=True,
         reviewed_by=reviewer,
         _exact_verified=True,
+        _verified_items={
+            str(item.get("item_id")): item for item in fresh.get("items") or [] if isinstance(item, Mapping)
+        },
     )
 
 
@@ -162958,6 +163003,7 @@ def _derived_text_capture_manifest_run(
     approve: bool,
     reviewed_by: str | None,
     _exact_verified: bool = False,
+    _verified_items: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
@@ -163045,13 +163091,24 @@ def _derived_text_capture_manifest_run(
             )
             continue
         if approve and _exact_verified:
-            item_result = _derived_text_capture_run(
-                root,
-                approve=True,
-                reviewed_by=str(reviewed_by),
-                _exact_verified=True,
-                **kwargs,
-            )
+            verified_item = (_verified_items or {}).get(item_id)
+            if verified_item is None:
+                item_result = _derived_text_capture_manifest_item_blocked(
+                    archive_id=archive_id,
+                    line_number=line_number,
+                    item_id=item_id,
+                    blockers=["derived_text_capture_item_changed_after_approval"],
+                    approve=approve,
+                )
+            else:
+                item_result = _derived_text_capture_run(
+                    root,
+                    approve=True,
+                    reviewed_by=str(reviewed_by),
+                    _exact_verified=True,
+                    _verified_basis=verified_item,
+                    **kwargs,
+                )
         elif approve:
             item_result = derived_text_capture_apply(
                 root,
