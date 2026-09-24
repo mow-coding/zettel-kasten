@@ -145,7 +145,7 @@ class V0434ReleaseDocsTests(unittest.TestCase):
     def test_release_surfaces_are_documented(self) -> None:
         approval = " ".join((KIT / "docs" / "exact-human-approval-contract.md").read_text(encoding="utf-8").split())
         for phrase in ("presenter-bound and time-boxed", "`presenter_token`", "work_session_presenter_mismatch",
-                       "`session_presenter`", "work_session_second_presenter_observed", "87 approval-available, 20 fixed-closed"):
+                       "`session_presenter`", "work_session_second_presenter_observed", "88 approval-available, 19 fixed-closed"):
             self.assertIn(phrase, approval)
         start_here = (KIT / "docs" / "ai-start-here.md").read_text(encoding="utf-8")
         self.assertIn("`session_permission_attention`", start_here)
@@ -182,9 +182,9 @@ class V0434ReleaseDocsTests(unittest.TestCase):
         routed = sum(1 for row in manifest["paths"].values() if row.get("route"))
         # v0.4.23 integrated create-draft (LR-06a); v0.4.24 through v0.4.27, v0.4.31 and v0.4.33 change no writer;
         # v0.4.28 restore, v0.4.29 offload, v0.4.30 claim finalize and v0.4.34 upload are pending (target v0.4.34).
-        self.assertEqual(len(statuses), 87)  # 2026-09-24 triage reopen
+        self.assertEqual(len(statuses), 88)  # 2026-09-24 triage reopen
         self.assertEqual(statuses.count("session_integrated") - routed, 6)
-        self.assertEqual(routed, 33)  # 2026-09-24 triage reopen
+        self.assertEqual(routed, 34)  # 2026-09-24 triage reopen
         self.assertEqual(statuses.count("pending"), 29)  # v0.4.36: five rows integrated through the environment route
         self.assertEqual(statuses.count("legacy_exception"), 19)
         self.assertEqual(manifest["paths"]["create-draft"]["status"], "session_integrated")

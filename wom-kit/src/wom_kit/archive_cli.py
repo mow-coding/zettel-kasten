@@ -32385,11 +32385,70 @@ def command_objet_rediscovery_plan(args: argparse.Namespace) -> int:
 
 
 def command_objet_source_metadata_write(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
+    if args.approve and not args.dry_run:
+        # Reopened 2026-09-24 (triage group 6): the group 3 plan-digest route.
+        if not (args.affirm_private_metadata_reviewed and args.affirm_external_writers_quiescent):
+            return _exact_human_approval_cli_error(
+                args,
+                lifecycle_action="private_objet_source_metadata_write",
+                reason_code="private_objet_source_metadata_write_review_affirmation_required",
+            )
+        from .private_objet_metadata_writer import _reviewed_by_valid
+
+        # One reviewer id in two namespaces: the approval broker binds
+        # `person:<id>`, the engine's receipt schema records `operator:<id>`.
+        # Both forms are validated before the dialog so a malformed id never
+        # consumes an approval.
+        reviewer_id = str(args.reviewed_by or "")
+        for prefix in ("person:", "operator:"):
+            if reviewer_id.startswith(prefix):
+                reviewer_id = reviewer_id[len(prefix):]
+                break
+        engine_reviewer = "operator:" + reviewer_id
+        if (
+            not reviewer_id
+            or not _reviewed_by_valid(engine_reviewer, archive_services.safe_projection_scalar)
+            or archive_services.safe_project_intake_actor_id("person:" + reviewer_id) is None
+        ):
+            return _exact_human_approval_cli_error(
+                args,
+                lifecycle_action="private_objet_source_metadata_write",
+                reason_code="private_objet_source_metadata_write_reviewer_required",
+            )
+        args.reviewed_by = "person:" + reviewer_id
+
+        def _write(digest, reviewer, binding, claim):
+            return archive_services.private_objet_source_metadata_write(
+                Path(args.archive_root),
+                intake=args.intake,
+                expected_intake_sha256=args.expected_intake_sha256,
+                expected_plan_sha256=digest,
+                dry_run=False,
+                approve=True,
+                reviewed_by=engine_reviewer,
+                affirm_private_metadata_reviewed=True,
+                affirm_external_writers_quiescent=True,
+                exact_human_approval_claim=claim,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+            )
+
+        return _plan_digest_exact_route(
             args,
             lifecycle_action="private_objet_source_metadata_write",
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.private_objet_source_metadata_write,
+            plan=lambda: archive_services.private_objet_source_metadata_write(
+                Path(args.archive_root),
+                intake=args.intake,
+                expected_intake_sha256=args.expected_intake_sha256,
+                dry_run=True,
+                approve=False,
+            ),
+            write=_write,
+            printer=print_json if args.format == "json" else (lambda result: print(
+                f"Private objet metadata writer: {result.get('action') or result.get('state') or 'blocked'}"
+            )),
+            nothing_to_do=lambda preview: not preview.get("would_change"),
         )
     if args.dry_run is args.approve:
         print(

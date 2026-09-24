@@ -145,9 +145,9 @@ class V0420ReleaseDocsTests(unittest.TestCase):
         # Current manifest facts move with the train (v0.4.21 reopened two
         # writers and classified them as pending session integration); the
         # v0.4.20 note above keeps its historical 21-pending claim.
-        self.assertEqual(len(statuses), 87)  # 2026-09-24 triage reopen
+        self.assertEqual(len(statuses), 88)  # 2026-09-24 triage reopen
         self.assertEqual(statuses.count("session_integrated") - routed, 6)
-        self.assertEqual(routed, 33)  # 2026-09-24 triage reopen
+        self.assertEqual(routed, 34)  # 2026-09-24 triage reopen
         self.assertEqual(statuses.count("pending"), 29)  # v0.4.36: five rows integrated through the environment route
         self.assertEqual(statuses.count("legacy_exception"), 19)
 

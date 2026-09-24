@@ -104,7 +104,7 @@ class V0401ReleaseDocsTests(unittest.TestCase):
 
     def test_current_parser_combines_all_released_writers(self) -> None:
         blocked = archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS
-        self.assertEqual(len(blocked), 19)  # 2026-09-24 triage reopen
+        self.assertEqual(len(blocked), 18)  # 2026-09-24 triage reopen
         self.assertNotIn("object-storage-upload", blocked)  # v0.4.33
         self.assertNotIn("migrate", blocked)
         self.assertNotIn("discard-draft", blocked)
@@ -143,8 +143,8 @@ class V0401ReleaseDocsTests(unittest.TestCase):
         self.assertEqual(counts["alias_invocation_path_count"], 248)  # v0.4.40: aliases of deleted writers removed
         self.assertEqual(counts["invocation_path_count"], 559)
         # v0.4.33 reopened object-storage-upload (one path moves from fixed-closed to available).
-        self.assertEqual(counts["approval_available_command_count"], 87)  # 2026-09-24 triage reopen
-        self.assertEqual(counts["approval_fixed_closed_command_count"], 20)
+        self.assertEqual(counts["approval_available_command_count"], 88)  # 2026-09-24 triage reopen
+        self.assertEqual(counts["approval_fixed_closed_command_count"], 19)
         self.assertEqual(counts["approval_not_exposed_command_count"], 204)
         self.assertEqual(counts["conditional_approval_command_count"], 10)
         self.assertEqual(counts["dry_run_exposed_command_count"], 266)

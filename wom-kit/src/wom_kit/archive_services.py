@@ -158564,12 +158564,49 @@ def private_objet_source_metadata_write(
     reviewed_by: str | None = None,
     affirm_private_metadata_reviewed: bool = False,
     affirm_external_writers_quiescent: bool = False,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Plan or apply one reviewed private objet metadata observation."""
 
-    if type(dry_run) is not bool or type(approve) is not bool or approve:
+    # Reopened 2026-09-24 (triage group 6): approve needs the exact
+    # approval bound to the engine's own reviewed plan digest.
+    if type(dry_run) is not bool or type(approve) is not bool or (
+        approve and exact_human_approval_claim is None
+    ):
         return _compound_exact_human_approval_blocked(
             lifecycle_action="private_objet_source_metadata_write",
+        )
+    if approve:
+        _require_exact_human_approval_inputs_before_archive_read(
+            claim=exact_human_approval_claim,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+        )
+        # The engine's receipt schema records reviewers as `operator:<id>`;
+        # the approval broker binds the same id as `person:<id>`.
+        reviewer = safe_project_intake_actor_id(
+            "person:" + reviewed_by.removeprefix("operator:")
+            if isinstance(reviewed_by, str) and reviewed_by.startswith("operator:")
+            else reviewed_by
+        )
+        if reviewer is None:
+            raise ArchiveServiceError("private_objet_source_metadata_reviewer_invalid")
+        try:
+            binding = plan_digest_approval_binding(
+                ExactHumanApprovalOperation.private_objet_source_metadata_write,
+                str(expected_plan_sha256 or ""),
+            )
+        except OperationApprovalBindingError as exc:
+            raise ArchiveServiceError(exc.code) from None
+        _require_exact_human_operation_approval(
+            require_existing_archive_root(archive_root),
+            binding,
+            reviewer_claim=reviewer,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+            claim=exact_human_approval_claim,
         )
 
     return _private_objet_source_metadata_write_legacy_core(
@@ -158578,7 +158615,7 @@ def private_objet_source_metadata_write(
         expected_intake_sha256=expected_intake_sha256,
         expected_plan_sha256=expected_plan_sha256,
         dry_run=dry_run,
-        approve=False,
+        approve=approve,
         reviewed_by=reviewed_by,
         affirm_private_metadata_reviewed=affirm_private_metadata_reviewed,
         affirm_external_writers_quiescent=(

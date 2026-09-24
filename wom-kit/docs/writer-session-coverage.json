@@ -127,6 +127,11 @@
       "route": "environment",
       "evidence": ["test_saved_view_exact"]
     },
+    "objet-source-metadata-write": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_objet_source_metadata_exact"]
+    },
     "draft-revision-write": {
       "status": "session_integrated",
       "route": "environment",

@@ -158,6 +158,15 @@ accepts a `sha256:`-prefixed digest). The write keeps its
 `--affirm-view-reviewed` requirement before any dialog. Evidence:
 `test_saved_view_exact`.
 
+Letter 105 asked to find an objet by its original filename;
+`objet-source-metadata-write --approve` records one reviewed filename
+observation through the private metadata engine, which already bound the
+intake digest and its own plan digest. The approval binds that plan digest.
+Deviation to note: the approval broker binds reviewers as `person:<id>` while
+the engine's receipt schema pins `operator:<id>`; the CLI accepts either form
+and uses the same `<id>` in both, checked before the dialog so a malformed id
+never consumes an approval. Evidence: `test_objet_source_metadata_exact`.
+
 ## Removal of Retired and Replaced Writers (v0.4.40)
 
 Owner direction (2026-09-24): a useless closed command is deleted outright, not

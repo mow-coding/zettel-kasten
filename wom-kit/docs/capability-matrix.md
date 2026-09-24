@@ -119,7 +119,7 @@ revalidated dimension by dimension without exposing compared values, and
 noninteractive Windows child processes use the common no-console policy while
 native approval and credential interaction remain visible.
 
-The current parser inventory has 87 approval-available, 20 fixed-closed, and
+The current parser inventory has 88 approval-available, 19 fixed-closed, and
 204 not-exposed canonical paths, including ten conditional approval scopes.
 v0.4.40 reopened `remint-reconcile` and `retire-draft-reconcile` and added
 their batch commands (2026-09-24 58-writer triage, group 1), reopened
@@ -131,8 +131,8 @@ reopened `principal-register` / `principal-unregister` and the four
 activity-group membership writers (group 4), and reopened `restore-drill`,
 `repair-gitignore` and `identity-reconcile` (group 5), reopened
 `zet-title-remap-recover` / `zet-title-remap-revert-recover` (legacy journal
-recovery), nested `derive-text capture` and `saved-view-write` /
-`saved-view-revert` (group 6), and removed 17 closed
+recovery), nested `derive-text capture`, `saved-view-write` /
+`saved-view-revert` and `objet-source-metadata-write` (group 6), and removed 17 closed
 commands no customer path needs (see UPGRADE for their replacements).
 v0.4.36 added `operator-feedback-archive` (delivered letters leave the archive).
 v0.4.33 reopened `object-storage-upload` under the exact approval contract.

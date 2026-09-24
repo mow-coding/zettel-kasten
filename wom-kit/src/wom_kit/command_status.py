@@ -81,7 +81,6 @@ COMPOUND_APPROVAL_FIXED_CLOSED_COMMANDS = frozenset(
         "notion-objet-link-convert",
         "notion-page-recovery",
         "notion-recover",
-        "objet-source-metadata-write",
         "onboard",
         "prehashed-objet-ledger",
         "project-bytecode-repair",
@@ -147,6 +146,8 @@ EXACT_APPROVAL_REOPENED_WRITERS = frozenset({
     # Triage group 6 (2026-09-24): saved views.
     "saved-view-write",
     "saved-view-revert",
+    # Triage group 6 (2026-09-24): private objet source metadata.
+    "objet-source-metadata-write",
 })
 
 # Public parser and dispatch exposure was audited at v0.3.320 and its explicit

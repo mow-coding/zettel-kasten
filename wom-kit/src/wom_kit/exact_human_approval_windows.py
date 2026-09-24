@@ -251,6 +251,8 @@ class ExactHumanApprovalOperation(Enum):
     # Triage group 6 (2026-09-24): saved views.
     saved_view_write = "saved_view_write"
     saved_view_revert = "saved_view_revert"
+    # Triage group 6 (2026-09-24): private objet source metadata.
+    private_objet_source_metadata_write = "private_objet_source_metadata_write"
 
 
 def _validated_target_preview_text(value: str | None) -> str | None:
@@ -569,6 +571,7 @@ _OPERATION_LABELS = {
     ExactHumanApprovalOperation.derived_text_capture: "파생 텍스트 등록",
     ExactHumanApprovalOperation.saved_view_write: "저장된 보기 만들기",
     ExactHumanApprovalOperation.saved_view_revert: "저장된 보기 되돌리기",
+    ExactHumanApprovalOperation.private_objet_source_metadata_write: "원본 파일명 메타데이터 기록",
 }
 
 _OPERATION_QUESTIONS = {
@@ -736,6 +739,9 @@ _OPERATION_QUESTIONS = {
     ),
     ExactHumanApprovalOperation.saved_view_revert: (
         "WOM이 만든 저장된 보기 하나를 영수증대로 제거할까요?"
+    ),
+    ExactHumanApprovalOperation.private_objet_source_metadata_write: (
+        "검토한 원본 파일명 관찰 1건을 비공개 메타데이터로 기록할까요?"
     ),
 }
 
@@ -972,6 +978,9 @@ _OPERATION_SUMMARIES = {
     ExactHumanApprovalOperation.saved_view_revert: (
         "영수증과 바이트가 일치하는 저장된 보기 파일 하나만 제거하고 되돌리기 영수증을 남깁니다."
     ),
+    ExactHumanApprovalOperation.private_objet_source_metadata_write: (
+        "검토한 원본 파일명 관찰 한 건을 비공개 오브제 메타데이터 행과 영수증으로 남깁니다. 오브제 바이트와 zet은 바뀌지 않습니다."
+    ),
 }
 
 _OPERATION_APPROVE_BUTTONS = {
@@ -1040,6 +1049,7 @@ _OPERATION_APPROVE_BUTTONS = {
     ExactHumanApprovalOperation.derived_text_capture: "텍스트 등록",
     ExactHumanApprovalOperation.saved_view_write: "보기 만들기",
     ExactHumanApprovalOperation.saved_view_revert: "보기 제거",
+    ExactHumanApprovalOperation.private_objet_source_metadata_write: "메타데이터 기록",
 }
 
 
