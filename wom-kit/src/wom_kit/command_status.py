@@ -76,7 +76,6 @@ COMPOUND_APPROVAL_FIXED_CLOSED_COMMANDS = frozenset(
         "activity-group-membership-removal-write",
         "activity-group-membership-write",
         "add-source",
-        "ai-scratch-gc",
         "credential-keepassxc-write",
         "credential-lifecycle",
         "delegate-zet",
@@ -122,7 +121,6 @@ COMPOUND_APPROVAL_FIXED_CLOSED_COMMANDS = frozenset(
         "zet-abstract-backfill-recover",
         "zet-abstract-backfill-revert",
         "zet-abstract-backfill-write",
-        "zet-catalog-pass-cleanup",
         "zet-revision-restore-proposal-from-snapshot",
         "zet-title-remap-recover",
         "zet-title-remap-revert-recover",
@@ -157,6 +155,9 @@ EXACT_APPROVAL_REOPENED_WRITERS = frozenset({
     "retire-draft-reconcile",
     "remint-reconcile-batch",
     "retire-draft-reconcile-batch",
+    # Triage group 2: one zet's explicit AI scratch refs; one catalog-pass file.
+    "ai-scratch-gc",
+    "zet-catalog-pass-cleanup",
 })
 
 # Public parser and dispatch exposure was audited at v0.3.320 and its explicit

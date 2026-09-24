@@ -27,6 +27,16 @@
       "route": "environment",
       "evidence": ["test_receipt_reconcile_exact"]
     },
+    "ai-scratch-gc": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_scratch_cleanup_exact"]
+    },
+    "zet-catalog-pass-cleanup": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_scratch_cleanup_exact"]
+    },
     "draft-revision-write": {
       "status": "session_integrated",
       "route": "environment",

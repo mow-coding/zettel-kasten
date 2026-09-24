@@ -142,9 +142,9 @@ class V0426ReleaseDocsTests(unittest.TestCase):
         statuses = [row["status"] for row in manifest["paths"].values()]
         routed = sum(1 for row in manifest["paths"].values() if row.get("route"))
         # v0.4.23 integrated create-draft (LR-06a); v0.4.24 through v0.4.26 change no writer.
-        self.assertEqual(len(statuses), 67)  # v0.4.40: four receipt reconciler rows
+        self.assertEqual(len(statuses), 69)  # v0.4.40: 2026-09-24 triage reopen
         self.assertEqual(statuses.count("session_integrated") - routed, 6)
-        self.assertEqual(routed, 13)  # v0.4.40: the four receipt reconcilers route through the environment grant
+        self.assertEqual(routed, 15)  # v0.4.40: 2026-09-24 triage reopen
         self.assertEqual(statuses.count("pending"), 29)  # v0.4.36: five rows integrated through the environment route
         self.assertEqual(statuses.count("legacy_exception"), 19)
         self.assertEqual(manifest["paths"]["create-draft"]["status"], "session_integrated")

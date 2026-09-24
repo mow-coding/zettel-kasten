@@ -33,7 +33,8 @@
         "zet_revision_restore_write",
         "source_intake_chain",
         "remint_reconcile",
-        "retire_draft_reconcile"
+        "retire_draft_reconcile",
+        "ai_scratch_gc"
       ]
     },
     "plan_sha256": {"$ref": "#/$defs/sha256_ref"},

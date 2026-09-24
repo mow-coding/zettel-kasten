@@ -145,13 +145,13 @@ class V0436ReleaseDocsTests(unittest.TestCase):
     def test_release_surfaces_are_documented(self) -> None:
         contract = (KIT / "docs" / "exact-human-approval-contract.md").read_text(encoding="utf-8")
         self.assertIn("Since v0.4.36 (beta letter 168 ⑥; the 2026-09-17 decision restored)", contract)
-        self.assertIn("67 approval-available, 57 fixed-closed", " ".join(contract.split()))
+        self.assertIn("69 approval-available, 55 fixed-closed", " ".join(contract.split()))
         capabilities = (KIT / "docs" / "agent-operator-capabilities.md").read_text(encoding="utf-8")
         self.assertIn("operator-feedback-archive", capabilities)
-        self.assertIn("approval_available:                   67", capabilities)
+        self.assertIn("approval_available:                   69", capabilities)
         matrix = (KIT / "docs" / "capability-matrix.md").read_text(encoding="utf-8")
         self.assertIn("| Operator feedback archival (v0.4.36) |", matrix)
-        self.assertIn("67 approval-available, 57 fixed-closed", " ".join(matrix.split()))
+        self.assertIn("69 approval-available, 55 fixed-closed", " ".join(matrix.split()))
         register = (KIT / "docs" / "recovery-operations-acceptance.md").read_text(encoding="utf-8")
         for row in ("L168-01", "L168-02", "L168-03", "L168-04", "L168-05"):
             self.assertIn(f"| {row} | v0.4.36 |", register)
@@ -176,9 +176,9 @@ class V0436ReleaseDocsTests(unittest.TestCase):
         routed = sum(1 for row in manifest["paths"].values() if row.get("route"))
         # v0.4.23 integrated create-draft (LR-06a); v0.4.24 through v0.4.27, v0.4.31 and v0.4.35 change no writer;
         # v0.4.28 restore, v0.4.29 offload, v0.4.30 claim finalize, v0.4.33 upload and v0.4.35 compose are pending (target v0.4.36).
-        self.assertEqual(len(statuses), 67)  # v0.4.40: four receipt reconciler rows
+        self.assertEqual(len(statuses), 69)  # v0.4.40: 2026-09-24 triage reopen
         self.assertEqual(statuses.count("session_integrated") - routed, 6)
-        self.assertEqual(routed, 13)  # v0.4.40: plus the four receipt reconcilers
+        self.assertEqual(routed, 15)  # v0.4.40: 2026-09-24 triage reopen
         self.assertEqual(statuses.count("pending"), 29)  # v0.4.36: five rows integrated through the environment route
         self.assertEqual(statuses.count("legacy_exception"), 19)
         self.assertEqual(manifest["paths"]["create-draft"]["status"], "session_integrated")

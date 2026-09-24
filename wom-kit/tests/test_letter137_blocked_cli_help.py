@@ -55,11 +55,10 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
             "scan-source",
             "tiro-lossless-recovery-capture",
             "tiro-lossless-recovery-fetch-run",
-            "zet-catalog-pass-cleanup",
         }
         self.assertEqual(
             len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS),
-            56,
+            54,
         )
         for exact_batch_command in (
             "source-intake-batch",
@@ -67,6 +66,9 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
             # 2026-09-24 reopen (58-writer triage, group 1).
             "remint-reconcile",
             "retire-draft-reconcile",
+            # 2026-09-24 reopen (triage group 2).
+            "ai-scratch-gc",
+            "zet-catalog-pass-cleanup",
         ):
             self.assertNotIn(
                 exact_batch_command,

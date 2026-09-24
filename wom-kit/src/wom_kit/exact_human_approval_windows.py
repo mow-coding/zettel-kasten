@@ -222,6 +222,10 @@ class ExactHumanApprovalOperation(Enum):
     # reviewed list of mint / retired-draft receipts from current bytes.
     remint_reconcile = "remint_reconcile"
     retire_draft_reconcile = "retire_draft_reconcile"
+    # Triage group 2: one zet's explicit AI scratch refs, and one SHA-bound
+    # catalog-pass scratch file.
+    ai_scratch_gc = "ai_scratch_gc"
+    zet_catalog_pass_cleanup = "zet_catalog_pass_cleanup"
 
 
 def _validated_target_preview_text(value: str | None) -> str | None:
@@ -520,6 +524,8 @@ _OPERATION_LABELS = {
     ExactHumanApprovalOperation.source_intake_chain: "새 원본 반입 사슬(근거 기록·선정·보존)",
     ExactHumanApprovalOperation.remint_reconcile: "발행 영수증 재정합",
     ExactHumanApprovalOperation.retire_draft_reconcile: "퇴역 영수증 재정합",
+    ExactHumanApprovalOperation.ai_scratch_gc: "zet 하나의 AI 임시 파일 정리",
+    ExactHumanApprovalOperation.zet_catalog_pass_cleanup: "카탈로그 작업 임시 파일 정리",
 }
 
 _OPERATION_QUESTIONS = {
@@ -627,6 +633,12 @@ _OPERATION_QUESTIONS = {
     ),
     ExactHumanApprovalOperation.retire_draft_reconcile: (
         "검토한 목록의 퇴역 영수증을 지금 바이트 기준으로 다시 기록할까요?"
+    ),
+    ExactHumanApprovalOperation.ai_scratch_gc: (
+        "이 zet가 가리키는 AI 임시 파일을 지울까요?"
+    ),
+    ExactHumanApprovalOperation.zet_catalog_pass_cleanup: (
+        "다 쓴 카탈로그 작업 임시 파일 하나를 지울까요?"
     ),
 }
 
@@ -802,6 +814,13 @@ _OPERATION_SUMMARIES = {
         "정본 내용은 바꾸지 않고, 목록의 퇴역 영수증 해시를 현재 바이트로 다시 적습니다. "
         "이전 값과 분류는 감사 영수증에 남습니다."
     ),
+    ExactHumanApprovalOperation.ai_scratch_gc: (
+        "zet가 명시적으로 가리키는 AI 임시 파일 중 확인한 해시와 같은 파일만 지우고 정리 영수증을 남깁니다. "
+        "정본과 오브제 저장소는 건드리지 않습니다."
+    ),
+    ExactHumanApprovalOperation.zet_catalog_pass_cleanup: (
+        "SHA-256이 확인된 비공개 카탈로그 작업 파일 하나만 지웁니다. 다른 파일은 건드리지 않습니다."
+    ),
 }
 
 _OPERATION_APPROVE_BUTTONS = {
@@ -850,6 +869,8 @@ _OPERATION_APPROVE_BUTTONS = {
     ExactHumanApprovalOperation.source_intake_chain: "반입 사슬 실행",
     ExactHumanApprovalOperation.remint_reconcile: "재정합 실행",
     ExactHumanApprovalOperation.retire_draft_reconcile: "재정합 실행",
+    ExactHumanApprovalOperation.ai_scratch_gc: "임시 파일 정리",
+    ExactHumanApprovalOperation.zet_catalog_pass_cleanup: "임시 파일 정리",
 }
 
 

@@ -118,6 +118,7 @@ from .operation_approval_binding import (
     mint_zet_approval_binding,
     objet_capture_approval_binding,
     project_version_update_approval_binding,
+    ai_scratch_gc_approval_binding,
     promote_zet_approval_binding,
     receipt_reconcile_batch_approval_binding,
     retire_draft_approval_binding,
@@ -60944,6 +60945,13 @@ def cleanup_empty_ai_scratch_dirs(root: Path, paths: list[Path]) -> None:
             current = current.parent
 
 
+def ai_scratch_gc_approval_projection(preview: dict[str, Any]) -> dict[str, Any]:
+    """Projection an exact approval binds for a standalone ai-scratch-gc preview."""
+
+    plan = preview.get("cleanup_plan") if isinstance(preview.get("cleanup_plan"), dict) else {}
+    return _ai_scratch_gc_approval_projection(plan)
+
+
 def ai_scratch_gc_receipt_path(zettel_id: str) -> str:
     safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", zettel_id).strip("._-") or "zet"
     stamp = datetime.now().astimezone().strftime("%Y%m%dT%H%M%S%f%z")
@@ -61014,12 +61022,62 @@ def ai_scratch_gc_for_zettel(
     approve: bool = False,
     reviewed_by: str | None = None,
     mint_receipt_path: str | None = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
 ) -> dict[str, Any]:
-    """Expose planning only until standalone cleanup has an exact binding."""
+    """Plan, or delete one zet's explicit AI scratch refs under exact approval.
 
-    if type(dry_run) is not bool or type(approve) is not bool or approve:
+    Triage group 2 (2026-09-24): the standalone writer reuses the mint-time
+    cleanup core. The approved projection is re-derived and compared
+    immediately before any file is deleted.
+    """
+
+    if type(dry_run) is not bool or type(approve) is not bool or dry_run == approve:
         return _compound_exact_human_approval_blocked(
             lifecycle_action="ai_scratch_gc",
+        )
+    if approve:
+        _require_exact_human_approval_inputs_before_archive_read(
+            claim=exact_human_approval_claim,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+        )
+        reviewer = (reviewed_by or "").strip()
+        if not reviewer:
+            raise ArchiveServiceError("ai_scratch_gc_reviewer_required")
+        root = require_existing_archive_root(archive_root)
+        preview = _ai_scratch_gc_for_zettel_core(
+            root,
+            zettel_id=zettel_id,
+            relative_path=relative_path,
+            dry_run=True,
+            approve=False,
+        )
+        if not preview.get("ok"):
+            raise ArchiveServiceError("ai_scratch_gc_preflight_blocked")
+        projection = ai_scratch_gc_approval_projection(preview)
+        try:
+            binding = ai_scratch_gc_approval_binding(projection)
+        except OperationApprovalBindingError as exc:
+            raise ArchiveServiceError(exc.code) from None
+        approval = _require_exact_human_operation_approval(
+            root,
+            binding,
+            reviewer_claim=reviewer,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+            claim=exact_human_approval_claim,
+        )
+        return _ai_scratch_gc_for_zettel_core(
+            root,
+            zettel_id=zettel_id,
+            relative_path=relative_path,
+            dry_run=False,
+            approve=True,
+            reviewed_by=reviewer,
+            _approved_cleanup_projection=projection,
+            _exact_operation_approval=approval,
         )
     return _ai_scratch_gc_for_zettel_core(
         archive_root,
@@ -61042,6 +61100,7 @@ def _ai_scratch_gc_for_zettel_core(
     reviewed_by: str | None = None,
     mint_receipt_path: str | None = None,
     _approved_cleanup_projection: dict[str, Any] | None = None,
+    _exact_operation_approval: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if approve and type(_approved_cleanup_projection) is not dict:
         return _compound_exact_human_approval_blocked(
@@ -61154,6 +61213,8 @@ def _ai_scratch_gc_for_zettel_core(
             "provider_api_called": False,
         },
     }
+    if _exact_operation_approval is not None:
+        receipt["exact_human_approval"] = _exact_operation_approval
     try:
         receipt_path.parent.mkdir(parents=True, exist_ok=True)
         write_json_new_file(receipt_path, receipt)

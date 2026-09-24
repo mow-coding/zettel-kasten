@@ -1,6 +1,6 @@
 # Archive Infra Decision Log: Closed-Writer Triage (2026-09-24)
 
-Status: owner decision recorded; group 1 implemented for v0.4.40.
+Status: owner decision recorded; groups 1-2 implemented for v0.4.40.
 
 ## Decision (owner, 2026-09-24)
 
@@ -53,3 +53,22 @@ with the only repair writer closed.
 
 Evidence: `wom-kit/tests/test_receipt_reconcile_exact.py` (synthetic archive,
 injected dialog and key).
+
+## Group 2: Scratch Cleanup (v0.4.40)
+
+The triage table reopened `ai-scratch-gc`, while the earlier letter-173 D
+decision had said to extend `activity-cleanup` instead. Asked once, the owner
+chose both (2026-09-24): `activity-cleanup` grows to in-archive AI scratch for
+bulk activity-scope cleanup, and `ai-scratch-gc` reopens as the small tool that
+deletes only what one zet explicitly references.
+
+- `ai-scratch-gc --approve` binds the mint-time cleanup projection (every
+  candidate's path, SHA-256 and size) as operation `ai_scratch_gc`, re-derives
+  it immediately before deleting, refuses any change as
+  `scratch_cleanup_approval_binding_changed`, and writes a receipt that
+  carries the approval reference. A zet with no ready candidate opens no dialog.
+- `zet-catalog-pass-cleanup --approve` binds the one SHA-verified catalog-pass
+  artifact as operation `zet_catalog_pass_cleanup`; the command gained a
+  JSON-only `--format` so refusals are machine-readable.
+
+Evidence: `wom-kit/tests/test_scratch_cleanup_exact.py`.

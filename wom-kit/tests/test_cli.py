@@ -62415,17 +62415,11 @@ state:
             def assert_compound_cleanup_blocked(arguments: list[str]) -> None:
                 code, output = self.run_cli(arguments)
                 self.assertEqual(code, 1, output)
+                # v0.4.40: the command has a JSON --format, so the conflicting
+                # mode refusal is the machine-readable CLI error.
                 self.assertEqual(
-                    output.strip(),
-                    (
-                        "Choose exactly one execution mode: --dry-run or --approve. "
-                        "The command did not start."
-                        if "--dry-run" in arguments else
-                        "Writer unavailable in this installed WOM version. Exact compound "
-                        "human-approval binding is not implemented for this command; the "
-                        "write did not start. Use the command's dry-run, plan, or audit "
-                        "mode and check `archive capabilities --machine`."
-                    ),
+                    json.loads(output)["reason_codes"],
+                    ["capability_mode_conflicting"],
                 )
                 for private_value in (
                     wrong_sha256,
@@ -62437,10 +62431,17 @@ state:
                 self.assertEqual(output_path.read_bytes(), artifact_before)
                 self.assertEqual(self.archive_tree_snapshot(archive_root), tree_before)
 
+            def refuse_dialog(*_args, **_kwargs):
+                raise AssertionError("a refused cleanup must not open the approval dialog")
+
+            # 2026-09-24 reopen (triage group 2): --approve runs under exact
+            # approval; a wrong SHA or unknown input is refused before any
+            # dialog, deleting nothing and echoing no private value.
             with patch.object(
                 archive_cli,
-                "_cleanup_zet_catalog_pass_output_file_legacy_core",
-            ) as cleanup_core:
+                "_execute_exact_human_approved_write",
+                side_effect=refuse_dialog,
+            ):
                 for command, input_arg, approval_sha in (
                     (
                         "zet-catalog-pass-cleanup",
@@ -62454,7 +62455,7 @@ state:
                     ),
                 ):
                     with self.subTest(command=command):
-                        assert_compound_cleanup_blocked(
+                        code, output = self.run_cli(
                             [
                                 command,
                                 str(archive_root),
@@ -62467,7 +62468,23 @@ state:
                                 reviewer_marker,
                             ]
                         )
-
+                        self.assertEqual(code, 1, output)
+                        payload = json.loads(output)
+                        self.assertIn(
+                            payload["reason_codes"][0],
+                            {
+                                "zet_catalog_pass_cleanup_preflight_blocked",
+                                "zet_catalog_pass_cleanup_workflow_failed_safely",
+                            },
+                        )
+                        for private_value in (
+                            wrong_sha256,
+                            reviewer_marker,
+                            private_input_marker,
+                        ):
+                            self.assertNotIn(private_value, output)
+                        self.assertEqual(output_path.read_bytes(), artifact_before)
+                        self.assertEqual(self.archive_tree_snapshot(archive_root), tree_before)
                 assert_compound_cleanup_blocked(
                     [
                         "zet-catalog-pass-cleanup",
@@ -62482,7 +62499,6 @@ state:
                         reviewer_marker,
                     ]
                 )
-                cleanup_core.assert_not_called()
 
     def test_zet_abstract_backfill_plan_binds_private_proposal_to_exact_canonical_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

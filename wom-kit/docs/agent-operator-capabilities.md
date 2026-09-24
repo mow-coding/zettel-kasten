@@ -211,15 +211,15 @@ For the current v0.4.40 working-tree parser, the inventory snapshot is:
 canonical executable command paths: 328
 alias invocation paths:              262
 all invocation paths:                590
-approval_available:                   67
-approval_fixed_closed:                57
+approval_available:                   69
+approval_fixed_closed:                55
 approval_not_exposed:                204
 conditional approval paths:            10
 dry_run_exposed:                     283
 unmatched fixed-close entries:         0
 ```
 
-The 57 fixed-closed paths consist of 56 compound-approval migrations and
+The 55 fixed-closed paths consist of 54 compound-approval migrations and
 `operation-control`, whose reason is `operation_cancel_not_supported`.
 Its retained `--approve` syntax does not implement cancellation. Status, wait,
 and recovery-plan remain available with `--dry-run`; no cancel request is

@@ -24862,12 +24862,47 @@ def command_zet_catalog_pass_read(args: argparse.Namespace) -> int:
 
 
 def command_zet_catalog_pass_cleanup(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="zet_catalog_pass_cleanup",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
+    if args.approve and not args.dry_run:
+        archive_root = Path(args.archive_root)
+
+        def _plan() -> dict[str, Any]:
+            return _cleanup_zet_catalog_pass_output_file_legacy_core(
+                str(args.input),
+                archive_root,
+                expected_sha256=str(args.expected_sha256),
+                approve=False,
+                reviewed_by=None,
+            )
+
+        def _write(binding, claim, reviewer) -> dict[str, Any]:
+            return _cleanup_zet_catalog_pass_output_file_legacy_core(
+                str(args.input),
+                archive_root,
+                expected_sha256=str(args.expected_sha256),
+                approve=True,
+                reviewed_by=reviewer,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+                exact_human_approval_claim=claim,
+            )
+
+        try:
+            return _exact_batch_approval_route(
+                args,
+                lifecycle_action="zet_catalog_pass_cleanup",
+                plan=_plan,
+                binding_builder=operation_approval_binding.zet_catalog_pass_cleanup_approval_binding,
+                write=_write,
+                items_of=lambda preview: preview.get("status") == "ready_for_approval",
+                collection_of=lambda preview: None,
+                printer=print_json,
+            )
+        except (ArchivePathError, ValueError):
+            return _exact_human_approval_cli_error(
+                args,
+                lifecycle_action="zet_catalog_pass_cleanup",
+                reason_code="zet_catalog_pass_cleanup_preflight_blocked",
+            )
     if bool(args.dry_run) == bool(args.approve):
         print("zet-catalog-pass-cleanup requires exactly one of --dry-run or --approve.", file=sys.stderr)
         return 1
@@ -31160,10 +31195,41 @@ def command_zet_quality_check(args: argparse.Namespace) -> int:
 
 def command_ai_scratch_gc(args: argparse.Namespace) -> int:
     if args.approve:
-        return _exact_human_approval_cli_error(
+        archive_root = Path(args.archive_root)
+
+        def _plan() -> dict[str, Any]:
+            return archive_services.ai_scratch_gc_for_zettel(
+                archive_root,
+                zettel_id=args.zettel_id,
+                relative_path=args.path,
+                dry_run=True,
+                approve=False,
+            )
+
+        def _write(binding, claim, reviewer) -> dict[str, Any]:
+            return archive_services.ai_scratch_gc_for_zettel(
+                archive_root,
+                zettel_id=args.zettel_id,
+                relative_path=args.path,
+                dry_run=False,
+                approve=True,
+                reviewed_by=reviewer,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+                exact_human_approval_claim=claim,
+            )
+
+        return _exact_batch_approval_route(
             args,
             lifecycle_action="ai_scratch_gc",
-            reason_code="compound_exact_human_approval_binding_required",
+            plan=_plan,
+            binding_builder=lambda preview: operation_approval_binding.ai_scratch_gc_approval_binding(
+                archive_services.ai_scratch_gc_approval_projection(preview)
+            ),
+            write=_write,
+            items_of=lambda preview: (preview.get("cleanup_plan") or {}).get("candidate_count"),
+            collection_of=lambda preview: None,
+            printer=lambda result: _print_ai_scratch_gc_result(result, args),
         )
     if not args.dry_run and not args.approve:
         print("ai-scratch-gc requires --dry-run or --approve.", file=sys.stderr)
@@ -31180,7 +31246,11 @@ def command_ai_scratch_gc(args: argparse.Namespace) -> int:
     except (archive_services.ArchiveServiceError, OSError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
+    _print_ai_scratch_gc_result(result, args)
+    return 0 if result.get("ok", True) else 1
 
+
+def _print_ai_scratch_gc_result(result: dict[str, Any], args: argparse.Namespace) -> None:
     if args.format == "json":
         print_json(result)
     else:
@@ -31210,7 +31280,6 @@ def command_ai_scratch_gc(args: argparse.Namespace) -> int:
             print("Warnings:")
             for warning in result["warnings"]:
                 print(f"- {warning}")
-    return 0 if result.get("ok", True) else 1
 
 
 def command_ai_artifact_inventory(args: argparse.Namespace) -> int:
@@ -38671,7 +38740,16 @@ def _cleanup_zet_catalog_pass_output_file_legacy_core(
     approve: bool,
     reviewed_by: str | None,
     progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
+    exact_human_approval_claim: Any = None,
 ) -> dict[str, Any]:
+    if approve and exact_human_approval_claim is None:
+        # Triage group 2 (2026-09-24): deletion needs the exact approval claim.
+        return archive_services._compound_exact_human_approval_blocked(
+            lifecycle_action="zet_catalog_pass_cleanup",
+            reason_code="exact_human_approval_required",
+        )
     root = archive_services.require_existing_archive_root(archive_root)
     normalized_expected_sha256 = normalize_zet_catalog_pass_sha256(expected_sha256)
     if normalized_expected_sha256 is None:
@@ -38689,6 +38767,27 @@ def _cleanup_zet_catalog_pass_output_file_legacy_core(
         blockers.append("A human reviewer is required for approved private scratch deletion.")
 
     deleted = False
+    approval_receipt: dict[str, Any] | None = None
+    if not blockers and approve:
+        preview = _cleanup_zet_catalog_pass_output_file_legacy_core(
+            path_arg,
+            root,
+            expected_sha256=expected_sha256,
+            approve=False,
+            reviewed_by=None,
+        )
+        try:
+            binding = operation_approval_binding.zet_catalog_pass_cleanup_approval_binding(preview)
+        except operation_approval_binding.OperationApprovalBindingError as exc:
+            raise archive_services.ArchiveServiceError(exc.code) from None
+        approval_receipt = archive_services._require_exact_human_operation_approval(
+            root,
+            binding,
+            reviewer_claim=str(reviewed_by or ""),
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+            claim=exact_human_approval_claim,
+        )
     if not blockers and approve:
         before = artifact_path.stat()
         current_sha256 = f"sha256:{sha256_file(artifact_path)}"
@@ -38727,6 +38826,9 @@ def _cleanup_zet_catalog_pass_output_file_legacy_core(
             "reviewed_by_supplied": bool(reviewed_by),
             "bound_to_expected_sha256": True,
             "scope": "one_complete_private_catalog_pass_artifact",
+            "exact_human_approval_operation": (
+                approval_receipt.get("operation") if approval_receipt else None
+            ),
         },
         "write_boundary": {
             "private_scratch_file_deleted": deleted,
@@ -44526,12 +44628,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Required sha256:<64 lowercase hex> identity from the pass summary.",
     )
     zet_catalog_pass_cleanup.add_argument("--dry-run", action="store_true", help="Preview deletion after validation.")
-    zet_catalog_pass_cleanup.add_argument("--approve", action="store_true", help="Delete only the validated SHA-bound scratch artifact.")
+    zet_catalog_pass_cleanup.add_argument(
+        "--approve",
+        action="store_true",
+        help="Delete only the validated SHA-bound scratch artifact under exact human approval (one native dialog, or none under a valid limited/allow_all session grant).",
+    )
     zet_catalog_pass_cleanup.add_argument("--reviewed-by", help="Human reviewer id required with --approve; the value is never echoed.")
     zet_catalog_pass_cleanup.add_argument(
         "--progress",
         action="store_true",
         help="Stream content-free byte counts and 10-second heartbeats to stderr.",
+    )
+    zet_catalog_pass_cleanup.add_argument(
+        "--format",
+        choices=["json"],
+        default="json",
+        help="Output format; the result is always JSON.",
     )
     zet_catalog_pass_cleanup.set_defaults(func=command_zet_catalog_pass_cleanup)
 
@@ -46865,7 +46977,11 @@ def build_parser() -> argparse.ArgumentParser:
     ai_scratch_gc_target.add_argument("--zettel-id", help="Zet id whose explicit scratch refs should be cleaned.")
     ai_scratch_gc_target.add_argument("--path", help="Archive-relative zet path whose explicit scratch refs should be cleaned.")
     ai_scratch_gc.add_argument("--dry-run", action="store_true", help="Preview cleanup without deleting scratch files.")
-    ai_scratch_gc.add_argument("--approve", action="store_true", help="Delete explicit scratch files and write a cleanup receipt.")
+    ai_scratch_gc.add_argument(
+        "--approve",
+        action="store_true",
+        help="Delete explicit scratch files and write a cleanup receipt under exact human approval (one native dialog, or none under a valid limited/allow_all session grant).",
+    )
     ai_scratch_gc.add_argument("--reviewed-by", help="Reviewer id required when --approve is used, e.g. person:me.")
     ai_scratch_gc.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     ai_scratch_gc.set_defaults(func=command_ai_scratch_gc)

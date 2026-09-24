@@ -1801,6 +1801,93 @@ def receipt_reconcile_batch_approval_binding(
     )
 
 
+def ai_scratch_gc_approval_binding(
+    projection: Mapping[str, Any],
+) -> ExactOperationApprovalBinding:
+    """Bind one zet's reviewed scratch cleanup projection.
+
+    The projection (target zet, every candidate's path, state, sha256 and
+    size, missing refs, blockers) is the same object the writer re-derives and
+    compares immediately before deleting anything.
+    """
+
+    plan = _plain_mapping(projection)
+    target_block = _plain_mapping(plan.get("target"))
+    candidates = plan.get("candidates")
+    if (
+        not isinstance(candidates, list)
+        or plan.get("blockers") != []
+        or _plain_mapping(plan.get("policy")).get("safe_to_cleanup") is not True
+    ):
+        raise _fail("operation_approval_plan_blocked")
+    ready = []
+    for item in candidates:
+        row = _plain_mapping(item)
+        if row.get("state") != "ready":
+            raise _fail("operation_approval_plan_invalid")
+        ready.append([_sha256(row.get("path")), _sha_ref(row.get("sha256")), row.get("bytes")])
+    if not ready:
+        raise _fail("operation_approval_plan_blocked")
+    target = {
+        "zettel_id_digest": _sha256(target_block.get("zettel_id")),
+        "zettel_path_digest": _sha256(target_block.get("zettel_path")),
+        "candidate_bindings": sorted(ready),
+        "candidate_count": len(ready),
+    }
+    basis = {
+        "schema_version": BINDING_SCHEMA_VERSION,
+        "operation": "ai_scratch_gc",
+        "target": target,
+        "projection_digest": _sha256(plan),
+    }
+    return ExactOperationApprovalBinding(
+        operation=ExactHumanApprovalOperation.ai_scratch_gc,
+        plan_sha256=_sha256(basis),
+        target_binding_sha256=_sha256(target),
+        warning_codes=(),
+        review_binding_codes=("candidate_digest_set", "zet_identity"),
+        target_preview=ExactHumanApprovalTargetPreview(
+            kind="zet",
+            primary=_required_target_preview_identity(target_block.get("zettel_id")),
+            primary_label=_optional_bound_preview_label(f"임시 파일 {len(ready)}개"),
+        ),
+    )
+
+
+def zet_catalog_pass_cleanup_approval_binding(
+    preview: Mapping[str, Any],
+) -> ExactOperationApprovalBinding:
+    """Bind the one SHA-verified private catalog-pass artifact."""
+
+    plan = _plain_mapping(preview)
+    artifact = _plain_mapping(plan.get("artifact"))
+    if (
+        plan.get("ok") is not True
+        or plan.get("status") != "ready_for_approval"
+        or plan.get("blockers") != []
+        or artifact.get("expected_sha256_matches") is not True
+        or artifact.get("structurally_complete_before_cleanup") is not True
+    ):
+        raise _fail("operation_approval_plan_blocked")
+    target = {
+        "artifact_path_digest": _sha256(artifact.get("path")),
+        "artifact_sha256": _sha_ref(artifact.get("sha256")),
+    }
+    basis = {
+        "schema_version": BINDING_SCHEMA_VERSION,
+        "operation": "zet_catalog_pass_cleanup",
+        "target": target,
+        "scope": _plain_mapping(plan.get("approval")).get("scope"),
+    }
+    return ExactOperationApprovalBinding(
+        operation=ExactHumanApprovalOperation.zet_catalog_pass_cleanup,
+        plan_sha256=_sha256(basis),
+        target_binding_sha256=_sha256(target),
+        warning_codes=_warning_codes(plan.get("warnings")),
+        review_binding_codes=("artifact_digest",),
+    )
+
+
 def zettel_edge_batch_revert_approval_binding(
     dry_run: Mapping[str, Any],
 ) -> ExactOperationApprovalBinding:
@@ -2756,6 +2843,7 @@ __all__ = [
     "ExactOperationApprovalBinding",
     "OperationApprovalBindingError",
     "assert_same_binding",
+    "ai_scratch_gc_approval_binding",
     "build_operation_exact_human_approval_receipt",
     "exact_operation_manifest_approval_binding",
     "mint_zet_approval_binding",
@@ -2767,4 +2855,5 @@ __all__ = [
     "zettel_edge_approval_binding",
     "zettel_edge_revert_approval_binding",
     "zettel_objet_link_approval_binding",
+    "zet_catalog_pass_cleanup_approval_binding",
 ]
