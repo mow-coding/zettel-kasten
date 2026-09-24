@@ -194,7 +194,7 @@ class ExactHumanApprovalOperation(Enum):
     object_storage_formal_adoption = "object_storage_formal_adoption"
     object_storage_bytes_restore = "object_storage_bytes_restore"
     object_storage_bytes_offload = "object_storage_bytes_offload"
-    # v0.4.33 (letter 164 ①): upload reopened under the exact contract; always a dialog.
+    # v0.4.33 (letter 164 ①): upload reopened under the exact contract (dialog or session grant).
     object_storage_bytes_upload = "object_storage_bytes_upload"
     # v0.4.34 (letter 165 [C]): the operator feedback body write asks the dialog
     # (or a session grant that names the kind) instead of trusting --reviewed-by.
@@ -202,7 +202,7 @@ class ExactHumanApprovalOperation(Enum):
     # v0.4.36 (letters 164 ⑧ / 168 request 8): delivered letters leave the
     # archive for an operator-designated folder; a content-free stub stays.
     operator_feedback_archive = "operator_feedback_archive"
-    # v0.4.30 (letter 163 ⑥): reviewed closing of started claims; always a dialog.
+    # v0.4.30 (letter 163 ⑥): reviewed closing of started claims (dialog or session grant).
     exact_approval_claim_finalize = "exact_approval_claim_finalize"
     local_recovery = "local_recovery"
     local_recovery_revert = "local_recovery_revert"
@@ -854,11 +854,12 @@ _WORK_SESSION_ACTION_COPY = {
     ),
     # v0.4.24: per-session permission mode. The listed kinds run without a
     # dialog until the session is paused, handed off or completed; project
-    # updates and credential writes always ask.
+    # v0.4.36 restored the 2026-09-17 decision: every operation kind is
+    # grantable; only the grant itself asks.
     "work_session_set_permission_mode": (
         "이 작업 세션의 승인 방식을 바꿀까요?",
         "아래에 표시된 작업 종류는 이 세션을 멈추거나 넘기거나 끝내기 전까지 승인 창 없이 실행됩니다. "
-        "각 쓰기의 내용은 지금처럼 기록되고, 프로젝트 업데이트와 자격증명 쓰기는 항상 창을 띄웁니다.",
+        "각 쓰기의 내용은 지금처럼 기록됩니다. 전체 허용이면 업데이트·원격 저장소·복구·삭제도 창 없이 실행됩니다.",
         "승인 방식 바꾸기",
     ),
 }

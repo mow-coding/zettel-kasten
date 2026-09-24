@@ -8,8 +8,8 @@ collected 27 such claims with no way to see or close them.  This module adds
   claim store that projects fixed fields only (never the reviewer id, the
   archive id or a path), and
 * ``plan_exact_human_approval_claim_finalize`` /
-  ``finalize_exact_human_approval_claims`` — the reviewed, always-dialog
-  closing of started claims through the same compare-and-swap finalizer as
+  ``finalize_exact_human_approval_claims`` — the reviewed (dialog or session
+  grant) closing of started claims through the same compare-and-swap finalizer as
   success, refused when any receipt under the archive references the claim,
   when the claim is younger than the minimum age (a writer may still be
   running) or when the claim belongs to ``project_version_update`` (its own
@@ -936,8 +936,8 @@ def plan_exact_human_approval_claim_finalize(
     if ok:
         next_safe_actions.append(
             "Re-run the same selection with --approve --reviewed-by <id> "
-            "--expected-plan-sha256 <plan_sha256>; one native dialog (never a "
-            "session permission mode) closes the listed claims as failed."
+            "--expected-plan-sha256 <plan_sha256>; one native dialog (none under a valid "
+            "session grant) closes the listed claims as failed."
         )
     if excluded_project_version_update:
         next_safe_actions.append(

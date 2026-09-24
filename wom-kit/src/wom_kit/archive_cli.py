@@ -40880,7 +40880,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "v0.4.30: close reviewed started exact-approval claims as failed "
             "(operator_closed_started_claim_after_review) after a receipt scan; "
-            "one native dialog, never a session permission mode."
+            "one native dialog, or none under a valid limited/allow_all session grant (since v0.4.36)."
         ),
     )
     claim_finalize.add_argument("archive_root", help="Archive root whose claims are closed.")
@@ -50428,7 +50428,8 @@ def build_parser() -> argparse.ArgumentParser:
                      "Set-permission-mode (v0.4.24) uses --approve with the claimed session and a private request "
                      "{reviewer_claim, permission_mode: manual|limited|allow_all, operations: [...]}: the listed "
                      "operation kinds then run without a dialog until the session is paused, handed off or "
-                     "completed; project updates and credential writes always ask. Each write still publishes "
+                     "completed; since v0.4.36 every operation kind is grantable and only the grant itself opens a dialog "
+                     "(credential secrets are still typed by a person in their own window). Each write still publishes "
                      "its own one-use claim, and that claim records the permission mechanism. "
                      "v0.4.34: a limited/allow_all grant is presenter-bound and time-boxed (request key "
                      "grant_hours, 1..24, default 8): the approve result returns presenter_token exactly once; "
