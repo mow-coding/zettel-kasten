@@ -43,16 +43,13 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
     def test_every_fixed_closed_command_has_honest_approval_help(self) -> None:
         expected_additional_public_commands = {
             "github-repo",
-            "imap-mailbox-adapter-manifest-write",
             "imap-mailbox-header-metadata-scan",
-            "onboard",
-            "runtime-skill-install",
-            "runtime-skill-uninstall",
-            "tiro-lossless-recovery-fetch-run",
+            # v0.4.41: onboard, runtime-skill-install/-uninstall, the IMAP adapter
+            # manifest and the Tiro fetch reopened.
         }
         self.assertEqual(
             len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS),
-            19,
+            7,
         )
         for exact_batch_command in (
             "source-intake-batch",
@@ -211,7 +208,7 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
             ("zet-revision-restore-write", "exact-byte"),
             ("remint-reconcile", "exact human approval"),
             ("remint-reconcile-batch", "exact human approval"),
-            ("import-external", f"Unavailable in v{archive_cli.__version__}"),
+            ("github-repo", f"Unavailable in v{archive_cli.__version__}"),  # import-external, prehashed-objet-ledger and add-source reopened in v0.4.41
         ):
             with self.subTest(command=command_name):
                 completed = subprocess.run(

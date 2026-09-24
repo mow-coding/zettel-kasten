@@ -43,11 +43,11 @@ class V0419CapabilityAvailabilityTests(unittest.TestCase):
 
     def test_fixed_closed_command_preserves_parser_json_default(self) -> None:
         output, errors = io.StringIO(), io.StringIO()
-        # principal-register reopened in v0.4.40; credential-lifecycle stays closed.
-        argv = ["credential-lifecycle", "synthetic-root-must-not-be-read", "--workspace-fingerprint",
-                "sha256:" + "b" * 64, "--default-credential-id", "credential:synthetic",
-                "--approve", "--reviewed-by", "person:synthetic"]
-        with mock.patch.object(archive_cli, "command_credential_lifecycle") as handler:
+        # principal-register reopened in v0.4.40; credential-lifecycle and the
+        # IMAP manifest writer in v0.4.41; the IMAP header scan stays closed.
+        argv = ["imap-mailbox-header-metadata-scan", "synthetic-root-must-not-be-read",
+                "--adapter-id", "synthetic-adapter", "--source-id", "imap:synthetic", "--account-ref", "env:SYNTHETIC_ACCOUNT", "--username-ref", "env:SYNTHETIC_USER", "--app-password-ref", "env:SYNTHETIC_PASSWORD", "--approve", "--reviewed-by", "person:synthetic"]
+        with mock.patch.object(archive_cli, "command_imap_mailbox_header_metadata_scan") as handler:
             with redirect_stdout(output), redirect_stderr(errors):
                 code = archive_cli.main(argv)
         handler.assert_not_called()
@@ -386,12 +386,12 @@ class V0419CapabilityAvailabilityTests(unittest.TestCase):
 
         dry_run = command_status.resolve_capability_availability(
             inventory,
-            "credential-lifecycle",
+            "imap-mailbox-header-metadata-scan",
             requested_mode="dry_run",
         )
         approve = command_status.resolve_capability_availability(
             inventory,
-            "credential-lifecycle",
+            "imap-mailbox-header-metadata-scan",
             requested_mode="approve",
         )
         available_writer = command_status.resolve_capability_availability(
@@ -817,8 +817,9 @@ class V0419CapabilityAvailabilityTests(unittest.TestCase):
         status = command_status.resolve_suggested_command_mode(
             inventory,
             (
-                "archive credential-lifecycle <archive-root> "
-                "--workspace-fingerprint <sha> --default-credential-id <id> --approve"
+                "archive imap-mailbox-header-metadata-scan <archive-root> "
+                "--adapter-id <id> --source-id <id> --account-ref <ref> "
+                "--username-ref <ref> --app-password-ref <ref> --approve"
             ),
             trusted_parser=parser,
         )
@@ -840,17 +841,23 @@ class V0419CapabilityAvailabilityTests(unittest.TestCase):
         stderr = io.StringIO()
         with mock.patch.object(
             archive_cli,
-            "command_credential_lifecycle",
+            "command_imap_mailbox_header_metadata_scan",
             side_effect=AssertionError("unavailable handler must not run"),
         ) as handler, redirect_stdout(stdout), redirect_stderr(stderr):
             exit_code = archive_cli.main(
                 [
-                    "credential-lifecycle",
+                    "imap-mailbox-header-metadata-scan",
                     private_marker,
-                    "--workspace-fingerprint",
-                    "sha256:" + "b" * 64,
-                    "--default-credential-id",
-                    "credential:synthetic",
+                    "--adapter-id",
+                    "synthetic-adapter",
+                    "--source-id",
+                    "imap:synthetic",
+                    "--account-ref",
+                    "env:SYNTHETIC_ACCOUNT",
+                    "--username-ref",
+                    "env:SYNTHETIC_USER",
+                    "--app-password-ref",
+                    "env:SYNTHETIC_PASSWORD",
                     "--approve",
                     "--format",
                     "json",
@@ -983,7 +990,7 @@ class V0419CapabilityAvailabilityTests(unittest.TestCase):
             for row in payload["data"]["capability_availability"]["rows"]
         }
         self.assertEqual(
-            rows["credential-lifecycle"]["approve_without_arguments"]["state"],
+            rows["imap-mailbox-header-metadata-scan"]["approve_without_arguments"]["state"],
             command_status.CAPABILITY_WRITER_UNAVAILABLE,
         )
         self.assertEqual(
@@ -1038,8 +1045,9 @@ class V0419CapabilityAvailabilityTests(unittest.TestCase):
             "--zettel-id <id> --dry-run"
         )
         unavailable_command = (
-            "archive credential-lifecycle <archive-root> "
-            "--workspace-fingerprint <sha> --default-credential-id <id> --approve"
+            "archive imap-mailbox-header-metadata-scan <archive-root> "
+            "--adapter-id <id> --source-id <id> --account-ref <ref> "
+            "--username-ref <ref> --app-password-ref <ref> --approve"
         )
         available_status = command_status.resolve_suggested_command_mode(
             inventory,

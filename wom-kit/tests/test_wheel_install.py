@@ -106,7 +106,7 @@ def patch_zip_member_name_bytes(wheel: Path, old_name: str, new_name: str) -> No
 
 
 class InstalledEntrypointTests(unittest.TestCase):
-    PACKAGE_VERSION = "0.4.40"
+    PACKAGE_VERSION = "0.4.41"
     SERVER_NAME = "zettel-kasten-archive-mcp"
 
     def setUp(self) -> None:
@@ -205,7 +205,7 @@ class InstalledEntrypointTests(unittest.TestCase):
 
     def test_installed_wheel_direct_url_retains_exact_pip_hash(self) -> None:
         python = self.scripts / "python.exe"
-        wheel = self.temp_root / "wom_kit-0.4.40-py3-none-any.whl"
+        wheel = self.temp_root / "wom_kit-0.4.41-py3-none-any.whl"
         wheel.write_bytes(b"synthetic exact wheel bytes")
         expected_sha256 = hashlib.sha256(wheel.read_bytes()).hexdigest()
         with mock.patch.object(
@@ -226,7 +226,7 @@ class InstalledEntrypointTests(unittest.TestCase):
 
     def test_installed_wheel_direct_url_missing_hash_fails_closed(self) -> None:
         python = self.scripts / "python.exe"
-        wheel = self.temp_root / "wom_kit-0.4.40-py3-none-any.whl"
+        wheel = self.temp_root / "wom_kit-0.4.41-py3-none-any.whl"
         wheel.write_bytes(b"synthetic exact wheel bytes")
         with mock.patch.object(
             check_wheel_install,
@@ -2762,7 +2762,7 @@ class InstalledRuntimeJourneyHookTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(prefix="wheel-runtime-hook-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
-        self.wheel = self.root / "wom_kit-0.4.40-py3-none-any.whl"
+        self.wheel = self.root / "wom_kit-0.4.41-py3-none-any.whl"
         self.wheel.write_bytes(b"synthetic-hook-wheel")
         self.evidence = {
             "ok": True, "schema": check_wheel_install.INSTALLED_V0419_RUNTIME_SCHEMA,
@@ -2847,11 +2847,11 @@ class InstalledRuntimeJourneyHookTests(unittest.TestCase):
                 self.invoke(evidence)
 
     def test_partial_runtime_evidence_accepts_canonical_beta_but_keeps_proof_checks(self):
-        evidence = {**self.evidence, "package_version": "0.4.40b1"}
+        evidence = {**self.evidence, "package_version": "0.4.41b1"}
         holder = check_wheel_install.WheelPartialEvidence()
         holder.record_runtime(evidence)
         self.assertEqual(holder.public_payload()["installed_v0419_runtime_journey"], evidence)
-        for version in ("0.4.40b0", "0.4.40b01", "0.4.40-beta.1", "0.4.40b1/private", "0.4.40b" + "1" * 65):
+        for version in ("0.4.41b0", "0.4.41b01", "0.4.41-beta.1", "0.4.41b1/private", "0.4.41b" + "1" * 65):
             with self.subTest(version=version), self.assertRaises(check_wheel_install.WheelCheckError):
                 holder.record_runtime({**evidence, "package_version": version})
         with self.assertRaises(check_wheel_install.WheelCheckError):
@@ -3018,14 +3018,16 @@ class InstalledRuntimeJourneyHookTests(unittest.TestCase):
         }
         for name, arguments in commands.items():
             output, errors = io.StringIO(), io.StringIO()
+            # v0.4.41: these writers are open, so the shared runtime guard runs
+            # first (here: passes); each probe is then refused before any
+            # dialog or write (no --archive-root / no reviewer).
             with self.subTest(command=name), mock.patch.object(
-                archive_cli, "_project_write_runtime_guard", side_effect=AssertionError("must stop before runtime/filesystem guard"),
-            ) as guard, redirect_stdout(output), redirect_stderr(errors):
+                archive_cli, "_project_write_runtime_guard", return_value=None,
+            ), redirect_stdout(output), redirect_stderr(errors):
                 code = archive_cli.main([name, *arguments, "--approve", "--format", "json"])
             self.assertEqual(code, 1)
             self.assertEqual(errors.getvalue(), "")
             self.assertEqual(json.loads(output.getvalue()), check_wheel_install._expected_fixed_closed_writer_result(name))
-            guard.assert_not_called()
             self.assertFalse(skills.exists())
             self.assertFalse(archive.exists())
 

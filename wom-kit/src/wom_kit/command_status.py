@@ -71,20 +71,8 @@ OPERATION_CANCEL_UNSUPPORTED_HELP = (
 # must consume this registry instead of maintaining independent claims.
 COMPOUND_APPROVAL_FIXED_CLOSED_COMMANDS = frozenset(
     {
-        "add-source",
-        "credential-lifecycle",
-        "imap-mailbox-adapter-manifest-write",
         "imap-mailbox-header-metadata-scan",
-        "import-external",
-        "legacy-coordination-cleanup",
-        "notion-objet-link-convert",
-        "notion-page-recovery",
         "notion-recover",
-        "onboard",
-        "prehashed-objet-ledger",
-        "runtime-skill-install",
-        "runtime-skill-uninstall",
-        "tiro-lossless-recovery-fetch-run",
         # Restored 2026-09-25: ZET sharing and ownership (v0.5 design); preview only.
         "delegate-zet",
         "transfer-ownership",
@@ -158,6 +146,29 @@ EXACT_APPROVAL_REOPENED_WRITERS = frozenset({
     "project-version-update-collision",
     # Triage group 6 (2026-09-24): restore proposal from a retained snapshot.
     "zet-revision-restore-proposal-from-snapshot",
+    # v0.4.41 (letters 142/148/156): retire by moving with --destination.
+    "legacy-coordination-cleanup",
+    # v0.4.41 (letters 116-118, 142/148/156): Notion page recovery.
+    "notion-page-recovery",
+    # v0.4.41 new-user entry: onboard --approve creates the archive.
+    "onboard",
+    # v0.4.41: runtime-skill --approve --archive-root records the approval.
+    "runtime-skill-install",
+    "runtime-skill-uninstall",
+    # v0.4.41 (letter 141): import-external --approve after one approval.
+    "import-external",
+    # v0.4.41 (letter 119): credential-lifecycle --approve.
+    "credential-lifecycle",
+    # v0.4.41 (letters 038-039, 164, 168): hash-only registration.
+    "prehashed-objet-ledger",
+    # v0.4.41 (feature request 34): link convert with one approval.
+    "notion-objet-link-convert",
+    # v0.4.41 (feature request 13): Tiro fetch with one approval.
+    "tiro-lossless-recovery-fetch-run",
+    # v0.4.41: add-source --approve after one approval.
+    "add-source",
+    # v0.4.41: IMAP adapter manifest after one approval.
+    "imap-mailbox-adapter-manifest-write",
 })
 
 # Public parser and dispatch exposure was audited at v0.3.320 and its explicit

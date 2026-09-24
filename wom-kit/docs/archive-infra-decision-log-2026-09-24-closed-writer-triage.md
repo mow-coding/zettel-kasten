@@ -273,3 +273,284 @@ a receipt, so `exact-approval-claim-finalize` can only warn
 theirs, as for earlier receipt-less operations. In-process flags such as
 `_exact_verified` are reachable only from Python callers, not from the CLI or
 MCP.
+
+## Group 7: Legacy Coordination Retire (v0.4.41)
+
+Owner delegation (2026-09-25): designs for the remaining closed writers follow
+Claude's recommendation; each is recorded as a delegated operating choice.
+
+Letters 142, 148 and 156 were blocked three times by
+`legacy-coordination-cleanup` (`collab_present_in_target`,
+`nested_git_repository_present`, `git_tracking_check_failed`). Delegated
+choice (Claude recommendation): retire by moving, never deleting.
+`--destination` moves the whole folder in one same-volume rename, keeps
+collaboration records and nested repositories intact as preserved classes,
+keeps the user's global Git configuration for the tracking check and names
+its cause, binds the plan digest under one exact approval recorded in the
+workspace archive, verifies the moved folder, and writes a content-free
+receipt. The delete-only approve stays fixed closed. Evidence:
+`test_legacy_coordination_retire`.
+
+## Group 7b: Notion Page Recovery (v0.4.41)
+
+Letters 116-118 (620 pages) and 142/148/156 (zero requests could be produced)
+were blocked because execution was fixed closed and the CLI accepted only the
+letter-118 577+43 batch. Delegated choice (Claude recommendation): accept any
+self-consistent reviewed request (unique groups, per-group counts equal to
+items, total equal to `expected_item_count`, each group bound to a credential
+and workspace fingerprint), and run the existing resumable engine after one
+exact approval bound to the plan digest (which covers the exact page list).
+The credential capability is issued in-process and adds no dialog. A request
+builder from existing ledgers and proven credential reuse are the next step;
+moving verified-recovered pages to the Notion trash comes after that.
+Evidence: `test_notion_page_recovery_exact`.
+
+## Planned: Notion Trash Cleanup After Verified Recovery
+
+Owner idea (2026-09-24), delegated design (2026-09-25, Claude
+recommendation). Not implemented; this records the design and the verified
+provider facts it rests on.
+
+Provider facts, checked against the official Notion API reference on
+2026-09-25: a page moves to the trash with `PATCH /v1/pages/{page_id}` and
+body `{"in_trash": true}` (API version 2026-03-11 replaced `archived` with
+`in_trash`); `{"in_trash": false}` restores it; the integration needs the
+"Update content" capability. There is no permanent delete through the API.
+
+Design:
+- Only pages with a verified `recovered` result qualify: a terminal journal
+  row, every stored fragment re-hashing to its recorded digest and size, and
+  manifest and projection rows present. A read-only plan lists the
+  qualifying pages; its digest covers the exact page list and the recovery
+  receipt digests.
+- Immediately before each PATCH, a fresh GET must show the page unchanged
+  since recovery (`last_edited_time`) and not already in the trash; a changed
+  page is skipped and reported.
+- The credential must carry a verified update capability; the current
+  read-only capability set is not enough, so adoption gains an explicit
+  update-capability check.
+- One exact approval (a native dialog, or none under a valid session grant)
+  covers the list. A journal row precedes each PATCH and a terminal row
+  follows a GET confirming `in_trash: true`; an interrupted run resumes.
+- A restore plan sets `in_trash` back to `false` for the same list.
+
+## Planned: New-User Entry (onboard, init, runtime skill)
+
+Finding (2026-09-25, read-only research): in v0.4.40 a new user cannot create
+an archive at all. `onboard --approve`, non-dry-run `init` (CLI and MCP) and
+`runtime-skill-install/-uninstall --approve` are fixed closed, and
+`setup-windows.ps1 -ApproveOnboarding` calls the closed `onboard` and exits
+1. Docker onboarding cannot show the Windows approval dialog at all.
+
+Delegated design (Claude recommendation, not yet implemented):
+- `onboard` dry-run gains a `plan_sha256` over type, archive id, principal,
+  profile, template and layer digests, WOM-kit version, target path hash and
+  target state (absent or empty) with its parent identity.
+- One dialog (a session grant cannot apply: no work session exists yet).
+  After the decision, create only what the key and claim need (target folder,
+  final `.gitignore` with `profiles/local/`, final `archive.yml`, claims
+  folder), then write the claim in the new archive; if that fails, remove
+  exactly those files. The writer then re-derives the plan, copies the rest,
+  runs strict doctor and writes `receipts/onboarding/<approval_id>.json`.
+  This deliberately moves the claim-store setup ahead of the claim, as the
+  broker already does for the key and claims folder.
+- `init` becomes an alias of this route; MCP `archive_init` stays dry-run and
+  returns the CLI command; `setup-windows.ps1` runs the native
+  `archive.exe onboard --approve` instead of Docker.
+- `runtime-skill-install/-uninstall --approve` require `--archive-root`; the
+  claim and a hash-only receipt go in that archive, and the digest binds the
+  existing operation plan (exact file set) plus the archive id and the
+  target folder identity. `onboard --install-skill <host>` covers archive and
+  skill under one approval for beginners.
+
+## Implemented: New-User Entry (v0.4.41, 2026-09-25)
+
+Implemented by Claude (Opus 5.5) under the owner's delegation. What shipped:
+- `onboard --dry-run` prints `plan_sha256`; `onboard --approve --reviewed-by`
+  opens one dialog bound to it (`onboard_archive` operation). After the
+  decision the plan is derived again (target still absent or empty, not a
+  link); then the folder, `archive.yml` and the safe `.gitignore` are written,
+  the key and claim are created in the new archive, and the writer creates
+  the rest, runs strict Doctor and writes `receipts/onboarding/<plan16>.json`.
+  If the key or claim step fails, the target is returned to absent or empty.
+- `init --approve` forwards to the same route. MCP `archive_init` is unchanged
+  (dry-run only).
+- `setup-windows.ps1 -ApproveOnboarding` runs the Windows-native `archive
+  onboard --approve` after the Docker dry-run; `setup-unix.sh
+  --approve-onboarding` explains that Linux and macOS have no approval dialog
+  yet and stops.
+- `runtime-skill-install/-uninstall --approve --archive-root <archive>` run
+  after one exact approval recorded in that archive (dialog, or none under a
+  valid session grant); the service reauthenticates the claim before any host
+  write. Without `--archive-root` they are refused before any dialog.
+
+Deviations from the plan above (for the owner to confirm or correct):
+- The onboarding digest binds type, archive id, principal id/kind/name,
+  archive name, provider profile, the resolved target path and the WOM-kit
+  version. Template and layer digests and the parent identity are not bound;
+  target absence/emptiness is re-checked after the decision instead.
+- The onboarding receipt is named by the plan digest, not the approval id
+  (the approval summary is in the command result).
+- On a key or claim failure the whole (previously empty) target is cleared,
+  including the lock and claim folders the key step created. The Windows
+  archive key for that archive id may remain; a retry reuses it.
+- `onboard` is recorded as a documented bootstrap exception in the
+  writer-session coverage manifest: it never uses a session grant, because
+  no session can exist for an archive that does not exist yet. This is not a
+  new always-dialog operation: every grantable operation stays grantable.
+- Runtime skill: the digest is the existing operation plan (it already binds
+  the target-path hash, source package and prior manifest); no separate
+  receipt is written in the archive, the claim is the record.
+  `onboard --install-skill <host>` is not implemented yet (carried).
+
+## Implemented: Relation Candidate Accept (v0.4.41, letter 108)
+
+`relation-candidate-decide --decision accept` opens (operation
+`relation_candidate_accept`). One approval binds a digest over the reviewed
+relation plan, the candidate, edge type, visibility, the review reason's
+hash, confidence, and the edge writer's own item approval digests for that
+exact edge. The service re-derives the edge preview under its lock, verifies
+the claim through the existing batch-authority mechanism narrowed to that one
+edge, writes the edge, then the judgment record and receipt. The
+`--decision` conditional scope is removed (ten conditional scopes remain).
+An accepted pair leaves the candidate plan, so a repeat is refused before any
+dialog.
+
+## Implemented: External Import (v0.4.41, letter 141)
+
+`import-external --approve` opens (operation `import_external`). The customer
+had used it for 437 notes before v0.4.0 closed it. The dry-run now returns a
+`plan_sha256` over the target archive, source, export path, locator policy,
+receipt path and, per item, the draft id, source digest, external id and
+source path; the writer re-discovers the export once, rebuilds the same
+projection and refuses unless it equals the approved digest, then writes the
+drafts and receipt with the pre-v0.4.0 rollback of partial files. The
+pre-v0.4.0 apply tests were restored and pass on the new route. Limit stays
+at most 1000 items per run.
+
+## Implemented: Credential Lifecycle (v0.4.41, letter 119)
+
+While wiring Notion trash, Claude found that an adopted credential becomes
+usable for page recovery only after a lifecycle decision records it as the
+workspace default (its scope binding is then `persisted`). With
+`credential-lifecycle --approve` fixed closed, no customer credential could
+ever pass the request builder's readiness check, so Notion recovery (and the
+trash cleanup after it) was unreachable in practice. `--approve` now records
+the reviewed plan after one exact approval (operation
+`credential_lifecycle`) bound to its `plan_sha256`; the existing registry
+core re-derives the plan and refuses drift. Labels only: nothing is deleted
+or revoked, no secret is read.
+
+## Implemented: Prehashed Objet Ledger (v0.4.41, letters 038-039, 164, 168)
+
+Delegated decision (Claude recommendation): hash-only registration stays. It
+is how large external stores (for example a Notion source export) were
+registered, the upload planner already classifies such rows as
+byte-external (`external_prehashed`), and every record says WOM-kit did not
+verify the bytes. `--approve` runs after one exact approval (operation
+`prehashed_objet_ledger`) bound to a dry-run `plan_sha256` over the archive,
+store kind and label, field names, row cap, ledger file digests and the exact
+candidate rows; the writer re-derives it and refuses drift. One store-label
+scheme (letter 168): the dry-run lists the registered store labels and warns
+`store_ref_not_a_registered_store_label` when the label is not one of them;
+it is a warning, not a blocker, because an external prehashed store need not
+be an object-storage registration.
+
+## Implemented: Notion Link Convert (v0.4.41, feature request 34)
+
+The conversion had nothing to convert: no manifest record said which objet
+a Notion locator meant. The mapping path now comes from Notion recovery: a
+locator's page id (the last id in the URL path, or the `?p=` peek id; a
+`#block` fragment is ignored) is looked up in the recovery projection rows
+(`receipts/import/notion-page-recovery-*.jsonl`, outcome `recovered`), and the
+recovered objet becomes a candidate (`match_kind: recovered_notion_page`).
+`--approve` (operation `notion_objet_link_convert`) binds a digest over the
+zettel, locator fingerprint, object, occurrence count, visibility, conversion
+receipt and the edge writer's own item digests; the batch authority is
+narrowed to that one embed edge, as for relation accept. The zettel body is
+not rewritten.
+
+## Implemented: Tiro Fetch (v0.4.41, feature request 13)
+
+`tiro-lossless-recovery-fetch-run --approve` opens (operation
+`tiro_lossless_recovery_fetch`). The approval binds a digest over the output
+path, the row caps and hashes of the workspace id, note id and credential
+reference; the credential is read only after the reauthenticated approval.
+The pre-v0.4.0 apply tests were restored and pass on the new route.
+Deviation (for the owner): Tiro keeps its operator credential reference
+(`env:` / `keyring:` / `credential-manager:`), because there is no Tiro
+equivalent of `credential-adopt`; a Tiro adoption path would be separate
+work. The fetch is read-only against Tiro and writes a private bundle under
+`workbench/` plus a receipt.
+
+## Implemented: Add Source (v0.4.41)
+
+`add-source --approve` opens (operation `add_source`). The dry-run prints a
+`plan_sha256` over the exact source binding, whether an ignored local root
+profile is written (its path only as a hash), `--replace`, and the current
+`source-bindings.yml` bytes; the writer re-derives it and refuses drift.
+The pre-v0.4.0 apply tests were restored (their `scan-source` step was
+dropped: that command was removed in v0.4.40). An IMAP mailbox source can
+now be registered; reading mail stays closed (next section).
+
+## IMAP (v0.4.41): manifest reopened, header scan stays closed
+
+`imap-mailbox-adapter-manifest-write --approve` opens (operation
+`imap_mailbox_adapter_manifest`): it writes the local non-secret adapter
+policy after one exact approval bound to a digest of the reviewed arguments
+(reference values only as hashes). The pre-v0.4.0 apply test passes again.
+
+`imap-mailbox-header-metadata-scan` stays closed. Its preflight requires a
+legacy `credential-access-approval` receipt, and that command became a
+plan-only preview in v0.4.0, so no such receipt can be produced; and headers
+alone do not meet the request to keep full messages and attachments.
+Delegated design (Claude recommendation, next work): a full-message IMAP
+fetch under one exact approval that stores each selected raw RFC 822 message
+(`.eml`, which keeps its attachments losslessly) as an objet through the
+existing intake chain, with the credential reference read only after the
+approval; the header scan is then either folded into it or removed.
+
+## Still closed: notion-recover (recommendation recorded)
+
+`notion-recover` was the client-requested one-command wrapper (2026-06-22,
+v0.3.136) over `notion-ancestor-crawl-plan`, `credential-access-approval`,
+`notion-ancestor-fetch-adapter-run` and `notion-ancestor-merge-plan`. Two of
+its parts no longer run (the fetch adapter was removed in v0.4.40; the access
+approval is a plan-only preview since v0.4.0), so it cannot simply reopen.
+Recommendation (not implemented): keep the client's intent, one command for a
+beginner, by turning it into a read-only guide over the current chain
+(`credential-adopt` -> `credential-lifecycle` -> `notion-page-recovery-request-build`
+-> `notion-page-recovery` -> `notion-page-trash`) that reports which step is
+done and prints the exact next command. Changing an existing command's
+meaning is left for the owner to confirm.
+
+## Implemented: Notion Trash Cleanup (v0.4.41)
+
+Implemented by Claude (Opus 5.5) under the owner's delegation, following the
+plan above:
+- `notion-page-trash <archive> --request <recovery request> --dry-run |
+  --approve [--restore]` (operation `notion_page_trash`). The plan digest
+  covers the mode, the request digest, the slice, and per page the recovery
+  plan digest, completion time and fragment digests.
+- The Notion adapter gains one write, `move_page_to_trash`: `PATCH
+  /v1/pages/{id}` with exactly `{"in_trash": bool}`, one transport attempt,
+  never retried; every other call stays a GET.
+- A second credential-capability profile `notion_page_trash_write` (GET
+  `retrieve_page`, PATCH `move_page_to_trash`); the recovery profile is
+  unchanged. The live token exists only in a spawned child, as for recovery.
+- Journal `profiles/local/notion-page-trash/<plan>.journal.jsonl` (ignored,
+  holds page ids); content-free receipt `receipts/notion-page-trash/`.
+
+Deviations from the plan (for the owner to confirm or correct):
+- Recovery did not store `last_edited_time`, so "unchanged since recovery"
+  compares the fresh `last_edited_time` with the recovery completion time:
+  an edit in the same minute as the completion or later counts as changed
+  (Notion reports minutes), so some unchanged pages may be skipped, never the
+  reverse.
+- Adoption did not gain an update-capability check: the adopted credential's
+  receipt records only read capabilities and Notion offers no endpoint that
+  reports an integration's capabilities. The first PATCH proves it; a 403
+  stops the run with `notion_update_capability_missing` after one refused
+  request.
+- Restore moves back only pages whose latest trash-journal outcome is
+  `trashed`; pages that were already in the trash stay there.

@@ -555,10 +555,11 @@ removed (use `external-locator-record --revert-recovery`).
 Use `relation-semantics-guide` before reviewing ambiguous continuation,
 recurrence, sequence, third-party Principal, or format-variant meaning.
 `relation-candidate-plan` reads frontmatter only and creates no edge.
-`relation-candidate-decide` can retain the supported non-accept review route.
-In v0.4.0 acceptance is a compound edge-plus-judgment effect and approval fails
-before private target read or mutation with
-`compound_exact_human_approval_binding_required`.
+`relation-candidate-decide` records a reviewed judgment. Since v0.4.41
+`--decision accept` writes the edge and the judgment record after one exact
+approval (a native dialog, or none under a valid session grant) that binds the
+reviewed relation plan, the chosen edge type and visibility, and the edge
+itself; a changed plan is refused before any dialog.
 
 The decision rule is exact:
 
@@ -1139,13 +1140,27 @@ API failure or retry it automatically.
 
 ## Approved Notion Recovery Capability
 
-This section records the historical v0.3.320 capability design. In v0.4.0
-`notion-page-recovery` and `notion-recover` execution are fixed fail-closed
-(`notion-ancestor-fetch-adapter-run` was removed in v0.4.40) with
-`compound_exact_human_approval_binding_required` before credential/private
-target read, provider call, object write, or receipt publication. Their
-read-only plan and dry-run surfaces remain available; the capability semantics
-below do not authorize current execution.
+Since v0.4.41 `notion-page-recovery --approve` runs again: any
+self-consistent reviewed request under `profiles/local/notion-page-recovery/`
+plans, and execution runs after one exact approval (a native dialog, or none
+under a valid session grant) bound to the plan digest, which covers the exact
+page list. It needs an adopted credential per workspace (`credential-adopt`).
+`notion-recover` stays fixed closed (`notion-ancestor-fetch-adapter-run` was
+removed in v0.4.40). Build the request with
+`notion-page-recovery-request-build <archive-root> --pages <private.jsonl> --group <group>=<credential-id> --batch-id <id> --dry-run|--write`:
+it fills each group's scope binding from the authenticated credential list and
+reads no Notion data. A credential is ready only after
+`credential-lifecycle --approve` (v0.4.41) records it as the workspace default. The capability design below is how an approved run
+reads credentials and pages.
+
+Since v0.4.41 `notion-page-trash <archive-root> --request <same request> --dry-run|--approve [--restore]`
+moves verified-recovered pages to the Notion trash (never a permanent delete;
+`--restore` moves the pages it trashed back). Only pages whose recovered bytes,
+manifest and projection rows verify qualify; a page edited in the minute its
+recovery completed or later is skipped. One exact approval covers the planned
+slice; each PATCH is journaled and a rerun resumes. The token needs Notion's
+"Update content" capability; without it the run stops after one refused
+request (`notion_update_capability_missing`). Page ids are never shown.
 
 Historically, an approved `notion-page-recovery` invocation minted one fresh secret-free
 `wom-kit/credential-capability/v0.1` document in the parent. It is bound to the

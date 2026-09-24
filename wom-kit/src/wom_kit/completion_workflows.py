@@ -14539,6 +14539,44 @@ def relation_candidate_plan(
     return result
 
 
+def _relation_accept_digest(
+    *,
+    relation_plan_sha256: str,
+    candidate_id: str,
+    edge_type: str,
+    visibility: str,
+    reason: str | None,
+    confidence: str,
+    edge_preview: Mapping[str, Any],
+) -> tuple[str, Any, str]:
+    """v0.4.41 (letter 108): the digest one accept approval binds.
+
+    It covers the reviewed relation plan, the candidate, the chosen edge type
+    and visibility, the review reason and confidence, and the edge writer's
+    own approval digests for the exact edge, so the edge and the judgment
+    record are approved together and nothing else can be written.
+    """
+
+    edge_binding = operation_approval_binding.zettel_edge_approval_binding(edge_preview)
+    identity = archive_services._zettel_edge_item_identity(edge_preview)
+    basis = {
+        "schema": "wom-kit/relation-candidate-accept-plan/v0.1",
+        "relation_plan_sha256": relation_plan_sha256,
+        "candidate_id": candidate_id,
+        "edge_type": edge_type,
+        "visibility": visibility,
+        "reason_sha256": hashlib.sha256(str(reason or "").encode("utf-8")).hexdigest(),
+        "confidence": confidence,
+        "edge_approval_plan_sha256": edge_binding.plan_sha256,
+        "edge_approval_target_binding_sha256": edge_binding.target_binding_sha256,
+        "edge_item_identity_sha256": identity,
+    }
+    digest = "sha256:" + hashlib.sha256(
+        json.dumps(basis, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return digest, edge_binding, identity
+
+
 def relation_candidate_decide(
     archive_root: Path | str,
     *,
@@ -14553,8 +14591,18 @@ def relation_candidate_decide(
     reviewed_by: str | None,
     max_candidates: int = 50,
     include_rejected: bool = False,
+    exact_human_approval_claim: Any = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
+    _accept_preview_only: bool = False,
 ) -> dict[str, Any]:
-    if str(decision or "").strip().lower() == "accept":
+    # v0.4.41 (letter 108): accept writes the edge and the judgment under one
+    # exact approval; without its claim it stays blocked exactly as before.
+    if (
+        str(decision or "").strip().lower() == "accept"
+        and exact_human_approval_claim is None
+        and not _accept_preview_only
+    ):
         return {
             "ok": False,
             "state": "blocked",
@@ -14651,6 +14699,30 @@ def relation_candidate_decide(
             "would_change": [],
             "files_written": [],
         }
+    if _accept_preview_only:
+        if normalized_decision != "accept" or edge_preview is None:
+            return {**plan, "ok": False, "state": "blocked", "blockers": ["relation_accept_preview_invalid"],
+                    "would_change": [], "files_written": []}
+        accept_digest, _edge_binding, _identity = _relation_accept_digest(
+            relation_plan_sha256=expected, candidate_id=normalized_candidate_id,
+            edge_type=normalized_edge_type, visibility=normalized_visibility,
+            reason=safe_reason, confidence=normalized_confidence, edge_preview=edge_preview,
+        )
+        return {
+            **plan,
+            "ok": True,
+            "state": "ready",
+            "dry_run": True,
+            "approved": False,
+            "lifecycle_action": "relation_candidate_accept",
+            "decision": normalized_decision,
+            "candidate_id": normalized_candidate_id,
+            "edge_preview": edge_preview,
+            "plan_sha256": accept_digest,
+            "blockers": [],
+            "would_change": list(edge_preview.get("would_change", [])),
+            "files_written": [],
+        }
 
     root: Path = private["root"]
     with _MarkupMutationLock(root):
@@ -14741,6 +14813,49 @@ def relation_candidate_decide(
         edge_result: dict[str, Any] | None = None
         files_written: list[str] = []
         if normalized_decision == "accept":
+            # The approval binds the relation plan, the chosen edge and the
+            # edge writer's own item digests; it is re-derived here under the
+            # lock and narrowed to exactly that one edge.
+            fresh_edge_preview = archive_services.zettel_edge_write(
+                root,
+                from_zettel=fresh_candidate["source"]["zettel_id"],
+                target_ref=fresh_candidate["target"]["zettel_id"],
+                edge_type=normalized_edge_type,
+                visibility=normalized_visibility,
+                dry_run=True,
+            )
+            if not fresh_edge_preview.get("ok"):
+                return {
+                    **fresh,
+                    "ok": False,
+                    "state": "blocked",
+                    "dry_run": False,
+                    "approved": False,
+                    "lifecycle_action": "relation_candidate_accept",
+                    "decision": normalized_decision,
+                    "candidate_id": normalized_candidate_id,
+                    "blockers": ["relation_plan_changed"],
+                    "would_change": [],
+                    "files_written": [],
+                }
+            accept_digest, edge_binding, edge_identity = _relation_accept_digest(
+                relation_plan_sha256=expected, candidate_id=normalized_candidate_id,
+                edge_type=normalized_edge_type, visibility=normalized_visibility,
+                reason=safe_reason, confidence=normalized_confidence, edge_preview=fresh_edge_preview,
+            )
+            authority = archive_services._build_exact_batch_authority(
+                root,
+                plan_digest_approval_binding(ExactHumanApprovalOperation.relation_candidate_accept, accept_digest),
+                reviewer_claim=reviewer,
+                expected_plan_sha256=expected_exact_approval_plan_sha256,
+                expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+                claim=exact_human_approval_claim,
+                item_results=[{
+                    "approval_plan_sha256": edge_binding.plan_sha256,
+                    "approval_target_binding_sha256": edge_binding.target_binding_sha256,
+                    "approval_item_identity_sha256": edge_identity,
+                }],
+            )
             edge_result = archive_services.zettel_edge_write(
                 root,
                 from_zettel=fresh_candidate["source"]["zettel_id"],
@@ -14749,6 +14864,8 @@ def relation_candidate_decide(
                 visibility=normalized_visibility,
                 approve=True,
                 reviewed_by=reviewer,
+                exact_human_approval_claim=exact_human_approval_claim,
+                batch_authority=authority.for_item(edge_identity),
             )
             if not edge_result.get("ok"):
                 return {

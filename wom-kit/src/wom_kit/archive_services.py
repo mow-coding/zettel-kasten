@@ -30103,6 +30103,65 @@ def group_notion_provider_locator_occurrences(
     return grouped, normalized_by_fingerprint, order
 
 
+_NOTION_LOCATOR_PAGE_ID_RE = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32}"
+)
+
+
+def notion_locator_page_id(normalized_locator: str) -> str | None:
+    """The Notion page a locator points at, as a lowercase UUID, or None.
+
+    A `#block` fragment is ignored; a `?p=<id>` peek link names its page;
+    otherwise the last id in the path is the page (Notion URL slugs end with
+    the page id).
+    """
+
+    import uuid
+
+    text = str(normalized_locator or "").lower().split("#", 1)[0]
+    base, _sep, query = text.partition("?")
+    for part in query.split("&"):
+        key, _eq, value = part.partition("=")
+        if key == "p":
+            found = _NOTION_LOCATOR_PAGE_ID_RE.findall(value)
+            if found:
+                return str(uuid.UUID(found[-1].replace("-", "")))
+    found = _NOTION_LOCATOR_PAGE_ID_RE.findall(base)
+    return str(uuid.UUID(found[-1].replace("-", ""))) if found else None
+
+
+def notion_recovered_page_objects(root: Path) -> dict[str, list[str]]:
+    """page_id -> recovered objet ids from the notion-page-recovery projection
+    rows (`receipts/import/notion-page-recovery-*.jsonl`, outcome recovered).
+    v0.4.41 (feature request 34): the mapping path the link conversion was
+    missing. Unreadable rows are skipped; nothing is echoed."""
+
+    mapping: dict[str, list[str]] = {}
+    directory = root / "receipts" / "import"
+    try:
+        paths = sorted(directory.glob("notion-page-recovery-*.jsonl"))
+    except OSError:
+        return mapping
+    for path in paths:
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeError):
+            continue
+        for line in lines:
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(row, dict) or row.get("outcome") != "recovered":
+                continue
+            page_id, object_id = row.get("page_id"), row.get("object_id")
+            if isinstance(page_id, str) and isinstance(object_id, str) and object_id.startswith("sha256:"):
+                bucket = mapping.setdefault(page_id.lower(), [])
+                if object_id not in bucket:
+                    bucket.append(object_id)
+    return mapping
+
+
 def notion_locator_candidate_entries(
     root: Path,
     manifest_records: list[dict[str, Any]],
@@ -30110,6 +30169,7 @@ def notion_locator_candidate_entries(
     normalized_locator: str,
     locator_fingerprint: str,
     max_candidates: int,
+    recovered_pages: dict[str, list[str]] | None = None,
 ) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     for record in manifest_records:
@@ -30142,6 +30202,35 @@ def notion_locator_candidate_entries(
         )
         if len(candidates) >= max_candidates:
             break
+    # v0.4.41 (feature request 34): the page this locator names may have been
+    # recovered into the archive; its recovered objet is a candidate too.
+    page_id = notion_locator_page_id(normalized_locator)
+    if recovered_pages is None:
+        recovered_pages = notion_recovered_page_objects(root)
+    known = {candidate.get("object_id") for candidate in candidates}
+    for object_id_value in (recovered_pages.get(page_id, []) if page_id else []):
+        if len(candidates) >= max_candidates:
+            break
+        candidate_blockers: list[str] = []
+        normalized_object_id = normalize_object_id(object_id_value, candidate_blockers)
+        if not normalized_object_id or normalized_object_id in known:
+            continue
+        resolution = resolve_objet_ref(root, object_id=normalized_object_id, dry_run=True)
+        candidates.append(
+            {
+                "object_id": normalized_object_id,
+                "match_fields": [{"field": "receipts/import/notion-page-recovery", "match_kind": "recovered_notion_page"}],
+                "match_fields_truncated": False,
+                "store_labels": [],
+                "resolution_state": resolution.get("resolution_state"),
+                "manifest_record_count": resolution.get("manifest_record_count"),
+                "local_openable": bool(resolution.get("local_openable")),
+                "external_declared": bool(resolution.get("external_declared")),
+                "suggested_objet_ref": f"objet:{normalized_object_id}",
+                "candidate_blockers": unique_preserve_order(candidate_blockers),
+            }
+        )
+        known.add(normalized_object_id)
     return candidates
 
 
@@ -30268,6 +30357,7 @@ def notion_objet_link_plan(
 
     manifest_records = load_manifest_records(root)
     notion_labeled_record_count = sum(1 for record in manifest_records if manifest_record_has_notion_store_label(record))
+    recovered_pages = notion_recovered_page_objects(root)
     truncated = len(order) > max_locators
     locators: list[dict[str, Any]] = []
     for fingerprint in order[:max_locators]:
@@ -30279,6 +30369,7 @@ def notion_objet_link_plan(
             normalized_locator=normalized_locator,
             locator_fingerprint=fingerprint,
             max_candidates=max_candidates,
+            recovered_pages=recovered_pages,
         )
         candidate_count = len(candidates)
         if candidate_count:
@@ -34327,8 +34418,16 @@ def notion_objet_link_convert(
     dry_run: bool = False,
     approve: bool = False,
     reviewed_by: str | None = None,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
+    expected_plan_sha256: str | None = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
 ) -> dict[str, Any]:
-    if type(dry_run) is not bool or type(approve) is not bool or approve:
+    # v0.4.41 (feature request 34): the write runs only with a reauthenticated
+    # exact approval covering the edge and the conversion receipt.
+    if type(dry_run) is not bool or type(approve) is not bool or (
+        approve and exact_human_approval_claim is None
+    ):
         return _compound_exact_human_approval_blocked(
             lifecycle_action="notion_objet_link_convert",
         )
@@ -34407,8 +34506,49 @@ def notion_objet_link_convert(
             would_change.extend(str(item) for item in edge_result.get("would_change", []) if isinstance(item, str))
             would_change.append(conversion_receipt_relative)
 
+    # v0.4.41: one digest binds the reviewed locator, object, occurrence count,
+    # visibility, conversion receipt and the edge writer's own item digests.
+    plan_sha256: str | None = None
+    edge_binding: Any = None
+    edge_identity: str | None = None
+    if not blockers and edge_result is not None:
+        edge_binding = zettel_edge_approval_binding(edge_result)
+        edge_identity = _zettel_edge_item_identity(edge_result)
+        plan_sha256 = "sha256:" + sha256_json_hex({
+            "schema": "wom-kit/notion-objet-link-convert-plan/v0.1",
+            "archive_id": archive_id,
+            "zettel_path": zettel_path,
+            "locator_fingerprint": selected_fingerprint,
+            "object_id": selected_object_id,
+            "target_mode": mode,
+            "visibility": normalized_visibility,
+            "expected_occurrence_count": expected_occurrence_count,
+            "conversion_receipt_path": conversion_receipt_relative,
+            "edge_approval_plan_sha256": edge_binding.plan_sha256,
+            "edge_approval_target_binding_sha256": edge_binding.target_binding_sha256,
+            "edge_item_identity_sha256": edge_identity,
+        })
+    batch_authority: Any = None
+    if approve and not blockers:
+        if plan_sha256 != expected_plan_sha256:
+            blockers.append("notion_objet_link_convert_plan_changed")
+        else:
+            batch_authority = _build_exact_batch_authority(
+                root,
+                plan_digest_approval_binding(ExactHumanApprovalOperation.notion_objet_link_convert, plan_sha256),
+                reviewer_claim=str(reviewed_by or ""),
+                expected_plan_sha256=expected_exact_approval_plan_sha256,
+                expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+                claim=exact_human_approval_claim,
+                item_results=[{
+                    "approval_plan_sha256": edge_binding.plan_sha256,
+                    "approval_target_binding_sha256": edge_binding.target_binding_sha256,
+                    "approval_item_identity_sha256": edge_identity,
+                }],
+            )
+
     if blockers or dry_run:
-        return notion_objet_link_convert_result(
+        preview_result = notion_objet_link_convert_result(
             archive_id=archive_id,
             dry_run=bool(dry_run),
             approve=bool(approve),
@@ -34424,6 +34564,8 @@ def notion_objet_link_convert(
             blockers=blockers,
             warnings=warnings,
         )
+        preview_result["plan_sha256"] = plan_sha256
+        return preview_result
 
     assert reviewed_by is not None
     assert conversion_receipt_relative is not None
@@ -34450,6 +34592,8 @@ def notion_objet_link_convert(
             dry_run=False,
             approve=True,
             reviewed_by=reviewed_by,
+            exact_human_approval_claim=exact_human_approval_claim,
+            batch_authority=batch_authority.for_item(str(edge_identity)),
         )
         if not written_edge_result.get("ok"):
             raise ArchiveServiceError(
@@ -75796,6 +75940,35 @@ def _tiro_optional_get(
         return None
 
 
+def tiro_lossless_recovery_fetch_plan_sha256(
+    archive_id: str,
+    *,
+    credential_ref: str | None,
+    workspace_guid: str | None,
+    note_guid: str | None,
+    output_path: str,
+    max_notes: int,
+    timeout_seconds: int,
+) -> str:
+    """v0.4.41: the digest `--approve` binds. Identifiers and the credential
+    reference enter only as hashes; no value is echoed."""
+
+    def digest(value: str | None) -> str | None:
+        text = str(value or "").strip()
+        return hashlib.sha256(text.encode("utf-8")).hexdigest() if text else None
+
+    return "sha256:" + sha256_json_hex({
+        "schema": "wom-kit/tiro-lossless-recovery-fetch-plan/v0.1",
+        "archive_id": archive_id,
+        "credential_ref_sha256": digest(credential_ref),
+        "workspace_guid_sha256": digest(workspace_guid),
+        "note_guid_sha256": digest(note_guid),
+        "output_path": str(output_path or ""),
+        "max_notes": max_notes,
+        "timeout_seconds": timeout_seconds,
+    })
+
+
 def tiro_lossless_recovery_fetch_run(
     archive_root: Path | str,
     *,
@@ -75808,11 +75981,80 @@ def tiro_lossless_recovery_fetch_run(
     dry_run: bool = False,
     approve: bool = False,
     reviewed_by: str | None = None,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
+    expected_plan_sha256: str | None = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
 ) -> dict[str, Any]:
-    if type(dry_run) is not bool or type(approve) is not bool or approve:
+    """v0.4.41 (feature request 13): the live fetch runs only after a
+    reauthenticated exact approval bound to the dry-run plan digest; without
+    the claim it stays fixed closed. The credential is read after approval."""
+
+    if type(dry_run) is not bool or type(approve) is not bool or (
+        approve and exact_human_approval_claim is None
+    ):
         return _compound_exact_human_approval_blocked(
             lifecycle_action="tiro_lossless_recovery_fetch_run",
         )
+    root = require_existing_archive_root(archive_root)
+    plan_sha256 = tiro_lossless_recovery_fetch_plan_sha256(
+        read_archive_id(root),
+        credential_ref=credential_ref,
+        workspace_guid=workspace_guid,
+        note_guid=note_guid,
+        output_path=output_path,
+        max_notes=max_notes,
+        timeout_seconds=timeout_seconds,
+    )
+    if approve:
+        if expected_plan_sha256 != plan_sha256:
+            raise ArchiveServiceError("tiro_lossless_recovery_fetch_plan_changed")
+        from .operation_approval_binding import plan_digest_approval_binding
+
+        try:
+            _require_exact_human_operation_approval(
+                root,
+                plan_digest_approval_binding(ExactHumanApprovalOperation.tiro_lossless_recovery_fetch, plan_sha256),
+                reviewer_claim=str(safe_project_intake_actor_id(reviewed_by) or ""),
+                expected_plan_sha256=expected_exact_approval_plan_sha256,
+                expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+                claim=exact_human_approval_claim,
+            )
+        except OperationApprovalBindingError as exc:
+            raise ArchiveServiceError(exc.code) from None
+    result = _tiro_lossless_recovery_fetch_run_core(
+        root,
+        credential_ref=credential_ref,
+        workspace_guid=workspace_guid,
+        note_guid=note_guid,
+        output_path=output_path,
+        max_notes=max_notes,
+        timeout_seconds=timeout_seconds,
+        dry_run=dry_run,
+        approve=approve,
+        reviewed_by=reviewed_by,
+    )
+    if isinstance(result, dict):
+        result["plan_sha256"] = plan_sha256
+    return result
+
+
+def _tiro_lossless_recovery_fetch_run_core(
+    archive_root: Path | str,
+    *,
+    credential_ref: str | None = None,
+    workspace_guid: str | None = None,
+    note_guid: str | None = None,
+    output_path: str = TIRO_LOSSLESS_RECOVERY_DEFAULT_OUTPUT_PATH,
+    max_notes: int = 200,
+    timeout_seconds: int = 30,
+    dry_run: bool = False,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+) -> dict[str, Any]:
+    """The pre-v0.4.0 fetch; reached with approve only through the public
+    entry above after the exact approval was reauthenticated."""
+
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     blockers: list[str] = []
@@ -81760,6 +82002,70 @@ def imap_mailbox_adapter_manifest_plan(
     }
 
 
+def _args_plan_sha256(lifecycle_action: str, archive_id: str, arguments: Mapping[str, Any]) -> str:
+    """v0.4.41: digest of the reviewed arguments of an argument-bound writer.
+    Reference values (`*_ref`) and hosts enter only as hashes."""
+
+    projected: dict[str, Any] = {}
+    for key in sorted(arguments):
+        if key in {"reviewed_by", "dry_run", "approve"}:
+            continue
+        value = arguments[key]
+        if isinstance(value, Path):
+            value = str(value)
+        if (key.endswith("_ref") or key.endswith("_host")) and value is not None:
+            value = "sha256:" + hashlib.sha256(str(value).encode("utf-8")).hexdigest()
+        projected[key] = value
+    return "sha256:" + sha256_json_hex({
+        "schema": "wom-kit/argument-bound-writer-plan/v0.1",
+        "lifecycle_action": lifecycle_action,
+        "archive_id": archive_id,
+        "arguments": projected,
+    })
+
+
+def _args_exact_writer(
+    lifecycle_action: str,
+    operation: ExactHumanApprovalOperation,
+    core: Callable[..., dict[str, Any]],
+    archive_root: Path | str,
+    arguments: dict[str, Any],
+    *,
+    claim: Any,
+    expected_plan_sha256: str | None,
+    expected_exact_approval_plan_sha256: str | None,
+    expected_exact_approval_target_binding_sha256: str | None,
+) -> dict[str, Any]:
+    """v0.4.41: run a legacy argument-bound writer; `approve` requires a
+    reauthenticated exact approval bound to the argument digest."""
+
+    dry_run, approve = arguments.get("dry_run", True), arguments.get("approve", False)
+    if type(dry_run) is not bool or type(approve) is not bool or (approve and claim is None):
+        return _compound_exact_human_approval_blocked(lifecycle_action=lifecycle_action)
+    root = require_existing_archive_root(archive_root)
+    plan_sha256 = _args_plan_sha256(lifecycle_action, read_archive_id(root), arguments)
+    if approve:
+        if expected_plan_sha256 != plan_sha256:
+            raise ArchiveServiceError(f"{lifecycle_action}_plan_changed")
+        from .operation_approval_binding import plan_digest_approval_binding
+
+        try:
+            _require_exact_human_operation_approval(
+                root,
+                plan_digest_approval_binding(operation, plan_sha256),
+                reviewer_claim=str(safe_project_intake_actor_id(arguments.get("reviewed_by")) or ""),
+                expected_plan_sha256=expected_exact_approval_plan_sha256,
+                expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+                claim=claim,
+            )
+        except OperationApprovalBindingError as exc:
+            raise ArchiveServiceError(exc.code) from None
+    result = core(root, **arguments)
+    if isinstance(result, dict):
+        result["plan_sha256"] = plan_sha256
+    return result
+
+
 def imap_mailbox_adapter_manifest_write(
     archive_root: Path | str,
     *,
@@ -81772,8 +82078,41 @@ def imap_mailbox_adapter_manifest_write(
     reviewed_by: str | None = None,
     dry_run: bool = True,
     approve: bool = False,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
+    expected_plan_sha256: str | None = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
 ) -> dict[str, Any]:
-    if type(dry_run) is not bool or type(approve) is not bool or approve:
+    """v0.4.41: approve runs only after a reauthenticated exact approval
+    bound to the digest of these reviewed arguments."""
+
+    return _args_exact_writer(
+        "imap_mailbox_adapter_manifest_write",
+        ExactHumanApprovalOperation.imap_mailbox_adapter_manifest,
+        _imap_mailbox_adapter_manifest_write_core,
+        archive_root,
+        dict(adapter_id=adapter_id, providers=providers, operations=operations, selection_rules=selection_rules, consumer=consumer, platform=platform, reviewed_by=reviewed_by, dry_run=dry_run, approve=approve),
+        claim=exact_human_approval_claim,
+        expected_plan_sha256=expected_plan_sha256,
+        expected_exact_approval_plan_sha256=expected_exact_approval_plan_sha256,
+        expected_exact_approval_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+    )
+
+
+def _imap_mailbox_adapter_manifest_write_core(
+    archive_root: Path | str,
+    *,
+    adapter_id: str,
+    providers: list[str] | None = None,
+    operations: list[str] | None = None,
+    selection_rules: list[str] | None = None,
+    consumer: str = "wom:adapter:imap-mailbox",
+    platform: str = "windows",
+    reviewed_by: str | None = None,
+    dry_run: bool = True,
+    approve: bool = False,
+) -> dict[str, Any]:
+    if type(dry_run) is not bool or type(approve) is not bool:
         return _compound_exact_human_approval_blocked(
             lifecycle_action="imap_mailbox_adapter_manifest_write",
         )
@@ -92039,8 +92378,18 @@ def prehashed_objet_ledger_register(
     approve: bool = False,
     reviewed_by: str | None = None,
     max_rows: int = 100000,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
+    expected_plan_sha256: str | None = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
+    preview_for_approval: bool = False,
 ) -> dict[str, Any]:
-    if type(dry_run) is not bool or type(approve) is not bool or approve:
+    # v0.4.41 (letters 038-039, 164, 168): hash-only registration stays; the
+    # write runs only after a reauthenticated exact approval bound to the
+    # dry-run plan digest, otherwise it is fixed closed as before.
+    if type(dry_run) is not bool or type(approve) is not bool or (
+        approve and exact_human_approval_claim is None
+    ):
         return _compound_exact_human_approval_blocked(
             lifecycle_action="prehashed_objet_ledger_register",
         )
@@ -92093,11 +92442,16 @@ def prehashed_objet_ledger_register(
         blockers.append("ledger must contain at least one JSON object row.")
     if ledger_summary["invalid_mime_count"]:
         warnings.append("Some ledger MIME values were invalid and were ignored without echoing row values.")
+    # v0.4.41: the preview an approval is built from applies the approve-only
+    # checks too, so a ledger the writer would refuse never opens a dialog.
+    approval_checks = approve or preview_for_approval is True
+    if preview_for_approval is True and not normalized_store_ref:
+        blockers.append("Prehashed objet ledger registration requires --store-ref with a safe external store label.")
     if ledger_summary["invalid_row_count"]:
         warnings.append("Some ledger rows are invalid and were counted without echoing row values.")
-        if approve and not blockers:
+        if approval_checks and not blockers:
             blockers.append("prehashed objet ledger registration blocks when any ledger row is invalid.")
-    if ledger_summary["truncated"] and approve:
+    if ledger_summary["truncated"] and approval_checks:
         blockers.append("prehashed objet ledger registration blocks when max_rows truncates the ledger.")
 
     existing_object_ids = {
@@ -92110,6 +92464,43 @@ def prehashed_objet_ledger_register(
         item for item in unique_objects if f"sha256:{item['sha256']}" not in existing_object_ids
     ]
     skipped_existing = len(unique_objects) - len(candidates)
+    # One store-label scheme (letter 168): say when the label is not one of
+    # the archive's registered store labels. External prehashed stores need
+    # not be object-storage registrations, so this is a warning.
+    from .object_storage_upload_exact import registered_store_refs
+
+    known_store_refs = registered_store_refs(root)
+    if normalized_store_ref and known_store_refs and normalized_store_ref not in known_store_refs:
+        warnings.append("store_ref_not_a_registered_store_label")
+    plan_sha256 = "sha256:" + sha256_json_hex({
+        "schema": "wom-kit/prehashed-objet-ledger-plan/v0.1",
+        "archive_id": archive_id,
+        "store_kind": normalized_store,
+        "store_ref": normalized_store_ref,
+        "fields": [safe_sha_field, safe_size_field, safe_mime_field],
+        "max_rows": capped_max_rows,
+        "ledger_file_sha256es": ledger_summary["ledger_file_sha256es"],
+        "candidates": sorted(
+            (json.dumps(item, sort_keys=True, default=str) for item in candidates),
+        ),
+    })
+    if approve and not blockers:
+        if expected_plan_sha256 != plan_sha256:
+            blockers.append("prehashed_objet_ledger_plan_changed")
+        else:
+            from .operation_approval_binding import plan_digest_approval_binding
+
+            try:
+                _require_exact_human_operation_approval(
+                    root,
+                    plan_digest_approval_binding(ExactHumanApprovalOperation.prehashed_objet_ledger, plan_sha256),
+                    reviewer_claim=str(reviewer or ""),
+                    expected_plan_sha256=expected_exact_approval_plan_sha256,
+                    expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+                    claim=exact_human_approval_claim,
+                )
+            except OperationApprovalBindingError as exc:
+                raise ArchiveServiceError(exc.code) from None
     manifest_relative = "objects/manifests/files.jsonl"
     timestamp_compact = re.sub(r"[^0-9TZ]", "", datetime.now(timezone.utc).replace(microsecond=0).isoformat())
     proposed_receipt_path = f"{PREHASHED_OBJET_LEDGER_RECEIPTS_DIR}/{timestamp_compact}-{secrets.token_hex(6)}.json"
@@ -92122,6 +92513,8 @@ def prehashed_objet_ledger_register(
         "ok": not blockers,
         "dry_run": bool(dry_run),
         "lifecycle_action": "prehashed_objet_ledger_preview" if dry_run else "prehashed_objet_ledger_register",
+        "plan_sha256": plan_sha256,
+        "registered_store_refs": known_store_refs,
         "archive_id": archive_id,
         "store_kind": normalized_store,
         "store_ref": normalized_store_ref or None,
@@ -95215,9 +95608,37 @@ def _external_import_dry_run_from_snapshot(
         "blockers": blockers,
         "warnings": warnings,
     }
+    # v0.4.41 (letter 141): the digest `import-external --approve` binds. It
+    # covers the exact items (draft id, source bytes digest, source path),
+    # the target archive, the export, the locator policy and the receipt.
+    plan_sha256 = "sha256:" + hashlib.sha256(
+        json.dumps(
+            {
+                "schema": "wom-kit/external-import-plan/v0.1",
+                "target_archive": target_archive,
+                "source": source,
+                "export_path": str(export_root),
+                "provider_locator_policy": locator_policy,
+                "proposed_receipt_path": proposed_receipt_path,
+                "items": [
+                    {
+                        "zettel_id": external_import_zettel_id(source, item),
+                        "sha256": item.get("sha256"),
+                        "external_id": item.get("external_id"),
+                        "source_path": item.get("source_path"),
+                    }
+                    for item in discovered
+                ],
+            },
+            sort_keys=True,
+            ensure_ascii=False,
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
     return {
         "ok": not blockers,
         "dry_run": True,
+        "plan_sha256": plan_sha256,
         "source_system": source,
         "source_export": str(export_root),
         "provider_locator_policy": locator_policy,
@@ -95246,18 +95667,35 @@ def import_external_archive(
     reviewed_by: str,
     limit: int = 200,
     provider_locator_policy: str = "preserve",
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
+    expected_plan_sha256: str | None = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
 ) -> dict[str, Any]:
-    return _compound_exact_human_approval_blocked(
-        lifecycle_action="import_external_archive",
-    )
-
-    # Dormant legacy implementation retained for compatibility analysis.
-    # It is not an approval authority.
-    reviewer = reviewed_by.strip()
-    if not reviewer:
-        raise ArchiveServiceError("External import requires --reviewed-by.")
+    # v0.4.41 (letter 141): writes only after a reauthenticated exact
+    # approval bound to the dry-run plan digest; otherwise fixed closed.
+    if exact_human_approval_claim is None:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="import_external_archive",
+        )
+    reviewer = safe_project_intake_actor_id(reviewed_by)
+    if reviewer is None:
+        raise ArchiveServiceError("import_external_reviewer_invalid")
 
     root = require_existing_archive_root(archive_root)
+    from .operation_approval_binding import plan_digest_approval_binding
+
+    try:
+        _require_exact_human_operation_approval(
+            root,
+            plan_digest_approval_binding(ExactHumanApprovalOperation.import_external, str(expected_plan_sha256 or "")),
+            reviewer_claim=reviewer,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+            claim=exact_human_approval_claim,
+        )
+    except OperationApprovalBindingError as exc:
+        raise ArchiveServiceError(exc.code) from None
     source = normalize_external_import_source(source_system)
     locator_policy = normalize_external_import_provider_locator_policy(
         provider_locator_policy
@@ -95289,6 +95727,8 @@ def import_external_archive(
     )
     if dry_run["blockers"]:
         raise ArchiveServiceError("External import blocked by dry-run: " + "; ".join(dry_run["blockers"]))
+    if dry_run["plan_sha256"] != expected_plan_sha256:
+        raise ArchiveServiceError("import_external_plan_changed")
 
     now = datetime.now().astimezone().replace(microsecond=0).isoformat()
     source = dry_run["source_system"]
@@ -97091,17 +97531,36 @@ def onboarding_plan(
 
     enabled_providers = provider_profile_enabled_providers(resolved_profile)
     disabled_providers = sorted(PROVIDER_TYPES - set(enabled_providers))
-    return {
-        "ok": not blockers,
-        "dry_run": True,
-        "action": "onboard_archive",
+    resolved_name = name or default_archive_name(resolved_type, principal_name, resolved_principal_id)
+    # v0.4.41: the digest `onboard --approve` binds; it covers every value
+    # that decides what the new archive contains.
+    plan_basis = {
+        "schema": "wom-kit/onboarding-plan/v0.1",
         "target_root": str(resolved_target),
         "archive_type": resolved_type,
         "archive_id": resolved_archive_id,
         "principal_id": resolved_principal_id,
         "principal_kind": resolved_principal_kind,
         "principal_name": principal_name or resolved_principal_id,
-        "name": name or default_archive_name(resolved_type, principal_name, resolved_principal_id),
+        "name": resolved_name,
+        "provider_profile": resolved_profile,
+        "wom_kit_version": WOM_KIT_VERSION,
+    }
+    plan_sha256 = "sha256:" + hashlib.sha256(
+        json.dumps(plan_basis, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return {
+        "ok": not blockers,
+        "dry_run": True,
+        "action": "onboard_archive",
+        "plan_sha256": plan_sha256,
+        "target_root": str(resolved_target),
+        "archive_type": resolved_type,
+        "archive_id": resolved_archive_id,
+        "principal_id": resolved_principal_id,
+        "principal_kind": resolved_principal_kind,
+        "principal_name": principal_name or resolved_principal_id,
+        "name": resolved_name,
         "provider_profile": resolved_profile,
         "provider_profile_description": ONBOARDING_PROVIDER_PROFILES.get(resolved_profile, {}).get("description"),
         "provider_bindings": {
@@ -101983,16 +102442,20 @@ def add_source_binding(
     visibility_scope: str = "private",
     source_visibility: str = "private",
     replace: bool = False,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
+    expected_plan_sha256: str | None = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
 ) -> dict[str, Any]:
-    return _compound_exact_human_approval_blocked(
-        lifecycle_action="add_source_binding",
-    )
-
-    # Dormant legacy implementation retained for compatibility analysis.
-    # It is not an approval authority.
-    reviewer = reviewed_by.strip()
-    if not reviewer:
-        raise ArchiveServiceError("Source registration requires --reviewed-by.")
+    # v0.4.41: writes only after a reauthenticated exact approval bound to the
+    # dry-run plan digest; otherwise fixed closed as before.
+    if exact_human_approval_claim is None:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="add_source_binding",
+        )
+    reviewer = safe_project_intake_actor_id(reviewed_by)
+    if reviewer is None:
+        raise ArchiveServiceError("add_source_reviewer_invalid")
     root = require_existing_archive_root(archive_root)
     plan = add_source_dry_run(
         root,
@@ -102011,6 +102474,22 @@ def add_source_binding(
     )
     if plan["blockers"]:
         raise ArchiveServiceError("Source registration blocked by dry-run: " + "; ".join(plan["blockers"]))
+    plan_sha256 = add_source_plan_sha256(root, plan, local_root=local_root, replace=replace)
+    if expected_plan_sha256 != plan_sha256:
+        raise ArchiveServiceError("add_source_plan_changed")
+    from .operation_approval_binding import plan_digest_approval_binding
+
+    try:
+        _require_exact_human_operation_approval(
+            root,
+            plan_digest_approval_binding(ExactHumanApprovalOperation.add_source, plan_sha256),
+            reviewer_claim=reviewer,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+            claim=exact_human_approval_claim,
+        )
+    except OperationApprovalBindingError as exc:
+        raise ArchiveServiceError(exc.code) from None
 
     source_bindings_path = archive_internal_path(root, "source-bindings.yml")
     bindings_doc = load_source_bindings(root)
@@ -102053,6 +102532,34 @@ def add_source_binding(
         "local_profile_path": local_profile_path,
         "mount_plan": source_mount_step(source_binding, local_profile_present=local_profile_path is not None),
     }
+
+
+def add_source_plan_sha256(
+    root: Path,
+    plan: Mapping[str, Any],
+    *,
+    local_root: Path | str | None,
+    replace: bool,
+) -> str:
+    """v0.4.41: the digest `add-source --approve` binds: the exact binding,
+    whether a local profile is written (its path only as a hash), replace,
+    and the current source-bindings.yml bytes."""
+
+    bindings_path = archive_internal_path(root, "source-bindings.yml")
+    try:
+        current = hashlib.sha256(bindings_path.read_bytes()).hexdigest()
+    except OSError:
+        current = None
+    local_text = str(Path(local_root).expanduser().resolve()) if local_root else ""
+    return "sha256:" + sha256_json_hex({
+        "schema": "wom-kit/add-source-plan/v0.1",
+        "archive_id": plan.get("archive_id"),
+        "source_binding": plan.get("source_binding"),
+        "local_profile_write": bool((plan.get("local_profile") or {}).get("write")),
+        "local_root_sha256": hashlib.sha256(local_text.encode("utf-8")).hexdigest() if local_text else None,
+        "replace": bool(replace),
+        "source_bindings_sha256": current,
+    })
 
 
 def build_source_binding(

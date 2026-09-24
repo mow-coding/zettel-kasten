@@ -5,7 +5,11 @@ This document is not proof of a live credential intake, provider recovery,
 pull-request review, CI, tag, GitHub Release, wheel, fresh install, or human
 acceptance.
 
-Current v0.4.0 override: `notion-page-recovery` and `notion-recover` are
+Current v0.4.41 state: `notion-page-recovery --approve` runs again under one
+exact approval bound to the plan digest, and any self-consistent reviewed
+request is accepted (not only the 577+43 batch). `notion-recover` stays closed.
+
+Earlier v0.4.0 override (historical): `notion-page-recovery` and `notion-recover` were
 content-free preview/audit routes only. Approval returns
 `compound_exact_human_approval_binding_required` before credential, private
 request, provider, or target reads; it starts no provider recovery and writes
@@ -200,7 +204,7 @@ real OS call.
 | --- | --- | --- |
 | Human-only adoption | `credential-adopt --interactive --dry-run` reviews safe helper task/reason copy plus fixed WOM security copy; `--interactive --approve --expected-request-sha256 ...` opens the separate echo-disabled Windows console only for first enrollment or explicit `--replace-existing`. In v0.4.0 a matching existing registration fixed-closes before saved-secret read, provider validation, or registry evolution; caller approval cannot silently reuse it. Metadata alone can never set `persisted: true`. | Parser, spawned worker, Unicode visible-console input, authenticated receipt composition, fixed existing-registration boundary, and privacy projection are implemented and tested with injected dependencies. |
 | Authenticated listing | `credential-secure-list` lists unauthenticated local metadata without an OS read; `--verify` reads only the exact archive authentication-key target and verifies receipt/lifecycle MACs. It never enumerates vault entries or reads a provider credential. | Parser, registry, and exact-key verification are implemented. |
-| Default lifecycle selection | `credential-lifecycle --dry-run` returns an authenticated plan. In v0.4.0 the legacy `--approve --expected-plan-sha256 ... --reviewed-by ...` writer is fixed closed before archive-key or credential access because a digest and reviewer label are not exact-human write authority. Historical v0.3 receipts remain auditable; WOM still never deletes or revokes credentials automatically. | Read-only planning remains implemented; the approval branch returns `compound_exact_human_approval_binding_required` and writes nothing. |
+| Default lifecycle selection | `credential-lifecycle --dry-run` returns an authenticated plan. Since v0.4.41 `--approve --reviewed-by <you>` records the plan after one exact approval bound to its digest; this makes the adopted credential's scope binding persisted, which `notion-page-recovery-request-build` requires. Historical v0.3 receipts remain auditable; WOM still never deletes or revokes credentials automatically. | Implemented (v0.4.41); synthetic tests only, customer use not yet confirmed. |
 
 The exact released artifact remains the final parser authority. No operator
 should paste a PAT into any command or AI chat: the approved path accepts it

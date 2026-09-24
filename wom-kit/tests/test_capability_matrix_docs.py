@@ -9,7 +9,7 @@ from wom_kit import __version__
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = KIT_ROOT.parent
-EXPECTED_CURRENT_VERSION = "0.4.40"
+EXPECTED_CURRENT_VERSION = "0.4.41"
 EXPECTED_CURRENT_TAG = f"v{EXPECTED_CURRENT_VERSION}"
 CURRENT_VERSION = f"v{__version__}"
 CURRENT_RELEASE_NOTE = f"{EXPECTED_CURRENT_TAG}.md"
@@ -19,7 +19,7 @@ CURRENT_WHEEL_URL = (
     f"releases/download/{EXPECTED_CURRENT_TAG}/"
     f"wom_kit-{EXPECTED_CURRENT_VERSION}-py3-none-any.whl"
 )
-CURRENT_RUNTIME_STATUS = f"Status: {CURRENT_VERSION} closed-writer triage (27 reopened, 12 removed) and activity-scoped close"
+CURRENT_RUNTIME_STATUS = f"Status: {CURRENT_VERSION} new-user entry, working Notion recovery with trash cleanup, and seven more writers reopened"
 CURRENT_MATRIX_VERSION = f"Version: {CURRENT_VERSION} implementation and release scope"
 MATRIX_PATH = KIT_ROOT / "docs" / "capability-matrix.md"
 PRODUCT_ROADMAP_PATH = KIT_ROOT / "docs" / "product-roadmap.md"
@@ -4338,13 +4338,13 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "authenticated exact-human local writer in v0.4.10",
             "Bounded multi-item Objet capture",
             "Notion objet locator bridge",
-            "read-only in v0.4.0",
-            "index/plan/rewrite-plan, label preview, and conversion preview write nothing",
+            # v0.4.41: the conversion writes one embed edge after exact approval.
+            "exact-approval conversion since v0.4.41",
+            "index/plan/rewrite-plan and previews write nothing",
             "notion-objet-manifest-locator-label",
             "notion-objet-link-convert",
-            "compound_exact_human_approval_binding_required",
-            "before private manifest/zettel reads or mutation",
-            "creates no manifest row, edge, locator-label receipt, or conversion receipt",
+            "recovered objet as a candidate",
+            "the zettel body is not rewritten",
             "continues to omit provider locators, titles, bodies, paths, account data, and secrets",
             "MCP exposes no writer",
         ):
@@ -7367,7 +7367,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 )
                 root_line = (
                     '$womBootstrapRoot = Join-Path $env:LOCALAPPDATA '
-                    '"WOM\\bootstrap-v0440-$womBootstrapNonce"'
+                    '"WOM\\bootstrap-v0441-$womBootstrapNonce"'
                 )
                 absent_guard = "if (Test-Path -LiteralPath $womBootstrapRoot)"
                 absent_failure = 'throw "WOM bootstrap path must be new."'
@@ -7402,7 +7402,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn("wom-kit/docs/runtime-skill-install", text)
                 self.assertNotIn(
                     '$womBootstrapRoot = Join-Path $env:LOCALAPPDATA '
-                    '"WOM\\bootstrap-v0440"',
+                    '"WOM\\bootstrap-v0441"',
                     text,
                 )
                 self.assertNotIn(

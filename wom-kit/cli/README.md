@@ -345,7 +345,7 @@ doctor
   Inspect an archive for missing files, invalid YAML/frontmatter, schema problems, manifest problems, unsafe zettel references, and minting-rule warnings.
 
 init
-  Preview personal, company, or family archive initialization with --dry-run. Real CLI initialization is unavailable in v0.4.0 and stops before target/template reads or writes.
+  Preview personal, company, or family archive initialization with --dry-run, or create it with --approve --reviewed-by (the same operation as onboard --approve, one exact approval; v0.4.41).
 
 validate
   Run strict archive validation.

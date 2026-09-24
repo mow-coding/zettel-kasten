@@ -186,9 +186,21 @@ class V0400ReleaseDocsTests(unittest.TestCase):
                 "external-locator-deactivate",  # reopened in v0.4.40
                 "project-bytecode-repair",  # reopened in v0.4.40
                 "project-version-update-collision",  # reopened in v0.4.40
+                "legacy-coordination-cleanup",  # --destination retire scope in v0.4.41
+                "notion-page-recovery",  # reopened in v0.4.41
+                "onboard",  # reopened in v0.4.41
+                "runtime-skill-install",  # reopened in v0.4.41
+                "runtime-skill-uninstall",  # reopened in v0.4.41
+                "import-external",  # reopened in v0.4.41 (letter 141)
+                "credential-lifecycle",  # reopened in v0.4.41 (letter 119)
+                "prehashed-objet-ledger",  # reopened in v0.4.41 (letters 038-039, 164, 168)
+                "notion-objet-link-convert",  # reopened in v0.4.41 (feature request 34)
+                "tiro-lossless-recovery-fetch-run",  # reopened in v0.4.41 (feature request 13)
+                "add-source",  # reopened in v0.4.41
+                "imap-mailbox-adapter-manifest-write",  # reopened in v0.4.41
             }
         )
-        self.assertEqual(len(current_blocked), 19)  # 2026-09-24 triage reopen
+        self.assertEqual(len(current_blocked), 7)  # v0.4.41: IMAP adapter manifest reopened
         self.assertEqual(len(historical_blocked), 79)
         self.assertNotIn("migrate", current_blocked)
         self.assertNotIn("zettel-objet-link", current_blocked)

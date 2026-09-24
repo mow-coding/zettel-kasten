@@ -271,7 +271,9 @@ class Letter137AdditionalPublicCliBoundaryTests(_CliAssertions):
                 code, stdout, stderr = self.run_cli(argv)
                 # 2026-09-24 reopen: these route through exact approval and are
                 # refused before any read because no reviewer was given.
-                reopened = {"restore_drill", "repair_gitignore", "archive_identity_reconcile"}
+                reopened = {"restore_drill", "repair_gitignore", "archive_identity_reconcile",
+                            "onboard", "tiro_lossless_recovery_fetch_run",
+                            "imap_mailbox_adapter_manifest_write"}  # v0.4.41
                 self.assert_fixed_json_block(
                     code,
                     stdout,
@@ -302,7 +304,7 @@ class Letter137AdditionalPublicCliBoundaryTests(_CliAssertions):
             "parcel": ["pack"],
         }
         alias_groups = {key: value for key, value in alias_groups.items() if key not in REMOVED_COMMANDS_V0440}  # deleted in v0.4.40
-        self.assertEqual(len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS), 19)  # 2026-09-24 triage reopen
+        self.assertEqual(len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS), 7)  # v0.4.41: IMAP adapter manifest reopened
         for exact_batch_command in (
             "source-intake-batch",
             "objet-capture-batch",
@@ -346,7 +348,9 @@ class Letter137AdditionalPublicCliBoundaryTests(_CliAssertions):
         for canonical, aliases in alias_groups.items():
             for alias in aliases:
                 self.assertIs(top.choices[canonical], top.choices[alias])
-            if canonical != "parcel":
+            # v0.4.41: the Tiro fetch and the IMAP adapter manifest reopened;
+            # their --approve help names the exact approval instead.
+            if canonical not in {"parcel", "tiro-lossless-recovery-fetch-run", "imap-mailbox-adapter-manifest-write"}:
                 approve = next(
                     action
                     for action in top.choices[canonical]._actions
@@ -375,7 +379,7 @@ class Letter137AdditionalPublicCliBoundaryTests(_CliAssertions):
         init_help = " ".join(top.choices["init"].format_help().split())
         create_help = " ".join(top.choices["create-draft"].format_help().split())
         self.assertIn(f"Unavailable in v{archive_cli.__version__}", parcel_help)
-        self.assertIn(f"unavailable in v{archive_cli.__version__}", init_help)
+        self.assertIn("exactly like onboard --approve", init_help)  # v0.4.41 new-user entry
         self.assertIn("exact reviewed AI", create_help)
 
     def test_nested_derive_approve_blocks_before_single_or_manifest_read(self) -> None:

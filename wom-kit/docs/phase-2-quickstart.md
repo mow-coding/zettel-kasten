@@ -83,10 +83,11 @@ $env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli init .\tmp-my-archi
   --dry-run
 ```
 
-In v0.4.0 real init is fixed closed before target/template reads and creates no
-folder. Continue the read-only parts of this guide with the bundled fake
-archive or an archive that already exists; do not run Doctor against the
-uncreated preview target.
+Since v0.4.41, `--approve --reviewed-by <you>` instead of `--dry-run` creates
+the archive after one Windows approval dialog (the same operation as
+`onboard --approve`), then runs strict Doctor. Without it, continue the
+read-only parts of this guide with the bundled fake archive or an archive that
+already exists; do not run Doctor against the uncreated preview target.
 
 ## 3. Preview A Draft
 

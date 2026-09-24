@@ -311,11 +311,7 @@ run_onboarding() {
   if [ -n "$PRINCIPAL_NAME" ]; then
     set -- "$@" --principal-name "$PRINCIPAL_NAME"
   fi
-  if [ "$mode" = "approve" ]; then
-    set -- "$@" --approve
-  else
-    set -- "$@" --dry-run
-  fi
+  set -- "$@" --dry-run
   docker "$@"
 }
 
@@ -417,7 +413,12 @@ fi
 run_onboarding dry-run
 
 if [ "$YES" -eq 1 ] || [ "$APPROVE_ONBOARDING" -eq 1 ]; then
-  run_onboarding approve
+  # v0.4.41: creating the archive needs one exact approval shown by the
+  # Windows approval dialog; Linux and macOS have no such dialog yet.
+  echo ""
+  echo "Creating the archive needs the Windows approval dialog, which this platform does not have yet."
+  echo "The dry-run above shows what would be created; run 'archive onboard ... --approve --reviewed-by <you>' on Windows."
+  exit 1
 fi
 
 echo ""

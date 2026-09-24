@@ -350,7 +350,13 @@ class _NotionSecureIntakeVerifier:
 
 
 class _NotionHttpAdapter:
-    """Notion 2026-03-11 read-only adapter over one injected stdlib opener."""
+    """Notion 2026-03-11 adapter over one injected stdlib opener.
+
+    Every call is a GET except ``move_page_to_trash`` (v0.4.41), the single
+    write: ``PATCH /v1/pages/{id}`` with exactly ``{"in_trash": bool}``. It
+    is sent once and never retried; the caller confirms the result with a
+    fresh GET.
+    """
 
     def __init__(
         self,
@@ -622,6 +628,58 @@ class _NotionHttpAdapter:
     ) -> _NotionIdentityVerifier:
         return _NotionIdentityVerifier(self, reviewed_anchor_page_id)
 
+    def move_page_to_trash(
+        self,
+        page_id: str,
+        credential: object,
+        *,
+        api_version: str,
+        in_trash: bool = True,
+    ) -> ProviderResponse:
+        """Move one page to the Notion trash (or back with ``in_trash=False``).
+
+        One transport attempt, never retried: a write whose outcome is unknown
+        is resolved by the caller's next GET, not by sending it again.
+        """
+
+        normalized = _normalize_uuid(page_id)
+        if normalized is None:
+            return _safe_provider_error(400, "notion_page_id_invalid")
+        if api_version != NOTION_API_VERSION:
+            return _safe_provider_error(400, "notion_api_version_invalid")
+        if type(in_trash) is not bool:
+            return _safe_provider_error(400, "notion_trash_value_invalid")
+        owned = not isinstance(credential, _NotionBearerSecret)
+        secret = _coerce_secret(credential)
+        if secret is None:
+            return _safe_provider_error(401, "notion_secret_invalid")
+        try:
+            if not self._pace_request():
+                return _safe_provider_error(599, "notion_transport_error")
+            result = self._send_json_once(
+                "PATCH",
+                f"/v1/pages/{normalized}",
+                secret,
+                body=json.dumps({"in_trash": in_trash}, separators=(",", ":")).encode("ascii"),
+            )
+            if result.status != 200:
+                return ProviderResponse(
+                    status=result.status,
+                    payload={"reason_code": result.reason_code or _status_reason(result.status)},
+                    headers=result.headers,
+                )
+            payload = _page_projection(result.payload, expected_id=normalized)
+            if payload is None:
+                return ProviderResponse(
+                    status=502,
+                    payload={"reason_code": "notion_response_malformed"},
+                    headers=result.headers,
+                )
+            return ProviderResponse(status=result.status, payload=payload, headers=result.headers)
+        finally:
+            if owned:
+                secret.close()
+
     def secure_intake_verifier(self) -> _NotionSecureIntakeVerifier:
         """Return a verifier matching credential_secure_intake's Protocol."""
 
@@ -687,15 +745,35 @@ class _NotionHttpAdapter:
         *,
         provider_request_observer: Callable[[], None] | None = None,
     ) -> _HttpResult:
-        # ``path`` is constructed only from fixed literals and normalized UUIDs.
+        return self._send_json_once(
+            "GET", path, secret, provider_request_observer=provider_request_observer,
+        )
+
+    def _send_json_once(
+        self,
+        method: str,
+        path: str,
+        secret: _NotionBearerSecret,
+        *,
+        body: bytes | None = None,
+        provider_request_observer: Callable[[], None] | None = None,
+    ) -> _HttpResult:
+        # ``path`` is constructed only from fixed literals and normalized UUIDs;
+        # the only write is PATCH with the fixed in_trash body.
+        if method not in {"GET", "PATCH"} or (method == "GET") != (body is None):
+            return _HttpResult(400, None, {}, "notion_request_invalid")
+        headers = {
+            "Accept": "application/json",
+            "Authorization": secret._authorization_value(),
+            "Notion-Version": NOTION_API_VERSION,
+        }
+        if body is not None:
+            headers["Content-Type"] = "application/json"
         request = urllib_request.Request(
             OFFICIAL_NOTION_API_BASE + path,
-            method="GET",
-            headers={
-                "Accept": "application/json",
-                "Authorization": secret._authorization_value(),
-                "Notion-Version": NOTION_API_VERSION,
-            },
+            data=body,
+            method=method,
+            headers=headers,
         )
         response: Any = None
         try:
