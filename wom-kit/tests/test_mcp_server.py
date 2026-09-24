@@ -2430,9 +2430,10 @@ class McpServerTests(unittest.TestCase):
     ) -> None:
         parser = archive_cli.build_parser()
         inventory = archive_cli._parser_capability_inventory(parser)
+        # transfer-ownership stays fixed closed; remint-reconcile reopened (2026-09-24).
         suggested_command = (
-            "archive remint-reconcile <archive-root> "
-            "--zettel-id <id> --approve"
+            "archive transfer-ownership <archive-root> "
+            "--new-owner <id> --approve"
         )
         status = archive_cli.command_status.resolve_suggested_command_mode(
             inventory,

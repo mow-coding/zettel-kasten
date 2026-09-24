@@ -218,6 +218,10 @@ class ExactHumanApprovalOperation(Enum):
     zet_revision_write = "zet_revision_write"
     zet_revision_restore_write = "zet_revision_restore_write"
     source_intake_chain = "source_intake_chain"
+    # 2026-09-24 reopen (58-writer triage, group 1): one approval re-issues the
+    # reviewed list of mint / retired-draft receipts from current bytes.
+    remint_reconcile = "remint_reconcile"
+    retire_draft_reconcile = "retire_draft_reconcile"
 
 
 def _validated_target_preview_text(value: str | None) -> str | None:
@@ -514,6 +518,8 @@ _OPERATION_LABELS = {
     ExactHumanApprovalOperation.zet_revision_write: "정본 zet 의미 개정",
     ExactHumanApprovalOperation.zet_revision_restore_write: "정본 zet 개정 복원",
     ExactHumanApprovalOperation.source_intake_chain: "새 원본 반입 사슬(근거 기록·선정·보존)",
+    ExactHumanApprovalOperation.remint_reconcile: "발행 영수증 재정합",
+    ExactHumanApprovalOperation.retire_draft_reconcile: "퇴역 영수증 재정합",
 }
 
 _OPERATION_QUESTIONS = {
@@ -615,6 +621,12 @@ _OPERATION_QUESTIONS = {
     ),
     ExactHumanApprovalOperation.source_intake_chain: (
         "검토한 새 원본 1개의 반입 근거 기록, 보존 선정, 오브제 보존을 한 번에 실행할까요?"
+    ),
+    ExactHumanApprovalOperation.remint_reconcile: (
+        "검토한 목록의 발행 영수증을 지금 바이트 기준으로 다시 기록할까요?"
+    ),
+    ExactHumanApprovalOperation.retire_draft_reconcile: (
+        "검토한 목록의 퇴역 영수증을 지금 바이트 기준으로 다시 기록할까요?"
     ),
 }
 
@@ -782,6 +794,14 @@ _OPERATION_SUMMARIES = {
         "content-addressed 보존과 보존 영수증)를 이 승인 하나로 이어서 실행합니다. "
         "본문을 외부로 보내거나 자격증명을 읽지 않습니다."
     ),
+    ExactHumanApprovalOperation.remint_reconcile: (
+        "정본 내용은 바꾸지 않고, 목록의 발행 영수증 해시를 현재 바이트로 다시 적습니다. "
+        "이전 값과 분류(줄바꿈 형식 차이 / 내용 변경)는 감사 영수증에 남습니다."
+    ),
+    ExactHumanApprovalOperation.retire_draft_reconcile: (
+        "정본 내용은 바꾸지 않고, 목록의 퇴역 영수증 해시를 현재 바이트로 다시 적습니다. "
+        "이전 값과 분류는 감사 영수증에 남습니다."
+    ),
 }
 
 _OPERATION_APPROVE_BUTTONS = {
@@ -828,6 +848,8 @@ _OPERATION_APPROVE_BUTTONS = {
     ExactHumanApprovalOperation.zet_revision_write: "개정 실행",
     ExactHumanApprovalOperation.zet_revision_restore_write: "개정 복원",
     ExactHumanApprovalOperation.source_intake_chain: "반입 사슬 실행",
+    ExactHumanApprovalOperation.remint_reconcile: "재정합 실행",
+    ExactHumanApprovalOperation.retire_draft_reconcile: "재정합 실행",
 }
 
 

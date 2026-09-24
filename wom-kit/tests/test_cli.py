@@ -3657,10 +3657,15 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertFalse(result["ok"], result)
         self.assertEqual(result["state"], "blocked")
         self.assertEqual(result["lifecycle_action"], lifecycle_action)
-        self.assertEqual(
-            result["reason_codes"],
-            ["compound_exact_human_approval_binding_required"],
+        # 2026-09-24 reopen: the receipt reconcilers route --approve through
+        # exact approval; a target that cannot be planned is refused before
+        # any dialog, still without writes or private echo.
+        expected_codes = (
+            [f"{lifecycle_action}_preflight_blocked"]
+            if lifecycle_action in {"remint_reconcile", "retire_draft_reconcile"}
+            else ["compound_exact_human_approval_binding_required"]
         )
+        self.assertEqual(result["reason_codes"], expected_codes)
         self.assertFalse(result["private_values_echoed"])
         self.assertEqual(self.archive_tree_snapshot(archive_root), before)
         return result
@@ -70798,10 +70803,13 @@ state:
             self.assertTrue(result["bom_stripped"], result)
             review = result["human_review_plan"]
             self.assertIn("--strip-bom", review["commands"]["review_visible_dry_run"])
-            self.assertIsNone(review["commands"]["approve_if_intentional"])
-            self.assertEqual(review["approval_state"], "writer_unavailable")
-            self.assertFalse(result["approval_would_write"])
-            self.assertFalse(any("--approve" in action for action in result["next_safe_actions"]))
+            # 2026-09-24 reopen: the approval command is offered again and
+            # carries the content-change acknowledgement and review digest.
+            approve = review["commands"]["approve_if_intentional"]
+            self.assertIn("--content-changed-ack", approve)
+            self.assertIn("--strip-bom", approve)
+            self.assertNotIn("approval_state", review)
+            self.assertTrue(result["approval_would_write"])
 
     def test_remint_reconcile_strip_bom_apply_content_edit_matches_dry_run(self) -> None:  # 2.T5
         # Apply agrees with the 2.T4 dry-run: BOM + title edit without ack is BLOCKED;
@@ -70985,9 +70993,10 @@ state:
             self.assertNotIn(body_marker, serialized_review)
             self.assertNotIn(receipt_marker, serialized_review)
             self.assertFalse(review["content_included"])
-            self.assertIsNone(review["commands"]["approve_if_intentional"])
-            self.assertEqual(review["approval_state"], "writer_unavailable")
-            self.assertFalse(result["approval_would_write"])
+            # 2026-09-24 reopen: approval is offered again under exact approval.
+            self.assertIn("--content-changed-ack", review["commands"]["approve_if_intentional"])
+            self.assertNotIn("approval_state", review)
+            self.assertTrue(result["approval_would_write"])
 
     def test_retire_draft_reconcile_pointer_ref_mismatch_is_content_change(self) -> None:
         # v0.3.167 Item 2: the mint_receipt pointer ref has no format dimension; ANY

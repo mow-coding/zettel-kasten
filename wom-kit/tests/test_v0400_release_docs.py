@@ -149,9 +149,11 @@ class V0400ReleaseDocsTests(unittest.TestCase):
                 "zet-revision-write",
                 "zet-revision-restore-write",
                 "object-storage-upload",  # reopened in v0.4.33
+                "remint-reconcile",  # reopened in v0.4.40
+                "retire-draft-reconcile",  # reopened in v0.4.40
             }
         )
-        self.assertEqual(len(current_blocked), 58)  # v0.4.33: object-storage-upload reopened
+        self.assertEqual(len(current_blocked), 56)  # v0.4.40: receipt reconcilers reopened
         self.assertEqual(len(historical_blocked), 79)
         self.assertNotIn("migrate", current_blocked)
         self.assertNotIn("zettel-objet-link", current_blocked)

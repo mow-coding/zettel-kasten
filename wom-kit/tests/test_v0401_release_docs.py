@@ -104,7 +104,7 @@ class V0401ReleaseDocsTests(unittest.TestCase):
 
     def test_current_parser_combines_all_released_writers(self) -> None:
         blocked = archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS
-        self.assertEqual(len(blocked), 58)
+        self.assertEqual(len(blocked), 56)  # v0.4.40: receipt reconcilers reopened
         self.assertNotIn("object-storage-upload", blocked)  # v0.4.33
         self.assertNotIn("migrate", blocked)
         self.assertNotIn("discard-draft", blocked)
@@ -139,15 +139,15 @@ class V0401ReleaseDocsTests(unittest.TestCase):
         # read-only exact-approval-claims (one alias) and the always-dialog
         # exact-approval-claim-finalize writer, and makes revert-edge --approve
         # unconditional (one conditional scope fewer).
-        self.assertEqual(counts["canonical_executable_command_count"], 326)  # v0.4.38: operator-feedback-archive
+        self.assertEqual(counts["canonical_executable_command_count"], 328)  # v0.4.40: two receipt reconcile batch commands
         self.assertEqual(counts["alias_invocation_path_count"], 262)
-        self.assertEqual(counts["invocation_path_count"], 588)
+        self.assertEqual(counts["invocation_path_count"], 590)
         # v0.4.33 reopened object-storage-upload (one path moves from fixed-closed to available).
-        self.assertEqual(counts["approval_available_command_count"], 63)  # v0.4.38: operator-feedback-archive
-        self.assertEqual(counts["approval_fixed_closed_command_count"], 59)
+        self.assertEqual(counts["approval_available_command_count"], 67)  # v0.4.40: receipt reconcilers reopened
+        self.assertEqual(counts["approval_fixed_closed_command_count"], 57)
         self.assertEqual(counts["approval_not_exposed_command_count"], 204)
         self.assertEqual(counts["conditional_approval_command_count"], 10)
-        self.assertEqual(counts["dry_run_exposed_command_count"], 281)
+        self.assertEqual(counts["dry_run_exposed_command_count"], 283)
         self.assertEqual(counts["unmatched_fixed_closed_command_count"], 0)
         by_path = {
             row["canonical_path"]: row for row in inventory["commands"]

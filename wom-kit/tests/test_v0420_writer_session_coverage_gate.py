@@ -16,9 +16,9 @@ class WriterSessionCoverageGateTests(unittest.TestCase):
     def test_manifest_matches_parser_and_denominator_stays_honest(self):
         problems, counts = subject.check()
         self.assertEqual(problems, [])
-        self.assertEqual(sum(counts.values()), 63)  # v0.4.38 adds draft revision and activity cleanup
+        self.assertEqual(sum(counts.values()), 67)  # v0.4.40 adds the four receipt reconcilers (2026-09-24 reopen)
         self.assertGreaterEqual(counts["session_integrated"], 5)
-        self.assertEqual(counts["routed"], 9)  # v0.4.38 adds two environment-grant routes
+        self.assertEqual(counts["routed"], 13)  # v0.4.38 two environment-grant routes; the reconcilers add four
         self.assertGreater(counts["pending"], 0)  # all-writer scope is not complete yet
         self.assertEqual(subject.main(["--format", "text"]), 0)
 

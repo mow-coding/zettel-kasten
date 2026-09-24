@@ -166,9 +166,9 @@ class V0435ReleaseDocsTests(unittest.TestCase):
         routed = sum(1 for row in manifest["paths"].values() if row.get("route"))
         # v0.4.23 integrated create-draft (LR-06a); v0.4.24 through v0.4.27, v0.4.31 and v0.4.34 change no writer;
         # v0.4.28 restore, v0.4.29 offload, v0.4.30 claim finalize, v0.4.33 upload and v0.4.34 compose are pending (target v0.4.36).
-        self.assertEqual(len(statuses), 63)  # v0.4.36: operator-feedback-archive row
+        self.assertEqual(len(statuses), 67)  # v0.4.40: four receipt reconciler rows
         self.assertEqual(statuses.count("session_integrated") - routed, 6)
-        self.assertEqual(routed, 9)  # v0.4.38: two more writers route through the environment grant
+        self.assertEqual(routed, 13)  # v0.4.40: the four receipt reconcilers route through the environment grant
         self.assertEqual(statuses.count("pending"), 29)  # v0.4.36: five rows integrated through the environment route
         self.assertEqual(statuses.count("legacy_exception"), 19)
         self.assertEqual(manifest["paths"]["create-draft"]["status"], "session_integrated")

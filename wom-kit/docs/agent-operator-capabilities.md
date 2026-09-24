@@ -205,21 +205,21 @@ field remain `history_not_audited`. Inventory, shared capability availability,
 and command help consume the same content-free history. Current availability
 continues to be parser-derived; history does not grant execution authority.
 
-For the current v0.4.36 working-tree parser, the inventory snapshot is:
+For the current v0.4.40 working-tree parser, the inventory snapshot is:
 
 ```text
-canonical executable command paths: 322
+canonical executable command paths: 328
 alias invocation paths:              262
-all invocation paths:                584
-approval_available:                   63
-approval_fixed_closed:                59
+all invocation paths:                590
+approval_available:                   67
+approval_fixed_closed:                57
 approval_not_exposed:                204
 conditional approval paths:            10
-dry_run_exposed:                     278
+dry_run_exposed:                     283
 unmatched fixed-close entries:         0
 ```
 
-The 59 fixed-closed paths consist of 58 compound-approval migrations and
+The 57 fixed-closed paths consist of 56 compound-approval migrations and
 `operation-control`, whose reason is `operation_cancel_not_supported`.
 Its retained `--approve` syntax does not implement cancellation. Status, wait,
 and recovery-plan remain available with `--dry-run`; no cancel request is

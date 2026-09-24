@@ -31,7 +31,9 @@
         "retire_draft_batch",
         "zet_revision_write",
         "zet_revision_restore_write",
-        "source_intake_chain"
+        "source_intake_chain",
+        "remint_reconcile",
+        "retire_draft_reconcile"
       ]
     },
     "plan_sha256": {"$ref": "#/$defs/sha256_ref"},

@@ -80,6 +80,8 @@ RECEIPTED_OPERATIONS = frozenset(
         "mint_zet_batch",
         "retire_draft",
         "retire_draft_batch",
+        "remint_reconcile",
+        "retire_draft_reconcile",
         "zettel_edge",
         "zettel_edge_batch",
         "zettel_edge_revert",

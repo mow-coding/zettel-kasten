@@ -39,7 +39,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable, Iterable, Iterator, Mapping, Protocol
+from typing import Any, Callable, Iterable, Iterator, Mapping, Protocol, Sequence
 
 from . import __version__ as WOM_KIT_VERSION
 from .paths import (
@@ -119,6 +119,7 @@ from .operation_approval_binding import (
     objet_capture_approval_binding,
     project_version_update_approval_binding,
     promote_zet_approval_binding,
+    receipt_reconcile_batch_approval_binding,
     retire_draft_approval_binding,
     warning_override_approval_binding,
     zettel_edge_approval_binding,
@@ -1333,8 +1334,10 @@ MINT_RETIRED_DRAFT_BATCH_RECEIPTS_DIR = "receipts/mint/retired-drafts/batches"
 MINT_RECONCILE_RECEIPTS_DIR = "receipts/mint/reconciles"
 # v0.3.167 Item 2: sibling audit receipts for retire-draft-reconcile.
 MINT_RETIRE_DRAFT_RECONCILE_RECEIPTS_DIR = "receipts/mint/retired-draft-reconciles"
-# Reserved for the deferred remint-reconcile-batch tier (do not implement now):
+# remint-reconcile-batch receipts (2026-09-24 reopen); the retired-draft batch
+# receipts live in the sibling reconcile directory's batches/ folder.
 MINT_RECONCILE_BATCH_RECEIPTS_DIR = "receipts/mint/reconciles/batches"
+MINT_RETIRE_DRAFT_RECONCILE_BATCH_RECEIPTS_DIR = "receipts/mint/retired-draft-reconciles/batches"
 # Frontmatter keys mint injects/manages on the canonical (see mint_zettel where it
 # builds canonical_frontmatter). These are EXCLUDED from reconcile's content-identity
 # comparison because they are mint-managed, not content. source_refs is TRANSFORMED
@@ -52625,6 +52628,7 @@ def remint_reconcile_apply(
     content_changed_ack: bool = False,
     reviewed_plan_sha256: str | None = None,
     strip_bom: bool = False,
+    _exact_approval: _ReconcileExactApproval | None = None,
 ) -> dict[str, Any]:
     """Re-issue an honest mint receipt after human review. Writes both receipts.
 
@@ -52638,9 +52642,12 @@ def remint_reconcile_apply(
     proceeds under that already-acked run. Guards: no-op refusal when no leading
     BOM; a hard normalized-content invariant asserted before the atomic rewrite.
     """
-    return _compound_exact_human_approval_blocked(
-        lifecycle_action="remint_reconcile",
-    )
+    # Writable only inside receipt_reconcile_batch, after the exact approval
+    # (dialog or session grant) was reauthenticated for the whole list.
+    if type(_exact_approval) is not _ReconcileExactApproval:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="remint_reconcile",
+        )
 
     reviewer = (reviewed_by or "").strip()
     if not reviewer:
@@ -52668,6 +52675,10 @@ def remint_reconcile_apply(
             raise ArchiveServiceError(
                 "Reconcile blocked: archive evidence changed after the human review dry-run; rerun the dry-run and review the new plan."
             )
+
+    _receipt_reconcile_require_item(root, "mint", plan, _exact_approval, strip_bom=strip_bom)
+
+    _receipt_reconcile_require_item(root, "mint", plan, _exact_approval, strip_bom=strip_bom)
 
     receipt_relative = plan["mint_receipt_path"]
     canonical_relative = plan["canonical_path"]
@@ -52771,6 +52782,8 @@ def remint_reconcile_apply(
         bom_stripped=bom_stripped,
         reviewed_plan_sha256=reviewed_plan_digest,
     )
+    provenance["exact_human_approval_id"] = _exact_approval.receipt["exact_human_approval"]["approval_id"]
+    provenance["batch_id"] = _exact_approval.batch_id
 
     # In-place mint-receipt update: preserve ALL fields; only recompute the three
     # shas and append/extend the reconcile provenance history (append-only).
@@ -52835,6 +52848,9 @@ def remint_reconcile_apply(
         audit_receipt["reviewed_plan_sha256"] = reviewed_plan_digest
     if source_note:
         audit_receipt["source_note"] = source_note
+    audit_receipt["batch_id"] = _exact_approval.batch_id
+    audit_receipt["approval_item_sha256"] = _exact_approval.item_sha256
+    audit_receipt["exact_human_approval"] = _exact_approval.receipt
     _atomic_write_json(reconcile_receipt_path, audit_receipt)
 
     result = dict(plan)
@@ -53258,15 +53274,17 @@ def retire_draft_reconcile_apply(
     content_changed_ack: bool = False,
     reviewed_plan_sha256: str | None = None,
     strip_bom: bool = False,
+    _exact_approval: _ReconcileExactApproval | None = None,
 ) -> dict[str, Any]:
     """Re-issue an honest retire-draft receipt after human review. Writes both the
     updated retire receipt (recomputed ref shas + append-only reconcile history) and
     a sibling immutable audit receipt. Refuses unless the plan is ok and the
     content_change ack gate is satisfied. Never edits content (except an opt-in
     --strip-bom on the canonical target, mirroring remint-reconcile Item 3)."""
-    return _compound_exact_human_approval_blocked(
-        lifecycle_action="retire_draft_reconcile",
-    )
+    if type(_exact_approval) is not _ReconcileExactApproval:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="retire_draft_reconcile",
+        )
 
     reviewer = (reviewed_by or "").strip()
     if not reviewer:
@@ -53289,6 +53307,10 @@ def retire_draft_reconcile_apply(
             raise ArchiveServiceError(
                 "Retire-draft reconcile blocked: archive evidence changed after the human review dry-run; rerun the dry-run and review the new plan."
             )
+
+    _receipt_reconcile_require_item(root, "retire_draft", plan, _exact_approval, strip_bom=strip_bom)
+
+    _receipt_reconcile_require_item(root, "retire_draft", plan, _exact_approval, strip_bom=strip_bom)
 
     zid = plan["zettel_id"]
     receipt_relative = plan["retire_receipt_path"]
@@ -53357,6 +53379,8 @@ def retire_draft_reconcile_apply(
     }
     if reviewed_plan_digest:
         provenance["reviewed_plan_sha256"] = reviewed_plan_digest
+    provenance["exact_human_approval_id"] = _exact_approval.receipt["exact_human_approval"]["approval_id"]
+    provenance["batch_id"] = _exact_approval.batch_id
     existing = updated_receipt.get("reconcile")
     history: list[dict[str, Any]] = []
     if isinstance(existing, dict) and isinstance(existing.get("history"), list):
@@ -53408,6 +53432,9 @@ def retire_draft_reconcile_apply(
     }
     if reviewed_plan_digest:
         audit_receipt["reviewed_plan_sha256"] = reviewed_plan_digest
+    audit_receipt["batch_id"] = _exact_approval.batch_id
+    audit_receipt["approval_item_sha256"] = _exact_approval.item_sha256
+    audit_receipt["exact_human_approval"] = _exact_approval.receipt
     _atomic_write_json(audit_path, audit_receipt)
 
     result = dict(plan)
@@ -53440,6 +53467,549 @@ def retire_draft_reconcile_apply(
     if bom_strip_note:
         result["bom_strip_note"] = bom_strip_note
     return result
+
+
+# ---------------------------------------------------------------------------
+# Receipt reconcile under exact human approval (2026-09-24 reopen, 58-writer
+# triage group 1).  Letters 147/148/156 reported 3,345 mint and 3,346 retired
+# draft receipt mismatches (mostly assets added after mint) with the only
+# repair writer closed.  One reviewed list, one exact approval (dialog or a
+# valid session grant), and every item re-verified from current bytes
+# immediately before its own write.
+# ---------------------------------------------------------------------------
+
+RECEIPT_RECONCILE_BATCH_RECEIPTS_DIRS = {
+    "mint": MINT_RECONCILE_BATCH_RECEIPTS_DIR,
+    "retire_draft": MINT_RETIRE_DRAFT_RECONCILE_BATCH_RECEIPTS_DIR,
+}
+RECEIPT_RECONCILE_KINDS = ("mint", "retire_draft")
+RECEIPT_RECONCILE_DRIFT_FILTERS = ("all", "format_drift", "content_change")
+RECEIPT_RECONCILE_DEFAULT_MAX_ITEMS = 1_000
+RECEIPT_RECONCILE_MAX_ITEMS = 10_000
+_RECEIPT_RECONCILE_ITEM_SCHEMA = "wom-kit/receipt-reconcile-item/v0.1"
+_RECEIPT_RECONCILE_BATCH_SCHEMA = "wom-kit/receipt-reconcile-batch-receipt/v0.1"
+_RECEIPT_RECONCILE_SOURCES = {
+    "mint": (MINT_RECEIPTS_DIR, ".mint.json", ("target", "snapshot", "source")),
+    "retire_draft": (
+        MINT_RETIRED_DRAFT_RECEIPTS_DIR,
+        ".retire-draft.json",
+        _RETIRE_RECONCILE_ALL_REFS,
+    ),
+}
+_RECEIPT_RECONCILE_COMMANDS = {
+    "mint": "remint-reconcile-batch",
+    "retire_draft": "retire-draft-reconcile-batch",
+}
+
+
+class _ReconcileExactApproval:
+    """Private proof that the batch writer reauthenticated the approval claim.
+
+    Only ``receipt_reconcile_batch`` constructs it, after
+    ``_require_exact_human_operation_approval`` succeeded for the whole list;
+    the single-item apply functions refuse to write without one.
+    """
+
+    __slots__ = ("receipt", "batch_id", "item_sha256")
+
+    def __init__(self, *, receipt: dict[str, Any], batch_id: str, item_sha256: str) -> None:
+        self.receipt = receipt
+        self.batch_id = batch_id
+        self.item_sha256 = item_sha256
+
+
+def _receipt_reconcile_plain_sha(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    value = value.removeprefix("sha256:")
+    return value if SHA256_RE.match(value) else None
+
+
+def _receipt_reconcile_file_sha(root: Path, relative: Any) -> str | None:
+    if not isinstance(relative, str) or not relative:
+        return None
+    try:
+        path = resolve_archive_relative_path(root, relative)
+    except ArchivePathError:
+        return None
+    try:
+        return sha256_path(path) if path.is_file() else None
+    except OSError:
+        return None
+
+
+def _receipt_reconcile_read_receipt(root: Path, relative: Any) -> dict[str, Any]:
+    if not isinstance(relative, str) or not relative:
+        return {}
+    try:
+        return read_json_object(resolve_archive_relative_path(root, relative), "Receipt")
+    except (ArchiveServiceError, ArchivePathError, OSError):
+        return {}
+
+
+def _receipt_reconcile_has_drift(root: Path, kind: str, receipt: dict[str, Any]) -> bool:
+    """Cheap pre-filter: does any recorded ref sha differ from current bytes?
+
+    A retired or missing source draft is not drift (both reconcilers preserve
+    its recorded sha); every other missing ref is left to the classifier.
+    """
+
+    for ref in _RECEIPT_RECONCILE_SOURCES[kind][2]:
+        section = receipt.get(ref) if isinstance(receipt.get(ref), dict) else {}
+        current = _receipt_reconcile_file_sha(root, section.get("path"))
+        if current is None:
+            if ref == "source":
+                continue
+            return True
+        if current != _receipt_reconcile_plain_sha(section.get("sha256")):
+            return True
+    return False
+
+
+def _receipt_reconcile_item_evidence(
+    root: Path,
+    kind: str,
+    plan: dict[str, Any],
+    *,
+    strip_bom: bool,
+) -> tuple[str, dict[str, Any]]:
+    """Return (approval_item_sha256, ref paths) for one classified plan."""
+
+    if kind == "mint":
+        receipt_relative = plan.get("mint_receipt_path")
+        receipt = _receipt_reconcile_read_receipt(root, receipt_relative)
+        source = receipt.get("source") if isinstance(receipt.get("source"), dict) else {}
+        ref_paths: dict[str, Any] = {
+            "canonical": plan.get("canonical_path"),
+            "snapshot": plan.get("draft_snapshot_path"),
+            "source": source.get("path"),
+        }
+    else:
+        receipt_relative = plan.get("retire_receipt_path")
+        receipt = _receipt_reconcile_read_receipt(root, receipt_relative)
+        ref_paths = {
+            ref: receipt[ref].get("path") if isinstance(receipt.get(ref), dict) else None
+            for ref in _RETIRE_RECONCILE_ALL_REFS
+        }
+    ref_paths["receipt"] = receipt_relative
+    ref_paths = {
+        name: ref_paths[name] if isinstance(ref_paths[name], str) else None
+        for name in sorted(ref_paths)
+    }
+    evidence = {
+        "schema": _RECEIPT_RECONCILE_ITEM_SCHEMA,
+        "reconcile_kind": kind,
+        "zettel_id": plan.get("zettel_id"),
+        "drift_class": plan.get("drift_class"),
+        "classification_basis": plan.get("classification_basis"),
+        "review_plan_sha256": plan.get("review_plan_sha256"),
+        "ref_paths": ref_paths,
+        "ref_sha256": {name: _receipt_reconcile_file_sha(root, rel) for name, rel in ref_paths.items()},
+        "strip_bom": strip_bom,
+    }
+    digest = "sha256:" + hashlib.sha256(
+        json.dumps(evidence, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return digest, ref_paths
+
+
+def _receipt_reconcile_require_item(
+    root: Path,
+    kind: str,
+    plan: dict[str, Any],
+    approval: _ReconcileExactApproval,
+    *,
+    strip_bom: bool,
+) -> None:
+    """Refuse an item whose evidence moved after the list was approved."""
+
+    digest, _paths = _receipt_reconcile_item_evidence(root, kind, plan, strip_bom=strip_bom)
+    if not hmac.compare_digest(digest, approval.item_sha256):
+        raise ArchiveServiceError("receipt_reconcile_item_changed_after_approval")
+
+
+def _receipt_reconcile_item(
+    root: Path,
+    kind: str,
+    plan: dict[str, Any],
+    *,
+    strip_bom: bool,
+) -> dict[str, Any]:
+    """Content-free item row plus the digest the approval binds for it."""
+
+    digest, ref_paths = _receipt_reconcile_item_evidence(root, kind, plan, strip_bom=strip_bom)
+    row: dict[str, Any] = {
+        "zettel_id": plan.get("zettel_id"),
+        "drift_class": plan.get("drift_class"),
+        "receipt_path": ref_paths.get("receipt"),
+        "approval_item_sha256": digest,
+        "write_status": "would_write",
+    }
+    if kind == "mint":
+        row["canonical_path"] = plan.get("canonical_path")
+        row["changed_frontmatter_fields"] = sorted(
+            {
+                str(change.get("field"))
+                for change in plan.get("frontmatter_field_changes") or []
+                if isinstance(change, dict) and change.get("field")
+            }
+        )
+        row["body_changed"] = plan.get("body_changed")
+    else:
+        row["changed_refs"] = [
+            str(report.get("ref"))
+            for report in plan.get("ref_reports") or []
+            if isinstance(report, dict) and report.get("drift_class") not in {None, "clean"}
+        ]
+    if plan.get("review_plan_sha256"):
+        row["review_plan_sha256"] = plan.get("review_plan_sha256")
+    return row
+
+
+def _receipt_reconcile_single_plan(
+    root: Path,
+    kind: str,
+    zettel_id: str,
+    receipt: dict[str, Any],
+    *,
+    strip_bom: bool,
+) -> dict[str, Any]:
+    if kind == "mint":
+        target = receipt.get("target") if isinstance(receipt.get("target"), dict) else {}
+        target_relative = target.get("path") if isinstance(target.get("path"), str) else None
+        if target_relative:
+            return remint_reconcile_plan(root, relative_path=target_relative, strip_bom=strip_bom)
+        return remint_reconcile_plan(root, zettel_id=zettel_id, strip_bom=strip_bom)
+    return retire_draft_reconcile_plan(root, zettel_id=zettel_id, strip_bom=strip_bom)
+
+
+def _receipt_reconcile_batch_plan(
+    root: Path,
+    *,
+    kind: str,
+    zettel_ids: Sequence[str] | None,
+    drift_class: str,
+    max_items: int,
+    strip_bom: bool,
+    reviewed_plan_sha256: str | None,
+    progress: Callable[[str, str, int | None, int | None], None] | None,
+) -> dict[str, Any]:
+    directory, suffix, _refs = _RECEIPT_RECONCILE_SOURCES[kind]
+    requested = [str(value).strip() for value in (zettel_ids or []) if str(value).strip()]
+    requested_set = set(requested)
+    candidates: list[tuple[str, Path]] = []
+    base = resolve_archive_relative_path(root, directory)
+    if base.is_dir():
+        for path in sorted(base.iterdir(), key=lambda item: item.name):
+            if path.is_file() and path.name.endswith(suffix):
+                zid = path.name[: -len(suffix)]
+                if not requested_set or zid in requested_set:
+                    candidates.append((zid, path))
+    found = {zid for zid, _path in candidates}
+    blocked_items = [
+        {"zettel_id": zid, "write_status": "blocked", "reason_code": "receipt_reconcile_receipt_missing"}
+        for zid in requested
+        if zid not in found
+    ]
+    items: list[dict[str, Any]] = []
+    clean_count = 0
+    excluded_by_class = 0
+    total = len(candidates)
+    for index, (zid, path) in enumerate(candidates, start=1):
+        if progress is not None and (index == 1 or index == total or index % 100 == 0):
+            try:
+                progress("receipt-reconcile-scan", f"{index}/{total}", index, total)
+            except Exception:
+                pass
+        try:
+            receipt = read_json_object(path, "Receipt")
+        except ArchiveServiceError:
+            receipt = {}
+        if receipt and not _receipt_reconcile_has_drift(root, kind, receipt):
+            clean_count += 1
+            continue
+        try:
+            plan = _receipt_reconcile_single_plan(root, kind, zid, receipt, strip_bom=strip_bom)
+        except (ArchiveServiceError, ArchivePathError, OSError, UnicodeError):
+            blocked_items.append(
+                {"zettel_id": zid, "write_status": "blocked", "reason_code": "receipt_reconcile_plan_failed"}
+            )
+            continue
+        if not plan.get("ok") or plan.get("blockers"):
+            blocked_items.append(
+                {"zettel_id": zid, "write_status": "blocked", "reason_code": "receipt_reconcile_plan_blocked"}
+            )
+            continue
+        if plan.get("drift_class") == "clean":
+            clean_count += 1
+            continue
+        if plan.get("drift_class") not in {"format_drift", "content_change"}:
+            blocked_items.append(
+                {"zettel_id": zid, "write_status": "blocked", "reason_code": "receipt_reconcile_unclassified"}
+            )
+            continue
+        if drift_class != "all" and plan.get("drift_class") != drift_class:
+            excluded_by_class += 1
+            continue
+        if reviewed_plan_sha256 is not None and plan.get("review_plan_sha256") != reviewed_plan_sha256:
+            blocked_items.append(
+                {"zettel_id": zid, "write_status": "blocked", "reason_code": "receipt_reconcile_reviewed_plan_changed"}
+            )
+            continue
+        items.append(_receipt_reconcile_item(root, kind, plan, strip_bom=strip_bom))
+    remaining = max(0, len(items) - max_items)
+    items = items[:max_items]
+    class_counts = {
+        name: sum(1 for item in items if item["drift_class"] == name)
+        for name in ("format_drift", "content_change")
+    }
+    field_counts: dict[str, int] = {}
+    for item in items:
+        for field in item.get("changed_frontmatter_fields") or item.get("changed_refs") or []:
+            field_counts[field] = field_counts.get(field, 0) + 1
+    batch_id = "receipt-reconcile:" + hashlib.sha256(
+        json.dumps(
+            [kind, strip_bom, [item["approval_item_sha256"] for item in items]],
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    command = _RECEIPT_RECONCILE_COMMANDS[kind]
+    next_safe_actions: list[str] = []
+    if items:
+        next_safe_actions.append(
+            f"Review the class counts, then rerun `archive {command} <archive-root> --approve "
+            "--reviewed-by person:<you> --format json` with the same selection options; one dialog "
+            "(none under a valid limited/allow_all session grant) covers the whole list."
+        )
+    if remaining:
+        next_safe_actions.append(
+            f"{remaining} more item(s) remain after --max-items; rerun the dry-run after this batch."
+        )
+    if kind == "mint":
+        next_safe_actions.append(
+            "After mint receipts are reconciled, run `archive retire-draft-reconcile-batch <archive-root> "
+            "--dry-run --format json`: retired-draft receipts point at the mint receipt and need the same repair."
+        )
+    if blocked_items:
+        next_safe_actions.append(
+            "Blocked items were not included; run the single reconcile dry-run for one of them to see its blockers."
+        )
+    if not items and not blocked_items:
+        next_safe_actions.append("Nothing to reconcile; rerun doctor to confirm.")
+    return {
+        "ok": True,
+        "dry_run": True,
+        "lifecycle_action": "receipt_reconcile_batch_plan",
+        "reconcile_kind": kind,
+        "write_status": "would_write" if items else "nothing_to_write",
+        "batch_id": batch_id,
+        "strip_bom": strip_bom,
+        "drift_class_filter": drift_class,
+        "items": items,
+        "blocked_items": blocked_items,
+        "summary": {
+            "receipt_count": total,
+            "clean_count": clean_count,
+            "item_count": len(items),
+            "format_drift_count": class_counts["format_drift"],
+            "content_change_count": class_counts["content_change"],
+            "changed_field_counts": dict(sorted(field_counts.items())),
+            "blocked_count": len(blocked_items),
+            "excluded_by_class_count": excluded_by_class,
+            "remaining_after_max_items": remaining,
+        },
+        "blockers": [],
+        "warnings": [],
+        "files_written": [],
+        "next_safe_actions": next_safe_actions,
+        "private_values_echoed": False,
+    }
+
+
+def receipt_reconcile_batch(
+    archive_root: Path | str,
+    *,
+    kind: str,
+    zettel_ids: Sequence[str] | None = None,
+    drift_class: str = "all",
+    max_items: int = RECEIPT_RECONCILE_DEFAULT_MAX_ITEMS,
+    strip_bom: bool = False,
+    reviewed_plan_sha256: str | None = None,
+    dry_run: bool = True,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
+) -> dict[str, Any]:
+    """Plan or write one reviewed list of mint / retired-draft receipt reconciles."""
+
+    if type(dry_run) is not bool or type(approve) is not bool or dry_run == approve:
+        raise ArchiveServiceError("receipt_reconcile_mode_invalid")
+    if kind not in RECEIPT_RECONCILE_KINDS or drift_class not in RECEIPT_RECONCILE_DRIFT_FILTERS:
+        raise ArchiveServiceError("receipt_reconcile_argument_invalid")
+    if type(max_items) is not int or not 1 <= max_items <= RECEIPT_RECONCILE_MAX_ITEMS:
+        raise ArchiveServiceError("receipt_reconcile_max_items_invalid")
+    reviewed_digest = (
+        normalize_reconcile_review_plan_sha256(reviewed_plan_sha256)
+        if reviewed_plan_sha256 is not None
+        else None
+    )
+    if approve:
+        _require_exact_human_approval_inputs_before_archive_read(
+            claim=exact_human_approval_claim,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+        )
+    root = require_existing_archive_root(archive_root)
+    plan = _receipt_reconcile_batch_plan(
+        root,
+        kind=kind,
+        zettel_ids=zettel_ids,
+        drift_class=drift_class,
+        max_items=max_items,
+        strip_bom=bool(strip_bom),
+        reviewed_plan_sha256=reviewed_digest,
+        progress=progress_callback,
+    )
+    if not approve:
+        return plan
+    reviewer = (reviewed_by or "").strip()
+    if not reviewer:
+        raise ArchiveServiceError("receipt_reconcile_reviewer_required")
+    if not plan["items"]:
+        raise ArchiveServiceError("receipt_reconcile_nothing_to_write")
+    try:
+        binding = receipt_reconcile_batch_approval_binding(plan)
+    except OperationApprovalBindingError as exc:
+        raise ArchiveServiceError(exc.code) from None
+    approval = _require_exact_human_operation_approval(
+        root,
+        binding,
+        reviewer_claim=reviewer,
+        expected_plan_sha256=expected_exact_approval_plan_sha256,
+        expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+        claim=exact_human_approval_claim,
+    )
+    written: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+    files_written: list[str] = []
+    total = len(plan["items"])
+    for index, item in enumerate(plan["items"], start=1):
+        if progress_callback is not None and (index == 1 or index == total or index % 50 == 0):
+            try:
+                progress_callback("receipt-reconcile-write", f"{index}/{total}", index, total)
+            except Exception:
+                pass
+        token = _ReconcileExactApproval(
+            receipt=approval,
+            batch_id=plan["batch_id"],
+            item_sha256=item["approval_item_sha256"],
+        )
+        content_change = item["drift_class"] == "content_change"
+        try:
+            if kind == "mint":
+                result = remint_reconcile_apply(
+                    root,
+                    relative_path=item.get("canonical_path"),
+                    reviewed_by=reviewer,
+                    content_changed_ack=content_change,
+                    reviewed_plan_sha256=item.get("review_plan_sha256") if content_change else None,
+                    strip_bom=bool(strip_bom),
+                    _exact_approval=token,
+                )
+            else:
+                result = retire_draft_reconcile_apply(
+                    root,
+                    zettel_id=str(item.get("zettel_id") or ""),
+                    reviewed_by=reviewer,
+                    content_changed_ack=content_change,
+                    reviewed_plan_sha256=item.get("review_plan_sha256") if content_change else None,
+                    strip_bom=bool(strip_bom),
+                    _exact_approval=token,
+                )
+        except (ArchiveServiceError, ArchivePathError, OSError, UnicodeError, ValueError) as exc:
+            failed.append(
+                {
+                    "zettel_id": item.get("zettel_id"),
+                    "drift_class": item["drift_class"],
+                    "approval_item_sha256": item["approval_item_sha256"],
+                    "write_status": "failed",
+                    "blockers": _lifecycle_batch_item_failure_blockers(
+                        exc, "receipt_reconcile_item_write_io_failed"
+                    ),
+                }
+            )
+            continue
+        files_written.extend(result.get("updated_paths") or [])
+        files_written.extend(result.get("created_paths") or [])
+        written.append(
+            {
+                "zettel_id": item.get("zettel_id"),
+                "drift_class": item["drift_class"],
+                "approval_item_sha256": item["approval_item_sha256"],
+                "write_status": "reconciled",
+                "reconcile_receipt_path": result.get("reconcile_receipt_path"),
+            }
+        )
+    batch_receipt_relative = (
+        f"{RECEIPT_RECONCILE_BATCH_RECEIPTS_DIRS[kind]}/"
+        f"{plan['batch_id'].removeprefix('receipt-reconcile:')[:24]}."
+        f"{kind.replace('_', '-')}-reconcile-batch.json"
+    )
+    batch_receipt_path = resolve_archive_relative_path(root, batch_receipt_relative)
+    if batch_receipt_path.exists():
+        batch_receipt_relative = batch_receipt_relative[: -len(".json")] + f".{secrets.token_hex(4)}.json"
+        batch_receipt_path = resolve_archive_relative_path(root, batch_receipt_relative)
+    batch_receipt = {
+        "schema": _RECEIPT_RECONCILE_BATCH_SCHEMA,
+        "receipt_id": f"receipt:receipt-reconcile-batch:{plan['batch_id']}",
+        "receipt_path": batch_receipt_relative,
+        "action": "receipt_reconcile_batch",
+        "reconcile_kind": kind,
+        "dry_run": False,
+        "timestamp": datetime.now().astimezone().replace(microsecond=0).isoformat(),
+        "archive_id": read_archive_id(root),
+        "reviewed_by": reviewer,
+        "batch_id": plan["batch_id"],
+        "strip_bom": bool(strip_bom),
+        "item_count": total,
+        "reconciled_count": len(written),
+        "failed_count": len(failed),
+        "items": written + failed,
+        "exact_human_approval": approval,
+    }
+    _atomic_write_json(batch_receipt_path, batch_receipt)
+    files_written.append(batch_receipt_relative)
+    next_safe_actions = [
+        "Rerun `archive doctor <archive-root> --format json` to confirm the receipt errors cleared."
+    ]
+    if kind == "mint":
+        next_safe_actions.append(
+            "Then run `archive retire-draft-reconcile-batch <archive-root> --dry-run --format json` "
+            "for the retired-draft receipts."
+        )
+    if failed:
+        next_safe_actions.insert(
+            0,
+            "Some items changed or failed after approval and were not written; rerun the dry-run to review them again.",
+        )
+    if plan["summary"]["remaining_after_max_items"]:
+        next_safe_actions.append("More items remain after --max-items; rerun the dry-run for the next list.")
+    return {
+        **plan,
+        "ok": not failed,
+        "dry_run": False,
+        "approved": True,
+        "write_status": "written" if not failed else ("partial" if written else "failed"),
+        "items": written + failed,
+        "reconciled_count": len(written),
+        "failed_count": len(failed),
+        "batch_receipt_path": batch_receipt_relative,
+        "files_written": files_written,
+        "next_safe_actions": next_safe_actions,
+    }
 
 
 def resolve_mint_lifecycle_batch_plan_path(

@@ -7,6 +7,26 @@
       "route": "environment",
       "evidence": ["test_activity_cleanup"]
     },
+    "remint-reconcile": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_receipt_reconcile_exact"]
+    },
+    "remint-reconcile-batch": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_receipt_reconcile_exact"]
+    },
+    "retire-draft-reconcile": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_receipt_reconcile_exact"]
+    },
+    "retire-draft-reconcile-batch": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_receipt_reconcile_exact"]
+    },
     "draft-revision-write": {
       "status": "session_integrated",
       "route": "environment",

@@ -110,8 +110,6 @@ COMPOUND_APPROVAL_FIXED_CLOSED_COMMANDS = frozenset(
         "repair-gitignore",
         "quarantine-foreign-block",
         "record-quarantine-decision",
-        "remint-reconcile",
-        "retire-draft-reconcile",
         "runtime-skill-install",
         "runtime-skill-uninstall",
         "restore-drill",
@@ -153,6 +151,12 @@ EXACT_APPROVAL_REOPENED_WRITERS = frozenset({
     # v0.4.34 (letter 165 [C]): the feedback body write asks the dialog; the
     # emergency lane under version-update.lock keeps the text-flag path.
     "operator-feedback-compose",
+    # 2026-09-24 (58-writer triage, group 1; letters 147/148/156): receipt
+    # reconcile reopened; the batch pair lists every drifted receipt.
+    "remint-reconcile",
+    "retire-draft-reconcile",
+    "remint-reconcile-batch",
+    "retire-draft-reconcile-batch",
 })
 
 # Public parser and dispatch exposure was audited at v0.3.320 and its explicit

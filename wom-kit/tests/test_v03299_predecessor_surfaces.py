@@ -137,10 +137,13 @@ CLI_ADDITIONS = {
     ("exact-approval-claims",),
     ("approval-claims",),
     ("exact-approval-claim-finalize",),
+    # 2026-09-24 reopen (58-writer triage, group 1): batch receipt reconcile.
+    ("remint-reconcile-batch",),
+    ("retire-draft-reconcile-batch",),
 }
-CURRENT_CLI_COUNT = 589
+CURRENT_CLI_COUNT = 591
 CURRENT_CLI_CANONICAL_SHA256 = (
-    "c071a8ff50e1da8c2f564daca37490b86f3ca54be756898841d525b2b35976a3"
+    "99c6a2c3ad2f0fd6a8b4566a31c1299d432bd653b8e2e46141c9de4c0665d541"
 )
 CURRENT_MCP_COUNT = 137
 CURRENT_MCP_CANONICAL_SHA256 = (

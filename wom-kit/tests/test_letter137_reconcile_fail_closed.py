@@ -129,6 +129,7 @@ class Letter137ReconcileCliBoundaryTests(unittest.TestCase):
         values: list[str],
         service_name: str,
         lifecycle_action: str,
+        reason_code: str = COMPOUND_APPROVAL_BLOCKER,
     ) -> None:
         args = self.parser.parse_args(values)
         stdout = io.StringIO()
@@ -149,7 +150,7 @@ class Letter137ReconcileCliBoundaryTests(unittest.TestCase):
         payload = json.loads(stdout.getvalue())
         self.assertEqual(payload["state"], "blocked")
         self.assertEqual(payload["lifecycle_action"], lifecycle_action)
-        self.assertEqual(payload["reason_codes"], [COMPOUND_APPROVAL_BLOCKER])
+        self.assertEqual(payload["reason_codes"], [reason_code])
         self.assertIs(payload["private_values_echoed"], False)
         serialized = stdout.getvalue() + stderr.getvalue()
         for value in (
@@ -179,6 +180,10 @@ class Letter137ReconcileCliBoundaryTests(unittest.TestCase):
             ],
             service_name="remint_reconcile_apply",
             lifecycle_action="remint_reconcile",
+            # 2026-09-24 reopen: --approve goes through the exact-approval
+            # batch route, never straight to the apply writer; an unreadable
+            # archive fails before any dialog with a fixed code.
+            reason_code="remint_reconcile_preflight_blocked",
         )
 
     def test_retire_reconcile_approve_blocks_before_service(self) -> None:
@@ -200,6 +205,7 @@ class Letter137ReconcileCliBoundaryTests(unittest.TestCase):
             ],
             service_name="retire_draft_reconcile_apply",
             lifecycle_action="retire_draft_reconcile",
+            reason_code="retire_draft_reconcile_workflow_failed_safely",
         )
 
 

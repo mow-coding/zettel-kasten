@@ -31538,16 +31538,205 @@ def _reconcile_writer_availability_result(
     return projected
 
 
+def _print_receipt_reconcile_batch_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+    kind = "Mint" if result.get("reconcile_kind") == "mint" else "Retired-draft"
+    print(f"{kind} receipt reconcile: {result.get('write_status') or 'unknown'}.")
+    print(f"Receipts scanned: {summary.get('receipt_count', 0)} (clean {summary.get('clean_count', 0)})")
+    print(
+        f"Listed: {summary.get('item_count', 0)} "
+        f"(format drift {summary.get('format_drift_count', 0)}, content change {summary.get('content_change_count', 0)})"
+    )
+    fields = summary.get("changed_field_counts") or {}
+    if fields:
+        print("Changed fields/refs: " + ", ".join(f"{name} {count}" for name, count in fields.items()))
+    if summary.get("blocked_count"):
+        print(f"Blocked (not listed): {summary.get('blocked_count')}")
+    if summary.get("remaining_after_max_items"):
+        print(f"Remaining after --max-items: {summary.get('remaining_after_max_items')}")
+    if not result.get("dry_run"):
+        print(f"Reconciled: {result.get('reconciled_count', 0)}; failed: {result.get('failed_count', 0)}")
+        if result.get("batch_receipt_path"):
+            print(f"Batch receipt: {result['batch_receipt_path']}")
+    for action in result.get("next_safe_actions") or []:
+        print(f"- {action}")
+
+
+def _receipt_reconcile_exact_route(
+    args: argparse.Namespace,
+    *,
+    kind: str,
+    lifecycle_action: str,
+    zettel_ids: list[str] | None,
+    drift_class: str,
+    max_items: int,
+    reviewed_plan_sha256: str | None,
+    single_content_ack: bool | None,
+) -> int:
+    """--approve for the reopened receipt reconcilers (2026-09-24 triage group 1).
+
+    One fresh plan, one exact binding over every item digest, one dialog or a
+    valid session grant; each item re-derives its digest before it writes.
+    A single-item approve keeps the dry-run's content-change contract: the
+    item must carry --content-changed-ack before the dialog is shown.
+    """
+
+    archive_root = Path(args.archive_root)
+    reporter = CommandProgressReporter(
+        bool(getattr(args, "progress", False)),
+        label=lifecycle_action.replace("_", "-"),
+    )
+
+    def _plan() -> dict[str, Any]:
+        return archive_services.receipt_reconcile_batch(
+            archive_root,
+            kind=kind,
+            zettel_ids=zettel_ids,
+            drift_class=drift_class,
+            max_items=max_items,
+            strip_bom=bool(getattr(args, "strip_bom", False)),
+            reviewed_plan_sha256=reviewed_plan_sha256,
+            dry_run=True,
+            approve=False,
+            progress_callback=reporter.progress,
+        )
+
+    def _write(binding, claim, reviewer) -> dict[str, Any]:
+        return archive_services.receipt_reconcile_batch(
+            archive_root,
+            kind=kind,
+            zettel_ids=zettel_ids,
+            drift_class=drift_class,
+            max_items=max_items,
+            strip_bom=bool(getattr(args, "strip_bom", False)),
+            reviewed_plan_sha256=reviewed_plan_sha256,
+            dry_run=False,
+            approve=True,
+            reviewed_by=reviewer,
+            expected_exact_approval_plan_sha256=binding.plan_sha256,
+            expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+            exact_human_approval_claim=claim,
+            progress_callback=reporter.progress,
+        )
+
+    try:
+        if single_content_ack is not None:
+            try:
+                preview = _plan()
+            except (archive_services.ArchiveServiceError, OSError):
+                return _exact_human_approval_cli_error(
+                    args,
+                    lifecycle_action=lifecycle_action,
+                    reason_code=f"{lifecycle_action}_workflow_failed_safely",
+                )
+            if preview.get("blocked_items"):
+                return _exact_human_approval_cli_error(
+                    args,
+                    lifecycle_action=lifecycle_action,
+                    reason_code=f"{lifecycle_action}_preflight_blocked",
+                    preflight_blockers=[
+                        str(item.get("reason_code")) for item in preview["blocked_items"]
+                    ],
+                )
+            if not single_content_ack and any(
+                item.get("drift_class") == "content_change" for item in preview.get("items") or []
+            ):
+                return _exact_human_approval_cli_error(
+                    args,
+                    lifecycle_action=lifecycle_action,
+                    reason_code=f"{lifecycle_action}_content_changed_ack_required",
+                )
+        return _exact_batch_approval_route(
+            args,
+            lifecycle_action=lifecycle_action,
+            plan=_plan,
+            binding_builder=operation_approval_binding.receipt_reconcile_batch_approval_binding,
+            write=_write,
+            items_of=lambda preview: preview.get("items"),
+            collection_of=lambda preview: None,
+            printer=lambda result: _print_receipt_reconcile_batch_result(result, args.format),
+        )
+    finally:
+        reporter.close()
+
+
+def command_receipt_reconcile_batch(args: argparse.Namespace) -> int:
+    kind = "mint" if args.command in {"remint-reconcile-batch"} else "retire_draft"
+    lifecycle_action = "remint_reconcile_batch" if kind == "mint" else "retire_draft_reconcile_batch"
+    if bool(args.dry_run) == bool(args.approve):
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code=f"{lifecycle_action}_mode_conflict",
+        )
+    zettel_ids = list(args.zettel_id or []) or None
+    if args.approve:
+        return _receipt_reconcile_exact_route(
+            args,
+            kind=kind,
+            lifecycle_action=lifecycle_action,
+            zettel_ids=zettel_ids,
+            drift_class=args.drift_class,
+            max_items=int(args.max_items),
+            reviewed_plan_sha256=None,
+            single_content_ack=None,
+        )
+    reporter = CommandProgressReporter(bool(getattr(args, "progress", False)), label=args.command)
+    try:
+        result = archive_services.receipt_reconcile_batch(
+            Path(args.archive_root),
+            kind=kind,
+            zettel_ids=zettel_ids,
+            drift_class=args.drift_class,
+            max_items=int(args.max_items),
+            strip_bom=bool(args.strip_bom),
+            dry_run=True,
+            approve=False,
+            progress_callback=reporter.progress,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    finally:
+        reporter.close()
+    _print_receipt_reconcile_batch_result(result, args.format)
+    return 0 if result.get("ok") else 1
+
+
 def command_remint_reconcile(args: argparse.Namespace) -> int:
     if args.dry_run and args.approve:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
         return 1
     approve = bool(args.approve)
     if approve:
-        return _exact_human_approval_cli_error(
+        if getattr(args, "diagnostic_only", False):
+            print("remint-reconcile --diagnostic-only is dry-run only; approve must show review content.", file=sys.stderr)
+            return 1
+        zettel_id = (args.zettel_id or "").strip()
+        if not zettel_id:
+            try:
+                located = archive_services.remint_reconcile_plan(Path(args.archive_root), relative_path=args.path)
+            except (archive_services.ArchiveServiceError, OSError):
+                located = {}
+            zettel_id = str(located.get("zettel_id") or "").strip()
+            if not zettel_id:
+                return _exact_human_approval_cli_error(
+                    args,
+                    lifecycle_action="remint_reconcile",
+                    reason_code="remint_reconcile_preflight_blocked",
+                )
+        return _receipt_reconcile_exact_route(
             args,
+            kind="mint",
             lifecycle_action="remint_reconcile",
-            reason_code="compound_exact_human_approval_binding_required",
+            zettel_ids=[zettel_id],
+            drift_class="all",
+            max_items=1,
+            reviewed_plan_sha256=getattr(args, "reviewed_plan_sha256", None),
+            single_content_ack=bool(args.content_changed_ack),
         )
     diagnostic_only = bool(getattr(args, "diagnostic_only", False))
     if approve and not (args.reviewed_by or "").strip():
@@ -31666,10 +31855,15 @@ def command_retire_draft_reconcile(args: argparse.Namespace) -> int:
         return 1
     approve = bool(args.approve)
     if approve:
-        return _exact_human_approval_cli_error(
+        return _receipt_reconcile_exact_route(
             args,
+            kind="retire_draft",
             lifecycle_action="retire_draft_reconcile",
-            reason_code="compound_exact_human_approval_binding_required",
+            zettel_ids=[str(args.zettel_id or "").strip()],
+            drift_class="all",
+            max_items=1,
+            reviewed_plan_sha256=getattr(args, "reviewed_plan_sha256", None),
+            single_content_ack=bool(args.content_changed_ack),
         )
     if approve and not (args.reviewed_by or "").strip():
         print("retire-draft-reconcile requires --reviewed-by when --approve is used.", file=sys.stderr)
@@ -46808,7 +47002,11 @@ def build_parser() -> argparse.ArgumentParser:
     reconcile_target.add_argument("--path", help="Archive-relative canonical zettel path to reconcile.")
     reconcile_mode = remint_reconcile.add_mutually_exclusive_group()
     reconcile_mode.add_argument("--dry-run", action="store_true", help="Classify and preview without writing (default).")
-    reconcile_mode.add_argument("--approve", action="store_true", help="Re-issue the mint receipt after human review; requires --reviewed-by.")
+    reconcile_mode.add_argument(
+        "--approve",
+        action="store_true",
+        help="Re-issue the mint receipt under exact human approval (one native dialog, or none under a valid limited/allow_all session grant); requires --reviewed-by.",
+    )
     remint_reconcile.add_argument("--reviewed-by", help="Reviewer id required when --approve is used, e.g. person:me.")
     remint_reconcile.add_argument(
         "--content-changed-ack",
@@ -46840,7 +47038,11 @@ def build_parser() -> argparse.ArgumentParser:
     retire_draft_reconcile.add_argument("--zettel-id", required=True, help="Zettel id whose retire-draft receipt to reconcile.")
     retire_reconcile_mode = retire_draft_reconcile.add_mutually_exclusive_group()
     retire_reconcile_mode.add_argument("--dry-run", action="store_true", help="Classify and preview without writing (default).")
-    retire_reconcile_mode.add_argument("--approve", action="store_true", help="Re-issue the retire receipt after human review; requires --reviewed-by.")
+    retire_reconcile_mode.add_argument(
+        "--approve",
+        action="store_true",
+        help="Re-issue the retire receipt under exact human approval (one native dialog, or none under a valid limited/allow_all session grant); requires --reviewed-by.",
+    )
     retire_draft_reconcile.add_argument("--reviewed-by", help="Reviewer id required when --approve is used, e.g. person:me.")
     retire_draft_reconcile.add_argument(
         "--content-changed-ack",
@@ -46858,6 +47060,57 @@ def build_parser() -> argparse.ArgumentParser:
     )
     retire_draft_reconcile.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     retire_draft_reconcile.set_defaults(func=command_retire_draft_reconcile)
+
+    for batch_name, batch_help in (
+        (
+            "remint-reconcile-batch",
+            "Preview or approve re-issuing every drifted mint receipt from current bytes under one exact approval.",
+        ),
+        (
+            "retire-draft-reconcile-batch",
+            "Preview or approve re-issuing every drifted retired-draft receipt from current bytes under one exact approval.",
+        ),
+    ):
+        batch_parser = subcommands.add_parser(batch_name, help=batch_help)
+        batch_parser.add_argument("archive_root", help="Archive root to inspect or update.")
+        batch_mode = batch_parser.add_mutually_exclusive_group(required=True)
+        batch_mode.add_argument("--dry-run", action="store_true", help="List and classify drifted receipts without writing.")
+        batch_mode.add_argument(
+            "--approve",
+            action="store_true",
+            help="Re-issue the listed receipts under exact human approval (one native dialog, or none under a valid limited/allow_all session grant); requires --reviewed-by.",
+        )
+        batch_parser.add_argument("--reviewed-by", help="Reviewer id required when --approve is used, e.g. person:me.")
+        batch_parser.add_argument(
+            "--zettel-id",
+            action="append",
+            help="Limit the list to these zettel ids (repeatable). Default: every drifted receipt.",
+        )
+        batch_parser.add_argument(
+            "--drift-class",
+            choices=list(archive_services.RECEIPT_RECONCILE_DRIFT_FILTERS),
+            default="all",
+            help="List only format drift, only content changes, or all (default).",
+        )
+        batch_parser.add_argument(
+            "--max-items",
+            type=int,
+            default=archive_services.RECEIPT_RECONCILE_DEFAULT_MAX_ITEMS,
+            help=f"Maximum listed items (1-{archive_services.RECEIPT_RECONCILE_MAX_ITEMS}); rerun for the rest.",
+        )
+        batch_parser.add_argument(
+            "--strip-bom",
+            action="store_true",
+            help="Opt-in: also remove one leading UTF-8 BOM from each canonical (content-preserving by definition).",
+        )
+        batch_parser.add_argument(
+            "--progress",
+            action=argparse.BooleanOptionalAction,
+            default=False,
+            help="Print content-free scan/write progress to stderr.",
+        )
+        batch_parser.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+        batch_parser.set_defaults(func=command_receipt_reconcile_batch)
 
     index = subcommands.add_parser("index", help="Build a generated local SQLite search index.")
     index.add_argument("archive_root", help="Archive root to index.")

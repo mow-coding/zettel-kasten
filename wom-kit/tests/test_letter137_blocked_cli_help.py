@@ -59,11 +59,14 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
         }
         self.assertEqual(
             len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS),
-            58,
+            56,
         )
         for exact_batch_command in (
             "source-intake-batch",
             "objet-capture-batch",
+            # 2026-09-24 reopen (58-writer triage, group 1).
+            "remint-reconcile",
+            "retire-draft-reconcile",
         ):
             self.assertNotIn(
                 exact_batch_command,
@@ -205,7 +208,9 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
             ("zet-revision-plan", "approval_available"),
             ("zet-revision-write", "exact human approval"),
             ("zet-revision-restore-write", "exact-byte"),
-            ("remint-reconcile", f"Unavailable in v{archive_cli.__version__}"),
+            ("remint-reconcile", "exact human approval"),
+            ("remint-reconcile-batch", "exact human approval"),
+            ("markup-normalization", f"Unavailable in v{archive_cli.__version__}"),
         ):
             with self.subTest(command=command_name):
                 completed = subprocess.run(
@@ -228,7 +233,7 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
                 )
                 self.assertIn(
                     expected,
-                    completed.stdout + completed.stderr,
+                    " ".join((completed.stdout + completed.stderr).split()),
                 )
 
 
