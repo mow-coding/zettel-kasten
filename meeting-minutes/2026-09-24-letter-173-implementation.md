@@ -18,6 +18,7 @@ Scope source: the developer's direction to handle beta letter 173 and a forwarde
 - C: inert ignored attribute files no longer block; the session route names the fixed cause with a next action.
 - E: runtime route v0.3 (compose approval is the single human decision), automatic next letter number, two user states in compose and ledger results, Skill and lifecycle document updated. The AGENTS block is unchanged (see decision L173-06).
 - D: direction decided by the developer; implementation follows in the next version.
+- Privacy (found in the follow-up review): activity-cleanup journals and remote preservation proofs moved from Git-tracked `receipts/` to the ignored `profiles/local/` boundary and refuse to write otherwise. A and C would have made the old location reachable by archive Git backup.
 
 ## Verification (development only)
 
