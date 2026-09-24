@@ -34,7 +34,7 @@ Windows 사용자 권한이나 WOM 밖의 프로그램까지 격리한다는 뜻
 아래 v0.4.21 URL은 조건부 계약이며 공개 자산이 실제로 존재한다는 증거가
 아닙니다. 정확히 일치하는 GitHub Release가 존재하고 검증된 wheel을 자산으로
 나열한 뒤에만 사용하세요. 소스 상태와 릴리스 증거의 구분은
-[v0.4.39 릴리스 노트](releases/v0.4.39.md)를 보세요. v0.4.19부터 v0.4.35까지의 노트는
+[v0.4.40 릴리스 노트](releases/v0.4.40.md)를 보세요. v0.4.19부터 v0.4.35까지의 노트는
 runtime 사실성, 세션 소유 쓰기, 다시 연 writer, update 실패, fidelity 원본, 승인 모드, archive root update, 승인 창 페이지 이동, 후속 요청, 오브제 저장소 되찾기, 오브제 저장소 비우기, 편지 163 핵심, 편지 163 나머지, 편지 164 전반부, 다시 연 upload, 제시 토큰 승인 모드, 다시 써진 원격 main delta의 기록으로 남습니다.
 
 설치된 이전 runtime에는 v0.4.36의 창 없는 승인 모드·업로드 원인 코드·편지 정리, v0.4.35의 다시 써진 원격 main 진단, v0.4.34의 제시 토큰에 묶인 승인 모드, v0.4.33의 다시 연 upload writer, v0.4.32의 편지 164 전반부, v0.4.31의 편지 163 나머지, v0.4.30의 편지 163 mint 게이트와 클레임 저장소, v0.4.29의 오브제 저장소 비우기, v0.4.28의 오브제 저장소 되찾기, v0.4.27의 후속 요청 반영, v0.4.26의 대상 자세히 보기 창 수정, v0.4.25의 archive root update 수정, v0.4.24의 세션 승인 모드, v0.4.23의 바이너리 fidelity 원본과 세션에 묶인 초안, v0.4.22의 project update 실패 사실성과 started claim 포기,
@@ -55,17 +55,17 @@ project는 v0.4.22 bootstrap의 `archive`(`--resume --abandon-started-approval`,
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0439-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0440-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.39/wom_kit-0.4.39-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.40/wom_kit-0.4.40-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-새 프로세스가 정확히 `archive 0.4.39`을 보고하면 그 명시적 부트스트랩으로
+새 프로세스가 정확히 `archive 0.4.40`을 보고하면 그 명시적 부트스트랩으로
 `project-version-update`를 실행합니다. 승인 성공 뒤 프로젝트 런타임을
 검증하고 해당 launcher를 사용합니다.
 
@@ -117,7 +117,7 @@ pin을 손으로 고치지 마세요. [Project Version Update](project-version-u
 ```powershell
 $womToolRoot = Join-Path $env:LOCALAPPDATA "WOM\tool-v0419"
 py -3.12 -m venv $womToolRoot
-& "$womToolRoot\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.39/wom_kit-0.4.39-py3-none-any.whl"
+& "$womToolRoot\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.40/wom_kit-0.4.40-py3-none-any.whl"
 & "$womToolRoot\Scripts\archive.exe" --version
 ```
 

@@ -1,6 +1,6 @@
 # Agent Operator Capabilities Manifest
 
-Current release: v0.4.39 letter 173 cleanup reliability and one deliverable feedback letter; [feedback route](operator-feedback-lifecycle.md).
+Current release: v0.4.40 closed-writer triage (27 reopened, 12 removed) and activity-scoped close; [triage decision](archive-infra-decision-log-2026-09-24-closed-writer-triage.md).
 
 Status: v0.4.36 no-dialog grants, letter-168, and writer-session coverage gate
 
