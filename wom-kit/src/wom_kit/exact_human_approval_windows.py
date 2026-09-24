@@ -255,6 +255,12 @@ class ExactHumanApprovalOperation(Enum):
     private_objet_source_metadata_write = "private_objet_source_metadata_write"
     # Triage group 6 (2026-09-24): duplicate external locator deactivation.
     external_locator_deactivate = "external_locator_deactivate"
+    # Triage group 6 (2026-09-24): post-update bytecode cleanup.
+    project_bytecode_repair = "project_bytecode_repair"
+    # Triage group 6 (2026-09-24): update collision preserve-relocate.
+    project_version_update_collision = "project_version_update_collision"
+    # Triage group 6 (2026-09-24): restore proposal from a retained snapshot.
+    zet_revision_restore_proposal_from_snapshot = "zet_revision_restore_proposal_from_snapshot"
 
 
 def _validated_target_preview_text(value: str | None) -> str | None:
@@ -575,6 +581,9 @@ _OPERATION_LABELS = {
     ExactHumanApprovalOperation.saved_view_revert: "저장된 보기 되돌리기",
     ExactHumanApprovalOperation.private_objet_source_metadata_write: "원본 파일명 메타데이터 기록",
     ExactHumanApprovalOperation.external_locator_deactivate: "중복 위치 기록 비활성화",
+    ExactHumanApprovalOperation.project_bytecode_repair: "업데이트 뒤 캐시 파일 정리",
+    ExactHumanApprovalOperation.project_version_update_collision: "업데이트 충돌 파일 보존 이동",
+    ExactHumanApprovalOperation.zet_revision_restore_proposal_from_snapshot: "수정 전 스냅샷으로 복원 제안 만들기",
 }
 
 _OPERATION_QUESTIONS = {
@@ -748,6 +757,15 @@ _OPERATION_QUESTIONS = {
     ),
     ExactHumanApprovalOperation.external_locator_deactivate: (
         "검토한 중복 외부 위치 기록 하나를 비활성으로 내릴까요?"
+    ),
+    ExactHumanApprovalOperation.project_bytecode_repair: (
+        "업데이트 뒤 남은 추적되지 않는 파이썬 캐시 파일을 검토한 목록대로 지울까요?"
+    ),
+    ExactHumanApprovalOperation.project_version_update_collision: (
+        "업데이트를 막은 충돌 파일 하나를 검토한 대로 보존 폴더로 옮길까요?"
+    ),
+    ExactHumanApprovalOperation.zet_revision_restore_proposal_from_snapshot: (
+        "보관된 수정 전 스냅샷을 비공개 복원 제안 파일로 만들까요?"
     ),
 }
 
@@ -990,6 +1008,15 @@ _OPERATION_SUMMARIES = {
     ExactHumanApprovalOperation.external_locator_deactivate: (
         "zet 하나의 외부 위치 기록 중 검토한 중복 항목 하나만 삭제 없이 비활성으로 표시하고 영수증을 남깁니다."
     ),
+    ExactHumanApprovalOperation.project_bytecode_repair: (
+        "WOM 프로젝트 폴더에서 검토한 .pyc/.pyo 캐시 파일과 빈 __pycache__ 폴더만 지웁니다. 원본 코드와 아카이브는 바뀌지 않습니다."
+    ),
+    ExactHumanApprovalOperation.project_version_update_collision: (
+        "업데이트를 막은 충돌 항목 하나를 지우지 않고 WOM 보존 위치로 옮기고 영수증을 남깁니다. 옮긴 뒤 업데이트를 다시 실행할 수 있습니다."
+    ),
+    ExactHumanApprovalOperation.zet_revision_restore_proposal_from_snapshot: (
+        "수정 영수증이 가리키는 수정 전 스냅샷을 비공개 복원 제안 파일 하나로 복사합니다. zet 본문은 바뀌지 않으며, 실제 복원은 zet-revision-restore-write로 따로 승인합니다."
+    ),
 }
 
 _OPERATION_APPROVE_BUTTONS = {
@@ -1060,6 +1087,9 @@ _OPERATION_APPROVE_BUTTONS = {
     ExactHumanApprovalOperation.saved_view_revert: "보기 제거",
     ExactHumanApprovalOperation.private_objet_source_metadata_write: "메타데이터 기록",
     ExactHumanApprovalOperation.external_locator_deactivate: "비활성화",
+    ExactHumanApprovalOperation.project_bytecode_repair: "캐시 정리",
+    ExactHumanApprovalOperation.project_version_update_collision: "보존 이동",
+    ExactHumanApprovalOperation.zet_revision_restore_proposal_from_snapshot: "제안 만들기",
 }
 
 

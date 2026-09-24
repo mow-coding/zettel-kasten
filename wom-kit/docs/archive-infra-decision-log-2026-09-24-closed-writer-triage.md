@@ -1,6 +1,6 @@
 # Archive Infra Decision Log: Closed-Writer Triage (2026-09-24)
 
-Status: owner decision recorded; groups 1-5a, the title-remap reclassification, group 6 (in progress) and the removals implemented for v0.4.40.
+Status: owner decision recorded; groups 1-5a, the title-remap reclassification, group 6 and the removals implemented for v0.4.40.
 
 ## Decision (owner, 2026-09-24)
 
@@ -172,6 +172,22 @@ Letter 116 retired duplicate external locators with
 plan under the per-zet locator lock; `--approve` now binds that plan digest
 (`--expected-plan-sha256` stays required). Evidence:
 `test_external_locator_deactivate_exact`.
+
+Letter 129 hit update collisions. `project-bytecode-repair` deletes only the
+untracked `.pyc`/`.pyo` files and empty `__pycache__` folders an update left
+behind, and `project-version-update-collision --action preserve-relocate`
+moves one reviewed collision aside (never deletes it). Both run on the
+project folder, so the approval is recorded in the project's archive (the
+project-version-update approval root). Bytecode repair binds its repair plan
+digest; collision relocation binds the failed update's materialization plan
+digest, the entry ref and the action. Evidence:
+`test_project_bytecode_repair_exact`, `test_project_update_collision_exact`.
+
+`zet-revision-restore-proposal-from-snapshot` copies one retained
+before-snapshot into a private restore proposal file that the open
+`zet-revision-restore-write` consumes; canonical zets never change. The
+approval binds the revision receipt digest and the preview's plan digest; the
+command gained `--reviewed-by`. Evidence: test_cli restore-proposal tests.
 
 ## Removal of Retired and Replaced Writers (v0.4.40)
 

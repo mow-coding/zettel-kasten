@@ -82,12 +82,9 @@ COMPOUND_APPROVAL_FIXED_CLOSED_COMMANDS = frozenset(
         "notion-recover",
         "onboard",
         "prehashed-objet-ledger",
-        "project-bytecode-repair",
-        "project-version-update-collision",
         "runtime-skill-install",
         "runtime-skill-uninstall",
         "tiro-lossless-recovery-fetch-run",
-        "zet-revision-restore-proposal-from-snapshot",
     }
 )
 
@@ -149,6 +146,12 @@ EXACT_APPROVAL_REOPENED_WRITERS = frozenset({
     "objet-source-metadata-write",
     # Triage group 6 (2026-09-24): external locator deactivation.
     "external-locator-deactivate",
+    # Triage group 6 (2026-09-24): post-update bytecode cleanup.
+    "project-bytecode-repair",
+    # Triage group 6 (2026-09-24): update collision preserve-relocate.
+    "project-version-update-collision",
+    # Triage group 6 (2026-09-24): restore proposal from a retained snapshot.
+    "zet-revision-restore-proposal-from-snapshot",
 })
 
 # Public parser and dispatch exposure was audited at v0.3.320 and its explicit

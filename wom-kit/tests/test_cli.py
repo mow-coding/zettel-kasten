@@ -58818,14 +58818,14 @@ state:
                     "json",
                 ]
             )
+            # Reopened in v0.4.40: approve needs a reviewer before any dialog.
             self.assertEqual(approve_code, 1, approve_output)
-            fixed_close = json.loads(approve_output)
+            refused = json.loads(approve_output)
             self.assertEqual(
-                fixed_close["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
+                refused["reason_codes"],
+                ["zet_revision_restore_proposal_from_snapshot_reviewer_required"],
             )
-            self.assertEqual(fixed_close["capability_state"], "writer_unavailable")
-            self.assertEqual(fixed_close["effects_state"], "none")
+            self.assertEqual(refused["effects_state"], "none")
             self.assertFalse(proposal_path.exists())
 
             applied_copy = (
@@ -58897,6 +58897,48 @@ state:
             ):
                 self.assertNotIn(private_marker, preview_output)
                 self.assertNotIn(private_marker, approve_output)
+
+    def test_zet_revision_restore_proposal_from_snapshot_approves_through_exact_route(self) -> None:
+        # Reopened 2026-09-24 (triage group 6): one exact approval bound to the
+        # receipt digest and the preview plan digest creates the proposal.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self.create_zet_revision_proposal(archive_root)
+            applied = self.approve_zet_revision_fixture(
+                archive_root,
+                fixture,
+                revision_at="2026-07-14T15:41:00Z",
+            )["applied"]
+            receipt_relative = applied["receipt"]["path"]
+            receipt_sha256 = "sha256:" + hashlib.sha256(
+                (archive_root / receipt_relative).read_bytes()
+            ).hexdigest()
+            canonical_after_revision = fixture["canonical_path"].read_bytes()
+            base = [
+                "zet-revision-restore-proposal-from-snapshot",
+                str(archive_root),
+                "--receipt",
+                receipt_relative,
+                "--expected-receipt-sha256",
+                receipt_sha256,
+                "--format",
+                "json",
+            ]
+            code, output = self.run_cli([*base, "--dry-run"])
+            self.assertEqual(code, 0, output)
+            preview = json.loads(output)
+            proposal_path = archive_root / preview["restore_proposal"]["relative_path"]
+            code, output = self.run_cli([*base, "--approve", "--reviewed-by", "person:test"])
+            self.assertEqual(json.loads(output)["reason_codes"],
+                             ["zet_revision_restore_proposal_from_snapshot_plan_digest_required"])
+            self.assertFalse(proposal_path.exists())
+            code, output = self.run_cli([
+                *base, "--approve", "--reviewed-by", "person:test",
+                "--expected-plan-digest", preview["plan_digest"],
+            ])
+            self.assertEqual(code, 0, output)
+            self.assertTrue(proposal_path.is_file())
+            self.assertEqual(fixture["canonical_path"].read_bytes(), canonical_after_revision)
 
     def test_zet_revision_restore_proposal_from_snapshot_never_overwrites_collision(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

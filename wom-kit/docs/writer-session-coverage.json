@@ -137,6 +137,21 @@
       "route": "environment",
       "evidence": ["test_external_locator_deactivate_exact"]
     },
+    "project-bytecode-repair": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_project_bytecode_repair_exact"]
+    },
+    "project-version-update-collision": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_project_update_collision_exact"]
+    },
+    "zet-revision-restore-proposal-from-snapshot": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_cli"]
+    },
     "draft-revision-write": {
       "status": "session_integrated",
       "route": "environment",

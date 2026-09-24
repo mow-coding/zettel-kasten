@@ -9931,15 +9931,123 @@ def _project_update_collision_cli_blockers(
     return blockers
 
 
+def _project_update_collision_exact_route(args: argparse.Namespace) -> int:
+    """Reopened 2026-09-24 (triage group 6): preserve-relocate one reviewed
+    collision after one dialog (or a valid session grant) recorded in the
+    project's archive and bound to the plan digest, entry ref and action."""
+
+    lifecycle_action = "project_version_update_collision"
+    if args.action != "preserve-relocate" or args.dry_run:
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_approve_action_invalid",
+        )
+    reviewer = archive_services.safe_foreign_quarantine_actor_id(getattr(args, "reviewed_by", None))
+    if reviewer is None:
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_reviewer_required",
+        )
+    if not bool(args.affirm_external_writers_quiescent):
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_quiescence_required",
+        )
+    cli_blockers = _project_update_collision_cli_blockers(args)
+    if cli_blockers:
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_preflight_blocked",
+            preflight_blockers=cli_blockers,
+        )
+    inspection_root = Path(args.inspection_root)
+    common = dict(
+        target=args.target,
+        entry_ref=args.entry_ref,
+        action=args.action,
+        expected_plan_sha256=args.expected_plan_sha256,
+        reveal_target_relative_path=False,
+    )
+    try:
+        try:
+            preview = archive_services.wom_kit_project_version_update_collision(
+                inspection_root, dry_run=True, approve=False, **common,
+            )
+        except BaseException:
+            # Same boundary as the preview command: nothing was written and no
+            # private value is reflected.
+            return _exact_human_approval_cli_error(
+                args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_workflow_failed_safely",
+            )
+        if not isinstance(preview, dict) or preview.get("ok") is not True or preview.get("blockers"):
+            return _exact_human_approval_cli_error(
+                args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_preflight_blocked",
+                preflight_blockers=preview.get("blockers"),
+            )
+        approval_root = archive_services.require_existing_archive_root(
+            archive_services.wom_kit_project_version_update_approval_archive_root(inspection_root)
+        )
+        binding = operation_approval_binding.plan_digest_approval_binding(
+            ExactHumanApprovalOperation.project_version_update_collision,
+            archive_services.activity_group_approval_digest(
+                str(args.expected_plan_sha256 or ""), str(args.entry_ref or ""), str(args.action or ""),
+            ),
+        )
+        context = binding.context(
+            archive_id=archive_services.read_archive_id(approval_root), reviewer_claim=reviewer,
+        )
+        result = _execute_exact_human_approved_write(
+            approval_root,
+            context,
+            lambda claim: archive_services.wom_kit_project_version_update_collision(
+                inspection_root,
+                dry_run=False,
+                approve=True,
+                reviewed_by=reviewer,
+                affirm_external_writers_quiescent=True,
+                exact_human_approval_claim=claim,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+                **common,
+            ),
+        )
+    except ExactHumanApprovalWorkflowError as error:
+        no_effect = error.code in {
+            "exact_human_approval_cancelled",
+            "exact_human_approval_operation_failed",
+            "exact_human_approval_writer_result_invalid",
+        }
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code=(
+                f"{lifecycle_action}_workflow_precondition_failed" if no_effect
+                else "exact_human_approval_state_unknown"
+            ),
+        )
+    except (
+        archive_services.ArchiveServiceError,
+        operation_approval_binding.OperationApprovalBindingError,
+        ExactHumanApprovalError,
+        ExactHumanApprovalWindowsError,
+        ArchivePathError,
+        OSError,
+        UnicodeError,
+        ValueError,
+    ):
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_workflow_failed_safely",
+        )
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(f"Project update collision: {result.get('status') or result.get('state') or 'blocked'}")
+        for blocker in result.get("blockers", []):
+            print(f"BLOCKED: {blocker}")
+    return 0 if result.get("ok") else 1
+
+
 def command_project_version_update_collision(
     args: argparse.Namespace,
 ) -> int:
     if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="project_version_update_collision",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
+        return _project_update_collision_exact_route(args)
     if args.action == "inspect-all":
         return _command_project_update_collision_inspect_all(args)
     cli_blockers = _project_update_collision_cli_blockers(args)
@@ -24134,6 +24242,42 @@ def command_zet_revision_receipt_audit(args: argparse.Namespace) -> int:
 def command_zet_revision_restore_proposal_from_snapshot(
     args: argparse.Namespace,
 ) -> int:
+    if args.approve and not args.dry_run:
+        # Reopened 2026-09-24 (triage group 6): bound to the receipt digest and
+        # the plan digest the no-write preview returned.
+        plan_digest = str(args.expected_plan_digest or "").strip()
+        if not plan_digest:
+            return _exact_human_approval_cli_error(
+                args,
+                lifecycle_action="zet_revision_restore_proposal_from_snapshot",
+                reason_code="zet_revision_restore_proposal_from_snapshot_plan_digest_required",
+            )
+        common = dict(
+            receipt_path=str(args.receipt),
+            expected_receipt_sha256=str(args.expected_receipt_sha256),
+            expected_plan_digest=plan_digest,
+        )
+        return _activity_group_exact_route(
+            args,
+            lifecycle_action="zet_revision_restore_proposal_from_snapshot",
+            operation=ExactHumanApprovalOperation.zet_revision_restore_proposal_from_snapshot,
+            digests=(str(args.expected_receipt_sha256), plan_digest),
+            affirmed=True,
+            preview=lambda: archive_services.zet_revision_restore_proposal_from_snapshot(
+                Path(args.archive_root), dry_run=True, approve=False, **common,
+            ),
+            write=lambda binding, claim, reviewer: archive_services.zet_revision_restore_proposal_from_snapshot(
+                Path(args.archive_root),
+                dry_run=False,
+                approve=True,
+                reviewed_by=reviewer,
+                exact_human_approval_claim=claim,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+                **common,
+            ),
+            title="WOM restore proposal from snapshot",
+        )
     if bool(args.dry_run) == bool(args.approve):
         print(
             "zet-revision-restore-proposal-from-snapshot requires exactly one of --dry-run or --approve.",
@@ -33598,13 +33742,116 @@ def command_project_bytecode_repair_plan(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
-def command_project_bytecode_repair(args: argparse.Namespace) -> int:
-    if args.approve:
+def _project_bytecode_repair_exact_route(args: argparse.Namespace) -> int:
+    """Reopened 2026-09-24 (triage group 6): one fresh plan, one dialog (or a
+    valid session grant) recorded in the project's archive and bound to the
+    repair plan digest. Refusals before the dialog write nothing."""
+
+    lifecycle_action = "project_bytecode_repair"
+    reviewer = archive_services.safe_project_intake_actor_id(getattr(args, "reviewed_by", None))
+    if reviewer is None:
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_reviewer_required",
+        )
+    if not bool(args.affirm_external_writers_quiescent):
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action=lifecycle_action,
+            reason_code=f"{lifecycle_action}_quiescence_required",
+        )
+    project_root = Path(args.project_root)
+    try:
+        preview = completion_workflows.project_bytecode_repair_plan(
+            project_root,
+            max_files=args.max_files,
+            target=args.target,
+            expected_materialization_plan_sha256=args.expected_materialization_plan_sha256,
+        )
+        summary = preview.get("summary") if isinstance(preview.get("summary"), dict) else {}
+        digest = preview.get("plan_sha256") or summary.get("plan_sha256")
+        if (
+            preview.get("ok") is not True
+            or preview.get("blockers")
+            or not isinstance(digest, str)
+            or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+        ):
+            return _exact_human_approval_cli_error(
+                args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_preflight_blocked",
+                preflight_blockers=preview.get("blockers"),
+            )
+        supplied = str(getattr(args, "expected_plan_sha256", None) or "").strip().lower()
+        if supplied and supplied != digest:
+            return _exact_human_approval_cli_error(
+                args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_plan_changed",
+            )
+        if not preview.get("would_change"):
+            result = {**preview, "dry_run": False, "approved": False, "state": "nothing_to_write",
+                      "write_status": "nothing_to_write", "native_approval_dialog_opened": False,
+                      "files_written": []}
+        else:
+            approval_root = archive_services.require_existing_archive_root(
+                archive_services.wom_kit_project_version_update_approval_archive_root(project_root)
+            )
+            binding = operation_approval_binding.plan_digest_approval_binding(
+                ExactHumanApprovalOperation.project_bytecode_repair, digest,
+            )
+            context = binding.context(
+                archive_id=archive_services.read_archive_id(approval_root), reviewer_claim=reviewer,
+            )
+            result = _execute_exact_human_approved_write(
+                approval_root,
+                context,
+                lambda claim: completion_workflows.project_bytecode_repair(
+                    project_root,
+                    max_files=args.max_files,
+                    expected_plan_sha256=digest,
+                    reviewed_by=reviewer,
+                    affirm_external_writers_quiescent=True,
+                    target=args.target,
+                    expected_materialization_plan_sha256=args.expected_materialization_plan_sha256,
+                    exact_human_approval_claim=claim,
+                    expected_exact_approval_plan_sha256=binding.plan_sha256,
+                    expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+                ),
+            )
+    except ExactHumanApprovalWorkflowError as error:
+        no_effect = error.code in {
+            "exact_human_approval_cancelled",
+            "exact_human_approval_operation_failed",
+            "exact_human_approval_writer_result_invalid",
+        }
         return _exact_human_approval_cli_error(
             args,
-            lifecycle_action="project_bytecode_repair",
-            reason_code="compound_exact_human_approval_binding_required",
+            lifecycle_action=lifecycle_action,
+            reason_code=(
+                f"{lifecycle_action}_workflow_precondition_failed" if no_effect
+                else "exact_human_approval_state_unknown"
+            ),
         )
+    except (
+        archive_services.ArchiveServiceError,
+        operation_approval_binding.OperationApprovalBindingError,
+        ExactHumanApprovalError,
+        ExactHumanApprovalWindowsError,
+        ArchivePathError,
+        OSError,
+        UnicodeError,
+        ValueError,
+    ):
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_workflow_failed_safely",
+        )
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(f"Project bytecode repair: {result.get('state', 'blocked')}")
+        for blocker in result.get("blockers", []):
+            print(f"BLOCKED: {blocker}")
+    return 0 if result.get("ok") or result.get("state") == "nothing_to_write" else 1
+
+
+def command_project_bytecode_repair(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _project_bytecode_repair_exact_route(args)
     if not args.approve:
         print("project-bytecode-repair requires --approve.", file=sys.stderr)
         return 1
@@ -43912,7 +44159,14 @@ def build_parser() -> argparse.ArgumentParser:
     zet_revision_restore_proposal_from_snapshot.add_argument(
         "--approve",
         action="store_true",
-        help="Create one exact independent private proposal; does not approve or perform a canonical restore.",
+        help=(
+            "Create one exact independent private proposal after one exact approval (a native dialog, "
+            "or none under a valid session grant); does not approve or perform a canonical restore."
+        ),
+    )
+    zet_revision_restore_proposal_from_snapshot.add_argument(
+        "--reviewed-by",
+        help="Reviewer id (person:<id> or human:<id>) required for --approve.",
     )
     zet_revision_restore_proposal_from_snapshot.add_argument(
         "--format",

@@ -16666,9 +16666,45 @@ def project_bytecode_repair(
     affirm_external_writers_quiescent: bool = False,
     target: str | None = None,
     expected_materialization_plan_sha256: str | None = None,
+    exact_human_approval_claim: Any = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
 ) -> dict[str, Any]:
-    return archive_services._compound_exact_human_approval_blocked(
-        lifecycle_action="project_bytecode_repair",
+    # Reopened 2026-09-24 (triage group 6): the approval is recorded in the
+    # project's archive and binds the repair plan digest; the engine
+    # re-derives that plan and refuses any drift.
+    if exact_human_approval_claim is None:
+        return archive_services._compound_exact_human_approval_blocked(
+            lifecycle_action="project_bytecode_repair",
+        )
+    reviewer = archive_services.safe_project_intake_actor_id(reviewed_by)
+    if reviewer is None:
+        raise archive_services.ArchiveServiceError("project_bytecode_reviewer_invalid")
+    approval_root = archive_services.require_existing_archive_root(
+        archive_services.wom_kit_project_version_update_approval_archive_root(inspection_root)
+    )
+    try:
+        archive_services._require_exact_human_operation_approval(
+            approval_root,
+            plan_digest_approval_binding(
+                ExactHumanApprovalOperation.project_bytecode_repair,
+                str(expected_plan_sha256 or ""),
+            ),
+            reviewer_claim=reviewer,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+            claim=exact_human_approval_claim,
+        )
+    except OperationApprovalBindingError as exc:
+        raise archive_services.ArchiveServiceError(exc.code) from None
+    return _project_bytecode_repair_legacy_core(
+        inspection_root,
+        max_files=max_files,
+        expected_plan_sha256=expected_plan_sha256,
+        reviewed_by=reviewer,
+        affirm_external_writers_quiescent=affirm_external_writers_quiescent,
+        target=target,
+        expected_materialization_plan_sha256=expected_materialization_plan_sha256,
     )
 
 

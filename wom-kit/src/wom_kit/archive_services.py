@@ -22847,12 +22847,30 @@ def zet_revision_restore_proposal_from_snapshot(
     expected_plan_digest: str | None = None,
     dry_run: bool = False,
     approve: bool = False,
+    reviewed_by: str | None = None,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Preview snapshot restoration; legacy direct approval is fixed closed."""
 
-    if type(dry_run) is not bool or type(approve) is not bool or approve:
+    # Reopened 2026-09-24 (triage group 6): approve needs the exact approval
+    # bound to the receipt digest and the preview's plan digest.
+    if type(dry_run) is not bool or type(approve) is not bool or (
+        approve and exact_human_approval_claim is None
+    ):
         return _compound_exact_human_approval_blocked(
             lifecycle_action="zet_revision_restore_proposal_from_snapshot",
+        )
+    if approve:
+        _activity_group_exact_gate(
+            archive_root,
+            operation=ExactHumanApprovalOperation.zet_revision_restore_proposal_from_snapshot,
+            digests=(str(expected_receipt_sha256 or ""), str(expected_plan_digest or "")),
+            reviewed_by=reviewed_by,
+            claim=exact_human_approval_claim,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
         )
     return _zet_revision_restore_proposal_from_snapshot_core(
         archive_root,
@@ -22860,7 +22878,7 @@ def zet_revision_restore_proposal_from_snapshot(
         expected_receipt_sha256=expected_receipt_sha256,
         expected_plan_digest=expected_plan_digest,
         dry_run=dry_run,
-        approve=False,
+        approve=approve,
     )
 
 
@@ -120655,6 +120673,9 @@ def wom_kit_project_version_update_collision(
     reviewed_by: str | None = None,
     affirm_external_writers_quiescent: bool = False,
     reveal_target_relative_path: bool = False,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Inspect or preserve one exact, digest-bound update collision.
 
@@ -120663,9 +120684,26 @@ def wom_kit_project_version_update_collision(
     the exact same key in the verified target Git tree.
     """
 
-    if type(dry_run) is not bool or type(approve) is not bool or approve:
+    # Reopened 2026-09-24 (triage group 6): approve needs the exact approval
+    # recorded in the project's archive and bound to the materialization
+    # plan digest, the entry ref and the action.
+    if type(dry_run) is not bool or type(approve) is not bool or (
+        approve and exact_human_approval_claim is None
+    ):
         return _compound_exact_human_approval_blocked(
             lifecycle_action="project_version_update_collision",
+        )
+    if approve:
+        _activity_group_exact_gate(
+            require_existing_archive_root(
+                wom_kit_project_version_update_approval_archive_root(inspection_root)
+            ),
+            operation=ExactHumanApprovalOperation.project_version_update_collision,
+            digests=(str(expected_plan_sha256 or ""), str(entry_ref or ""), str(action or "")),
+            reviewed_by=reviewed_by,
+            claim=exact_human_approval_claim,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
         )
 
     return _wom_kit_project_version_update_collision_legacy_core(
@@ -162248,7 +162286,9 @@ def _derived_text_capture_core(
         language=language,
         born_digital=born_digital,
         paired_with=paired_with,
-        _exact_verified=_exact_verified,
+        # Only the verified exact-approval path passes the flag, so a
+        # historical fixture that swaps in the legacy core keeps working.
+        **({"_exact_verified": True} if _exact_verified else {}),
     )
 
 

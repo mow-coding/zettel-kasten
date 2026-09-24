@@ -8,8 +8,13 @@ from pathlib import Path
 from wom_kit import archive_cli, archive_services, command_status
 
 
-FIXED_CLOSED_PATHS = (
-    # derive-text capture was reopened in v0.4.40 (test_derive_text_capture_exact).
+# Both surfaces this v0.4.12 truth test pinned closed were reopened under
+# exact approval in v0.4.40 (derive-text capture, restore proposal from a
+# snapshot); the inventory now reports them available and their help no
+# longer says "Unavailable". Their services still refuse without a claim.
+FIXED_CLOSED_PATHS: tuple[str, ...] = ()
+REOPENED_PATHS = (
+    "derive-text capture",
     "zet-revision-restore-proposal-from-snapshot",
 )
 
@@ -53,18 +58,16 @@ class V0412FixedCloseSurfaceTruthTests(unittest.TestCase):
                     command_status.COMPOUND_APPROVAL_REASON_CODE,
                 )
 
-        for argv in (
-            ["zet-revision-restore-proposal-from-snapshot"],
-        ):
-            with self.subTest(argv=argv):
-                help_text = self.help_text(argv)
-                self.assertIn(
+        for path in REOPENED_PATHS:
+            with self.subTest(reopened=path):
+                self.assertEqual(
+                    commands[path]["approval_status"],
+                    command_status.APPROVAL_AVAILABLE,
+                )
+                help_text = self.help_text(path.split())
+                self.assertNotIn(
                     f"Unavailable in v{archive_cli.__version__}",
                     help_text,
-                )
-                self.assertIn(
-                    "operation-specific exact compound human-approval path",
-                    " ".join(help_text.split()),
                 )
 
     def test_runtime_refusal_happens_before_archive_or_source_reads(self) -> None:
