@@ -1199,12 +1199,11 @@ class RuntimeGuidanceReadinessTests(unittest.TestCase):
             [
                 "read_feedback_policy",
                 "inspect_feedback_ledger",
-                "preview_feedback_body",
-                "human_review",
-                "approve_feedback_body",
-                "preview_feedback_record",
-                "approve_feedback_record",
-                "verify_feedback_body_binding",
+                "preview_feedback_letter",
+                "compose_feedback_letter",
+                "verify_feedback_letter",
+                "present_letter_before_delivery",
+                "record_user_delivery",
             ],
         )
         self.assertIn(
@@ -1217,15 +1216,20 @@ class RuntimeGuidanceReadinessTests(unittest.TestCase):
         )
         self.assertIn("operator-feedback-compose", route["sequence"][2]["command"])
         self.assertIn("--dry-run", route["sequence"][2]["command"])
-        self.assertTrue(route["sequence"][3]["required_gate"])
-        self.assertIsNone(route["sequence"][3]["command"])
-        self.assertIn("--approve", route["sequence"][4]["command"])
-        self.assertIn("--reviewed-by", route["sequence"][4]["command"])
-        self.assertIn("--dry-run", route["sequence"][5]["command"])
-        self.assertNotIn("--approve", route["sequence"][5]["command"])
-        self.assertIn("--approve", route["sequence"][6]["command"])
-        self.assertIn("--reviewed-by", route["sequence"][6]["command"])
-        self.assertIn("operator-feedback-body-check", route["sequence"][7]["command"])
+        # Request E (2026-09-24): the compose approval is the one human decision;
+        # no command-less review stop and no separate record approval.
+        self.assertIn("--approve", route["sequence"][3]["command"])
+        self.assertIn("--reviewed-by", route["sequence"][3]["command"])
+        self.assertIn("operator-feedback-body-check", route["sequence"][4]["command"])
+        self.assertIsNone(route["sequence"][5]["command"])
+        self.assertEqual(route["sequence"][5]["user_label"], "전달 전")
+        self.assertFalse(route["sequence"][5]["writes"])
+        self.assertIn("operator-feedback-mark-delivered", route["sequence"][6]["command"])
+        self.assertEqual(route["sequence"][6]["user_label"], "전달 완료")
+        self.assertFalse(any(step.get("required_gate") for step in route["sequence"]))
+        self.assertFalse(route["separate_review_copies_allowed"])
+        self.assertFalse(route["extra_content_approval_stage"])
+        self.assertEqual(route["user_states"], {"before_delivery": "전달 전", "delivered": "전달 완료"})
         self.assertFalse(
             route["user_knowledge_objets_are_canonical_feedback_tracker"]
         )

@@ -9,7 +9,30 @@ operator is running an archive for a human. Those records are meaningful, but
 they are not the user's own knowledge objects. They should not be tracked only
 as loose files in user content folders.
 
-## Runtime Route (v0.3.293)
+## Current Route: One Deliverable Letter (request E with letter 173)
+
+When the person asks for a letter to the developers, the operator prepares one
+letter that can be read and delivered as is. The person sees two states:
+**before delivery** (`전달 전`) and **delivered** (`전달 완료`). Developer
+receipt (`acknowledged`) is a separate, later state.
+
+1. Inspect `operator-feedback-ledger`; `user_view.next_feedback_id` shows the
+   next number.
+2. Preview `operator-feedback-compose` with a request that omits `feedback_id`;
+   WOM assigns the next `wom-feedback-YYYYMMDD-NNN` number.
+3. Approve the same compose plan. This one approval writes the letter, its
+   receipt and its record; a valid session grant covers it without a dialog.
+4. Run `operator-feedback-body-check --dry-run`.
+5. Tell the person the letter is ready (`전달 전`) and where it is. Do not create
+   separate review copies and do not add another content-approval stage. Revise
+   with `--intent revise` only when the person asks for a change.
+6. After the person reports that they delivered it, run
+   `operator-feedback-mark-delivered --only <id> --approve` (`전달 완료`).
+
+The internal record status `draft` is an implementation state, not a review
+task for the person. The route below is kept as history.
+
+## Runtime Route (v0.3.293, superseded by the current route above)
 
 `runtime-context`, `ai-start-here`, `operational-context`, and
 `operator-feedback-plan` now expose one exact workflow:

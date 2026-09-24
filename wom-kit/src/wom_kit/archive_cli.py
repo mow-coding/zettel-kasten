@@ -12535,6 +12535,20 @@ def _operator_feedback_compose_exact_approval(
         except Exception:  # noqa: BLE001 - the body write already succeeded; report, never raise
             record["skipped_reason"] = "feedback_record_create_failed"
         result["draft_record"] = record
+        if record["record_created"] or record["skipped_reason"] == "feedback_record_exists":
+            # Request E: this approval was the human decision for this letter. The
+            # one letter is ready; the person sees "before delivery", not a review task.
+            result["user_status"] = "before_delivery"
+            result["user_status_label"] = "전달 전"
+            result["human_review_completed_by_this_approval"] = True
+            result["separate_review_copy_needed"] = False
+            result["revision_route_if_requested"] = list(getattr(api, "REVISE_PATH_NEXT_SAFE_ACTIONS", ()))
+            result["next_safe_actions"] = [
+                f"archive operator-feedback-body-check <archive-root> --feedback-id {feedback_id} --dry-run --format json",
+                "tell the person this one letter is ready to deliver (전달 전) and where it is; make no review copies",
+                f"after the person reports delivery: archive operator-feedback-mark-delivered <archive-root> --only {feedback_id} --approve --reviewed-by <person:...> --format json (전달 완료)",
+            ]
+            return result
     result["next_safe_actions"] = [
         *[item for item in result.get("next_safe_actions", []) if isinstance(item, str)],
         *getattr(api, "REVISE_PATH_NEXT_SAFE_ACTIONS", ()),

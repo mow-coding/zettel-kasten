@@ -751,8 +751,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/SKILL.md",
       "packaged": "templates/ai-runtime/wom-archive/SKILL.md",
-      "bytes": 11576,
-      "sha256": "9e23f286b0fc3fef066aa4e43177d808bb9b5a9c767b33a46bd2c2719677418b"
+      "bytes": 11616,
+      "sha256": "4cbaa9832acf99d88a74884af13cc304d6363fe326a323d80b63a9bb33f5ff81"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
