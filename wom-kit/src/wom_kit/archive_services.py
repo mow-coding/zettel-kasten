@@ -119,6 +119,7 @@ from .operation_approval_binding import (
     objet_capture_approval_binding,
     project_version_update_approval_binding,
     ai_scratch_gc_approval_binding,
+    plan_digest_approval_binding,
     promote_zet_approval_binding,
     receipt_reconcile_batch_approval_binding,
     retire_draft_approval_binding,
@@ -46659,6 +46660,52 @@ def _activity_group_membership_write(
             cleanup_empty_archive_dirs(root, [receipt_path])
 
 
+def activity_group_approval_digest(*digests: str) -> str:
+    """One hex digest over the reviewed request and plan digests (triage group 4)."""
+
+    joined = "\n".join(str(value or "").strip().lower() for value in digests)
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()
+
+
+def _activity_group_exact_gate(
+    archive_root: Path | str,
+    *,
+    operation: ExactHumanApprovalOperation,
+    digests: tuple[str, ...],
+    reviewed_by: str | None,
+    claim: _ClaimedExactHumanApproval | None,
+    expected_plan_sha256: str | None,
+    expected_target_binding_sha256: str | None,
+) -> None:
+    """Reauthenticate the claim before the membership writer takes its locks.
+
+    The writer itself still re-verifies both reviewed digests under its lock;
+    the approval binds exactly those digests, so any drift fails there.
+    """
+
+    _require_exact_human_approval_inputs_before_archive_read(
+        claim=claim,
+        expected_plan_sha256=expected_plan_sha256,
+        expected_target_binding_sha256=expected_target_binding_sha256,
+    )
+    root = require_existing_archive_root(archive_root)
+    reviewer = safe_foreign_quarantine_actor_id(reviewed_by)
+    if reviewer is None:
+        raise ArchiveServiceError("activity_group_membership_reviewer_invalid")
+    try:
+        binding = plan_digest_approval_binding(operation, activity_group_approval_digest(*digests))
+    except OperationApprovalBindingError as exc:
+        raise ArchiveServiceError(exc.code) from None
+    _require_exact_human_operation_approval(
+        root,
+        binding,
+        reviewer_claim=reviewer,
+        expected_plan_sha256=expected_plan_sha256,
+        expected_target_binding_sha256=expected_target_binding_sha256,
+        claim=claim,
+    )
+
+
 def activity_group_membership_write(
     archive_root: Path | str,
     *,
@@ -46674,10 +46721,26 @@ def activity_group_membership_write(
         [str, str, int | None, int | None], None
     ]
     | None = None,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
 ) -> dict[str, Any]:
-    if type(dry_run) is not bool or type(approve) is not bool or approve:
+    # Triage group 4 (2026-09-24): approve needs the exact approval claim.
+    if type(dry_run) is not bool or type(approve) is not bool or (
+        approve and exact_human_approval_claim is None
+    ):
         return _compound_exact_human_approval_blocked(
             lifecycle_action="activity_group_membership_write",
+        )
+    if approve:
+        _activity_group_exact_gate(
+            archive_root,
+            operation=ExactHumanApprovalOperation.activity_group_membership_write,
+            digests=(expected_request_sha256, expected_review_plan_sha256),
+            reviewed_by=reviewed_by,
+            claim=exact_human_approval_claim,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
         )
     return _activity_group_membership_write(
         archive_root,
@@ -46709,10 +46772,26 @@ def activity_group_membership_removal_write(
         [str, str, int | None, int | None], None
     ]
     | None = None,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
 ) -> dict[str, Any]:
-    if type(dry_run) is not bool or type(approve) is not bool or approve:
+    # Triage group 4 (2026-09-24): approve needs the exact approval claim.
+    if type(dry_run) is not bool or type(approve) is not bool or (
+        approve and exact_human_approval_claim is None
+    ):
         return _compound_exact_human_approval_blocked(
             lifecycle_action="activity_group_membership_removal_write",
+        )
+    if approve:
+        _activity_group_exact_gate(
+            archive_root,
+            operation=ExactHumanApprovalOperation.activity_group_membership_removal_write,
+            digests=(expected_request_sha256, expected_review_plan_sha256),
+            reviewed_by=reviewed_by,
+            claim=exact_human_approval_claim,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
         )
     return _activity_group_membership_write(
         archive_root,
@@ -48916,10 +48995,24 @@ def activity_group_membership_recover(
         [str, str, int | None, int | None], None
     ]
     | None = None,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
 ) -> dict[str, Any]:
-    if type(approve) is not bool or approve:
+    # Triage group 4 (2026-09-24): approve needs the exact approval claim.
+    if type(approve) is not bool or (approve and exact_human_approval_claim is None):
         return _compound_exact_human_approval_blocked(
             lifecycle_action="activity_group_membership_recover",
+        )
+    if approve:
+        _activity_group_exact_gate(
+            archive_root,
+            operation=ExactHumanApprovalOperation.activity_group_membership_recover,
+            digests=(expected_request_sha256, expected_recovery_plan_sha256),
+            reviewed_by=reviewed_by,
+            claim=exact_human_approval_claim,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
         )
     return _activity_group_membership_recover(
         archive_root,
@@ -48945,10 +49038,24 @@ def activity_group_membership_removal_recover(
         [str, str, int | None, int | None], None
     ]
     | None = None,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
 ) -> dict[str, Any]:
-    if type(approve) is not bool or approve:
+    # Triage group 4 (2026-09-24): approve needs the exact approval claim.
+    if type(approve) is not bool or (approve and exact_human_approval_claim is None):
         return _compound_exact_human_approval_blocked(
             lifecycle_action="activity_group_membership_removal_recover",
+        )
+    if approve:
+        _activity_group_exact_gate(
+            archive_root,
+            operation=ExactHumanApprovalOperation.activity_group_membership_removal_recover,
+            digests=(expected_request_sha256, expected_recovery_plan_sha256),
+            reviewed_by=reviewed_by,
+            claim=exact_human_approval_claim,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
         )
     return _activity_group_membership_recover(
         archive_root,

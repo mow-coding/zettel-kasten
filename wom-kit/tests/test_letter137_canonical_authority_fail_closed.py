@@ -426,7 +426,8 @@ class Letter137CanonicalAuthorityCliBoundaryTests(
         # 2026-09-24 reopen (triage group 3): the markup writers route through
         # exact approval; this private reviewer value is refused before any
         # read, still without entering the approved service.
-        reopened = {"markup_normalization", "markup_normalization_revert", "markup_normalization_recovery"}
+        reopened = {"markup_normalization", "markup_normalization_revert", "markup_normalization_recovery",
+                    "principal_register", "principal_unregister"}
         self.assertEqual(
             result["reason_codes"],
             [f"{lifecycle_action}_reviewer_required" if lifecycle_action in reopened else COMPOUND_APPROVAL_BLOCKER],

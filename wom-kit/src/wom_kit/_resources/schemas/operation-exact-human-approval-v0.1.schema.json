@@ -38,7 +38,9 @@
         "markup_normalization",
         "markup_normalization_revert",
         "markup_normalization_recovery",
-        "zettel_objet_link_revert"
+        "zettel_objet_link_revert",
+        "principal_register",
+        "principal_unregister"
       ]
     },
     "plan_sha256": {"$ref": "#/$defs/sha256_ref"},

@@ -395,7 +395,15 @@ class Letter137LegacyAffirmCliBoundaryTests(_BoundaryAssertions):
         self.assertFalse(result["ok"])
         self.assertEqual(result["state"], "blocked")
         self.assertEqual(result["lifecycle_action"], lifecycle_action)
-        self.assertEqual(result["reason_codes"], [COMPOUND_APPROVAL_BLOCKER])
+        # 2026-09-24 reopen (triage group 4): the activity-group writers route
+        # through exact approval; incomplete input is refused before any read.
+        if lifecycle_action.startswith("activity_group_membership"):
+            self.assertIn(result["reason_codes"][0], {
+                f"{lifecycle_action}_reviewer_required",
+                f"{lifecycle_action}_review_affirmation_required",
+            })
+        else:
+            self.assertEqual(result["reason_codes"], [COMPOUND_APPROVAL_BLOCKER])
         self.assertIs(result["private_values_echoed"], False)
         rendered = stdout.getvalue() + stderr.getvalue()
         for private in PRIVATE_VALUES:

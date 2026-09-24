@@ -29259,12 +29259,122 @@ def command_activity_group_membership_removal_plan(
     return 0 if result.get("ok") else 1
 
 
-def command_activity_group_membership_write(args: argparse.Namespace) -> int:
-    if args.approve:
+def _activity_group_exact_route(
+    args: argparse.Namespace,
+    *,
+    lifecycle_action: str,
+    operation: ExactHumanApprovalOperation,
+    digests: tuple[str, ...],
+    affirmed: bool,
+    preview: Callable[[], dict[str, Any]] | None,
+    write: Callable[[Any, Any, str], dict[str, Any]],
+    title: str,
+) -> int:
+    """--approve for the reopened activity-group writers (triage group 4).
+
+    The approval (dialog or a valid limited/allow_all session grant) binds the
+    reviewed request digest and review/recovery plan digest; the writer
+    re-verifies both under its own lock. A fresh dry-run and the explicit
+    review affirmation are checked before any dialog.
+    """
+
+    reviewer = archive_services.safe_foreign_quarantine_actor_id(getattr(args, "reviewed_by", None))
+    if reviewer is None:
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_reviewer_required",
+        )
+    if not affirmed:
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_review_affirmation_required",
+        )
+    archive_root = Path(args.archive_root)
+    try:
+        if preview is not None:
+            planned = preview()
+            if planned.get("ok") is not True or planned.get("blockers"):
+                return _exact_human_approval_cli_error(
+                    args,
+                    lifecycle_action=lifecycle_action,
+                    reason_code=f"{lifecycle_action}_preflight_blocked",
+                    preflight_blockers=planned.get("blockers"),
+                )
+        binding = operation_approval_binding.plan_digest_approval_binding(
+            operation, archive_services.activity_group_approval_digest(*digests),
+        )
+        context = binding.context(
+            archive_id=archive_services.read_archive_id(archive_root), reviewer_claim=reviewer,
+        )
+        result = _execute_exact_human_approved_write(
+            archive_root, context, lambda claim: write(binding, claim, reviewer),
+        )
+    except ExactHumanApprovalWorkflowError as error:
+        no_effect = error.code in {
+            "exact_human_approval_cancelled",
+            "exact_human_approval_operation_failed",
+            "exact_human_approval_writer_result_invalid",
+        }
         return _exact_human_approval_cli_error(
             args,
+            lifecycle_action=lifecycle_action,
+            reason_code=(
+                f"{lifecycle_action}_workflow_precondition_failed" if no_effect
+                else "exact_human_approval_state_unknown"
+            ),
+        )
+    except (
+        archive_services.ArchiveServiceError,
+        operation_approval_binding.OperationApprovalBindingError,
+        ExactHumanApprovalError,
+        ExactHumanApprovalWindowsError,
+        ArchivePathError,
+        OSError,
+        UnicodeError,
+        ValueError,
+    ):
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_workflow_failed_safely",
+        )
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(f"{title}: {result.get('status') or result.get('state') or 'unknown'}")
+        for blocker in result.get("blockers") or []:
+            print(f"- {blocker}")
+    return 0 if result.get("ok") else 1
+
+
+def command_activity_group_membership_write(args: argparse.Namespace) -> int:
+    if args.approve and not getattr(args, "dry_run", False):
+        return _activity_group_exact_route(
+            args,
             lifecycle_action="activity_group_membership_write",
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.activity_group_membership_write,
+            digests=(args.expected_request_sha256, args.expected_review_plan_sha256),
+            affirmed=bool(args.affirm_memberships_reviewed),
+            preview=lambda: archive_services.activity_group_membership_write(
+                Path(args.archive_root),
+                request_path=args.request,
+                expected_request_sha256=args.expected_request_sha256,
+                expected_review_plan_sha256=args.expected_review_plan_sha256,
+                dry_run=True,
+                approve=False,
+                max_members=int(args.max_members),
+            ),
+            write=lambda binding, claim, reviewer: archive_services.activity_group_membership_write(
+                Path(args.archive_root),
+                request_path=args.request,
+                expected_request_sha256=args.expected_request_sha256,
+                expected_review_plan_sha256=args.expected_review_plan_sha256,
+                dry_run=False,
+                approve=True,
+                reviewed_by=reviewer,
+                affirm_memberships_reviewed=True,
+                max_members=int(args.max_members),
+                exact_human_approval_claim=claim,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+            ),
+            title="WOM activity-group membership write",
         )
     if bool(args.dry_run) == bool(args.approve):
         print(
@@ -29417,11 +29527,26 @@ def command_activity_group_membership_recovery_plan(
 def command_activity_group_membership_recover(
     args: argparse.Namespace,
 ) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
+    if args.approve and not getattr(args, "dry_run", False):
+        return _activity_group_exact_route(
             args,
             lifecycle_action="activity_group_membership_recover",
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.activity_group_membership_recover,
+            digests=(args.expected_request_sha256, args.expected_recovery_plan_sha256),
+            affirmed=bool(args.affirm_recovery_reviewed),
+            preview=None,
+            write=lambda binding, claim, reviewer: archive_services.activity_group_membership_recover(
+                Path(args.archive_root),
+                expected_request_sha256=args.expected_request_sha256,
+                expected_recovery_plan_sha256=args.expected_recovery_plan_sha256,
+                approve=True,
+                reviewed_by=reviewer,
+                affirm_recovery_reviewed=True,
+                exact_human_approval_claim=claim,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+            ),
+            title="WOM activity-group membership recovery",
         )
     if not args.approve:
         print(
@@ -29498,11 +29623,37 @@ def command_activity_group_membership_recover(
 def command_activity_group_membership_removal_write(
     args: argparse.Namespace,
 ) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
+    if args.approve and not getattr(args, "dry_run", False):
+        return _activity_group_exact_route(
             args,
             lifecycle_action="activity_group_membership_removal_write",
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.activity_group_membership_removal_write,
+            digests=(args.expected_request_sha256, args.expected_review_plan_sha256),
+            affirmed=bool(args.affirm_removals_reviewed),
+            preview=lambda: archive_services.activity_group_membership_removal_write(
+                Path(args.archive_root),
+                request_path=args.request,
+                expected_request_sha256=args.expected_request_sha256,
+                expected_review_plan_sha256=args.expected_review_plan_sha256,
+                dry_run=True,
+                approve=False,
+                max_members=int(args.max_members),
+            ),
+            write=lambda binding, claim, reviewer: archive_services.activity_group_membership_removal_write(
+                Path(args.archive_root),
+                request_path=args.request,
+                expected_request_sha256=args.expected_request_sha256,
+                expected_review_plan_sha256=args.expected_review_plan_sha256,
+                dry_run=False,
+                approve=True,
+                reviewed_by=reviewer,
+                affirm_removals_reviewed=True,
+                max_members=int(args.max_members),
+                exact_human_approval_claim=claim,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+            ),
+            title="WOM activity-group membership removal",
         )
     if bool(args.dry_run) == bool(args.approve):
         print(
@@ -29657,11 +29808,26 @@ def command_activity_group_membership_removal_recovery_plan(
 def command_activity_group_membership_removal_recover(
     args: argparse.Namespace,
 ) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
+    if args.approve and not getattr(args, "dry_run", False):
+        return _activity_group_exact_route(
             args,
             lifecycle_action="activity_group_membership_removal_recover",
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.activity_group_membership_removal_recover,
+            digests=(args.expected_request_sha256, args.expected_recovery_plan_sha256),
+            affirmed=bool(args.affirm_recovery_reviewed),
+            preview=None,
+            write=lambda binding, claim, reviewer: archive_services.activity_group_membership_removal_recover(
+                Path(args.archive_root),
+                expected_request_sha256=args.expected_request_sha256,
+                expected_recovery_plan_sha256=args.expected_recovery_plan_sha256,
+                approve=True,
+                reviewed_by=reviewer,
+                affirm_recovery_reviewed=True,
+                exact_human_approval_claim=claim,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+            ),
+            title="WOM activity-group membership removal recovery",
         )
     if not args.approve:
         print(
@@ -33695,10 +33861,21 @@ def command_principal_register_plan(args: argparse.Namespace) -> int:
 
 def command_principal_register(args: argparse.Namespace) -> int:
     if args.approve:
-        return _exact_human_approval_cli_error(
+        root = Path(args.archive_root)
+        return _plan_digest_exact_route(
             args,
             lifecycle_action="principal_register",
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.principal_register,
+            plan=lambda: completion_workflows.principal_registration_plan(root, principal_id=args.principal_id, kind=args.kind, display_name=args.display_name),
+            write=lambda digest, reviewer, binding, claim: completion_workflows.principal_register(
+                root, principal_id=args.principal_id, kind=args.kind, display_name=args.display_name,
+                expected_plan_sha256=digest,
+                reviewed_by=reviewer,
+                exact_human_approval_claim=claim,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+            ),
+            printer=print_json,
         )
     if not args.approve:
         print("principal-register requires --approve.", file=sys.stderr)
@@ -33812,10 +33989,21 @@ def command_principal_unregister_plan(args: argparse.Namespace) -> int:
 
 def command_principal_unregister(args: argparse.Namespace) -> int:
     if args.approve:
-        return _exact_human_approval_cli_error(
+        root = Path(args.archive_root)
+        return _plan_digest_exact_route(
             args,
             lifecycle_action="principal_unregister",
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.principal_unregister,
+            plan=lambda: completion_workflows.principal_unregistration_plan(root, principal_id=args.principal_id),
+            write=lambda digest, reviewer, binding, claim: completion_workflows.principal_unregister(
+                root, principal_id=args.principal_id,
+                expected_plan_sha256=digest,
+                reviewed_by=reviewer,
+                exact_human_approval_claim=claim,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+            ),
+            printer=print_json,
         )
     if not args.approve:
         print("principal-unregister requires --approve.", file=sys.stderr)

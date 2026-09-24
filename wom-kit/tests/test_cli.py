@@ -67170,7 +67170,7 @@ state:
                         malformed_serialized,
                     )
 
-    def test_activity_group_membership_write_previews_but_approve_fails_closed(self) -> None:
+    def test_activity_group_membership_write_previews_and_a_declined_approve_writes_nothing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = Path(tmp) / "personal-archive"
             fixture = self.create_activity_group_write_fixture(
@@ -67193,7 +67193,14 @@ state:
             )
             before = self.snapshot_archive_files(archive_root)
 
-            approve_code, approve_stdout, approve_stderr = self.run_cli_split(
+            # 2026-09-24 reopen (triage group 4): approve asks for exact
+            # approval; a declined decision writes nothing and no real window
+            # opens.
+            def decline(*_args, **_kwargs):
+                raise archive_cli.ExactHumanApprovalWorkflowError("exact_human_approval_cancelled")
+
+            with patch.object(archive_cli, "_execute_exact_human_approved_write", side_effect=decline):
+                approve_code, approve_stdout, approve_stderr = self.run_cli_split(
                 [
                     "activity-group-membership-write",
                     str(archive_root),
@@ -67215,7 +67222,7 @@ state:
             blocked_cli = json.loads(approve_stdout)
             self.assertEqual(
                 blocked_cli["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
+                ["activity_group_membership_write_workflow_precondition_failed"],
             )
             self.assertFalse(blocked_cli["private_values_echoed"])
             self.assertEqual(self.snapshot_archive_files(archive_root), before)

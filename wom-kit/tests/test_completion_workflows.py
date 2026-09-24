@@ -8404,7 +8404,15 @@ class CompletionWorkflowTests(unittest.TestCase):
             self.assertTrue(record_path.exists())
 
     def test_principal_cli_runs_reviewed_register_list_unregister_cycle(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        # 2026-09-24 reopen (triage group 4): register/unregister ask for exact
+        # approval; this cycle declines both, so nothing is written by the CLI
+        # and no real window opens.
+        def decline(_root, _context, _writer, **_kwargs):
+            raise archive_cli.ExactHumanApprovalWorkflowError("exact_human_approval_cancelled")
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            archive_cli, "_execute_exact_human_approved_write", side_effect=decline
+        ):
             archive_root = self.fake_archive(Path(tmp) / "archive")
             principal_id = "team:reviewed-operations"
             common = [
@@ -8444,7 +8452,7 @@ class CompletionWorkflowTests(unittest.TestCase):
             register_blocked = json.loads(register_output)
             self.assertEqual(
                 register_blocked["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
+                ["principal_register_workflow_precondition_failed"],
             )
             self.assertFalse(register_blocked["private_values_echoed"])
             registered = self.install_historical_principal_fixture(
@@ -8490,7 +8498,7 @@ class CompletionWorkflowTests(unittest.TestCase):
             unregister_blocked = json.loads(unregister_output)
             self.assertEqual(
                 unregister_blocked["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
+                ["principal_unregister_workflow_precondition_failed"],
             )
             self.assertFalse(unregister_blocked["private_values_echoed"])
             self.assertTrue(

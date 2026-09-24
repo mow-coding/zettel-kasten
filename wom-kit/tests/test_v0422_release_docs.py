@@ -156,9 +156,9 @@ class V0422ReleaseDocsTests(unittest.TestCase):
         statuses = [row["status"] for row in manifest["paths"].values()]
         routed = sum(1 for row in manifest["paths"].values() if row.get("route"))
         # v0.4.22 changes no writer: the v0.4.21 inventory and gate stand.
-        self.assertEqual(len(statuses), 73)  # v0.4.40: 2026-09-24 triage reopen
+        self.assertEqual(len(statuses), 79)  # v0.4.40: 2026-09-24 triage reopen
         self.assertEqual(statuses.count("session_integrated") - routed, 6)
-        self.assertEqual(routed, 19)  # v0.4.40: 2026-09-24 triage reopen
+        self.assertEqual(routed, 25)  # v0.4.40: 2026-09-24 triage reopen
         self.assertEqual(statuses.count("pending"), 29)  # v0.4.36: five rows integrated through the environment route
         self.assertEqual(statuses.count("legacy_exception"), 19)
 

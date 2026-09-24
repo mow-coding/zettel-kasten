@@ -71,10 +71,6 @@ OPERATION_CANCEL_UNSUPPORTED_HELP = (
 # must consume this registry instead of maintaining independent claims.
 COMPOUND_APPROVAL_FIXED_CLOSED_COMMANDS = frozenset(
     {
-        "activity-group-membership-recover",
-        "activity-group-membership-removal-recover",
-        "activity-group-membership-removal-write",
-        "activity-group-membership-write",
         "add-source",
         "credential-keepassxc-write",
         "credential-lifecycle",
@@ -99,8 +95,6 @@ COMPOUND_APPROVAL_FIXED_CLOSED_COMMANDS = frozenset(
         "objet-source-metadata-write",
         "onboard",
         "prehashed-objet-ledger",
-        "principal-register",
-        "principal-unregister",
         "project-bytecode-repair",
         "project-version-update-collision",
         "repair-gitignore",
@@ -159,6 +153,13 @@ EXACT_APPROVAL_REOPENED_WRITERS = frozenset({
     "markup-normalization-recovery",
     "markup-normalization-revert",
     "zettel-objet-link-revert",
+    # Triage group 4: third-party Principals and activity-group memberships.
+    "principal-register",
+    "principal-unregister",
+    "activity-group-membership-write",
+    "activity-group-membership-removal-write",
+    "activity-group-membership-recover",
+    "activity-group-membership-removal-recover",
 })
 
 # Public parser and dispatch exposure was audited at v0.3.320 and its explicit

@@ -1,6 +1,6 @@
 # Archive Infra Decision Log: Closed-Writer Triage (2026-09-24)
 
-Status: owner decision recorded; groups 1-3 implemented for v0.4.40.
+Status: owner decision recorded; groups 1-4 implemented for v0.4.40.
 
 ## Decision (owner, 2026-09-24)
 
@@ -95,3 +95,21 @@ blocked without it.
   command's legacy tests now replace the dialog.
 
 Evidence: `wom-kit/tests/test_markup_and_link_revert_exact.py`.
+
+## Group 4: Principals and Activity Groups (v0.4.40)
+
+Letters 102, 104 and 112 asked for event groups and non-owner Principals;
+both were implemented and never usable after v0.4.0.
+
+- `principal-register` / `principal-unregister` use the group 3 plan-digest
+  route; their receipts name the approval.
+- `activity-group-membership-write`, `-removal-write`, `-recover` and
+  `-removal-recover` bind the approval to the reviewed request digest and the
+  review/recovery plan digest (`activity_group_approval_digest`); the writer
+  re-verifies both under its own lock. Their receipt schemas are unchanged, so
+  the approval reference lives in the claim record.
+- The review affirmation and a fresh dry-run are checked before any dialog.
+- Local verification now runs through a harness that replaces the real native
+  dialog, so a legacy test can never open a window on the owner's desktop.
+
+Evidence: `wom-kit/tests/test_group_principal_exact.py`.

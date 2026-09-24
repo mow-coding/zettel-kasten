@@ -45,10 +45,11 @@ class V0419CapabilityAvailabilityTests(unittest.TestCase):
 
     def test_fixed_closed_command_preserves_parser_json_default(self) -> None:
         output, errors = io.StringIO(), io.StringIO()
-        argv = ["principal-register", "synthetic-root-must-not-be-read", "--principal-id", "team:synthetic",
-                "--kind", "team", "--display-name", "Synthetic app", "--expected-plan-sha256",
-                "sha256:" + "a" * 64, "--approve", "--reviewed-by", "person:synthetic"]
-        with mock.patch.object(archive_cli, "command_principal_register") as handler:
+        # principal-register reopened in v0.4.40; credential-lifecycle stays closed.
+        argv = ["credential-lifecycle", "synthetic-root-must-not-be-read", "--workspace-fingerprint",
+                "sha256:" + "b" * 64, "--default-credential-id", "credential:synthetic",
+                "--approve", "--reviewed-by", "person:synthetic"]
+        with mock.patch.object(archive_cli, "command_credential_lifecycle") as handler:
             with redirect_stdout(output), redirect_stderr(errors):
                 code = archive_cli.main(argv)
         handler.assert_not_called()

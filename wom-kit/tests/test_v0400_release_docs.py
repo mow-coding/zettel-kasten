@@ -157,9 +157,15 @@ class V0400ReleaseDocsTests(unittest.TestCase):
                 "markup-normalization-recovery",  # reopened in v0.4.40
                 "markup-normalization-revert",  # reopened in v0.4.40
                 "zettel-objet-link-revert",  # reopened in v0.4.40
+                "principal-register",  # reopened in v0.4.40
+                "principal-unregister",  # reopened in v0.4.40
+                "activity-group-membership-write",  # reopened in v0.4.40
+                "activity-group-membership-removal-write",  # reopened in v0.4.40
+                "activity-group-membership-recover",  # reopened in v0.4.40
+                "activity-group-membership-removal-recover",  # reopened in v0.4.40
             }
         )
-        self.assertEqual(len(current_blocked), 50)  # v0.4.40: 2026-09-24 triage reopen
+        self.assertEqual(len(current_blocked), 44)  # v0.4.40: 2026-09-24 triage reopen
         self.assertEqual(len(historical_blocked), 79)
         self.assertNotIn("migrate", current_blocked)
         self.assertNotIn("zettel-objet-link", current_blocked)

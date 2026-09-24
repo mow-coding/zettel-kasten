@@ -15119,10 +15119,15 @@ def principal_register(
     display_name: str | None,
     expected_plan_sha256: str | None,
     reviewed_by: str | None,
+    exact_human_approval_claim: Any = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
 ) -> dict[str, Any]:
-    return archive_services._compound_exact_human_approval_blocked(
-        lifecycle_action="principal_register",
-    )
+    # Triage group 4 (2026-09-24): writes again under exact approval.
+    if exact_human_approval_claim is None:
+        return archive_services._compound_exact_human_approval_blocked(
+            lifecycle_action="principal_register",
+        )
 
     # Dormant legacy implementation retained for compatibility analysis.
     # It is not an approval authority.
@@ -15155,6 +15160,17 @@ def principal_register(
         }
 
     root: Path = private["root"]
+    try:
+        exact_operation_approval = archive_services._require_exact_human_operation_approval(
+            root,
+            plan_digest_approval_binding(ExactHumanApprovalOperation.principal_register, expected),
+            reviewer_claim=reviewer,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+            claim=exact_human_approval_claim,
+        )
+    except OperationApprovalBindingError as exc:
+        raise archive_services.ArchiveServiceError(exc.code) from None
     with _PrincipalLock(root, private["principal_id"]):
         fresh, fresh_private = _principal_registration_plan_core(
             root,
@@ -15209,6 +15225,7 @@ def principal_register(
             receipt_relative,
         )
         receipt = {
+            "exact_human_approval": exact_operation_approval,
             "schema": PRINCIPAL_REGISTRATION_RECEIPT_SCHEMA,
             "archive_id": fresh_private["archive_id"],
             "principal_id": fresh_private["principal_id"],
@@ -15465,10 +15482,15 @@ def principal_unregister(
     principal_id: str | None,
     expected_plan_sha256: str | None,
     reviewed_by: str | None,
+    exact_human_approval_claim: Any = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
 ) -> dict[str, Any]:
-    return archive_services._compound_exact_human_approval_blocked(
-        lifecycle_action="principal_unregister",
-    )
+    # Triage group 4 (2026-09-24): writes again under exact approval.
+    if exact_human_approval_claim is None:
+        return archive_services._compound_exact_human_approval_blocked(
+            lifecycle_action="principal_unregister",
+        )
 
     # Dormant legacy implementation retained for compatibility analysis.
     # It is not an approval authority.
@@ -15499,6 +15521,17 @@ def principal_unregister(
         }
 
     root: Path = private["root"]
+    try:
+        exact_operation_approval = archive_services._require_exact_human_operation_approval(
+            root,
+            plan_digest_approval_binding(ExactHumanApprovalOperation.principal_unregister, expected),
+            reviewer_claim=reviewer,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+            claim=exact_human_approval_claim,
+        )
+    except OperationApprovalBindingError as exc:
+        raise archive_services.ArchiveServiceError(exc.code) from None
     with _PrincipalLock(root, private["principal_id"]):
         fresh, fresh_private = _principal_unregistration_plan_core(
             root,
@@ -15541,6 +15574,7 @@ def principal_unregister(
             receipt_relative,
         )
         receipt = {
+            "exact_human_approval": exact_operation_approval,
             "schema": PRINCIPAL_UNREGISTRATION_RECEIPT_SCHEMA,
             "archive_id": fresh_private["archive_id"],
             "principal_id": fresh_private["principal_id"],

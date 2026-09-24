@@ -57,6 +57,36 @@
       "route": "environment",
       "evidence": ["test_markup_and_link_revert_exact"]
     },
+    "principal-register": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_group_principal_exact"]
+    },
+    "principal-unregister": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_group_principal_exact"]
+    },
+    "activity-group-membership-write": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_group_principal_exact"]
+    },
+    "activity-group-membership-removal-write": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_group_principal_exact"]
+    },
+    "activity-group-membership-recover": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_group_principal_exact"]
+    },
+    "activity-group-membership-removal-recover": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_group_principal_exact"]
+    },
     "draft-revision-write": {
       "status": "session_integrated",
       "route": "environment",

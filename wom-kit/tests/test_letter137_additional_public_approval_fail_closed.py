@@ -291,7 +291,7 @@ class Letter137AdditionalPublicCliBoundaryTests(_CliAssertions):
             ],
             "parcel": ["pack"],
         }
-        self.assertEqual(len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS), 50)  # triage groups 1-3 reopened
+        self.assertEqual(len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS), 44)  # v0.4.40: 2026-09-24 triage reopen
         for exact_batch_command in (
             "source-intake-batch",
             "objet-capture-batch",

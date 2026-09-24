@@ -16,9 +16,9 @@ class WriterSessionCoverageGateTests(unittest.TestCase):
     def test_manifest_matches_parser_and_denominator_stays_honest(self):
         problems, counts = subject.check()
         self.assertEqual(problems, [])
-        self.assertEqual(sum(counts.values()), 73)  # v0.4.40: ten writers reopened by the 2026-09-24 triage (groups 1-3)
+        self.assertEqual(sum(counts.values()), 79)  # v0.4.40: 2026-09-24 triage reopen
         self.assertGreaterEqual(counts["session_integrated"], 5)
-        self.assertEqual(counts["routed"], 19)  # v0.4.38 two environment-grant routes; the 2026-09-24 reopen adds ten
+        self.assertEqual(counts["routed"], 25)  # v0.4.40: 2026-09-24 triage reopen
         self.assertGreater(counts["pending"], 0)  # all-writer scope is not complete yet
         self.assertEqual(subject.main(["--format", "text"]), 0)
 

@@ -232,6 +232,13 @@ class ExactHumanApprovalOperation(Enum):
     markup_normalization_revert = "markup_normalization_revert"
     markup_normalization_recovery = "markup_normalization_recovery"
     zettel_objet_link_revert = "zettel_objet_link_revert"
+    # Triage group 4: principals and activity-group memberships.
+    principal_register = "principal_register"
+    principal_unregister = "principal_unregister"
+    activity_group_membership_write = "activity_group_membership_write"
+    activity_group_membership_removal_write = "activity_group_membership_removal_write"
+    activity_group_membership_recover = "activity_group_membership_recover"
+    activity_group_membership_removal_recover = "activity_group_membership_removal_recover"
 
 
 def _validated_target_preview_text(value: str | None) -> str | None:
@@ -536,6 +543,12 @@ _OPERATION_LABELS = {
     ExactHumanApprovalOperation.markup_normalization_revert: "마크업 정규화 되돌리기",
     ExactHumanApprovalOperation.markup_normalization_recovery: "중단된 마크업 정규화 복구",
     ExactHumanApprovalOperation.zettel_objet_link_revert: "zet-오브제 연결 되돌리기",
+    ExactHumanApprovalOperation.principal_register: "제3자 Principal 등록",
+    ExactHumanApprovalOperation.principal_unregister: "제3자 Principal 등록 해제",
+    ExactHumanApprovalOperation.activity_group_membership_write: "사건 그룹 소속 추가",
+    ExactHumanApprovalOperation.activity_group_membership_removal_write: "사건 그룹 소속 제거",
+    ExactHumanApprovalOperation.activity_group_membership_recover: "중단된 소속 추가 복구",
+    ExactHumanApprovalOperation.activity_group_membership_removal_recover: "중단된 소속 제거 복구",
 }
 
 _OPERATION_QUESTIONS = {
@@ -661,6 +674,24 @@ _OPERATION_QUESTIONS = {
     ),
     ExactHumanApprovalOperation.zettel_objet_link_revert: (
         "이 연결 영수증 이전의 바이트로 zet를 되돌릴까요?"
+    ),
+    ExactHumanApprovalOperation.principal_register: (
+        "검토한 Principal 하나를 이 아카이브에 등록할까요?"
+    ),
+    ExactHumanApprovalOperation.principal_unregister: (
+        "쓰이지 않는 이 Principal 등록을 해제할까요?"
+    ),
+    ExactHumanApprovalOperation.activity_group_membership_write: (
+        "검토한 사건 그룹 소속을 목록의 zet들에 추가할까요?"
+    ),
+    ExactHumanApprovalOperation.activity_group_membership_removal_write: (
+        "검토한 사건 그룹 소속을 목록의 zet들에서 제거할까요?"
+    ),
+    ExactHumanApprovalOperation.activity_group_membership_recover: (
+        "중단된 소속 추가 작업을 검토한 복구 계획대로 끝낼까요?"
+    ),
+    ExactHumanApprovalOperation.activity_group_membership_removal_recover: (
+        "중단된 소속 제거 작업을 검토한 복구 계획대로 끝낼까요?"
     ),
 }
 
@@ -855,6 +886,24 @@ _OPERATION_SUMMARIES = {
     ExactHumanApprovalOperation.zettel_objet_link_revert: (
         "연결 영수증의 스냅샷 바이트로 zet 하나를 되돌리고 되돌리기 영수증을 남깁니다. 오브제는 건드리지 않습니다."
     ),
+    ExactHumanApprovalOperation.principal_register: (
+        "검토한 계획대로 기관·인물 Principal 기록 하나와 영수증을 남깁니다. 다른 기록은 바꾸지 않습니다."
+    ),
+    ExactHumanApprovalOperation.principal_unregister: (
+        "어디에서도 쓰이지 않는 Principal 기록 하나만 해제하고 영수증을 남깁니다."
+    ),
+    ExactHumanApprovalOperation.activity_group_membership_write: (
+        "검토한 요청의 zet마다 사건 앵커 소속을 추가하고 복구 저널과 영수증을 남깁니다."
+    ),
+    ExactHumanApprovalOperation.activity_group_membership_removal_write: (
+        "검토한 요청의 zet마다 사건 앵커 소속을 제거하고 복구 저널과 영수증을 남깁니다."
+    ),
+    ExactHumanApprovalOperation.activity_group_membership_recover: (
+        "복구 저널의 정확한 바이트로 중단된 소속 추가를 마무리하거나 되돌립니다."
+    ),
+    ExactHumanApprovalOperation.activity_group_membership_removal_recover: (
+        "복구 저널의 정확한 바이트로 중단된 소속 제거를 마무리하거나 되돌립니다."
+    ),
 }
 
 _OPERATION_APPROVE_BUTTONS = {
@@ -909,6 +958,12 @@ _OPERATION_APPROVE_BUTTONS = {
     ExactHumanApprovalOperation.markup_normalization_revert: "정규화 되돌리기",
     ExactHumanApprovalOperation.markup_normalization_recovery: "복구 실행",
     ExactHumanApprovalOperation.zettel_objet_link_revert: "연결 되돌리기",
+    ExactHumanApprovalOperation.principal_register: "Principal 등록",
+    ExactHumanApprovalOperation.principal_unregister: "등록 해제",
+    ExactHumanApprovalOperation.activity_group_membership_write: "소속 추가",
+    ExactHumanApprovalOperation.activity_group_membership_removal_write: "소속 제거",
+    ExactHumanApprovalOperation.activity_group_membership_recover: "복구 실행",
+    ExactHumanApprovalOperation.activity_group_membership_removal_recover: "복구 실행",
 }
 
 
