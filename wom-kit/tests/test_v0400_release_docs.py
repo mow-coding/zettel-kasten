@@ -149,9 +149,46 @@ class V0400ReleaseDocsTests(unittest.TestCase):
                 "zet-revision-write",
                 "zet-revision-restore-write",
                 "object-storage-upload",  # reopened in v0.4.33
+                "remint-reconcile",  # reopened in v0.4.40
+                "retire-draft-reconcile",  # reopened in v0.4.40
+                "ai-scratch-gc",  # reopened in v0.4.40
+                "zet-catalog-pass-cleanup",  # reopened in v0.4.40
+                "markup-normalization",  # reopened in v0.4.40
+                "markup-normalization-recovery",  # reopened in v0.4.40
+                "markup-normalization-revert",  # reopened in v0.4.40
+                "zettel-objet-link-revert",  # reopened in v0.4.40
+                "objet-capture-enable",  # deleted in v0.4.40
+                "object-storage-upload-evidence",  # deleted in v0.4.40
+                "zet-abstract-backfill-recover",  # deleted in v0.4.40
+                "zet-abstract-backfill-revert",  # deleted in v0.4.40
+                "zet-abstract-backfill-write",  # deleted in v0.4.40
+                "credential-keepassxc-write",  # deleted in v0.4.40
+                "external-locator-revert",  # deleted in v0.4.40
+                "notion-ancestor-fetch-adapter-run",  # deleted in v0.4.40
+                "notion-objet-manifest-locator-label",  # deleted in v0.4.40
+                "object-storage-wom-location-reconcile",  # deleted in v0.4.40
+                "scan-source",  # deleted in v0.4.40
+                "tiro-lossless-recovery-capture",  # deleted in v0.4.40
+                "principal-register",  # reopened in v0.4.40
+                "principal-unregister",  # reopened in v0.4.40
+                "activity-group-membership-write",  # reopened in v0.4.40
+                "activity-group-membership-removal-write",  # reopened in v0.4.40
+                "activity-group-membership-recover",  # reopened in v0.4.40
+                "activity-group-membership-removal-recover",  # reopened in v0.4.40
+                "restore-drill",  # reopened in v0.4.40
+                "repair-gitignore",  # reopened in v0.4.40
+                "identity-reconcile",  # reopened in v0.4.40
+                "zet-title-remap-recover",  # reopened in v0.4.40
+                "zet-title-remap-revert-recover",  # reopened in v0.4.40
+                "saved-view-write",  # reopened in v0.4.40
+                "saved-view-revert",  # reopened in v0.4.40
+                "objet-source-metadata-write",  # reopened in v0.4.40
+                "external-locator-deactivate",  # reopened in v0.4.40
+                "project-bytecode-repair",  # reopened in v0.4.40
+                "project-version-update-collision",  # reopened in v0.4.40
             }
         )
-        self.assertEqual(len(current_blocked), 58)  # v0.4.33: object-storage-upload reopened
+        self.assertEqual(len(current_blocked), 19)  # 2026-09-24 triage reopen
         self.assertEqual(len(historical_blocked), 79)
         self.assertNotIn("migrate", current_blocked)
         self.assertNotIn("zettel-objet-link", current_blocked)
@@ -160,7 +197,7 @@ class V0400ReleaseDocsTests(unittest.TestCase):
         self.assertNotIn("objet-capture", current_blocked)
         self.assertNotIn("objet-capture-selection", current_blocked)
         self.assertNotIn("revert-edge", current_blocked)
-        self.assertIn("zettel-objet-link-revert", current_blocked)
+        self.assertNotIn("zettel-objet-link-revert", current_blocked)  # reopened in v0.4.40
 
         release = RELEASE_PATH.read_text(encoding="utf-8")
         self.assertIn("exactly 79 top-level", release)

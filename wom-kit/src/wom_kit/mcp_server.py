@@ -2363,20 +2363,6 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "source_scan_plan",
-        "description": "Plan a metadata-only source scan. This never writes source maps or receipts.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "archive_root": {"type": "string"},
-                "source": {"type": "string"},
-                "source_root": {"type": "string"},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 10000, "default": 2000},
-            },
-            "required": ["archive_root", "source"],
-        },
-    },
-    {
         "name": "source_registration_plan",
         "description": "Plan source registration. This never writes source-bindings.yml or local profiles.",
         "inputSchema": {
@@ -3863,8 +3849,6 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_notion_client_fixture_request_plan(arguments)
     if name == "list_sources":
         return tool_list_sources(arguments)
-    if name == "source_scan_plan":
-        return tool_source_scan_plan(arguments)
     if name == "source_registration_plan":
         return tool_source_registration_plan(arguments)
     if name == "source_mount_plan":
@@ -6066,23 +6050,6 @@ def tool_list_sources(arguments: dict[str, Any]) -> dict[str, Any]:
     archive_root = require_path_arg(arguments, "archive_root")
     result = call_service(archive_services.list_sources, archive_root)
     return tool_success_result(f"Found {result['source_count']} source(s).", result)
-
-
-def tool_source_scan_plan(arguments: dict[str, Any]) -> dict[str, Any]:
-    archive_root = require_path_arg(arguments, "archive_root")
-    source = require_string_arg(arguments, "source")
-    source_root_value = optional_string_arg(arguments, "source_root")
-    source_root = require_path_arg({"source_root": source_root_value}, "source_root") if source_root_value else None
-    limit = int(arguments.get("limit", 2000))
-    result = call_service(
-        archive_services.source_scan_dry_run,
-        archive_root,
-        source_id=source,
-        source_root=source_root,
-        limit=limit,
-    )
-    state = "passed" if result["ok"] else "blocked"
-    return tool_success_result(f"source_scan_plan: {state}.", result)
 
 
 def tool_source_registration_plan(arguments: dict[str, Any]) -> dict[str, Any]:

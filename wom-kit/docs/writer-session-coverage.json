@@ -7,6 +7,151 @@
       "route": "environment",
       "evidence": ["test_activity_cleanup"]
     },
+    "remint-reconcile": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_receipt_reconcile_exact"]
+    },
+    "remint-reconcile-batch": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_receipt_reconcile_exact"]
+    },
+    "retire-draft-reconcile": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_receipt_reconcile_exact"]
+    },
+    "retire-draft-reconcile-batch": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_receipt_reconcile_exact"]
+    },
+    "ai-scratch-gc": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_scratch_cleanup_exact"]
+    },
+    "zet-catalog-pass-cleanup": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_scratch_cleanup_exact"]
+    },
+    "markup-normalization": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_markup_and_link_revert_exact"]
+    },
+    "markup-normalization-recovery": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_markup_and_link_revert_exact"]
+    },
+    "markup-normalization-revert": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_markup_and_link_revert_exact"]
+    },
+    "zettel-objet-link-revert": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_markup_and_link_revert_exact"]
+    },
+    "principal-register": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_group_principal_exact"]
+    },
+    "principal-unregister": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_group_principal_exact"]
+    },
+    "activity-group-membership-write": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_group_principal_exact"]
+    },
+    "activity-group-membership-removal-write": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_group_principal_exact"]
+    },
+    "activity-group-membership-recover": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_group_principal_exact"]
+    },
+    "activity-group-membership-removal-recover": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_group_principal_exact"]
+    },
+    "restore-drill": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_group5_restore_gitignore_identity_exact"]
+    },
+    "repair-gitignore": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_group5_restore_gitignore_identity_exact"]
+    },
+    "identity-reconcile": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_group5_restore_gitignore_identity_exact"]
+    },
+    "zet-title-remap-recover": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_title_remap_recover_exact"]
+    },
+    "zet-title-remap-revert-recover": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_title_remap_recover_exact"]
+    },
+    "derive-text capture": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_derive_text_capture_exact"]
+    },
+    "saved-view-write": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_saved_view_exact"]
+    },
+    "saved-view-revert": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_saved_view_exact"]
+    },
+    "objet-source-metadata-write": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_objet_source_metadata_exact"]
+    },
+    "external-locator-deactivate": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_external_locator_deactivate_exact"]
+    },
+    "project-bytecode-repair": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_project_bytecode_repair_exact"]
+    },
+    "project-version-update-collision": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_project_update_collision_exact"]
+    },
+    "zet-revision-restore-proposal-from-snapshot": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_cli"]
+    },
     "draft-revision-write": {
       "status": "session_integrated",
       "route": "environment",

@@ -2165,24 +2165,30 @@ class CompletionWorkflowTests(unittest.TestCase):
             )
             self.assertEqual(code, 1, output)
             self.assertEqual(record_path.read_bytes(), before)
-            code, output = self.run_cli(
-                [
-                    "external-locator-deactivate",
-                    *common,
-                    "--expected-plan-sha256",
-                    expected,
-                    "--reviewed-by",
-                    "person:test",
-                    "--approve",
-                    "--format",
-                    "json",
-                ]
-            )
+            # Reopened in v0.4.40: approve asks for exact approval; a declined
+            # decision writes nothing and echoes no private value.
+            def decline(*_args, **_kwargs):
+                raise archive_cli.ExactHumanApprovalWorkflowError("exact_human_approval_cancelled")
+
+            with mock.patch.object(archive_cli, "_execute_exact_human_approved_write", side_effect=decline):
+                code, output = self.run_cli(
+                    [
+                        "external-locator-deactivate",
+                        *common,
+                        "--expected-plan-sha256",
+                        expected,
+                        "--reviewed-by",
+                        "person:test",
+                        "--approve",
+                        "--format",
+                        "json",
+                    ]
+                )
             self.assertEqual(code, 1, output)
             blocked = json.loads(output)
             self.assertEqual(
                 blocked["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
+                ["external_locator_deactivate_workflow_precondition_failed"],
             )
             self.assertFalse(blocked["private_values_echoed"])
             self.assertEqual(record_path.read_bytes(), before)
@@ -3154,7 +3160,7 @@ class CompletionWorkflowTests(unittest.TestCase):
             )
             self.assertFalse(replay["ok"], replay)
 
-    def test_zettel_objet_link_exact_approval_writes_while_revert_stays_closed(self) -> None:
+    def test_zettel_objet_link_exact_approval_writes_and_a_declined_revert_writes_nothing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.fake_archive(Path(tmp) / "archive")
             indexed = completion_workflows.archive_services.index_archive(
@@ -3279,28 +3285,34 @@ class CompletionWorkflowTests(unittest.TestCase):
                 for path in archive_root.rglob("*")
                 if path.is_file()
             }
-            revert_code, revert_output = self.run_cli(
-                [
-                    "zettel-objet-link-revert",
-                    str(archive_root),
-                    "--receipt",
-                    applied["summary"]["receipt_path"],
-                    "--expected-plan-sha256",
-                    revert_plan["summary"]["plan_sha256"],
-                    "--approve",
-                    "--reviewed-by",
-                    "person:test",
-                    "--format",
-                    "json",
-                ]
-            )
+            # 2026-09-24 reopen (triage group 3): the revert asks for exact
+            # approval; a declined decision writes nothing. The native dialog is
+            # replaced so a test never opens a real window.
+            def decline(_root, _context, _writer, **_kwargs):
+                raise archive_cli.ExactHumanApprovalWorkflowError("exact_human_approval_cancelled")
+
+            with mock.patch.object(archive_cli, "_execute_exact_human_approved_write", side_effect=decline):
+                revert_code, revert_output = self.run_cli(
+                    [
+                        "zettel-objet-link-revert",
+                        str(archive_root),
+                        "--receipt",
+                        applied["summary"]["receipt_path"],
+                        "--expected-plan-sha256",
+                        revert_plan["summary"]["plan_sha256"],
+                        "--approve",
+                        "--reviewed-by",
+                        "person:test",
+                        "--format",
+                        "json",
+                    ]
+                )
             self.assertEqual(revert_code, 1, revert_output)
             reverted = json.loads(revert_output)
             self.assertEqual(
                 reverted["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
+                ["zettel_objet_link_revert_workflow_precondition_failed"],
             )
-            self.assertEqual(reverted["capability_state"], "writer_unavailable")
             self.assertEqual(reverted["files_written"], [])
             self.assertEqual(reverted["effects_state"], "none")
             self.assertFalse(reverted["private_values_echoed"])
@@ -8398,7 +8410,15 @@ class CompletionWorkflowTests(unittest.TestCase):
             self.assertTrue(record_path.exists())
 
     def test_principal_cli_runs_reviewed_register_list_unregister_cycle(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        # 2026-09-24 reopen (triage group 4): register/unregister ask for exact
+        # approval; this cycle declines both, so nothing is written by the CLI
+        # and no real window opens.
+        def decline(_root, _context, _writer, **_kwargs):
+            raise archive_cli.ExactHumanApprovalWorkflowError("exact_human_approval_cancelled")
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            archive_cli, "_execute_exact_human_approved_write", side_effect=decline
+        ):
             archive_root = self.fake_archive(Path(tmp) / "archive")
             principal_id = "team:reviewed-operations"
             common = [
@@ -8438,7 +8458,7 @@ class CompletionWorkflowTests(unittest.TestCase):
             register_blocked = json.loads(register_output)
             self.assertEqual(
                 register_blocked["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
+                ["principal_register_workflow_precondition_failed"],
             )
             self.assertFalse(register_blocked["private_values_echoed"])
             registered = self.install_historical_principal_fixture(
@@ -8484,7 +8504,7 @@ class CompletionWorkflowTests(unittest.TestCase):
             unregister_blocked = json.loads(unregister_output)
             self.assertEqual(
                 unregister_blocked["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
+                ["principal_unregister_workflow_precondition_failed"],
             )
             self.assertFalse(unregister_blocked["private_values_echoed"])
             self.assertTrue(

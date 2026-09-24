@@ -263,9 +263,10 @@ class ProjectUpdateCollisionCliTests(unittest.TestCase):
         result = json.loads(stdout)
         self.assertEqual(code, 1)
         self.assertEqual(result["state"], "blocked")
+        # Reopened in v0.4.40: a reviewer is required before any read.
         self.assertEqual(
             result["reason_codes"],
-            ["compound_exact_human_approval_binding_required"],
+            ["project_version_update_collision_reviewer_required"],
         )
         self.assertFalse(result["private_values_echoed"])
 
@@ -322,13 +323,16 @@ class ProjectUpdateCollisionCliTests(unittest.TestCase):
                 ]
             )
 
+        # Reopened in v0.4.40: the service is only called for the no-write
+        # preview; a project without an archive stops before any approval.
         self.assertEqual(code, 1, stdout)
-        self.assertEqual(captured, {})
+        self.assertIs(captured.get("dry_run"), True)
+        self.assertIs(captured.get("approve"), False)
         result = json.loads(stdout)
         self.assertEqual(result["state"], "blocked")
         self.assertEqual(
             result["reason_codes"],
-            ["compound_exact_human_approval_binding_required"],
+            ["project_version_update_collision_workflow_failed_safely"],
         )
         self.assertFalse(result["private_values_echoed"])
 
@@ -428,11 +432,13 @@ class ProjectUpdateCollisionCliTests(unittest.TestCase):
         self.assertFalse(
             dry_result["write_boundary"]["relocation_may_have_been_attempted"]
         )
+        # Reopened in v0.4.40: approve previews first; a failing preview
+        # stops safely before any approval or write.
         self.assertEqual(approved_code, 1)
         self.assertEqual(approved_result["state"], "blocked")
         self.assertEqual(
             approved_result["reason_codes"],
-            ["compound_exact_human_approval_binding_required"],
+            ["project_version_update_collision_workflow_failed_safely"],
         )
         self.assertFalse(approved_result["private_values_echoed"])
         self.assertNotIn("PRIVATE-ROOT", approved_stdout)

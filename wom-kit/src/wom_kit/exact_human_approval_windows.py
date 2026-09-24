@@ -194,7 +194,7 @@ class ExactHumanApprovalOperation(Enum):
     object_storage_formal_adoption = "object_storage_formal_adoption"
     object_storage_bytes_restore = "object_storage_bytes_restore"
     object_storage_bytes_offload = "object_storage_bytes_offload"
-    # v0.4.33 (letter 164 ①): upload reopened under the exact contract; always a dialog.
+    # v0.4.33 (letter 164 ①): upload reopened under the exact contract (dialog or session grant).
     object_storage_bytes_upload = "object_storage_bytes_upload"
     # v0.4.34 (letter 165 [C]): the operator feedback body write asks the dialog
     # (or a session grant that names the kind) instead of trusting --reviewed-by.
@@ -202,7 +202,7 @@ class ExactHumanApprovalOperation(Enum):
     # v0.4.36 (letters 164 ⑧ / 168 request 8): delivered letters leave the
     # archive for an operator-designated folder; a content-free stub stays.
     operator_feedback_archive = "operator_feedback_archive"
-    # v0.4.30 (letter 163 ⑥): reviewed closing of started claims; always a dialog.
+    # v0.4.30 (letter 163 ⑥): reviewed closing of started claims (dialog or session grant).
     exact_approval_claim_finalize = "exact_approval_claim_finalize"
     local_recovery = "local_recovery"
     local_recovery_revert = "local_recovery_revert"
@@ -218,6 +218,49 @@ class ExactHumanApprovalOperation(Enum):
     zet_revision_write = "zet_revision_write"
     zet_revision_restore_write = "zet_revision_restore_write"
     source_intake_chain = "source_intake_chain"
+    # 2026-09-24 reopen (58-writer triage, group 1): one approval re-issues the
+    # reviewed list of mint / retired-draft receipts from current bytes.
+    remint_reconcile = "remint_reconcile"
+    retire_draft_reconcile = "retire_draft_reconcile"
+    # Triage group 2: one zet's explicit AI scratch refs, and one SHA-bound
+    # catalog-pass scratch file.
+    ai_scratch_gc = "ai_scratch_gc"
+    zet_catalog_pass_cleanup = "zet_catalog_pass_cleanup"
+    # Triage group 3: markup normalization writers and objet-link revert,
+    # bound to each service's own reviewed plan digest.
+    markup_normalization = "markup_normalization"
+    markup_normalization_revert = "markup_normalization_revert"
+    markup_normalization_recovery = "markup_normalization_recovery"
+    zettel_objet_link_revert = "zettel_objet_link_revert"
+    # Triage group 4: principals and activity-group memberships.
+    principal_register = "principal_register"
+    principal_unregister = "principal_unregister"
+    activity_group_membership_write = "activity_group_membership_write"
+    activity_group_membership_removal_write = "activity_group_membership_removal_write"
+    activity_group_membership_recover = "activity_group_membership_recover"
+    activity_group_membership_removal_recover = "activity_group_membership_removal_recover"
+    # Triage group 5: restore drill, .gitignore repair, identity reconcile.
+    restore_drill = "restore_drill"
+    repair_gitignore = "repair_gitignore"
+    archive_identity_reconcile = "archive_identity_reconcile"
+    # Reclassified 2026-09-24: legacy title-remap journal recovery.
+    zet_title_remap_recover = "zet_title_remap_recover"
+    zet_title_remap_revert_recover = "zet_title_remap_revert_recover"
+    # Triage group 6 (2026-09-24): derived text for existing objets.
+    derived_text_capture = "derived_text_capture"
+    # Triage group 6 (2026-09-24): saved views.
+    saved_view_write = "saved_view_write"
+    saved_view_revert = "saved_view_revert"
+    # Triage group 6 (2026-09-24): private objet source metadata.
+    private_objet_source_metadata_write = "private_objet_source_metadata_write"
+    # Triage group 6 (2026-09-24): duplicate external locator deactivation.
+    external_locator_deactivate = "external_locator_deactivate"
+    # Triage group 6 (2026-09-24): post-update bytecode cleanup.
+    project_bytecode_repair = "project_bytecode_repair"
+    # Triage group 6 (2026-09-24): update collision preserve-relocate.
+    project_version_update_collision = "project_version_update_collision"
+    # Triage group 6 (2026-09-24): restore proposal from a retained snapshot.
+    zet_revision_restore_proposal_from_snapshot = "zet_revision_restore_proposal_from_snapshot"
 
 
 def _validated_target_preview_text(value: str | None) -> str | None:
@@ -514,6 +557,33 @@ _OPERATION_LABELS = {
     ExactHumanApprovalOperation.zet_revision_write: "정본 zet 의미 개정",
     ExactHumanApprovalOperation.zet_revision_restore_write: "정본 zet 개정 복원",
     ExactHumanApprovalOperation.source_intake_chain: "새 원본 반입 사슬(근거 기록·선정·보존)",
+    ExactHumanApprovalOperation.remint_reconcile: "발행 영수증 재정합",
+    ExactHumanApprovalOperation.retire_draft_reconcile: "퇴역 영수증 재정합",
+    ExactHumanApprovalOperation.ai_scratch_gc: "zet 하나의 AI 임시 파일 정리",
+    ExactHumanApprovalOperation.zet_catalog_pass_cleanup: "카탈로그 작업 임시 파일 정리",
+    ExactHumanApprovalOperation.markup_normalization: "마크업 정규화 적용",
+    ExactHumanApprovalOperation.markup_normalization_revert: "마크업 정규화 되돌리기",
+    ExactHumanApprovalOperation.markup_normalization_recovery: "중단된 마크업 정규화 복구",
+    ExactHumanApprovalOperation.zettel_objet_link_revert: "zet-오브제 연결 되돌리기",
+    ExactHumanApprovalOperation.principal_register: "제3자 Principal 등록",
+    ExactHumanApprovalOperation.principal_unregister: "제3자 Principal 등록 해제",
+    ExactHumanApprovalOperation.activity_group_membership_write: "사건 그룹 소속 추가",
+    ExactHumanApprovalOperation.activity_group_membership_removal_write: "사건 그룹 소속 제거",
+    ExactHumanApprovalOperation.activity_group_membership_recover: "중단된 소속 추가 복구",
+    ExactHumanApprovalOperation.activity_group_membership_removal_recover: "중단된 소속 제거 복구",
+    ExactHumanApprovalOperation.restore_drill: "복원 훈련",
+    ExactHumanApprovalOperation.repair_gitignore: ".gitignore 안전 패턴 추가",
+    ExactHumanApprovalOperation.archive_identity_reconcile: "아카이브 신원 파일 수리",
+    ExactHumanApprovalOperation.zet_title_remap_recover: "중단된 제목 변경 복구",
+    ExactHumanApprovalOperation.zet_title_remap_revert_recover: "중단된 제목 되돌리기 복구",
+    ExactHumanApprovalOperation.derived_text_capture: "파생 텍스트 등록",
+    ExactHumanApprovalOperation.saved_view_write: "저장된 보기 만들기",
+    ExactHumanApprovalOperation.saved_view_revert: "저장된 보기 되돌리기",
+    ExactHumanApprovalOperation.private_objet_source_metadata_write: "원본 파일명 메타데이터 기록",
+    ExactHumanApprovalOperation.external_locator_deactivate: "중복 위치 기록 비활성화",
+    ExactHumanApprovalOperation.project_bytecode_repair: "업데이트 뒤 캐시 파일 정리",
+    ExactHumanApprovalOperation.project_version_update_collision: "업데이트 충돌 파일 보존 이동",
+    ExactHumanApprovalOperation.zet_revision_restore_proposal_from_snapshot: "수정 전 스냅샷으로 복원 제안 만들기",
 }
 
 _OPERATION_QUESTIONS = {
@@ -615,6 +685,87 @@ _OPERATION_QUESTIONS = {
     ),
     ExactHumanApprovalOperation.source_intake_chain: (
         "검토한 새 원본 1개의 반입 근거 기록, 보존 선정, 오브제 보존을 한 번에 실행할까요?"
+    ),
+    ExactHumanApprovalOperation.remint_reconcile: (
+        "검토한 목록의 발행 영수증을 지금 바이트 기준으로 다시 기록할까요?"
+    ),
+    ExactHumanApprovalOperation.retire_draft_reconcile: (
+        "검토한 목록의 퇴역 영수증을 지금 바이트 기준으로 다시 기록할까요?"
+    ),
+    ExactHumanApprovalOperation.ai_scratch_gc: (
+        "이 zet가 가리키는 AI 임시 파일을 지울까요?"
+    ),
+    ExactHumanApprovalOperation.zet_catalog_pass_cleanup: (
+        "다 쓴 카탈로그 작업 임시 파일 하나를 지울까요?"
+    ),
+    ExactHumanApprovalOperation.markup_normalization: (
+        "검토한 정규화 계획대로 정본 zet를 고칠까요?"
+    ),
+    ExactHumanApprovalOperation.markup_normalization_revert: (
+        "이 정규화 영수증 이전의 바이트로 되돌릴까요?"
+    ),
+    ExactHumanApprovalOperation.markup_normalization_recovery: (
+        "중단된 정규화 작업을 계획대로 마무리하거나 되돌릴까요?"
+    ),
+    ExactHumanApprovalOperation.zettel_objet_link_revert: (
+        "이 연결 영수증 이전의 바이트로 zet를 되돌릴까요?"
+    ),
+    ExactHumanApprovalOperation.principal_register: (
+        "검토한 Principal 하나를 이 아카이브에 등록할까요?"
+    ),
+    ExactHumanApprovalOperation.principal_unregister: (
+        "쓰이지 않는 이 Principal 등록을 해제할까요?"
+    ),
+    ExactHumanApprovalOperation.activity_group_membership_write: (
+        "검토한 사건 그룹 소속을 목록의 zet들에 추가할까요?"
+    ),
+    ExactHumanApprovalOperation.activity_group_membership_removal_write: (
+        "검토한 사건 그룹 소속을 목록의 zet들에서 제거할까요?"
+    ),
+    ExactHumanApprovalOperation.activity_group_membership_recover: (
+        "중단된 소속 추가 작업을 검토한 복구 계획대로 끝낼까요?"
+    ),
+    ExactHumanApprovalOperation.activity_group_membership_removal_recover: (
+        "중단된 소속 제거 작업을 검토한 복구 계획대로 끝낼까요?"
+    ),
+    ExactHumanApprovalOperation.restore_drill: (
+        "아카이브를 새 폴더에 복원해 점검할까요?"
+    ),
+    ExactHumanApprovalOperation.repair_gitignore: (
+        "빠진 안전 패턴을 .gitignore에 추가할까요?"
+    ),
+    ExactHumanApprovalOperation.archive_identity_reconcile: (
+        "검토한 대로 아카이브 신원 파일을 맞출까요?"
+    ),
+    ExactHumanApprovalOperation.zet_title_remap_recover: (
+        "중단된 제목 변경 작업을 검토한 복구 계획대로 끝낼까요?"
+    ),
+    ExactHumanApprovalOperation.zet_title_remap_revert_recover: (
+        "중단된 제목 되돌리기 작업을 검토한 복구 계획대로 끝낼까요?"
+    ),
+    ExactHumanApprovalOperation.derived_text_capture: (
+        "검토한 추출 텍스트를 해당 오브제의 파생 텍스트로 등록할까요?"
+    ),
+    ExactHumanApprovalOperation.saved_view_write: (
+        "검토한 조건으로 비공개 저장된 보기 하나를 만들까요?"
+    ),
+    ExactHumanApprovalOperation.saved_view_revert: (
+        "WOM이 만든 저장된 보기 하나를 영수증대로 제거할까요?"
+    ),
+    ExactHumanApprovalOperation.private_objet_source_metadata_write: (
+        "검토한 원본 파일명 관찰 1건을 비공개 메타데이터로 기록할까요?"
+    ),
+    ExactHumanApprovalOperation.external_locator_deactivate: (
+        "검토한 중복 외부 위치 기록 하나를 비활성으로 내릴까요?"
+    ),
+    ExactHumanApprovalOperation.project_bytecode_repair: (
+        "업데이트 뒤 남은 추적되지 않는 파이썬 캐시 파일을 검토한 목록대로 지울까요?"
+    ),
+    ExactHumanApprovalOperation.project_version_update_collision: (
+        "업데이트를 막은 충돌 파일 하나를 검토한 대로 보존 폴더로 옮길까요?"
+    ),
+    ExactHumanApprovalOperation.zet_revision_restore_proposal_from_snapshot: (
+        "보관된 수정 전 스냅샷을 비공개 복원 제안 파일로 만들까요?"
     ),
 }
 
@@ -782,6 +933,90 @@ _OPERATION_SUMMARIES = {
         "content-addressed 보존과 보존 영수증)를 이 승인 하나로 이어서 실행합니다. "
         "본문을 외부로 보내거나 자격증명을 읽지 않습니다."
     ),
+    ExactHumanApprovalOperation.remint_reconcile: (
+        "정본 내용은 바꾸지 않고, 목록의 발행 영수증 해시를 현재 바이트로 다시 적습니다. "
+        "이전 값과 분류(줄바꿈 형식 차이 / 내용 변경)는 감사 영수증에 남습니다."
+    ),
+    ExactHumanApprovalOperation.retire_draft_reconcile: (
+        "정본 내용은 바꾸지 않고, 목록의 퇴역 영수증 해시를 현재 바이트로 다시 적습니다. "
+        "이전 값과 분류는 감사 영수증에 남습니다."
+    ),
+    ExactHumanApprovalOperation.ai_scratch_gc: (
+        "zet가 명시적으로 가리키는 AI 임시 파일 중 확인한 해시와 같은 파일만 지우고 정리 영수증을 남깁니다. "
+        "정본과 오브제 저장소는 건드리지 않습니다."
+    ),
+    ExactHumanApprovalOperation.zet_catalog_pass_cleanup: (
+        "SHA-256이 확인된 비공개 카탈로그 작업 파일 하나만 지웁니다. 다른 파일은 건드리지 않습니다."
+    ),
+    ExactHumanApprovalOperation.markup_normalization: (
+        "계획에 든 정본 zet만 스냅샷을 남기고 고친 뒤 영수증을 남깁니다. 영수증으로 원래 바이트로 되돌릴 수 있습니다."
+    ),
+    ExactHumanApprovalOperation.markup_normalization_revert: (
+        "영수증에 기록된 스냅샷 바이트로 정본을 되돌리고 되돌리기 영수증을 남깁니다. 원래 영수증은 지우지 않습니다."
+    ),
+    ExactHumanApprovalOperation.markup_normalization_recovery: (
+        "중단된 작업 기록(저널)의 정확한 바이트로 끝내거나 되돌리고 복구 영수증을 남깁니다."
+    ),
+    ExactHumanApprovalOperation.zettel_objet_link_revert: (
+        "연결 영수증의 스냅샷 바이트로 zet 하나를 되돌리고 되돌리기 영수증을 남깁니다. 오브제는 건드리지 않습니다."
+    ),
+    ExactHumanApprovalOperation.principal_register: (
+        "검토한 계획대로 기관·인물 Principal 기록 하나와 영수증을 남깁니다. 다른 기록은 바꾸지 않습니다."
+    ),
+    ExactHumanApprovalOperation.principal_unregister: (
+        "어디에서도 쓰이지 않는 Principal 기록 하나만 해제하고 영수증을 남깁니다."
+    ),
+    ExactHumanApprovalOperation.activity_group_membership_write: (
+        "검토한 요청의 zet마다 사건 앵커 소속을 추가하고 복구 저널과 영수증을 남깁니다."
+    ),
+    ExactHumanApprovalOperation.activity_group_membership_removal_write: (
+        "검토한 요청의 zet마다 사건 앵커 소속을 제거하고 복구 저널과 영수증을 남깁니다."
+    ),
+    ExactHumanApprovalOperation.activity_group_membership_recover: (
+        "복구 저널의 정확한 바이트로 중단된 소속 추가를 마무리하거나 되돌립니다."
+    ),
+    ExactHumanApprovalOperation.activity_group_membership_removal_recover: (
+        "복구 저널의 정확한 바이트로 중단된 소속 제거를 마무리하거나 되돌립니다."
+    ),
+    ExactHumanApprovalOperation.restore_drill: (
+        "아카이브의 제어 영역을 새 대상 폴더에 복사해 doctor·색인·검색을 점검하고 영수증을 남깁니다. 원본은 바꾸지 않습니다."
+    ),
+    ExactHumanApprovalOperation.repair_gitignore: (
+        "빠진 안전 패턴만 .gitignore 끝에 추가합니다. 기존 줄은 지우거나 바꾸지 않습니다."
+    ),
+    ExactHumanApprovalOperation.archive_identity_reconcile: (
+        "archive.yml과 archive-identity.yml의 불일치를 검토한 제안대로 수리하고 영수증을 남깁니다."
+    ),
+    ExactHumanApprovalOperation.zet_title_remap_recover: (
+        "남아 있는 옛 제목 변경 저널을 검토한 계획대로 마무리하거나 되돌리고 잠금을 정리합니다."
+    ),
+    ExactHumanApprovalOperation.zet_title_remap_revert_recover: (
+        "남아 있는 옛 제목 되돌리기 저널을 검토한 계획대로 마무리하거나 되돌리고 잠금을 정리합니다."
+    ),
+    ExactHumanApprovalOperation.derived_text_capture: (
+        "추출·OCR·음성 인식 텍스트를 원본 오브제에 연결된 파생 텍스트로 저장하고 영수증을 남깁니다. 원본 오브제는 바뀌지 않습니다."
+    ),
+    ExactHumanApprovalOperation.saved_view_write: (
+        "검토한 필터 조건의 저장된 보기 파일 하나와 영수증을 씁니다. zet 본문은 바뀌지 않습니다."
+    ),
+    ExactHumanApprovalOperation.saved_view_revert: (
+        "영수증과 바이트가 일치하는 저장된 보기 파일 하나만 제거하고 되돌리기 영수증을 남깁니다."
+    ),
+    ExactHumanApprovalOperation.private_objet_source_metadata_write: (
+        "검토한 원본 파일명 관찰 한 건을 비공개 오브제 메타데이터 행과 영수증으로 남깁니다. 오브제 바이트와 zet은 바뀌지 않습니다."
+    ),
+    ExactHumanApprovalOperation.external_locator_deactivate: (
+        "zet 하나의 외부 위치 기록 중 검토한 중복 항목 하나만 삭제 없이 비활성으로 표시하고 영수증을 남깁니다."
+    ),
+    ExactHumanApprovalOperation.project_bytecode_repair: (
+        "WOM 프로젝트 폴더에서 검토한 .pyc/.pyo 캐시 파일과 빈 __pycache__ 폴더만 지웁니다. 원본 코드와 아카이브는 바뀌지 않습니다."
+    ),
+    ExactHumanApprovalOperation.project_version_update_collision: (
+        "업데이트를 막은 충돌 항목 하나를 지우지 않고 WOM 보존 위치로 옮기고 영수증을 남깁니다. 옮긴 뒤 업데이트를 다시 실행할 수 있습니다."
+    ),
+    ExactHumanApprovalOperation.zet_revision_restore_proposal_from_snapshot: (
+        "수정 영수증이 가리키는 수정 전 스냅샷을 비공개 복원 제안 파일 하나로 복사합니다. zet 본문은 바뀌지 않으며, 실제 복원은 zet-revision-restore-write로 따로 승인합니다."
+    ),
 }
 
 _OPERATION_APPROVE_BUTTONS = {
@@ -828,6 +1063,33 @@ _OPERATION_APPROVE_BUTTONS = {
     ExactHumanApprovalOperation.zet_revision_write: "개정 실행",
     ExactHumanApprovalOperation.zet_revision_restore_write: "개정 복원",
     ExactHumanApprovalOperation.source_intake_chain: "반입 사슬 실행",
+    ExactHumanApprovalOperation.remint_reconcile: "재정합 실행",
+    ExactHumanApprovalOperation.retire_draft_reconcile: "재정합 실행",
+    ExactHumanApprovalOperation.ai_scratch_gc: "임시 파일 정리",
+    ExactHumanApprovalOperation.zet_catalog_pass_cleanup: "임시 파일 정리",
+    ExactHumanApprovalOperation.markup_normalization: "정규화 적용",
+    ExactHumanApprovalOperation.markup_normalization_revert: "정규화 되돌리기",
+    ExactHumanApprovalOperation.markup_normalization_recovery: "복구 실행",
+    ExactHumanApprovalOperation.zettel_objet_link_revert: "연결 되돌리기",
+    ExactHumanApprovalOperation.principal_register: "Principal 등록",
+    ExactHumanApprovalOperation.principal_unregister: "등록 해제",
+    ExactHumanApprovalOperation.activity_group_membership_write: "소속 추가",
+    ExactHumanApprovalOperation.activity_group_membership_removal_write: "소속 제거",
+    ExactHumanApprovalOperation.activity_group_membership_recover: "복구 실행",
+    ExactHumanApprovalOperation.activity_group_membership_removal_recover: "복구 실행",
+    ExactHumanApprovalOperation.restore_drill: "복원 훈련",
+    ExactHumanApprovalOperation.repair_gitignore: "패턴 추가",
+    ExactHumanApprovalOperation.archive_identity_reconcile: "신원 수리",
+    ExactHumanApprovalOperation.zet_title_remap_recover: "복구 실행",
+    ExactHumanApprovalOperation.zet_title_remap_revert_recover: "복구 실행",
+    ExactHumanApprovalOperation.derived_text_capture: "텍스트 등록",
+    ExactHumanApprovalOperation.saved_view_write: "보기 만들기",
+    ExactHumanApprovalOperation.saved_view_revert: "보기 제거",
+    ExactHumanApprovalOperation.private_objet_source_metadata_write: "메타데이터 기록",
+    ExactHumanApprovalOperation.external_locator_deactivate: "비활성화",
+    ExactHumanApprovalOperation.project_bytecode_repair: "캐시 정리",
+    ExactHumanApprovalOperation.project_version_update_collision: "보존 이동",
+    ExactHumanApprovalOperation.zet_revision_restore_proposal_from_snapshot: "제안 만들기",
 }
 
 
@@ -854,11 +1116,12 @@ _WORK_SESSION_ACTION_COPY = {
     ),
     # v0.4.24: per-session permission mode. The listed kinds run without a
     # dialog until the session is paused, handed off or completed; project
-    # updates and credential writes always ask.
+    # v0.4.36 restored the 2026-09-17 decision: every operation kind is
+    # grantable; only the grant itself asks.
     "work_session_set_permission_mode": (
         "이 작업 세션의 승인 방식을 바꿀까요?",
         "아래에 표시된 작업 종류는 이 세션을 멈추거나 넘기거나 끝내기 전까지 승인 창 없이 실행됩니다. "
-        "각 쓰기의 내용은 지금처럼 기록되고, 프로젝트 업데이트와 자격증명 쓰기는 항상 창을 띄웁니다.",
+        "각 쓰기의 내용은 지금처럼 기록됩니다. 전체 허용이면 업데이트·원격 저장소·복구·삭제도 창 없이 실행됩니다.",
         "승인 방식 바꾸기",
     ),
 }

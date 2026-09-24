@@ -1,20 +1,39 @@
 # Mint-Receipt Reconcile
 
-Current v0.4.0 boundary: `archive remint-reconcile` and
-`archive retire-draft-reconcile` classify drift and preview exact effects only.
-Approval returns `compound_exact_human_approval_binding_required` before
-private target read or mutation. It rewrites no receipt or canonical byte and
-creates no audit receipt. Historical reconcile receipts remain readable.
+Current route (since v0.4.40, 2026-09-24 reopen): the reconcilers write again
+under exact human approval, one native dialog or none under a valid
+limited/allow_all session grant. From v0.4.0 to v0.4.39 approval returned
+`compound_exact_human_approval_binding_required` and wrote nothing. Historical
+reconcile receipts remain readable.
 
 ## Current Command
 
 ```text
-archive remint-reconcile <archive-root> (--zettel-id <id> | --path <rel>) --dry-run [--strip-bom] [--diagnostic-only] [--format text|json]
-archive retire-draft-reconcile <archive-root> --zettel-id <id> --dry-run [--strip-bom] [--format text|json]
+archive remint-reconcile <archive-root> (--zettel-id <id> | --path <rel>) (--dry-run | --approve --reviewed-by <actor> [--content-changed-ack --reviewed-plan-sha256 <sha>]) [--strip-bom] [--diagnostic-only] [--format text|json]
+archive retire-draft-reconcile <archive-root> --zettel-id <id> (--dry-run | --approve --reviewed-by <actor> [--content-changed-ack --reviewed-plan-sha256 <sha>]) [--strip-bom] [--format text|json]
+archive remint-reconcile-batch <archive-root> (--dry-run | --approve --reviewed-by <actor> [--content-changed-ack]) [--zettel-id <id> ...] [--drift-class all|format_drift|content_change] [--max-items N] [--strip-bom] [--progress] [--format text|json]
+archive retire-draft-reconcile-batch <archive-root> (--dry-run | --approve --reviewed-by <actor>) [same selection options]
 ```
 
 Dry-run preserves strict drift classification, diagnostics, and the content-
-free human-review plan. Those results grant no mutation authority.
+free human-review plan. The dry-run digest is not approval authority; the
+dialog or session grant is.
+
+## Many Drifted Receipts: The Batch Route
+
+Letters 147, 148 and 156 reported thousands of `mint_receipt_sha_mismatch` and
+`mint_retired_draft_sha_mismatch` errors, mostly an `assets` field added after
+mint by an ordinary objet link. The batch dry-run lists every drifted receipt
+with its `format_drift` / `content_change` class and counts the changed fields.
+One approval covers the whole list. Each item's evidence digest (zet id, drift
+class, review-plan digest, current bytes of every receipt ref) is bound into
+the approval and re-derived immediately before that item writes; an item that
+moved after approval is refused as `receipt_reconcile_item_changed_after_approval`.
+Run the mint batch first, then the retired-draft batch: a retired-draft receipt
+points at the mint receipt, so the mint repair changes that pointer. A
+`content_change` approve, for one zet or a list that contains any, needs
+`--content-changed-ack` (a flag, not an extra dialog) before any dialog opens;
+a single zet also takes the reviewed plan digest when given.
 
 ## Historical v0.3 Governing Doctrine (R0)
 
@@ -63,9 +82,9 @@ archive remint-reconcile <archive-root> (--zettel-id <id> | --path <rel>)
 ```
 
 - `--dry-run` classifies and previews with zero writes.
-- In v0.4.0, reviewer, acknowledgment, and reviewed-plan values do not grant
-  authority; approval fails with
-  `compound_exact_human_approval_binding_required`.
+- `--approve` runs under exact human approval (since v0.4.40). Reviewer,
+  acknowledgment, and reviewed-plan values bind what is approved; they are not
+  authority by themselves.
 - `--strip-bom` (opt-in) removes a single leading UTF-8 BOM; see below.
 - `--diagnostic-only` is dry-run JSON only. It omits canonical body text and
   frontmatter values while keeping drift and body-diff diagnostics; see below.
@@ -234,8 +253,8 @@ three-sha shape. It is a separate command (not a flag on `remint-reconcile`) so 
 safety-critical mint classifier stays single-purpose.
 
 Honesty model (identical to mint reconcile): dry-run recomputes the four refs
-from current on-disk bytes and shows the on-disk content. In v0.4.0 it grants
-no write authority. Per-ref classification:
+from current on-disk bytes and shows the on-disk content. It grants no write
+authority; approval does. Per-ref classification:
 
 - `target` / `snapshot` (text refs): inherit the Item 1 discipline. A ref is
   `format_drift` only when the shared mint-reconcile classifier proves the
@@ -319,8 +338,8 @@ It omits `current_canonical_text` and the full `frontmatter_field_changes` value
 lets an operator inspect which residual body-diff category they have without copying the
 canonical body into a JSON transcript.
 
-`--diagnostic-only` remains a redacted dry-run only. No v0.4.0 path recomputes
-receipt hashes.
+`--diagnostic-only` remains a redacted dry-run only; only an approved write
+recomputes receipt hashes.
 
 For a BOM finding, use the diagnostic-only command first. If it reports
 `format_drift`, `bom_stripped: true`, no blockers, `body_changed: false`, and no

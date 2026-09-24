@@ -104,7 +104,7 @@ class V0401ReleaseDocsTests(unittest.TestCase):
 
     def test_current_parser_combines_all_released_writers(self) -> None:
         blocked = archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS
-        self.assertEqual(len(blocked), 58)
+        self.assertEqual(len(blocked), 19)  # 2026-09-24 triage reopen
         self.assertNotIn("object-storage-upload", blocked)  # v0.4.33
         self.assertNotIn("migrate", blocked)
         self.assertNotIn("discard-draft", blocked)
@@ -114,7 +114,7 @@ class V0401ReleaseDocsTests(unittest.TestCase):
                          "zet-revision-write", "zet-revision-restore-write"):
             self.assertNotIn(reopened, blocked)
         self.assertNotIn("zettel-objet-link", blocked)
-        self.assertIn("zettel-objet-link-revert", blocked)
+        self.assertNotIn("zettel-objet-link-revert", blocked)  # reopened in v0.4.40
         self.assertNotIn("project-version-update", blocked)
         self.assertNotIn("object-storage-adopt-existing", blocked)
         self.assertNotIn("object-storage", blocked)
@@ -124,8 +124,8 @@ class V0401ReleaseDocsTests(unittest.TestCase):
         self.assertNotIn("source-intake-batch", blocked)
         self.assertNotIn("objet-capture-batch", blocked)
         self.assertNotIn("revert-edge", blocked)
-        self.assertIn("derive-text capture", blocked)
-        self.assertIn("zet-revision-restore-proposal-from-snapshot", blocked)
+        self.assertNotIn("derive-text capture", blocked)  # reopened in v0.4.40
+        self.assertNotIn("zet-revision-restore-proposal-from-snapshot", blocked)  # reopened in v0.4.40
 
         inventory = command_status.build_command_status_inventory(
             archive_cli.build_parser(),
@@ -139,15 +139,15 @@ class V0401ReleaseDocsTests(unittest.TestCase):
         # read-only exact-approval-claims (one alias) and the always-dialog
         # exact-approval-claim-finalize writer, and makes revert-edge --approve
         # unconditional (one conditional scope fewer).
-        self.assertEqual(counts["canonical_executable_command_count"], 326)  # v0.4.38: operator-feedback-archive
-        self.assertEqual(counts["alias_invocation_path_count"], 262)
-        self.assertEqual(counts["invocation_path_count"], 588)
+        self.assertEqual(counts["canonical_executable_command_count"], 316)  # v0.4.40: two receipt reconcile batch commands
+        self.assertEqual(counts["alias_invocation_path_count"], 248)  # v0.4.40: aliases of deleted writers removed
+        self.assertEqual(counts["invocation_path_count"], 564)
         # v0.4.33 reopened object-storage-upload (one path moves from fixed-closed to available).
-        self.assertEqual(counts["approval_available_command_count"], 63)  # v0.4.38: operator-feedback-archive
-        self.assertEqual(counts["approval_fixed_closed_command_count"], 59)
+        self.assertEqual(counts["approval_available_command_count"], 92)  # 2026-09-24 triage reopen
+        self.assertEqual(counts["approval_fixed_closed_command_count"], 20)
         self.assertEqual(counts["approval_not_exposed_command_count"], 204)
         self.assertEqual(counts["conditional_approval_command_count"], 10)
-        self.assertEqual(counts["dry_run_exposed_command_count"], 281)
+        self.assertEqual(counts["dry_run_exposed_command_count"], 271)
         self.assertEqual(counts["unmatched_fixed_closed_command_count"], 0)
         by_path = {
             row["canonical_path"]: row for row in inventory["commands"]
@@ -193,15 +193,15 @@ class V0401ReleaseDocsTests(unittest.TestCase):
         )
         self.assertEqual(
             by_path["zettel-objet-link-revert"]["approval_status"],
-            "approval_fixed_closed",
+            "approval_available",  # reopened in v0.4.40
         )
         self.assertEqual(
             by_path["derive-text capture"]["approval_status"],
-            "approval_fixed_closed",
+            "approval_available",  # reopened in v0.4.40
         )
         self.assertEqual(
             by_path["zet-revision-restore-proposal-from-snapshot"]["approval_status"],
-            "approval_fixed_closed",
+            "approval_available",  # reopened in v0.4.40
         )
         self.assertEqual(
             by_path["project-version-update"]["approval_status"],
@@ -338,7 +338,10 @@ class V0401ReleaseDocsTests(unittest.TestCase):
             self.assertIn("v0.4.1", text)
             self.assertIn("zettel-objet-link", text)
             self.assertIn("revert", text)
-            self.assertIn("fixed closed", text)
+        # Link revert was reopened under exact approval in v0.4.40; other
+        # operator-contract writers remain fixed closed.
+        self.assertIn("fixed closed", operator)
+        self.assertIn("v0.4.40", capture)
         self.assertIn("native exact-human", operator)
         self.assertIn("exact-human-approved replay", capture)
         self.assertNotIn(
@@ -352,7 +355,7 @@ class V0401ReleaseDocsTests(unittest.TestCase):
         self.assertIn(f"Current checkpoint: Status: v{__version__}", version_truth)
         self.assertIn("exactly 78", runtime_layer)
         self.assertIn("single link apply", runtime_layer)
-        self.assertIn("zettel-objet-link-revert` remains preview-only", runtime_layer)
+        self.assertIn("v0.4.40 reopened it under the same plan-digest-bound exact approval", " ".join(runtime_layer.split()))
 
     def test_historical_v0400_release_remains_immutable(self) -> None:
         self.assertEqual(

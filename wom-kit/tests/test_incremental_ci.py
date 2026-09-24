@@ -93,6 +93,26 @@ class IncrementalCITests(unittest.TestCase):
         bad[-1]['steps'][0]['name'] = 'Install dependencies'
         with self.assertRaises(ValueError): ci.validate_jobs(bad, [], lambda _: log)
 
+    def test_real_full_run_with_skipped_lane_only_jobs_is_a_valid_baseline(self):
+        # Every full run since #134 lists the lane-only jobs as skipped with
+        # unexpanded matrix names (PR #137 run 35872218288 had 17 jobs), which
+        # made the incremental lane unreachable.
+        names = ['Release readiness gate', 'Classify exact change', ci.INSTALLED_JOB,
+                 *ci.SCALE_JOBS, *ci.TEST_JOBS, 'Required CI']
+        jobs = [{'id': i, 'name': n, 'status': 'completed', 'conclusion': 'success', 'steps': []}
+                for i, n in enumerate(names)]
+        lane_only = [{'id': 100, 'name': 'Delivery tools ${{ matrix.os }}', 'status': 'completed',
+                      'conclusion': 'skipped', 'steps': []},
+                     {'id': 101, 'name': 'Focused regression ${{ matrix.os }} py${{ matrix.python }}',
+                      'status': 'completed', 'conclusion': 'skipped', 'steps': []}]
+        self.assertEqual(len(ci.validate_jobs(jobs + lane_only, [], lambda _: '')), len(names) - 1)
+        for conclusion in ('success', 'failure', 'cancelled'):
+            ran = copy.deepcopy(lane_only); ran[0]['conclusion'] = conclusion
+            with self.subTest(conclusion=conclusion), self.assertRaises(ValueError):
+                ci.validate_jobs(jobs + ran, [], lambda _: '')
+        with self.assertRaises(ValueError):
+            ci.validate_jobs(jobs + [dict(lane_only[0], name='Delivery tools something-else')], [], lambda _: '')
+
     def test_exact_git_inputs_detect_runtime_fixture_and_global_workflow_drift(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

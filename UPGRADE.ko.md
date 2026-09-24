@@ -2,6 +2,34 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.4.40 닫힌 쓰기 명령을 다시 열거나 없앰
+
+공개된 뒤 정확한 wheel을 사용하세요. v0.4.0부터 닫혀 있던 쓰기 명령 27개가 정확 승인으로 다시 동작합니다. 먼저 미리보기를 하고 그 계획을 승인하세요. 명령 12개는 없어졌습니다. 이 명령을 부르는 스크립트나 메모는 아래 대체 명령으로 바꾸세요.
+
+| Removed command | Use instead |
+|---|---|
+| `credential-keepassxc-write` | `credential-adopt` |
+| `external-locator-revert` | `external-locator-record --revert-recovery` |
+| `notion-ancestor-fetch-adapter-run` | `notion-recover` (still closed; see the release note) |
+| `notion-objet-manifest-locator-label` | `external-locator-record` |
+| `object-storage-wom-location-reconcile` | `object-storage-adopt-existing` |
+| `scan-source` | `source-intake-batch --manifest` |
+| `tiro-lossless-recovery-capture` | `source-intake-chain` |
+| `zet-abstract-backfill-write` | `zet-revision-write` for one zet |
+| `zet-abstract-backfill-revert`, `zet-abstract-backfill-recover` | none; historical receipts stay auditable with the read-only audit and recovery plan |
+| `objet-capture-enable`, `object-storage-upload-evidence` | none; never usable since v0.4.0 (`objet-capture-enable`: capture a file on a real archive with `source-intake-chain`) |
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0440-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.40/wom_kit-0.4.40-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+고객은 여전히 검토된 `project-version-update` 절차를 실행해야 합니다. 부트스트랩 설치만으로 프로젝트에 고정된 런타임은 바뀌지 않습니다.
+
 ## v0.4.39 편지 173 수정과 전달할 편지 하나
 
 공개된 뒤 정확한 wheel을 사용하세요. `activity-cleanup` 미리보기 뒤 승인할 때 Windows 폴더 크기 변동 때문에 거부되던 문제가 해결됐습니다. 미리보기를 다시 실행하고 그 계획을 승인하세요. 커밋될 수 있는 경로에 닿지 않는 무시된 속성 파일은 Git 백업을 막지 않습니다. 피드백 편지는 번호를 직접 고르거나 별도 검토본을 만들 필요가 없습니다.

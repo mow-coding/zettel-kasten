@@ -12,6 +12,10 @@ from types import ModuleType
 from unittest import mock
 
 from wom_kit import archive_cli, archive_services, completion_workflows
+import sys as _removed_sys
+from pathlib import Path as _RemovedPath
+_removed_sys.path.insert(0, str(_RemovedPath(__file__).resolve().parent))
+from removed_commands_v0440 import REMOVED_COMMANDS_V0440  # noqa: E402
 
 
 COMPOUND_APPROVAL_BLOCKER = "compound_exact_human_approval_binding_required"
@@ -395,7 +399,15 @@ class Letter137LegacyAffirmCliBoundaryTests(_BoundaryAssertions):
         self.assertFalse(result["ok"])
         self.assertEqual(result["state"], "blocked")
         self.assertEqual(result["lifecycle_action"], lifecycle_action)
-        self.assertEqual(result["reason_codes"], [COMPOUND_APPROVAL_BLOCKER])
+        # 2026-09-24 reopen (triage group 4): the activity-group writers route
+        # through exact approval; incomplete input is refused before any read.
+        if lifecycle_action.startswith("activity_group_membership"):
+            self.assertIn(result["reason_codes"][0], {
+                f"{lifecycle_action}_reviewer_required",
+                f"{lifecycle_action}_review_affirmation_required",
+            })
+        else:
+            self.assertEqual(result["reason_codes"], [COMPOUND_APPROVAL_BLOCKER])
         self.assertIs(result["private_values_echoed"], False)
         rendered = stdout.getvalue() + stderr.getvalue()
         for private in PRIVATE_VALUES:
@@ -466,6 +478,8 @@ class Letter137LegacyAffirmCliBoundaryTests(_BoundaryAssertions):
             ),
         )
         for arguments, service, action in calls:
+            if arguments[0] in REMOVED_COMMANDS_V0440:  # deleted in v0.4.40
+                continue
             with self.subTest(action=action):
                 self._assert_cli_block(
                     arguments=arguments,
@@ -537,6 +551,8 @@ class Letter137LegacyAffirmCliBoundaryTests(_BoundaryAssertions):
             ),
         )
         for arguments, service, action in calls:
+            if arguments[0] in REMOVED_COMMANDS_V0440:  # deleted in v0.4.40
+                continue
             with self.subTest(action=action):
                 self._assert_cli_block(
                     arguments=arguments,
@@ -589,42 +605,12 @@ class Letter137LegacyAffirmCliBoundaryTests(_BoundaryAssertions):
                 "zet_title_remap_revert",
                 "zet_title_remap_revert",
             ),
-            (
-                [
-                    "zet-title-remap-recover",
-                    PRIVATE_CLI_ROOT,
-                    "--case-sha256",
-                    PRIVATE_DIGEST,
-                    "--expected-plan-digest",
-                    PRIVATE_DIGEST,
-                    "--expected-action",
-                    "cleanup_unstarted_title_transaction_evidence",
-                    "--affirm-recovery-reviewed",
-                    "--affirm-archive-quiescent",
-                    *approval,
-                ],
-                "zet_title_remap_recover",
-                "zet_title_remap_recover",
-            ),
-            (
-                [
-                    "zet-title-remap-revert-recover",
-                    PRIVATE_CLI_ROOT,
-                    "--case-sha256",
-                    PRIVATE_DIGEST,
-                    "--expected-plan-digest",
-                    PRIVATE_DIGEST,
-                    "--expected-action",
-                    "cleanup_unstarted_title_revert_transaction_evidence",
-                    "--affirm-recovery-reviewed",
-                    "--affirm-archive-quiescent",
-                    *approval,
-                ],
-                "zet_title_remap_revert_recover",
-                "zet_title_remap_revert_recover",
-            ),
+            # zet-title-remap-recover and -revert-recover were reopened under
+            # exact approval in v0.4.40 (test_title_remap_recover_exact).
         )
         for arguments, service, action in calls:
+            if arguments[0] in REMOVED_COMMANDS_V0440:  # deleted in v0.4.40
+                continue
             with self.subTest(action=action):
                 self._assert_cli_block(
                     arguments=arguments,
@@ -676,6 +662,8 @@ class Letter137LegacyAffirmCliBoundaryTests(_BoundaryAssertions):
         # archive that does not exist the writer is never entered, the error
         # is a fixed code, and no private argument is echoed.
         for arguments, service, action in calls:
+            if arguments[0] in REMOVED_COMMANDS_V0440:  # deleted in v0.4.40
+                continue
             with self.subTest(action=action):
                 args = self.parser.parse_args(arguments)
                 stdout, stderr = io.StringIO(), io.StringIO()

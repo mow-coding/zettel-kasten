@@ -14,6 +14,10 @@ from wom_kit import archive_cli, archive_services, mcp_server
 from wom_kit.exact_human_approval import (
     _ClaimedExactHumanApproval as ClaimedExactHumanApproval,
 )
+import sys as _removed_sys
+from pathlib import Path as _RemovedPath
+_removed_sys.path.insert(0, str(_RemovedPath(__file__).resolve().parent))
+from removed_commands_v0440 import REMOVED_COMMANDS_V0440  # noqa: E402
 
 
 BLOCKER = "compound_exact_human_approval_binding_required"
@@ -257,17 +261,23 @@ class Letter137AdditionalPublicCliBoundaryTests(_CliAssertions):
             ),
         )
         for service_name, lifecycle, argv in cases:
+            if argv[0] in REMOVED_COMMANDS_V0440:  # deleted in v0.4.40
+                continue
             with self.subTest(command=argv[0]), mock.patch.object(
                 archive_services,
                 service_name,
                 side_effect=AssertionError("dispatch must stay closed"),
             ) as service:
                 code, stdout, stderr = self.run_cli(argv)
+                # 2026-09-24 reopen: these route through exact approval and are
+                # refused before any read because no reviewer was given.
+                reopened = {"restore_drill", "repair_gitignore", "archive_identity_reconcile"}
                 self.assert_fixed_json_block(
                     code,
                     stdout,
                     stderr,
                     lifecycle_action=lifecycle,
+                    **({"reason_code": f"{lifecycle}_reviewer_required"} if lifecycle in reopened else {}),
                 )
                 service.assert_not_called()
 
@@ -291,7 +301,8 @@ class Letter137AdditionalPublicCliBoundaryTests(_CliAssertions):
             ],
             "parcel": ["pack"],
         }
-        self.assertEqual(len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS), 58)
+        alias_groups = {key: value for key, value in alias_groups.items() if key not in REMOVED_COMMANDS_V0440}  # deleted in v0.4.40
+        self.assertEqual(len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS), 19)  # 2026-09-24 triage reopen
         for exact_batch_command in (
             "source-intake-batch",
             "objet-capture-batch",
@@ -328,7 +339,7 @@ class Letter137AdditionalPublicCliBoundaryTests(_CliAssertions):
             "revert-edge",
             archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS,
         )
-        self.assertIn(
+        self.assertNotIn(  # reopened in v0.4.40 (triage group 3)
             "zettel-objet-link-revert",
             archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS,
         )
@@ -358,7 +369,8 @@ class Letter137AdditionalPublicCliBoundaryTests(_CliAssertions):
             for action in capture._actions
             if "--approve" in action.option_strings
         )
-        self.assertEqual(approve.help, archive_cli.COMPOUND_APPROVAL_BLOCKED_HELP)
+        # Reopened in v0.4.40: the help names the exact approval.
+        self.assertIn("exact approval", approve.help)
         parcel_help = " ".join(top.choices["parcel"].format_help().split())
         init_help = " ".join(top.choices["init"].format_help().split())
         create_help = " ".join(top.choices["create-draft"].format_help().split())
@@ -396,18 +408,19 @@ class Letter137AdditionalPublicCliBoundaryTests(_CliAssertions):
             ),
         )
         for argv, service_name, lifecycle in cases:
+            if argv[0] in REMOVED_COMMANDS_V0440:  # deleted in v0.4.40
+                continue
             with self.subTest(lifecycle=lifecycle), mock.patch.object(
                 archive_services,
                 service_name,
                 side_effect=AssertionError("derived input must not be read"),
             ) as service:
                 code, stdout, stderr = self.run_cli(argv)
-                self.assert_fixed_json_block(
-                    code,
-                    stdout,
-                    stderr,
-                    lifecycle_action=lifecycle,
-                )
+                # Reopened in v0.4.40: approve without a reviewer is refused
+                # before any derived input is read.
+                self.assertEqual(code, 1)
+                self.assertEqual(stderr, "")
+                self.assertEqual(json.loads(stdout)["reason_codes"], [f"{lifecycle}_reviewer_required"])
                 service.assert_not_called()
 
     def test_human_create_draft_blocks_before_body_file_or_service(self) -> None:
@@ -576,6 +589,8 @@ class Letter137AdditionalPublicCliBoundaryTests(_CliAssertions):
             ),
         )
         for service_name, argv in cases:
+            if argv[0] in REMOVED_COMMANDS_V0440:  # deleted in v0.4.40
+                continue
             with self.subTest(command=argv[0]), mock.patch.object(
                 archive_services,
                 service_name,
@@ -1120,6 +1135,8 @@ class Letter137ExactJsonProjectionTests(_CliAssertions):
             (["retire-minted-draft", PRIVATE, "--path", PRIVATE, "--approve", "--format", "json"], "retire_minted_draft", "retire_reviewer_required"),
         )
         for argv, lifecycle, reason in cases:
+            if argv[0] in REMOVED_COMMANDS_V0440:  # deleted in v0.4.40
+                continue
             with self.subTest(command=argv[0], reason=reason):
                 code, stdout, stderr = self.run_cli(argv)
                 self.assert_fixed_json_block(
@@ -1256,6 +1273,8 @@ class Letter137ExactJsonProjectionTests(_CliAssertions):
             ),
         )
         for service_name, binding_name, argv, lifecycle, reason in cases:
+            if argv[0] in REMOVED_COMMANDS_V0440:  # deleted in v0.4.40
+                continue
             with self.subTest(command=argv[0]), mock.patch.object(
                 archive_services,
                 "require_current_zettel_index",
@@ -1356,6 +1375,8 @@ class Letter137ExactJsonProjectionTests(_CliAssertions):
             ),
         )
         for service_name, argv, lifecycle, reason in cases:
+            if argv[0] in REMOVED_COMMANDS_V0440:  # deleted in v0.4.40
+                continue
             with self.subTest(command=argv[0]), mock.patch.object(
                 archive_services,
                 service_name,

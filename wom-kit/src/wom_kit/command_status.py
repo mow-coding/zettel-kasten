@@ -71,64 +71,26 @@ OPERATION_CANCEL_UNSUPPORTED_HELP = (
 # must consume this registry instead of maintaining independent claims.
 COMPOUND_APPROVAL_FIXED_CLOSED_COMMANDS = frozenset(
     {
-        "activity-group-membership-recover",
-        "activity-group-membership-removal-recover",
-        "activity-group-membership-removal-write",
-        "activity-group-membership-write",
         "add-source",
-        "ai-scratch-gc",
-        "credential-keepassxc-write",
         "credential-lifecycle",
-        "delegate-zet",
-        "derive-text capture",
-        "external-locator-deactivate",
-        "external-locator-revert",
-        "github-repo",
-        "identity-reconcile",
         "imap-mailbox-adapter-manifest-write",
         "imap-mailbox-header-metadata-scan",
         "import-external",
         "legacy-coordination-cleanup",
-        "markup-normalization",
-        "markup-normalization-recovery",
-        "markup-normalization-revert",
-        "notion-ancestor-fetch-adapter-run",
-        "notion-objet-manifest-locator-label",
         "notion-objet-link-convert",
         "notion-page-recovery",
         "notion-recover",
-        "object-storage-upload-evidence",
-        "object-storage-wom-location-reconcile",
-        "objet-capture-enable",
-        "objet-source-metadata-write",
         "onboard",
         "prehashed-objet-ledger",
-        "principal-register",
-        "principal-unregister",
-        "project-bytecode-repair",
-        "project-version-update-collision",
-        "repair-gitignore",
-        "quarantine-foreign-block",
-        "record-quarantine-decision",
-        "remint-reconcile",
-        "retire-draft-reconcile",
         "runtime-skill-install",
         "runtime-skill-uninstall",
-        "restore-drill",
-        "saved-view-revert",
-        "saved-view-write",
-        "scan-source",
-        "tiro-lossless-recovery-capture",
         "tiro-lossless-recovery-fetch-run",
+        # Restored 2026-09-25: ZET sharing and ownership (v0.5 design); preview only.
+        "delegate-zet",
         "transfer-ownership",
-        "zet-abstract-backfill-recover",
-        "zet-abstract-backfill-revert",
-        "zet-abstract-backfill-write",
-        "zet-catalog-pass-cleanup",
-        "zet-revision-restore-proposal-from-snapshot",
-        "zet-title-remap-recover",
-        "zet-title-remap-revert-recover",
-        "zettel-objet-link-revert",
+        "quarantine-foreign-block",
+        "record-quarantine-decision",
+        "github-repo",
     }
 )
 
@@ -153,6 +115,49 @@ EXACT_APPROVAL_REOPENED_WRITERS = frozenset({
     # v0.4.34 (letter 165 [C]): the feedback body write asks the dialog; the
     # emergency lane under version-update.lock keeps the text-flag path.
     "operator-feedback-compose",
+    # 2026-09-24 (58-writer triage, group 1; letters 147/148/156): receipt
+    # reconcile reopened; the batch pair lists every drifted receipt.
+    "remint-reconcile",
+    "retire-draft-reconcile",
+    "remint-reconcile-batch",
+    "retire-draft-reconcile-batch",
+    # Triage group 2: one zet's explicit AI scratch refs; one catalog-pass file.
+    "ai-scratch-gc",
+    "zet-catalog-pass-cleanup",
+    # Triage group 3: markup normalization writers and objet-link revert.
+    "markup-normalization",
+    "markup-normalization-recovery",
+    "markup-normalization-revert",
+    "zettel-objet-link-revert",
+    # Triage group 4: third-party Principals and activity-group memberships.
+    "principal-register",
+    "principal-unregister",
+    "activity-group-membership-write",
+    "activity-group-membership-removal-write",
+    "activity-group-membership-recover",
+    "activity-group-membership-removal-recover",
+    # Triage group 5: restore drill, .gitignore repair, identity reconcile.
+    "restore-drill",
+    "repair-gitignore",
+    "identity-reconcile",
+    # Reclassified 2026-09-24: legacy title-remap journal recovery.
+    "zet-title-remap-recover",
+    "zet-title-remap-revert-recover",
+    # Triage group 6 (2026-09-24): derived text capture.
+    "derive-text capture",
+    # Triage group 6 (2026-09-24): saved views.
+    "saved-view-write",
+    "saved-view-revert",
+    # Triage group 6 (2026-09-24): private objet source metadata.
+    "objet-source-metadata-write",
+    # Triage group 6 (2026-09-24): external locator deactivation.
+    "external-locator-deactivate",
+    # Triage group 6 (2026-09-24): post-update bytecode cleanup.
+    "project-bytecode-repair",
+    # Triage group 6 (2026-09-24): update collision preserve-relocate.
+    "project-version-update-collision",
+    # Triage group 6 (2026-09-24): restore proposal from a retained snapshot.
+    "zet-revision-restore-proposal-from-snapshot",
 })
 
 # Public parser and dispatch exposure was audited at v0.3.320 and its explicit

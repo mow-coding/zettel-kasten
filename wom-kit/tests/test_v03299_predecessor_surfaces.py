@@ -137,14 +137,40 @@ CLI_ADDITIONS = {
     ("exact-approval-claims",),
     ("approval-claims",),
     ("exact-approval-claim-finalize",),
+    # 2026-09-24 reopen (58-writer triage, group 1): batch receipt reconcile.
+    ("remint-reconcile-batch",),
+    ("retire-draft-reconcile-batch",),
 }
-CURRENT_CLI_COUNT = 589
+# v0.4.40 (owner decision 2026-09-24): retired and replaced writers are
+# deleted outright instead of staying fixed closed. Five sharing/ownership
+# commands were restored on 2026-09-25 (owner ZET design) and stay closed.
+CLI_REMOVALS = {
+    (name,)
+    for name in (
+        "objet-capture-enable", "capture-enable", "object-storage-upload-evidence",
+        "object-storage-external-upload-evidence", "objet-storage-upload-evidence",
+        "zet-abstract-backfill-recover", "abstract-backfill-recover", "zet-abstract-backfill-revert",
+        "abstract-backfill-revert", "zet-abstract-backfill-write", "abstract-backfill-write",
+        "credential-keepassxc-write", "keepassxc-write", "external-locator-revert",
+        "notion-ancestor-fetch-adapter-run", "notion-ancestor-fetch-run", "notion-ancestor-live-fetch",
+        "notion-objet-manifest-locator-label", "notion-objet-locator-label",
+        "object-storage-wom-location-reconcile", "object-storage-upload-location-reconcile",
+        "object-storage-manifest-reconcile", "objet-storage-wom-location-reconcile", "scan-source",
+        "tiro-lossless-recovery-capture", "tiro-recovery-capture",
+    )
+}
+# 2026-09-25: the five ZET sharing/ownership commands and their MCP previews
+# were restored (owner design for v0.5); only source_scan_plan stays removed.
+MCP_REMOVALS = {
+    "source_scan_plan",
+}
+CURRENT_CLI_COUNT = 565
 CURRENT_CLI_CANONICAL_SHA256 = (
-    "c071a8ff50e1da8c2f564daca37490b86f3ca54be756898841d525b2b35976a3"
+    "0f41d099f1c891ed34d5cfa8a92dce84ae8d1cd81c799d32ac35693fd1f1de18"
 )
-CURRENT_MCP_COUNT = 137
+CURRENT_MCP_COUNT = 136
 CURRENT_MCP_CANONICAL_SHA256 = (
-    "74e53bf6d52f2f2d67f0e560d29b00c666ed1ffd886f199a9b66f34008462554"  # v0.4.34: work-session request grant_hours/permission keys
+    "39e09bca67b57398b9f8314a7e9241e911f581ff3f473225ea53d3069a779f26"  # v0.4.40: source_scan_plan removed; five sharing previews restored 2026-09-25
 )
 MCP_ADDITIONS = {
     "zet_title_remap_write",
@@ -169,7 +195,7 @@ CURRENT_DATABASE_CANONICAL_SHA256 = (
     "d9a42f08ee12a6d42e40214cfb12441e4077bf50c38c25b2692ec1344328294a"
 )
 RESOURCE_ADDITIONS = {
-    "release-notes/v0.4.39.md",
+    "release-notes/v0.4.40.md",
     "schemas/activity-cleanup-request-v1.schema.json",
     "templates/ai-runtime/wom-archive/references/storage-scope.md",
     "schemas/agent-instruction-policy-v0.1.schema.json",
@@ -238,7 +264,7 @@ RESOURCE_ADDITIONS = {
 RESOURCE_REMOVALS = {"release-notes/v0.3.297.md"}
 CURRENT_RESOURCE_COUNT = 175
 CURRENT_RESOURCE_CANONICAL_SHA256 = (
-    "68414b9f66b5795e931f9c9d5c3ddc2072db6d3e785407198044c97bffaba9b8"
+    "6c780e447e71d6fb212bd946f90d2ca860f4b698c95ec5ece3719c688d13ed23"
 )
 
 
@@ -438,7 +464,7 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         self.assertFalse(CLI_ADDITIONS & predecessor_set)
         expected = [
             list(path)
-            for path in sorted(predecessor_set | CLI_ADDITIONS)
+            for path in sorted((predecessor_set | CLI_ADDITIONS) - CLI_REMOVALS)
         ]
         actual = current_cli_paths()
         self.assertEqual(actual, expected, path_diff_message(expected, actual))
@@ -479,7 +505,7 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         current_by_name = {row["name"]: row for row in current}
         self.assertEqual(
             set(current_by_name),
-            set(predecessor_by_name) | MCP_ADDITIONS,
+            (set(predecessor_by_name) | MCP_ADDITIONS) - MCP_REMOVALS,
         )
 
         changed = sorted(
@@ -596,10 +622,10 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             actual,
             expected,
             "Current package-resource paths must be the full v0.3.297 set plus "
-            "the exact cumulative v0.3.298 through v0.4.39 delta. "
+            "the exact cumulative v0.3.298 through v0.4.40 delta. "
             f"missing={compact(missing)}; extra={compact(extra)}",
         )
-        self.assertEqual(manifest["version"], "0.4.39")
+        self.assertEqual(manifest["version"], "0.4.40")
         self.assertEqual(len(actual), CURRENT_RESOURCE_COUNT)
         self.assertEqual(
             canonical_sha256(actual),
@@ -619,13 +645,13 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         self.assertNotIn("C:\\Users\\", predecessor_text)
 
     def test_v0419_release_note_is_current_and_older_notes_remain_historical(self) -> None:
-        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.4.39.md"
+        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.4.40.md"
         current_packaged_release = (
             SRC_ROOT
             / "wom_kit"
             / "_resources"
             / "release-notes"
-            / "v0.4.39.md"
+            / "v0.4.40.md"
         )
         self.assertEqual(
             current_source_release.read_bytes(),
@@ -634,10 +660,10 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         current_text = current_source_release.read_text(encoding="utf-8")
         current_flat = " ".join(current_text.split())
         for token in (
-            "v0.4.39",
+            "v0.4.40",
             "project-version-update",
             "Installing the tool alone does not change a customer archive",
-            "wom_kit-0.4.39-py3-none-any.whl",
+            "wom_kit-0.4.40-py3-none-any.whl",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, current_flat)

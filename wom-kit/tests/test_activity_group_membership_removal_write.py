@@ -1743,13 +1743,27 @@ class ActivityGroupMembershipRemovalWriteTests(unittest.TestCase):
                             "--affirm-removals-reviewed",
                         ],
                     )
+                    # 2026-09-24 reopen (triage group 4): complete input reaches
+                    # the exact-approval workflow, declined here so no real
+                    # window opens; the core may serve the dry-run preview but
+                    # is never entered with approve=True.
+                    real_core = archive_services._activity_group_membership_write
+
+                    def core_without_approval(*core_args, **core_kwargs):
+                        if core_kwargs.get("approve"):
+                            raise AssertionError("blocked public approval reached private core")
+                        return real_core(*core_args, **core_kwargs)
+
+                    def decline(*_args, **_kwargs):
+                        raise archive_cli.ExactHumanApprovalWorkflowError("exact_human_approval_cancelled")
+
                     with patch.object(
                         archive_services,
                         "_activity_group_membership_write",
-                        side_effect=AssertionError(
-                            "blocked public approval reached private core"
-                        ),
-                    ) as private_core:
+                        side_effect=core_without_approval,
+                    ) as private_core, patch.object(
+                        archive_cli, "_execute_exact_human_approved_write", side_effect=decline,
+                    ):
                         for approval_args in approval_variants:
                             blocked_code, blocked_output = self._run_cli(
                                 [*base_args, *approval_args]
@@ -1767,16 +1781,17 @@ class ActivityGroupMembershipRemovalWriteTests(unittest.TestCase):
                                 blocked["lifecycle_action"],
                                 "activity_group_membership_removal_write",
                             )
-                            expected_reason = (
-                                "capability_mode_conflicting"
-                                if "--dry-run" in approval_args
-                                and "--approve" in approval_args
-                                else "compound_exact_human_approval_binding_required"
-                            )
-                            self.assertEqual(
-                                blocked["reason_codes"],
-                                [expected_reason],
-                            )
+                            # 2026-09-24 reopen (triage group 4): an incomplete
+                            # approval is refused before any read or dialog.
+                            if "--dry-run" in approval_args and "--approve" in approval_args:
+                                self.assertEqual(blocked["reason_codes"], ["capability_mode_conflicting"])
+                            else:
+                                self.assertIn(blocked["reason_codes"][0], {
+                                    "activity_group_membership_removal_write_reviewer_required",
+                                    "activity_group_membership_removal_write_workflow_precondition_failed",
+                                    "activity_group_membership_removal_write_review_affirmation_required",
+                                    "activity_group_membership_removal_write_preflight_blocked",
+                                })
                             self.assertEqual(blocked["effects_state"], "none")
                             self.assertEqual(blocked["files_written"], [])
                             self.assertFalse(
@@ -1786,7 +1801,7 @@ class ActivityGroupMembershipRemovalWriteTests(unittest.TestCase):
                                 before,
                                 self._file_state(fixture["root"]),
                             )
-                    private_core.assert_not_called()
+                    self.assertFalse(any(call.kwargs.get("approve") for call in private_core.call_args_list))
                     self._assert_result_is_content_free(
                         outputs,
                         fixture,
@@ -1976,13 +1991,27 @@ class ActivityGroupMembershipRemovalWriteTests(unittest.TestCase):
                             "--affirm-recovery-reviewed",
                         ],
                     )
+                    # 2026-09-24 reopen (triage group 4): complete input reaches
+                    # the exact-approval workflow, declined here so no real
+                    # window opens; the core may serve the dry-run preview but
+                    # is never entered with approve=True.
+                    real_core = archive_services._activity_group_membership_recover
+
+                    def core_without_approval(*core_args, **core_kwargs):
+                        if core_kwargs.get("approve"):
+                            raise AssertionError("blocked public recovery reached private core")
+                        return real_core(*core_args, **core_kwargs)
+
+                    def decline(*_args, **_kwargs):
+                        raise archive_cli.ExactHumanApprovalWorkflowError("exact_human_approval_cancelled")
+
                     with patch.object(
                         archive_services,
                         "_activity_group_membership_recover",
-                        side_effect=AssertionError(
-                            "blocked public recovery reached private core"
-                        ),
-                    ) as private_core:
+                        side_effect=core_without_approval,
+                    ) as private_core, patch.object(
+                        archive_cli, "_execute_exact_human_approved_write", side_effect=decline,
+                    ):
                         for approval_args in approval_variants:
                             blocked_code, blocked_output = self._run_cli(
                                 [*base_args, *approval_args]
@@ -2000,13 +2029,13 @@ class ActivityGroupMembershipRemovalWriteTests(unittest.TestCase):
                                 blocked["lifecycle_action"],
                                 "activity_group_membership_removal_recover",
                             )
-                            self.assertEqual(
-                                blocked["reason_codes"],
-                                [
-                                    "compound_exact_human_approval_"
-                                    "binding_required"
-                                ],
-                            )
+                            # 2026-09-24 reopen (triage group 4).
+                            self.assertIn(blocked["reason_codes"][0], {
+                                "activity_group_membership_removal_recover_reviewer_required",
+                                "activity_group_membership_removal_recover_workflow_precondition_failed",
+                                "activity_group_membership_removal_recover_review_affirmation_required",
+                                "activity_group_membership_removal_recover_workflow_failed_safely",
+                            })
                             self.assertFalse(
                                 blocked["private_values_echoed"]
                             )
@@ -2014,7 +2043,7 @@ class ActivityGroupMembershipRemovalWriteTests(unittest.TestCase):
                                 before,
                                 self._file_state(fixture["root"]),
                             )
-                    private_core.assert_not_called()
+                    self.assertFalse(any(call.kwargs.get("approve") for call in private_core.call_args_list))
                     self.assertTrue(paths["lock"].is_file())
                     self.assertFalse(paths["journal"].exists())
                     self.assertFalse(paths["guard"].exists())

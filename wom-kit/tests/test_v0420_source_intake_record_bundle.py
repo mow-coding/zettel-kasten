@@ -78,18 +78,18 @@ class SourceIntakeRecordBundleTests(unittest.TestCase):
     def test_pre_extraction_legacy_goldens_and_pure_factory_are_exact(self):
         plan = self.plan
         self.assertEqual(plan.manifest.manifest_sha256,
-            "sha256:95659c8f0c5e10238ba3bb2d3872d3c0101fa7d5a1171aa2477022726f91735e")
+            "sha256:ab0b763c7d1e1e46e844a57947edc1fd8801879d1e1ac15decc3f69dc32fa230")
         self.assertEqual(plan.input_plan_bytes_sha256,
-            "sha256:622428d796e21593ff48cf15619ac756dbfd346e14e47e4f5167baa2095935bd")
+            "sha256:20f1ee7ca6c518b06f721ab362ba70c22a4a2178483aa9016e010f2c5b4d97d9")
         self.assertEqual(plan.source_intake_plan_sha256,
-            "sha256:36f67c671287ff6817936c1b74dc471c19c1e1465bee43b6592d63df7730ac98")
+            "sha256:aff4c90e6a158ad27fabe0a63ae341da07023636e018585f0fb079101a73e9e7")
         self.assertEqual(intake._sha_bytes(plan.receipt_bytes),
-            "sha256:a1005d87e5d507854bef5b1362ef4173d8d8a15bd66f652f0b42b28e2ebd4069")
+            "sha256:eabf1eb4f36e9a01b3d77cbf2265c7f620aea6347918f8bfed2e13873afb1c05")
         self.assertEqual(intake._sha_bytes(plan.source_basis_bytes),
-            "sha256:43bc10356d904b965b38434d35a92d83a936a7ca98ce0b6f7ab482cbb2c47264")
+            "sha256:a4c79a2fac5b584c40caf58a3ef36502b10ceaa6135074886b17beb4e8963367")
         self.assertEqual(approval.exact_human_approval_context_sha256(
             intake.approval_context(plan, reviewer_claim=fixtures.REVIEWER)),
-            "sha256:0bd0ba44d380f3381dfc2d554f771468388a96e1fd480557e6ebba4dad153b04")
+            "sha256:8c1f828ba0893cd7fa843397ccf874ad2dc1fb699ae34bdfeab0b1ee122845ec")
         with patch.object(intake, "_stable_regular_bytes", side_effect=AssertionError("input read")), \
              patch.object(intake.archive_services, "archive_internal_path", side_effect=AssertionError("target read")):
             rebuilt = intake._source_intake_record_plan_from_bytes(self.root, archive_id=plan.archive_id,

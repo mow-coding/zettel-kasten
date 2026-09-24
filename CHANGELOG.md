@@ -6,6 +6,13 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.40 - 2026-09-25
+
+- Reopen 27 writers fixed closed since v0.4.0 under the exact approval contract (one dialog, or none under a valid session grant): receipt reconcile with new batch commands, scratch cleanup, markup normalization, objet-link revert, principals, activity groups, restore drill, .gitignore repair, identity reconcile, title-remap recovery, derive-text capture, saved views, private objet source metadata, locator deactivation, bytecode repair, update-collision relocation, and the snapshot restore proposal.
+- Remove 12 commands no customer path needs and the `source_scan_plan` MCP preview; UPGRADE lists each replacement. The five ZET sharing and ownership commands stay as closed previews for the v0.5 design.
+- Scope `session-handoff-checkpoint` to one activity with `--activity-root` (letter 173 D).
+- Runtime guidance no longer names nonexistent commands or calls reopened writers closed.
+
 ## v0.4.39 - 2026-09-24
 
 - Keep reviewed activity-cleanup plans stable when Windows reports folder-size changes without content changes; report no effects for refusals before approval; add content-free progress and a progress log.

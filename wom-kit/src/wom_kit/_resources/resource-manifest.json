@@ -1,6 +1,6 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.4.39",
+  "version": "0.4.40",
   "source_of_truth": "wom-kit source resource directories",
   "file_count": 175,
   "files": [
@@ -367,8 +367,8 @@
     {
       "source": "schemas/operation-exact-human-approval-v0.1.schema.json",
       "packaged": "schemas/operation-exact-human-approval-v0.1.schema.json",
-      "bytes": 1925,
-      "sha256": "1b7c2016a84006c56bd1a86ada29c1f51c9d9fd2d69880f90661090c75fb994a"
+      "bytes": 2222,
+      "sha256": "730b7425823caf2915b7f2adf2227ff19ed54ff3aa237ed4d07a0a98c9d523ef"
     },
     {
       "source": "schemas/operator-feedback-delivery-receipt.schema.json",
@@ -757,8 +757,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
       "packaged": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
-      "bytes": 9615,
-      "sha256": "f197787aaaef21bdf8343524436ea834b8953fb943346276b987890dd3df7646"
+      "bytes": 9531,
+      "sha256": "60689700fff8f22ab0bf4299b849305be21a067449d20294013b530613508836"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/foreign-sharing-and-trust.md",
@@ -769,14 +769,14 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/operator-contract.md",
       "packaged": "templates/ai-runtime/wom-archive/references/operator-contract.md",
-      "bytes": 77429,
-      "sha256": "5d06bd9bbe3ed797eb0e22ae116b49cd484569e63f625576cd2477b628f8b268"
+      "bytes": 75026,
+      "sha256": "a8ece3137de3e59aa8604c2855ec7f8710ceda8196ef47b5e4b39ddb68d25cc0"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/reading-memory-and-revision.md",
       "packaged": "templates/ai-runtime/wom-archive/references/reading-memory-and-revision.md",
-      "bytes": 8232,
-      "sha256": "c7449ddfc92ed5ff5867ca0ad715a8f63e689ab141d673ac1fd782086ff2514c"
+      "bytes": 8199,
+      "sha256": "8e6449662b92f9b7583b7f056e4c138ca8621b4d5ddcefb1933d5b7d43bf4dd4"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/safety-results-and-human-language.md",
@@ -787,8 +787,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/startup-and-update.md",
       "packaged": "templates/ai-runtime/wom-archive/references/startup-and-update.md",
-      "bytes": 9260,
-      "sha256": "d5f3d069de42d6c6179c56720937904fadecfb2dc0c3d00bf2d3130c628dfb67"
+      "bytes": 9337,
+      "sha256": "827f2bb33b4aae57cfe7e53edc1aadfaa580e88f4f4d72c56c0b68cce6d85b12"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/storage-scope.md",
@@ -799,8 +799,8 @@
     {
       "source": "templates/company/AGENTS.md",
       "packaged": "templates/company/AGENTS.md",
-      "bytes": 11857,
-      "sha256": "a61b758369dff2012464c80cc178380b3cd6b6978ae9e81ba9b529d6787ffc59"
+      "bytes": 11843,
+      "sha256": "6821f498014c19a9f5f280d9b3173195deb37fbb76154a5a64f01b5951a3f280"
     },
     {
       "source": "templates/company/archive-identity.yml",
@@ -871,8 +871,8 @@
     {
       "source": "templates/family/AGENTS.md",
       "packaged": "templates/family/AGENTS.md",
-      "bytes": 11997,
-      "sha256": "c258d64b09f7b278a8dff4bbf61590d4820ea80b81760473b3065f91114b4377"
+      "bytes": 11983,
+      "sha256": "ad3c124bf7d66d3d8922f717171b79e0e22600c9bbfc91aacaedc57dc521102d"
     },
     {
       "source": "templates/family/archive-identity.yml",
@@ -943,8 +943,8 @@
     {
       "source": "templates/personal/AGENTS.md",
       "packaged": "templates/personal/AGENTS.md",
-      "bytes": 13075,
-      "sha256": "9617e480f4c1a224d67afb0f85843f6ff341e17edb9a71d1b4247219013dabb0"
+      "bytes": 13061,
+      "sha256": "211e622af1be463de989039ced7bc38e79703ec8e1c614b524a0770173197706"
     },
     {
       "source": "templates/personal/archive-identity.yml",
@@ -1049,10 +1049,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.4.39.md",
-      "packaged": "release-notes/v0.4.39.md",
-      "bytes": 4251,
-      "sha256": "2de5fd06de9bec3351a8820fec619190e87c5c90806d0c31ae152f63fc1a8d7e"
+      "source": "docs/releases/v0.4.40.md",
+      "packaged": "release-notes/v0.4.40.md",
+      "bytes": 5273,
+      "sha256": "33f8a5d7889fa00095aa9dd352d18afe023b6cf9f53d529019005083293ae3c7"
     }
   ]
 }

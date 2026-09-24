@@ -130,8 +130,8 @@ Commands:
           Search the private generated alias index without reflecting the query.
   source-reference-coverage-audit
           Compare observed canonical source-reference coverage with separate recorded storage evidence.
-  external-locator-plan / external-locator-record / external-locator-deactivate-plan / external-locator-deactivate / external-locator-revert
-          Review, record, recover, and exactly revert provider-neutral external locators.
+  external-locator-plan / external-locator-record / external-locator-deactivate-plan / external-locator-deactivate
+          Review, record, recover, and deactivate provider-neutral external locators (exact revert: external-locator-record --revert-recovery).
   objet-capture-batch
           Preflight and execute one bounded reviewed multi-item Objet capture request.
   markup-normalization-plan / markup-normalization / markup-normalization-recovery
@@ -144,8 +144,6 @@ Commands:
           Plan a future provider presigned URL request without creating URLs.
   object-storage-operation-request-plan
           Compose the read-only approval request package before any future object storage operation.
-  object-storage-upload-evidence
-          Record reviewed external upload evidence and update manifest locations without provider calls.
   object-storage-upload-evidence-audit
           Audit upload evidence receipts and manifest locations without provider calls.
   object-storage-upload-plan
@@ -166,8 +164,6 @@ Commands:
           Plan missing Notion ancestor crawl requests from a sanitized nested tree fixture.
   notion-ancestor-fetch-adapter-execution-contract
           Preview the read-only execution contract for a future Notion ancestor fetch adapter.
-  notion-ancestor-fetch-adapter-run
-          Run the approval-gated local Notion ancestor structure fetch adapter.
   notion-recover
           Run the beginner-friendly one-command Notion missing-location recovery wrapper.
   notion-page-recovery-plan
@@ -224,8 +220,6 @@ Commands:
           Check a credential request against the approval policy gate.
   credential-keepassxc-command-plan
           Plan a KeePassXC CLI command after approval receipt verification, without executing it.
-  credential-keepassxc-write
-          Execute a minimal KeePassXC CLI add after approval receipt verification.
   credential-access-broker-plan
           Plan a future approved credential broker request without retrieving secrets.
   credential-access-approval-plan
@@ -336,8 +330,6 @@ Commands:
           Inspect provider bindings and external account change plans.
   sources
           Inspect source bindings and mapped source items.
-  scan-source
-          Metadata-only scan of a registered source into source-maps/.
   add-source
           Register a source without hand-editing source-bindings.yml.
   mint-zet
@@ -6992,7 +6984,7 @@ class Doctor:
                                     "the receipt."
                                 ),
                                 suggested_command=(
-                                    "archive object-storage-wom-location-reconcile <archive-root> "
+                                    "archive object-storage-adopt-existing <archive-root> "
                                     f"--receipt {receipt_relative} --dry-run"
                                 ),
                             )
@@ -7635,7 +7627,7 @@ class Doctor:
                 self.warn(
                     "capture_enablement_receipts_missing",
                     "Objet capture enablement record is valid but no enablement receipts exist under "
-                    "receipts/capture-enablement/; re-approve with objet-capture-enable so the audit "
+                    "receipts/capture-enablement/; use an exact-approval capture path (objet-capture-selection or source-intake-chain), which needs no enablement record, so the audit "
                     "trail matches the record.",
                     record_path,
                 )
@@ -7652,7 +7644,7 @@ class Doctor:
         self.warn(
             "capture_enablement_record_invalid",
             f"ops/capture-enablement.yml is present but does not validly enable capture: {reason}; "
-            "objet capture stays blocked; inspect with objet-capture-enable --dry-run.",
+            "objet capture stays blocked; use objet-capture-selection or source-intake-chain, which need no enablement record.",
             record_path,
         )
 
@@ -9949,15 +9941,123 @@ def _project_update_collision_cli_blockers(
     return blockers
 
 
+def _project_update_collision_exact_route(args: argparse.Namespace) -> int:
+    """Reopened 2026-09-24 (triage group 6): preserve-relocate one reviewed
+    collision after one dialog (or a valid session grant) recorded in the
+    project's archive and bound to the plan digest, entry ref and action."""
+
+    lifecycle_action = "project_version_update_collision"
+    if args.action != "preserve-relocate" or args.dry_run:
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_approve_action_invalid",
+        )
+    reviewer = archive_services.safe_foreign_quarantine_actor_id(getattr(args, "reviewed_by", None))
+    if reviewer is None:
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_reviewer_required",
+        )
+    if not bool(args.affirm_external_writers_quiescent):
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_quiescence_required",
+        )
+    cli_blockers = _project_update_collision_cli_blockers(args)
+    if cli_blockers:
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_preflight_blocked",
+            preflight_blockers=cli_blockers,
+        )
+    inspection_root = Path(args.inspection_root)
+    common = dict(
+        target=args.target,
+        entry_ref=args.entry_ref,
+        action=args.action,
+        expected_plan_sha256=args.expected_plan_sha256,
+        reveal_target_relative_path=False,
+    )
+    try:
+        try:
+            preview = archive_services.wom_kit_project_version_update_collision(
+                inspection_root, dry_run=True, approve=False, **common,
+            )
+        except BaseException:
+            # Same boundary as the preview command: nothing was written and no
+            # private value is reflected.
+            return _exact_human_approval_cli_error(
+                args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_workflow_failed_safely",
+            )
+        if not isinstance(preview, dict) or preview.get("ok") is not True or preview.get("blockers"):
+            return _exact_human_approval_cli_error(
+                args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_preflight_blocked",
+                preflight_blockers=preview.get("blockers"),
+            )
+        approval_root = archive_services.require_existing_archive_root(
+            archive_services.wom_kit_project_version_update_approval_archive_root(inspection_root)
+        )
+        binding = operation_approval_binding.plan_digest_approval_binding(
+            ExactHumanApprovalOperation.project_version_update_collision,
+            archive_services.activity_group_approval_digest(
+                str(args.expected_plan_sha256 or ""), str(args.entry_ref or ""), str(args.action or ""),
+            ),
+        )
+        context = binding.context(
+            archive_id=archive_services.read_archive_id(approval_root), reviewer_claim=reviewer,
+        )
+        result = _execute_exact_human_approved_write(
+            approval_root,
+            context,
+            lambda claim: archive_services.wom_kit_project_version_update_collision(
+                inspection_root,
+                dry_run=False,
+                approve=True,
+                reviewed_by=reviewer,
+                affirm_external_writers_quiescent=True,
+                exact_human_approval_claim=claim,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+                **common,
+            ),
+        )
+    except ExactHumanApprovalWorkflowError as error:
+        no_effect = error.code in {
+            "exact_human_approval_cancelled",
+            "exact_human_approval_operation_failed",
+            "exact_human_approval_writer_result_invalid",
+        }
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code=(
+                f"{lifecycle_action}_workflow_precondition_failed" if no_effect
+                else "exact_human_approval_state_unknown"
+            ),
+        )
+    except (
+        archive_services.ArchiveServiceError,
+        operation_approval_binding.OperationApprovalBindingError,
+        ExactHumanApprovalError,
+        ExactHumanApprovalWindowsError,
+        ArchivePathError,
+        OSError,
+        UnicodeError,
+        ValueError,
+    ):
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_workflow_failed_safely",
+        )
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(f"Project update collision: {result.get('status') or result.get('state') or 'blocked'}")
+        for blocker in result.get("blockers", []):
+            print(f"BLOCKED: {blocker}")
+    return 0 if result.get("ok") else 1
+
+
 def command_project_version_update_collision(
     args: argparse.Namespace,
 ) -> int:
     if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="project_version_update_collision",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
+        return _project_update_collision_exact_route(args)
     if args.action == "inspect-all":
         return _command_project_update_collision_inspect_all(args)
     cli_blockers = _project_update_collision_cli_blockers(args)
@@ -12700,49 +12800,6 @@ def command_operator_feedback_body_check(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
-def command_objet_capture_enable(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="objet_capture_enable",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
-    try:
-        result = archive_services.objet_capture_enable(
-            Path(args.archive_root),
-            dry_run=args.dry_run,
-            approve=args.approve,
-            reviewed_by=args.reviewed_by,
-            revoke=args.revoke,
-            acknowledge_never_touch_name=args.acknowledge_never_touch_name,
-            reenable=args.reenable,
-        )
-    except archive_services.ArchiveServiceError as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-    if args.format == "json":
-        print_json(result)
-    else:
-        print("Objet capture enablement.")
-        print(f"State: {result.get('state') or '-'}")
-        print(f"Action: {result.get('action') or '-'}")
-        print(f"Never-touch name match: {result.get('never_touch_name_match')}")
-        if result.get("reason"):
-            print(f"Reason: {result['reason']}")
-        if result.get("dry_run"):
-            for path in result.get("planned_writes") or []:
-                print(f"Planned write: {path}")
-            print("Writes: none")
-        else:
-            for path in result.get("files_written") or []:
-                print(f"Wrote: {path}")
-        if result.get("blockers"):
-            print("Blockers:")
-            for blocker in result["blockers"]:
-                print(f"- {blocker}")
-    return 0 if result.get("ok") else 1
-
-
 def command_approval_handoff_plan(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("approval-handoff-plan is read-only and requires --dry-run.", file=sys.stderr)
@@ -13390,11 +13447,37 @@ def command_validate(args: argparse.Namespace) -> int:
 
 
 def command_repair_gitignore(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
+    if args.approve and not args.dry_run:
+        root = Path(args.archive_root)
+
+        def _preview() -> tuple[dict[str, Any], str | None]:
+            plan = _repair_gitignore_legacy_core(root, approve=False, reviewed_by=None)
+            if not plan.get("missing_patterns"):
+                return plan, None
+            gitignore = root / ".gitignore"
+            current = hashlib.sha256(gitignore.read_bytes()).hexdigest() if gitignore.is_file() else None
+            return plan, _plan_json_digest({
+                "missing_patterns": plan.get("missing_patterns"),
+                "planned_writes": plan.get("planned_writes"),
+                "gitignore_sha256": current,
+            })
+
+        def _print(result: dict[str, Any]) -> None:
+            if args.format == "json":
+                print_json(result)
+            else:
+                print(f"Gitignore repair {result.get('action') or result.get('write_status')}.")
+                for path in result.get("changed_paths", []):
+                    print(f"CHANGED: {path}")
+
+        return _cli_exact_route(
             args,
             lifecycle_action="repair_gitignore",
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.repair_gitignore,
+            reviewer=archive_services.safe_foreign_quarantine_actor_id(args.reviewed_by),
+            preview=_preview,
+            write=lambda reviewer: _repair_gitignore_legacy_core(root, approve=True, reviewed_by=reviewer),
+            printer=_print,
         )
     if args.dry_run and args.approve:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
@@ -14216,6 +14299,7 @@ def command_session_handoff_checkpoint(args: argparse.Namespace) -> int:
             reviewed_by=args.reviewed_by,
             confirm_chat_reviewed=args.confirm_chat_reviewed,
             expected_state_digest=args.expected_state_digest,
+            activity_roots=list(getattr(args, "activity_root", None) or []),
         )
     except (archive_services.ArchiveServiceError, OSError) as exc:
         print(str(exc), file=sys.stderr)
@@ -16207,83 +16291,6 @@ def command_notion_ancestor_fetch_adapter_execution_contract(args: argparse.Name
     return 0 if result.get("ok", True) else 1
 
 
-def command_notion_ancestor_fetch_adapter_run(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="notion_ancestor_fetch_adapter_run",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
-    if args.dry_run == args.approve:
-        print("Choose exactly one mode: --dry-run or --approve.", file=sys.stderr)
-        return 1
-
-    try:
-        result = archive_services.notion_ancestor_fetch_adapter_run(
-            Path(args.archive_root),
-            tree_path=args.tree,
-            output_path=args.output,
-            source=args.source,
-            credential_id=args.credential_id,
-            credential_ref=args.credential_ref,
-            credential_kind=args.credential_kind,
-            credential_provider=args.credential_provider,
-            store_kind=args.store_kind,
-            adapter_kind=args.adapter_kind,
-            approval_decision=args.approval_decision,
-            approval_receipt=args.approval_receipt,
-            consumer=args.consumer,
-            reviewed_by=args.reviewed_by,
-            platform=args.platform,
-            notion_version=args.notion_version,
-            timeout_seconds=args.timeout_seconds,
-            dry_run=args.dry_run,
-            approve=args.approve,
-            max_items=args.max_items,
-            max_depth=args.max_depth,
-            scope_generation_ids=args.scope_generation_id,
-            scope_root_refs=args.scope_root_ref,
-            scope_ancestor_refs=args.scope_ancestor_ref,
-            scope_leaf_refs=args.scope_leaf_ref,
-        )
-    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-
-    if args.format == "json":
-        print_json(result)
-    else:
-        summary = result.get("fetch_summary") if isinstance(result.get("fetch_summary"), dict) else {}
-        fixture = result.get("fixture") if isinstance(result.get("fixture"), dict) else {}
-        receipt = result.get("receipt") if isinstance(result.get("receipt"), dict) else {}
-        print(f"Notion ancestor fetch adapter run: {result.get('run_state') or '-'}")
-        print(f"Archive: {result.get('archive_id') or '-'}")
-        print(f"Source: {result.get('source') or '-'}")
-        print(f"Requests: {summary.get('request_count', 0)}")
-        print(f"Fetched nodes: {summary.get('fetched_node_count', 0)}")
-        print(f"Fixture: {fixture.get('output_path') or fixture.get('proposed_output_path') or '-'}")
-        print(f"Receipt: {receipt.get('receipt_path') or receipt.get('proposed_receipt_path') or '-'}")
-        print("Page titles read: no")
-        print("Page bodies read: no")
-        print("Media bytes downloaded: no")
-        writes = result.get("files_written") or []
-        if writes:
-            print("Files written:")
-            for path in writes:
-                print(f"- {path}")
-        else:
-            print("Writes: none")
-        if result.get("blockers"):
-            print("Blockers:")
-            for blocker in result["blockers"]:
-                print(f"- {blocker}")
-        if result.get("warnings"):
-            print("Warnings:")
-            for warning in result["warnings"]:
-                print(f"- {warning}")
-    return 0 if result.get("ok", True) else 1
-
-
 def command_notion_recover(args: argparse.Namespace) -> int:
     if args.approve or not args.dry_run:
         return _exact_human_approval_cli_error(
@@ -17976,41 +17983,6 @@ def command_prehashed_objet_ledger(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
-def command_object_storage_upload_evidence(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="object_storage_upload_evidence_register",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
-    if args.dry_run == args.approve:
-        print("object-storage-upload-evidence requires exactly one of --dry-run or --approve.", file=sys.stderr)
-        return 1
-    if args.approve and not args.reviewed_by:
-        print("object-storage-upload-evidence requires --reviewed-by when --approve is used.", file=sys.stderr)
-        return 1
-    try:
-        result = archive_services.object_storage_upload_evidence_register(
-            Path(args.archive_root),
-            [Path(item) for item in args.ledger],
-            provider_kind=args.provider_kind,
-            store_ref=args.store_ref,
-            sha256_field=args.sha256_field,
-            size_field=args.size_field,
-            status_field=args.status_field,
-            dry_run=args.dry_run,
-            approve=args.approve,
-            reviewed_by=args.reviewed_by,
-            max_rows=args.max_rows,
-        )
-    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-
-    print_object_storage_upload_evidence_result(result, args.format)
-    return 0 if result.get("ok", True) else 1
-
-
 def command_object_storage_upload_evidence_audit(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("object-storage-upload-evidence-audit is read-only and requires --dry-run.", file=sys.stderr)
@@ -19296,40 +19268,6 @@ def command_object_storage_adopt_existing(args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return 1
     print_object_storage_adopt_existing_result(result, args.format)
-    return 0 if result.get("ok", True) else 1
-
-
-def command_object_storage_wom_location_reconcile(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="object_storage_wom_location_reconcile",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
-    if args.dry_run and args.approve:
-        print("Use either --dry-run or --approve, not both.", file=sys.stderr)
-        return 1
-    if not args.dry_run and not args.approve:
-        print("object-storage-wom-location-reconcile requires exactly one of --dry-run or --approve.", file=sys.stderr)
-        return 1
-    if args.approve and not (args.reviewed_by or "").strip():
-        print("object-storage-wom-location-reconcile requires --reviewed-by when --approve is used.", file=sys.stderr)
-        return 1
-    try:
-        result = archive_services.object_storage_wom_location_reconcile_run(
-            Path(args.archive_root),
-            receipt=getattr(args, "receipt", None),
-            provider_kind=getattr(args, "provider_kind", None),
-            store_ref=getattr(args, "store_ref", None),
-            max_items=getattr(args, "max_items", None),
-            reviewed_by=getattr(args, "reviewed_by", None),
-            approve=bool(args.approve),
-            dry_run=bool(args.dry_run),
-        )
-    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-    print_object_storage_wom_location_reconcile_result(result, args.format)
     return 0 if result.get("ok", True) else 1
 
 
@@ -21024,69 +20962,6 @@ def command_credential_adapter_audit_plan(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
-def command_credential_keepassxc_write(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="credential_keepassxc_write",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
-    if args.dry_run == args.approve:
-        print("Choose exactly one mode: --dry-run or --approve.", file=sys.stderr)
-        return 1
-    try:
-        result = archive_services.credential_keepassxc_write(
-            Path(args.archive_root),
-            credential_id=args.credential_id,
-            credential_ref=args.credential_ref,
-            credential_kind=args.credential_kind,
-            provider=args.provider,
-            action_kind=args.action_kind,
-            operation=args.operation,
-            approval_receipt=args.approval_receipt,
-            entry_label=args.entry_label,
-            group_label=args.group_label,
-            database_ref=args.database_ref,
-            database_path=args.database_path,
-            consumer=args.consumer,
-            reviewed_by=args.reviewed_by,
-            platform=args.platform,
-            dry_run=args.dry_run,
-            approve=args.approve,
-        )
-    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-
-    if args.format == "json":
-        print_json(result)
-    else:
-        state = result.get("execution_status") or ("passed" if result.get("ok") else "blocked")
-        print(f"Credential KeePassXC write {state}.")
-        print(f"Archive: {result.get('archive_id') or '-'}")
-        print(f"Receipt: {result.get('receipt_path') or result.get('proposed_receipt_path') or '-'}")
-        target = result.get("target") if isinstance(result.get("target"), dict) else {}
-        print(f"Entry: {target.get('entry_target') or '-'}")
-        print(f"Database path echoed: {target.get('database_path_included')}")
-        print(f"Secret returned to AI: {result.get('execution_boundary', {}).get('secret_value_return_to_ai')}")
-        writes = result.get("files_written") or []
-        if writes:
-            print("Files written:")
-            for path in writes:
-                print(f"- {path}")
-        else:
-            print("Writes: none")
-        if result.get("blockers"):
-            print("Blockers:")
-            for blocker in result["blockers"]:
-                print(f"- {blocker}")
-        if result.get("warnings"):
-            print("Warnings:")
-            for warning in result["warnings"]:
-                print(f"- {warning}")
-    return 0 if result.get("ok", True) else 1
-
-
 def command_project_intake_unpack_queue(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("project-intake-unpack-queue is read-only and requires --dry-run.", file=sys.stderr)
@@ -21220,38 +21095,6 @@ def print_prehashed_objet_ledger_result(result: dict[str, Any], output_format: s
     else:
         print(f"Appended manifest records: {registration.get('appended_manifest_records', 0)}")
         print(f"Receipt: {registration.get('receipt_path') or '-'}")
-    if result.get("blockers"):
-        print("Blockers:")
-        for blocker in result["blockers"]:
-            print(f"- {blocker}")
-    if result.get("warnings"):
-        print("Warnings:")
-        for warning in result["warnings"]:
-            print(f"- {warning}")
-
-
-def print_object_storage_upload_evidence_result(result: dict[str, Any], output_format: str) -> None:
-    if output_format == "json":
-        print_json(result)
-        return
-    state = "passed" if result.get("ok") else "blocked"
-    evidence = result.get("evidence") if isinstance(result.get("evidence"), dict) else {}
-    update = result.get("manifest_update") if isinstance(result.get("manifest_update"), dict) else {}
-    receipt = result.get("receipt") if isinstance(result.get("receipt"), dict) else {}
-    print(f"Object-storage upload evidence {state}.")
-    print(f"Archive: {result.get('archive_id') or '-'}")
-    print(f"Provider: {result.get('provider_kind') or '-'}")
-    print(f"Store ref: {result.get('store_ref') or '-'}")
-    print(f"Ledger files: {evidence.get('ledger_file_count', 0)}")
-    print(f"Rows: {evidence.get('row_count', 0)}")
-    print(f"Successful evidence rows: {evidence.get('successful_upload_count', 0)}")
-    print(f"Matched manifest records: {update.get('matched_manifest_records', 0)}")
-    if result.get("dry_run"):
-        print(f"Would add locations: {update.get('would_add_locations', 0)}")
-        print("Writes: none")
-    else:
-        print(f"Added locations: {update.get('added_locations', 0)}")
-        print(f"Receipt: {receipt.get('receipt_path') or '-'}")
     if result.get("blockers"):
         print("Blockers:")
         for blocker in result["blockers"]:
@@ -21547,33 +21390,6 @@ def print_object_storage_bytes_preservation_result(
     print("Manifest location updates: 0")
 
 
-def print_object_storage_wom_location_reconcile_result(result: dict[str, Any], output_format: str) -> None:
-    if output_format == "json":
-        print_json(result)
-        return
-    counts = result.get("counts") if isinstance(result.get("counts"), dict) else {}
-    print(f"Object storage WOM location reconcile: {result.get('status') or '-'}")
-    print(f"Archive: {result.get('archive_id') or '-'}")
-    print(f"Receipt filter: {result.get('receipt_filter') or '-'}")
-    print(f"Receipts scanned: {counts.get('receipts_scanned', 0)}")
-    print(f"Already linked: {counts.get('already_linked', 0)}")
-    print(f"Covered by existing wom_uploaded: {counts.get('covered_by_existing_wom_uploaded', 0)}")
-    print(f"Planned manifest updates: {result.get('planned_manifest_updates', 0)}")
-    print(f"Applied manifest updates: {result.get('applied_manifest_updates', 0)}")
-    print("Provider API called: no")
-    print(f"Writes: {'manifest/audit receipt' if result.get('applied_manifest_updates') else 'none'}")
-    for warning in result.get("warnings") or []:
-        print(f"Warning: {warning}")
-    if result.get("blockers"):
-        print("Blockers:")
-        for blocker in result["blockers"]:
-            print(f"- {blocker}")
-    if result.get("next_safe_actions"):
-        print("Next safe actions:")
-        for action in result["next_safe_actions"]:
-            print(f"- {action}")
-
-
 def print_imap_mailbox_operation_request_plan_result(result: dict[str, Any], output_format: str) -> None:
     if output_format == "json":
         print_json(result)
@@ -21724,53 +21540,6 @@ def command_tiro_lossless_recovery_plan(args: argparse.Namespace) -> int:
         print(f"Endpoint categories: {len(result.get('endpoint_inventory') or [])}")
         credential = result.get("credential_summary") if isinstance(result.get("credential_summary"), dict) else {}
         print(f"Credential ref supplied: {bool(credential.get('credential_ref_supplied'))}")
-        if result.get("blockers"):
-            print("Blockers:")
-            for blocker in result["blockers"]:
-                print(f"- {blocker}")
-        if result.get("warnings"):
-            print("Warnings:")
-            for warning in result["warnings"]:
-                print(f"- {warning}")
-    return 0 if result.get("ok", True) else 1
-
-
-def command_tiro_lossless_recovery_capture(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="tiro_lossless_recovery_capture",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
-    try:
-        result = archive_services.tiro_lossless_recovery_capture(
-            Path(args.archive_root),
-            bundle_path=args.bundle,
-            dry_run=args.dry_run,
-            approve=args.approve,
-            reviewed_by=args.reviewed_by,
-        )
-    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-
-    if args.format == "json":
-        print_json(result)
-    else:
-        print(f"Tiro lossless recovery capture {result.get('capture_state') or '-'}.")
-        print(f"Archive: {result.get('archive_id') or '-'}")
-        obj = result.get("object") if isinstance(result.get("object"), dict) else {}
-        print(f"Object: {obj.get('object_id') or '-'}")
-        receipt = result.get("receipt") if isinstance(result.get("receipt"), dict) else {}
-        print(f"Receipt: {receipt.get('receipt_path') or receipt.get('proposed_receipt_path') or '-'}")
-        if result.get("files_written"):
-            print("Files written:")
-            for path in result["files_written"]:
-                print(f"- {path}")
-        elif result.get("would_change"):
-            print("Would change:")
-            for path in result["would_change"]:
-                print(f"- {path}")
         if result.get("blockers"):
             print("Blockers:")
             for blocker in result["blockers"]:
@@ -23795,11 +23564,42 @@ def command_zet_title_remap_revert_recovery_plan(
 def command_zet_title_remap_recover(
     args: argparse.Namespace,
 ) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
+    if args.approve and not args.dry_run:
+        return _activity_group_exact_route(
             args,
             lifecycle_action="zet_title_remap_recover",
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.zet_title_remap_recover,
+            digests=(str(args.case_sha256), str(args.expected_plan_digest), str(args.expected_action)),
+            affirmed=bool(args.affirm_recovery_reviewed and args.affirm_archive_quiescent),
+            preview=lambda: archive_services.zet_title_remap_recover(
+                Path(args.archive_root),
+                case_sha256=str(args.case_sha256),
+                expected_plan_digest=str(args.expected_plan_digest),
+                expected_action=str(args.expected_action),
+                max_receipts=int(args.max_receipts),
+                max_journals=int(args.max_journals),
+                max_cases=int(args.max_cases),
+                dry_run=True,
+                approve=False,
+            ),
+            write=lambda binding, claim, reviewer: archive_services.zet_title_remap_recover(
+                Path(args.archive_root),
+                case_sha256=str(args.case_sha256),
+                expected_plan_digest=str(args.expected_plan_digest),
+                expected_action=str(args.expected_action),
+                max_receipts=int(args.max_receipts),
+                max_journals=int(args.max_journals),
+                max_cases=int(args.max_cases),
+                dry_run=False,
+                approve=True,
+                reviewed_by=reviewer,
+                affirm_recovery_reviewed=True,
+                affirm_archive_quiescent=True,
+                exact_human_approval_claim=claim,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+            ),
+            title="WOM title-remap recovery",
         )
     reporter = CommandProgressReporter(
         bool(getattr(args, "progress", False)),
@@ -23887,11 +23687,42 @@ def command_zet_title_remap_recover(
 def command_zet_title_remap_revert_recover(
     args: argparse.Namespace,
 ) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
+    if args.approve and not args.dry_run:
+        return _activity_group_exact_route(
             args,
             lifecycle_action="zet_title_remap_revert_recover",
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.zet_title_remap_revert_recover,
+            digests=(str(args.case_sha256), str(args.expected_plan_digest), str(args.expected_action)),
+            affirmed=bool(args.affirm_recovery_reviewed and args.affirm_archive_quiescent),
+            preview=lambda: archive_services.zet_title_remap_revert_recover(
+                Path(args.archive_root),
+                case_sha256=str(args.case_sha256),
+                expected_plan_digest=str(args.expected_plan_digest),
+                expected_action=str(args.expected_action),
+                max_receipts=int(args.max_receipts),
+                max_journals=int(args.max_journals),
+                max_cases=int(args.max_cases),
+                dry_run=True,
+                approve=False,
+            ),
+            write=lambda binding, claim, reviewer: archive_services.zet_title_remap_revert_recover(
+                Path(args.archive_root),
+                case_sha256=str(args.case_sha256),
+                expected_plan_digest=str(args.expected_plan_digest),
+                expected_action=str(args.expected_action),
+                max_receipts=int(args.max_receipts),
+                max_journals=int(args.max_journals),
+                max_cases=int(args.max_cases),
+                dry_run=False,
+                approve=True,
+                reviewed_by=reviewer,
+                affirm_recovery_reviewed=True,
+                affirm_archive_quiescent=True,
+                exact_human_approval_claim=claim,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+            ),
+            title="WOM title-remap revert recovery",
         )
     reporter = CommandProgressReporter(
         bool(getattr(args, "progress", False)),
@@ -24491,6 +24322,42 @@ def command_zet_revision_receipt_audit(args: argparse.Namespace) -> int:
 def command_zet_revision_restore_proposal_from_snapshot(
     args: argparse.Namespace,
 ) -> int:
+    if args.approve and not args.dry_run:
+        # Reopened 2026-09-24 (triage group 6): bound to the receipt digest and
+        # the plan digest the no-write preview returned.
+        plan_digest = str(args.expected_plan_digest or "").strip()
+        if not plan_digest:
+            return _exact_human_approval_cli_error(
+                args,
+                lifecycle_action="zet_revision_restore_proposal_from_snapshot",
+                reason_code="zet_revision_restore_proposal_from_snapshot_plan_digest_required",
+            )
+        common = dict(
+            receipt_path=str(args.receipt),
+            expected_receipt_sha256=str(args.expected_receipt_sha256),
+            expected_plan_digest=plan_digest,
+        )
+        return _activity_group_exact_route(
+            args,
+            lifecycle_action="zet_revision_restore_proposal_from_snapshot",
+            operation=ExactHumanApprovalOperation.zet_revision_restore_proposal_from_snapshot,
+            digests=(str(args.expected_receipt_sha256), plan_digest),
+            affirmed=True,
+            preview=lambda: archive_services.zet_revision_restore_proposal_from_snapshot(
+                Path(args.archive_root), dry_run=True, approve=False, **common,
+            ),
+            write=lambda binding, claim, reviewer: archive_services.zet_revision_restore_proposal_from_snapshot(
+                Path(args.archive_root),
+                dry_run=False,
+                approve=True,
+                reviewed_by=reviewer,
+                exact_human_approval_claim=claim,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+                **common,
+            ),
+            title="WOM restore proposal from snapshot",
+        )
     if bool(args.dry_run) == bool(args.approve):
         print(
             "zet-revision-restore-proposal-from-snapshot requires exactly one of --dry-run or --approve.",
@@ -24862,12 +24729,47 @@ def command_zet_catalog_pass_read(args: argparse.Namespace) -> int:
 
 
 def command_zet_catalog_pass_cleanup(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="zet_catalog_pass_cleanup",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
+    if args.approve and not args.dry_run:
+        archive_root = Path(args.archive_root)
+
+        def _plan() -> dict[str, Any]:
+            return _cleanup_zet_catalog_pass_output_file_legacy_core(
+                str(args.input),
+                archive_root,
+                expected_sha256=str(args.expected_sha256),
+                approve=False,
+                reviewed_by=None,
+            )
+
+        def _write(binding, claim, reviewer) -> dict[str, Any]:
+            return _cleanup_zet_catalog_pass_output_file_legacy_core(
+                str(args.input),
+                archive_root,
+                expected_sha256=str(args.expected_sha256),
+                approve=True,
+                reviewed_by=reviewer,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+                exact_human_approval_claim=claim,
+            )
+
+        try:
+            return _exact_batch_approval_route(
+                args,
+                lifecycle_action="zet_catalog_pass_cleanup",
+                plan=_plan,
+                binding_builder=operation_approval_binding.zet_catalog_pass_cleanup_approval_binding,
+                write=_write,
+                items_of=lambda preview: preview.get("status") == "ready_for_approval",
+                collection_of=lambda preview: None,
+                printer=print_json,
+            )
+        except (ArchivePathError, ValueError):
+            return _exact_human_approval_cli_error(
+                args,
+                lifecycle_action="zet_catalog_pass_cleanup",
+                reason_code="zet_catalog_pass_cleanup_preflight_blocked",
+            )
     if bool(args.dry_run) == bool(args.approve):
         print("zet-catalog-pass-cleanup requires exactly one of --dry-run or --approve.", file=sys.stderr)
         return 1
@@ -24930,95 +24832,6 @@ def command_zet_abstract_backfill_plan(args: argparse.Namespace) -> int:
         print(f"Ready for review: {summary.get('ready_for_review_count', 0)}")
         print(f"Blocked: {summary.get('blocked_count', 0)}")
         print("Writes: none")
-    return 0 if result.get("ok") else 1
-
-
-def command_zet_abstract_backfill_write(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="zet_abstract_backfill_write",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
-    if bool(args.dry_run) == bool(args.approve):
-        print("zet-abstract-backfill-write requires exactly one of --dry-run or --approve.", file=sys.stderr)
-        return 1
-    reporter = CommandProgressReporter(bool(getattr(args, "progress", False)), label="zet-abstract-backfill-write")
-    try:
-        result = archive_services.zet_abstract_backfill_write(
-            Path(args.archive_root),
-            proposal_path=str(args.proposal),
-            expected_proposal_sha256=str(args.expected_proposal_sha256),
-            max_items=int(args.max_items),
-            dry_run=bool(args.dry_run),
-            approve=bool(args.approve),
-            reviewed_by=str(args.reviewed_by or "").strip() or None,
-            affirm_abstracts_reviewed=bool(args.affirm_abstracts_reviewed),
-            progress_callback=reporter.progress,
-        )
-    except archive_services.ArchiveServiceError:
-        print("zet-abstract-backfill-write could not read a safe private proposal or archive target.", file=sys.stderr)
-        return 1
-    except (ArchivePathError, OSError, ValueError):
-        print("zet-abstract-backfill-write failed before a privacy-safe result could be produced.", file=sys.stderr)
-        return 1
-    finally:
-        reporter.close()
-
-    if args.format == "json":
-        print_json(result)
-    else:
-        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
-        print(f"WOM zet abstract backfill write: {result.get('status') or 'unknown'}")
-        print(f"Candidates: {summary.get('candidate_count', 0)}")
-        print(f"Applied: {summary.get('applied_count', 0)}")
-        print(f"Already applied: {summary.get('already_applied_count', 0)}")
-        print(f"Blocked: {summary.get('blocked_count', 0)}")
-    return 0 if result.get("ok") else 1
-
-
-def command_zet_abstract_backfill_revert(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="zet_abstract_backfill_revert",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
-    if bool(args.dry_run) == bool(args.approve):
-        print("zet-abstract-backfill-revert requires exactly one of --dry-run or --approve.", file=sys.stderr)
-        return 1
-    reporter = CommandProgressReporter(bool(getattr(args, "progress", False)), label="zet-abstract-backfill-revert")
-    try:
-        result = archive_services.zet_abstract_backfill_revert(
-            Path(args.archive_root),
-            receipt_path=str(args.receipt),
-            expected_receipt_sha256=str(args.expected_receipt_sha256),
-            max_items=int(args.max_items),
-            dry_run=bool(args.dry_run),
-            approve=bool(args.approve),
-            reviewed_by=str(args.reviewed_by or "").strip() or None,
-            affirm_abstract_removal_reviewed=bool(args.affirm_abstract_removal_reviewed),
-            progress_callback=reporter.progress,
-        )
-    except archive_services.ArchiveServiceError:
-        print("zet-abstract-backfill-revert could not read a safe private receipt or archive target.", file=sys.stderr)
-        return 1
-    except (ArchivePathError, OSError, ValueError):
-        print("zet-abstract-backfill-revert failed before a privacy-safe result could be produced.", file=sys.stderr)
-        return 1
-    finally:
-        reporter.close()
-
-    if args.format == "json":
-        print_json(result)
-    else:
-        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
-        print(f"WOM zet abstract backfill revert: {result.get('status') or 'unknown'}")
-        print(f"Candidates: {summary.get('candidate_count', 0)}")
-        print(f"Ready: {summary.get('ready_count', 0)}")
-        print(f"Reverted: {summary.get('reverted_count', 0)}")
-        print(f"Already reverted: {summary.get('already_reverted_count', 0)}")
-        print(f"Blocked: {summary.get('blocked_count', 0)}")
     return 0 if result.get("ok") else 1
 
 
@@ -25119,86 +24932,6 @@ def command_zet_abstract_backfill_recovery_plan(args: argparse.Namespace) -> int
         print(
             "Execution implemented: "
             f"{bool(result.get('execution_boundary', {}).get('execution_implemented'))}"
-        )
-    return 0 if result.get("ok") else 1
-
-
-def command_zet_abstract_backfill_recover(
-    args: argparse.Namespace,
-) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="zet_abstract_backfill_recover",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
-    reporter = CommandProgressReporter(
-        bool(getattr(args, "progress", False)),
-        label="zet-abstract-backfill-recover",
-    )
-    try:
-        result = archive_services.zet_abstract_backfill_recover(
-            Path(args.archive_root),
-            operation=str(args.operation),
-            basis_sha256=str(args.basis_sha256),
-            expected_plan_digest=str(args.expected_plan_digest),
-            expected_action=str(args.expected_action),
-            dry_run=bool(args.dry_run),
-            approve=bool(args.approve),
-            reviewed_by=args.reviewed_by,
-            affirm_recovery_reviewed=bool(
-                args.affirm_recovery_reviewed
-            ),
-            affirm_archive_quiescent=bool(
-                args.affirm_archive_quiescent
-            ),
-            max_receipts=int(args.max_receipts),
-            max_locks=int(args.max_locks),
-            max_cases=int(args.max_cases),
-            progress_callback=reporter.progress,
-        )
-    except archive_services.ArchiveServiceError:
-        print(
-            "zet-abstract-backfill-recover could not bind a safe private recovery case.",
-            file=sys.stderr,
-        )
-        return 1
-    except (ArchivePathError, OSError, ValueError):
-        print(
-            "zet-abstract-backfill-recover failed before a privacy-safe result could be produced.",
-            file=sys.stderr,
-        )
-        return 1
-    finally:
-        reporter.close()
-
-    if args.format == "json":
-        print_json(result)
-    else:
-        summary = (
-            result.get("summary")
-            if isinstance(result.get("summary"), dict)
-            else {}
-        )
-        print(
-            "WOM zet abstract recovery: "
-            f"{result.get('status') or 'unknown'}"
-        )
-        print(
-            "Action: "
-            f"{result.get('expected_action') or 'unknown'}"
-        )
-        print(
-            "Canonical files written: "
-            f"{summary.get('canonical_files_written_this_run', 0)}"
-        )
-        print(
-            "Revert receipt written: "
-            f"{bool(summary.get('revert_receipt_written_this_run'))}"
-        )
-        print(
-            "Journal removed: "
-            f"{bool(summary.get('transaction_journal_removed'))}"
         )
     return 0 if result.get("ok") else 1
 
@@ -26813,8 +26546,22 @@ def command_zettel_objet_link_revert(args: argparse.Namespace) -> int:
                 receipt=args.receipt,
             )
         else:
-            result = _zettel_objet_link_compound_write_blocked(
-                "zettel_objet_link_revert"
+            root = Path(args.archive_root)
+            return _plan_digest_exact_route(
+                args,
+                lifecycle_action="zettel_objet_link_revert",
+                operation=ExactHumanApprovalOperation.zettel_objet_link_revert,
+                plan=lambda: completion_workflows.zettel_objet_link_revert_plan(root, receipt=args.receipt),
+                write=lambda digest, reviewer, binding, claim: completion_workflows.zettel_objet_link_revert(
+                    root,
+                    receipt=args.receipt,
+                    expected_plan_sha256=digest,
+                    reviewed_by=reviewer,
+                    exact_human_approval_claim=claim,
+                    expected_exact_approval_plan_sha256=binding.plan_sha256,
+                    expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+                ),
+                printer=lambda result: _print_zettel_objet_link_result(result, args.format),
             )
     except Exception:
         print("zettel-objet-link-revert failed safely.", file=sys.stderr)
@@ -27483,10 +27230,29 @@ def command_external_locator_deactivate_plan(args: argparse.Namespace) -> int:
 
 def command_external_locator_deactivate(args: argparse.Namespace) -> int:
     if args.approve:
-        return _exact_human_approval_cli_error(
+        # Reopened 2026-09-24 (triage group 6): the group 3 plan-digest route.
+        return _plan_digest_exact_route(
             args,
             lifecycle_action="external_locator_deactivate",
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.external_locator_deactivate,
+            plan=lambda: completion_workflows.external_locator_deactivate_plan(
+                Path(args.archive_root),
+                zettel_id=args.zettel_id,
+                locator_id=args.locator_id,
+                keep_locator_id=args.keep_locator_id,
+            ),
+            write=lambda digest, reviewer, binding, claim: completion_workflows.external_locator_deactivate(
+                Path(args.archive_root),
+                zettel_id=args.zettel_id,
+                locator_id=args.locator_id,
+                keep_locator_id=args.keep_locator_id,
+                expected_plan_sha256=digest,
+                reviewed_by=reviewer,
+                exact_human_approval_claim=claim,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+            ),
+            printer=lambda result: _print_external_locator_result(result, args.format),
         )
     if not args.approve:
         print(
@@ -27530,39 +27296,6 @@ def command_external_locator_recovery_plan(args: argparse.Namespace) -> int:
             "external-locator-recovery-plan failed safely.",
             file=sys.stderr,
         )
-        return 1
-    _print_external_locator_result(result, args.format)
-    return 0 if result.get("ok") else 1
-
-
-def command_external_locator_revert(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="external_locator_revert",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
-    if args.dry_run == args.approve:
-        print(
-            "external-locator-revert requires exactly one of --dry-run or --approve.",
-            file=sys.stderr,
-        )
-        return 1
-    try:
-        if args.dry_run:
-            result = completion_workflows.external_locator_revert_plan(
-                Path(args.archive_root),
-                receipt=args.receipt,
-            )
-        else:
-            result = completion_workflows.external_locator_revert(
-                Path(args.archive_root),
-                receipt=args.receipt,
-                expected_plan_sha256=args.expected_plan_sha256,
-                reviewed_by=args.reviewed_by,
-            )
-    except Exception:
-        print("external-locator-revert failed safely.", file=sys.stderr)
         return 1
     _print_external_locator_result(result, args.format)
     return 0 if result.get("ok") else 1
@@ -27658,61 +27391,6 @@ def command_notion_objet_link_convert(args: argparse.Namespace) -> int:
         print(f"- edge: {edge_write.get('edge_id') or '-'}")
         print(f"- edge receipt: {edge_write.get('receipt_path') or '-'}")
         print(f"- conversion receipt: {receipt.get('receipt_path') or '-'}")
-        if result.get("files_written"):
-            print("Files written:")
-            for path in result["files_written"]:
-                print(f"- {path}")
-        elif result.get("would_change"):
-            print("Would change:")
-            for path in result["would_change"]:
-                print(f"- {path}")
-        if result.get("blockers"):
-            print("Blockers:")
-            for blocker in result["blockers"]:
-                print(f"- {blocker}")
-        if result.get("warnings"):
-            print("Warnings:")
-            for warning in result["warnings"]:
-                print(f"- {warning}")
-        if result.get("next_safe_actions"):
-            print("Next safe actions:")
-            for action in result["next_safe_actions"]:
-                print(f"- {action}")
-    return 0 if result.get("ok", True) else 1
-
-
-def command_notion_objet_manifest_locator_label(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="notion_objet_manifest_locator_label",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
-    try:
-        result = archive_services.notion_objet_manifest_locator_label(
-            Path(args.archive_root),
-            object_id=args.object_id,
-            locator_fingerprint=args.locator_fingerprint,
-            dry_run=args.dry_run,
-            approve=args.approve,
-            reviewed_by=args.reviewed_by,
-        )
-    except (archive_services.ArchiveServiceError, OSError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-
-    if args.format == "json":
-        print_json(result)
-    else:
-        update = result.get("manifest_update") if isinstance(result.get("manifest_update"), dict) else {}
-        receipt = result.get("receipt") if isinstance(result.get("receipt"), dict) else {}
-        print(f"Notion objet manifest locator label: {result.get('write_status') or '-'}")
-        print(f"Archive: {result.get('archive_id') or '-'}")
-        print(f"Object: {result.get('object_id') or '-'}")
-        print(f"Locator fingerprint: {result.get('locator_fingerprint') or '-'}")
-        print(f"Label field: {update.get('label_field') or '-'}")
-        print(f"Already labeled: {update.get('already_labeled')}")
-        print(f"Receipt: {receipt.get('receipt_path') or '-'}")
         if result.get("files_written"):
             print("Files written:")
             for path in result["files_written"]:
@@ -27974,6 +27652,17 @@ def _bounded_preflight_blockers(blockers: Any) -> list[str]:
     return kept
 
 
+_PRE_DIALOG_REFUSAL_SUFFIXES = (
+    "_reviewer_required",
+    "_review_affirmation_required",
+    "_content_changed_ack_required",
+    "_preflight_blocked",
+    "_plan_changed",
+    "_mode_conflict",
+    "_workflow_precondition_failed",
+)
+
+
 def _exact_human_approval_cli_error(
     args: argparse.Namespace,
     *,
@@ -28062,6 +27751,15 @@ def _exact_human_approval_cli_error(
             "mode only.",
             file=sys.stderr,
         )
+    elif safe_reason.endswith(_PRE_DIALOG_REFUSAL_SUFFIXES):
+        # Refused before any dialog or write (2026-09-24 reopen routes).
+        print(
+            f"The write did not start: {safe_reason}. Fix the input and rerun; "
+            "the command's --dry-run shows what the approval would cover.",
+            file=sys.stderr,
+        )
+        for blocker in blockers:
+            print(f"BLOCKED: {blocker}", file=sys.stderr)
     else:
         print(
             "Exact human approval failed or its write state is uncertain; "
@@ -29209,12 +28907,122 @@ def command_activity_group_membership_removal_plan(
     return 0 if result.get("ok") else 1
 
 
-def command_activity_group_membership_write(args: argparse.Namespace) -> int:
-    if args.approve:
+def _activity_group_exact_route(
+    args: argparse.Namespace,
+    *,
+    lifecycle_action: str,
+    operation: ExactHumanApprovalOperation,
+    digests: tuple[str, ...],
+    affirmed: bool,
+    preview: Callable[[], dict[str, Any]] | None,
+    write: Callable[[Any, Any, str], dict[str, Any]],
+    title: str,
+) -> int:
+    """--approve for the reopened activity-group writers (triage group 4).
+
+    The approval (dialog or a valid limited/allow_all session grant) binds the
+    reviewed request digest and review/recovery plan digest; the writer
+    re-verifies both under its own lock. A fresh dry-run and the explicit
+    review affirmation are checked before any dialog.
+    """
+
+    reviewer = archive_services.safe_foreign_quarantine_actor_id(getattr(args, "reviewed_by", None))
+    if reviewer is None:
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_reviewer_required",
+        )
+    if not affirmed:
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_review_affirmation_required",
+        )
+    archive_root = Path(args.archive_root)
+    try:
+        if preview is not None:
+            planned = preview()
+            if planned.get("ok") is not True or planned.get("blockers"):
+                return _exact_human_approval_cli_error(
+                    args,
+                    lifecycle_action=lifecycle_action,
+                    reason_code=f"{lifecycle_action}_preflight_blocked",
+                    preflight_blockers=planned.get("blockers"),
+                )
+        binding = operation_approval_binding.plan_digest_approval_binding(
+            operation, archive_services.activity_group_approval_digest(*digests),
+        )
+        context = binding.context(
+            archive_id=archive_services.read_archive_id(archive_root), reviewer_claim=reviewer,
+        )
+        result = _execute_exact_human_approved_write(
+            archive_root, context, lambda claim: write(binding, claim, reviewer),
+        )
+    except ExactHumanApprovalWorkflowError as error:
+        no_effect = error.code in {
+            "exact_human_approval_cancelled",
+            "exact_human_approval_operation_failed",
+            "exact_human_approval_writer_result_invalid",
+        }
         return _exact_human_approval_cli_error(
             args,
+            lifecycle_action=lifecycle_action,
+            reason_code=(
+                f"{lifecycle_action}_workflow_precondition_failed" if no_effect
+                else "exact_human_approval_state_unknown"
+            ),
+        )
+    except (
+        archive_services.ArchiveServiceError,
+        operation_approval_binding.OperationApprovalBindingError,
+        ExactHumanApprovalError,
+        ExactHumanApprovalWindowsError,
+        ArchivePathError,
+        OSError,
+        UnicodeError,
+        ValueError,
+    ):
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_workflow_failed_safely",
+        )
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(f"{title}: {result.get('status') or result.get('state') or 'unknown'}")
+        for blocker in result.get("blockers") or []:
+            print(f"- {blocker}")
+    return 0 if result.get("ok") else 1
+
+
+def command_activity_group_membership_write(args: argparse.Namespace) -> int:
+    if args.approve and not getattr(args, "dry_run", False):
+        return _activity_group_exact_route(
+            args,
             lifecycle_action="activity_group_membership_write",
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.activity_group_membership_write,
+            digests=(args.expected_request_sha256, args.expected_review_plan_sha256),
+            affirmed=bool(args.affirm_memberships_reviewed),
+            preview=lambda: archive_services.activity_group_membership_write(
+                Path(args.archive_root),
+                request_path=args.request,
+                expected_request_sha256=args.expected_request_sha256,
+                expected_review_plan_sha256=args.expected_review_plan_sha256,
+                dry_run=True,
+                approve=False,
+                max_members=int(args.max_members),
+            ),
+            write=lambda binding, claim, reviewer: archive_services.activity_group_membership_write(
+                Path(args.archive_root),
+                request_path=args.request,
+                expected_request_sha256=args.expected_request_sha256,
+                expected_review_plan_sha256=args.expected_review_plan_sha256,
+                dry_run=False,
+                approve=True,
+                reviewed_by=reviewer,
+                affirm_memberships_reviewed=True,
+                max_members=int(args.max_members),
+                exact_human_approval_claim=claim,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+            ),
+            title="WOM activity-group membership write",
         )
     if bool(args.dry_run) == bool(args.approve):
         print(
@@ -29367,11 +29175,26 @@ def command_activity_group_membership_recovery_plan(
 def command_activity_group_membership_recover(
     args: argparse.Namespace,
 ) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
+    if args.approve and not getattr(args, "dry_run", False):
+        return _activity_group_exact_route(
             args,
             lifecycle_action="activity_group_membership_recover",
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.activity_group_membership_recover,
+            digests=(args.expected_request_sha256, args.expected_recovery_plan_sha256),
+            affirmed=bool(args.affirm_recovery_reviewed),
+            preview=None,
+            write=lambda binding, claim, reviewer: archive_services.activity_group_membership_recover(
+                Path(args.archive_root),
+                expected_request_sha256=args.expected_request_sha256,
+                expected_recovery_plan_sha256=args.expected_recovery_plan_sha256,
+                approve=True,
+                reviewed_by=reviewer,
+                affirm_recovery_reviewed=True,
+                exact_human_approval_claim=claim,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+            ),
+            title="WOM activity-group membership recovery",
         )
     if not args.approve:
         print(
@@ -29448,11 +29271,37 @@ def command_activity_group_membership_recover(
 def command_activity_group_membership_removal_write(
     args: argparse.Namespace,
 ) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
+    if args.approve and not getattr(args, "dry_run", False):
+        return _activity_group_exact_route(
             args,
             lifecycle_action="activity_group_membership_removal_write",
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.activity_group_membership_removal_write,
+            digests=(args.expected_request_sha256, args.expected_review_plan_sha256),
+            affirmed=bool(args.affirm_removals_reviewed),
+            preview=lambda: archive_services.activity_group_membership_removal_write(
+                Path(args.archive_root),
+                request_path=args.request,
+                expected_request_sha256=args.expected_request_sha256,
+                expected_review_plan_sha256=args.expected_review_plan_sha256,
+                dry_run=True,
+                approve=False,
+                max_members=int(args.max_members),
+            ),
+            write=lambda binding, claim, reviewer: archive_services.activity_group_membership_removal_write(
+                Path(args.archive_root),
+                request_path=args.request,
+                expected_request_sha256=args.expected_request_sha256,
+                expected_review_plan_sha256=args.expected_review_plan_sha256,
+                dry_run=False,
+                approve=True,
+                reviewed_by=reviewer,
+                affirm_removals_reviewed=True,
+                max_members=int(args.max_members),
+                exact_human_approval_claim=claim,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+            ),
+            title="WOM activity-group membership removal",
         )
     if bool(args.dry_run) == bool(args.approve):
         print(
@@ -29607,11 +29456,26 @@ def command_activity_group_membership_removal_recovery_plan(
 def command_activity_group_membership_removal_recover(
     args: argparse.Namespace,
 ) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
+    if args.approve and not getattr(args, "dry_run", False):
+        return _activity_group_exact_route(
             args,
             lifecycle_action="activity_group_membership_removal_recover",
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.activity_group_membership_removal_recover,
+            digests=(args.expected_request_sha256, args.expected_recovery_plan_sha256),
+            affirmed=bool(args.affirm_recovery_reviewed),
+            preview=None,
+            write=lambda binding, claim, reviewer: archive_services.activity_group_membership_removal_recover(
+                Path(args.archive_root),
+                expected_request_sha256=args.expected_request_sha256,
+                expected_recovery_plan_sha256=args.expected_recovery_plan_sha256,
+                approve=True,
+                reviewed_by=reviewer,
+                affirm_recovery_reviewed=True,
+                exact_human_approval_claim=claim,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+            ),
+            title="WOM activity-group membership removal recovery",
         )
     if not args.approve:
         print(
@@ -31160,10 +31024,41 @@ def command_zet_quality_check(args: argparse.Namespace) -> int:
 
 def command_ai_scratch_gc(args: argparse.Namespace) -> int:
     if args.approve:
-        return _exact_human_approval_cli_error(
+        archive_root = Path(args.archive_root)
+
+        def _plan() -> dict[str, Any]:
+            return archive_services.ai_scratch_gc_for_zettel(
+                archive_root,
+                zettel_id=args.zettel_id,
+                relative_path=args.path,
+                dry_run=True,
+                approve=False,
+            )
+
+        def _write(binding, claim, reviewer) -> dict[str, Any]:
+            return archive_services.ai_scratch_gc_for_zettel(
+                archive_root,
+                zettel_id=args.zettel_id,
+                relative_path=args.path,
+                dry_run=False,
+                approve=True,
+                reviewed_by=reviewer,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+                exact_human_approval_claim=claim,
+            )
+
+        return _exact_batch_approval_route(
             args,
             lifecycle_action="ai_scratch_gc",
-            reason_code="compound_exact_human_approval_binding_required",
+            plan=_plan,
+            binding_builder=lambda preview: operation_approval_binding.ai_scratch_gc_approval_binding(
+                archive_services.ai_scratch_gc_approval_projection(preview)
+            ),
+            write=_write,
+            items_of=lambda preview: (preview.get("cleanup_plan") or {}).get("candidate_count"),
+            collection_of=lambda preview: None,
+            printer=lambda result: _print_ai_scratch_gc_result(result, args),
         )
     if not args.dry_run and not args.approve:
         print("ai-scratch-gc requires --dry-run or --approve.", file=sys.stderr)
@@ -31180,7 +31075,11 @@ def command_ai_scratch_gc(args: argparse.Namespace) -> int:
     except (archive_services.ArchiveServiceError, OSError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
+    _print_ai_scratch_gc_result(result, args)
+    return 0 if result.get("ok", True) else 1
 
+
+def _print_ai_scratch_gc_result(result: dict[str, Any], args: argparse.Namespace) -> None:
     if args.format == "json":
         print_json(result)
     else:
@@ -31210,7 +31109,6 @@ def command_ai_scratch_gc(args: argparse.Namespace) -> int:
             print("Warnings:")
             for warning in result["warnings"]:
                 print(f"- {warning}")
-    return 0 if result.get("ok", True) else 1
 
 
 def command_ai_artifact_inventory(args: argparse.Namespace) -> int:
@@ -31538,16 +31436,231 @@ def _reconcile_writer_availability_result(
     return projected
 
 
+def _print_receipt_reconcile_batch_result(result: dict[str, Any], output_format: str) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+    kind = "Mint" if result.get("reconcile_kind") == "mint" else "Retired-draft"
+    print(f"{kind} receipt reconcile: {result.get('write_status') or 'unknown'}.")
+    print(f"Receipts scanned: {summary.get('receipt_count', 0)} (clean {summary.get('clean_count', 0)})")
+    print(
+        f"Listed: {summary.get('item_count', 0)} "
+        f"(format drift {summary.get('format_drift_count', 0)}, content change {summary.get('content_change_count', 0)})"
+    )
+    fields = summary.get("changed_field_counts") or {}
+    if fields:
+        print("Changed fields/refs: " + ", ".join(f"{name} {count}" for name, count in fields.items()))
+    if summary.get("blocked_count"):
+        print(f"Blocked (not listed): {summary.get('blocked_count')}")
+    if summary.get("remaining_after_max_items"):
+        print(f"Remaining after --max-items: {summary.get('remaining_after_max_items')}")
+    if not result.get("dry_run"):
+        print(f"Reconciled: {result.get('reconciled_count', 0)}; failed: {result.get('failed_count', 0)}")
+        if result.get("batch_receipt_path"):
+            print(f"Batch receipt: {result['batch_receipt_path']}")
+    for action in result.get("next_safe_actions") or []:
+        print(f"- {action}")
+
+
+def _receipt_reconcile_exact_route(
+    args: argparse.Namespace,
+    *,
+    kind: str,
+    lifecycle_action: str,
+    zettel_ids: list[str] | None,
+    drift_class: str,
+    max_items: int,
+    reviewed_plan_sha256: str | None,
+    single_content_ack: bool | None,
+    batch_content_ack: bool | None = None,
+) -> int:
+    """--approve for the reopened receipt reconcilers (2026-09-24 triage group 1).
+
+    One fresh plan, one exact binding over every item digest, one dialog or a
+    valid session grant; each item re-derives its digest before it writes.
+    A single-item approve keeps the dry-run's content-change contract: the
+    item must carry --content-changed-ack before the dialog is shown.
+    """
+
+    archive_root = Path(args.archive_root)
+    reporter = CommandProgressReporter(
+        bool(getattr(args, "progress", False)),
+        label=lifecycle_action.replace("_", "-"),
+    )
+
+    def _plan() -> dict[str, Any]:
+        return archive_services.receipt_reconcile_batch(
+            archive_root,
+            kind=kind,
+            zettel_ids=zettel_ids,
+            drift_class=drift_class,
+            max_items=max_items,
+            strip_bom=bool(getattr(args, "strip_bom", False)),
+            reviewed_plan_sha256=reviewed_plan_sha256,
+            dry_run=True,
+            approve=False,
+            progress_callback=reporter.progress,
+        )
+
+    def _write(binding, claim, reviewer) -> dict[str, Any]:
+        return archive_services.receipt_reconcile_batch(
+            archive_root,
+            kind=kind,
+            zettel_ids=zettel_ids,
+            drift_class=drift_class,
+            max_items=max_items,
+            strip_bom=bool(getattr(args, "strip_bom", False)),
+            reviewed_plan_sha256=reviewed_plan_sha256,
+            dry_run=False,
+            approve=True,
+            reviewed_by=reviewer,
+            expected_exact_approval_plan_sha256=binding.plan_sha256,
+            expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+            exact_human_approval_claim=claim,
+            progress_callback=reporter.progress,
+        )
+
+    try:
+        if single_content_ack is not None:
+            try:
+                preview = _plan()
+            except (archive_services.ArchiveServiceError, OSError):
+                return _exact_human_approval_cli_error(
+                    args,
+                    lifecycle_action=lifecycle_action,
+                    reason_code=f"{lifecycle_action}_workflow_failed_safely",
+                )
+            if preview.get("blocked_items"):
+                return _exact_human_approval_cli_error(
+                    args,
+                    lifecycle_action=lifecycle_action,
+                    reason_code=f"{lifecycle_action}_preflight_blocked",
+                    preflight_blockers=[
+                        str(item.get("reason_code")) for item in preview["blocked_items"]
+                    ],
+                )
+            if not single_content_ack and any(
+                item.get("drift_class") == "content_change" for item in preview.get("items") or []
+            ):
+                return _exact_human_approval_cli_error(
+                    args,
+                    lifecycle_action=lifecycle_action,
+                    reason_code=f"{lifecycle_action}_content_changed_ack_required",
+                )
+        if batch_content_ack is False:
+            # Independent review 2026-09-25: a batch that contains content
+            # changes needs the same --content-changed-ack as one item (a flag,
+            # not an extra dialog).
+            try:
+                preview = _plan()
+            except (archive_services.ArchiveServiceError, OSError):
+                return _exact_human_approval_cli_error(
+                    args,
+                    lifecycle_action=lifecycle_action,
+                    reason_code=f"{lifecycle_action}_workflow_failed_safely",
+                )
+            if any(item.get("drift_class") == "content_change" for item in preview.get("items") or []):
+                return _exact_human_approval_cli_error(
+                    args,
+                    lifecycle_action=lifecycle_action,
+                    reason_code=f"{lifecycle_action}_content_changed_ack_required",
+                )
+        return _exact_batch_approval_route(
+            args,
+            lifecycle_action=lifecycle_action,
+            plan=_plan,
+            binding_builder=operation_approval_binding.receipt_reconcile_batch_approval_binding,
+            write=_write,
+            items_of=lambda preview: preview.get("items"),
+            collection_of=lambda preview: None,
+            printer=lambda result: _print_receipt_reconcile_batch_result(result, args.format),
+        )
+    finally:
+        reporter.close()
+
+
+def command_receipt_reconcile_batch(args: argparse.Namespace) -> int:
+    kind = "mint" if args.command in {"remint-reconcile-batch"} else "retire_draft"
+    lifecycle_action = "remint_reconcile_batch" if kind == "mint" else "retire_draft_reconcile_batch"
+    if bool(args.dry_run) == bool(args.approve):
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code=f"{lifecycle_action}_mode_conflict",
+        )
+    if args.zettel_id is not None and any(not str(value).strip() for value in args.zettel_id):
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code=f"{lifecycle_action}_zettel_id_blank",
+        )
+    zettel_ids = list(args.zettel_id or []) or None
+    if args.approve:
+        return _receipt_reconcile_exact_route(
+            args,
+            kind=kind,
+            lifecycle_action=lifecycle_action,
+            zettel_ids=zettel_ids,
+            drift_class=args.drift_class,
+            max_items=int(args.max_items),
+            reviewed_plan_sha256=None,
+            single_content_ack=None,
+            batch_content_ack=bool(getattr(args, "content_changed_ack", False)),
+        )
+    reporter = CommandProgressReporter(bool(getattr(args, "progress", False)), label=args.command)
+    try:
+        result = archive_services.receipt_reconcile_batch(
+            Path(args.archive_root),
+            kind=kind,
+            zettel_ids=zettel_ids,
+            drift_class=args.drift_class,
+            max_items=int(args.max_items),
+            strip_bom=bool(args.strip_bom),
+            dry_run=True,
+            approve=False,
+            progress_callback=reporter.progress,
+        )
+    except (archive_services.ArchiveServiceError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    finally:
+        reporter.close()
+    _print_receipt_reconcile_batch_result(result, args.format)
+    return 0 if result.get("ok") else 1
+
+
 def command_remint_reconcile(args: argparse.Namespace) -> int:
     if args.dry_run and args.approve:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
         return 1
     approve = bool(args.approve)
     if approve:
-        return _exact_human_approval_cli_error(
+        if getattr(args, "diagnostic_only", False):
+            print("remint-reconcile --diagnostic-only is dry-run only; approve must show review content.", file=sys.stderr)
+            return 1
+        zettel_id = (args.zettel_id or "").strip()
+        if not zettel_id:
+            try:
+                located = archive_services.remint_reconcile_plan(Path(args.archive_root), relative_path=args.path)
+            except (archive_services.ArchiveServiceError, OSError):
+                located = {}
+            zettel_id = str(located.get("zettel_id") or "").strip()
+            if not zettel_id:
+                return _exact_human_approval_cli_error(
+                    args,
+                    lifecycle_action="remint_reconcile",
+                    reason_code="remint_reconcile_preflight_blocked",
+                )
+        return _receipt_reconcile_exact_route(
             args,
+            kind="mint",
             lifecycle_action="remint_reconcile",
-            reason_code="compound_exact_human_approval_binding_required",
+            zettel_ids=[zettel_id],
+            drift_class="all",
+            max_items=1,
+            reviewed_plan_sha256=getattr(args, "reviewed_plan_sha256", None),
+            single_content_ack=bool(args.content_changed_ack),
         )
     diagnostic_only = bool(getattr(args, "diagnostic_only", False))
     if approve and not (args.reviewed_by or "").strip():
@@ -31666,10 +31779,15 @@ def command_retire_draft_reconcile(args: argparse.Namespace) -> int:
         return 1
     approve = bool(args.approve)
     if approve:
-        return _exact_human_approval_cli_error(
+        return _receipt_reconcile_exact_route(
             args,
+            kind="retire_draft",
             lifecycle_action="retire_draft_reconcile",
-            reason_code="compound_exact_human_approval_binding_required",
+            zettel_ids=[str(args.zettel_id or "").strip()],
+            drift_class="all",
+            max_items=1,
+            reviewed_plan_sha256=getattr(args, "reviewed_plan_sha256", None),
+            single_content_ack=bool(args.content_changed_ack),
         )
     if approve and not (args.reviewed_by or "").strip():
         print("retire-draft-reconcile requires --reviewed-by when --approve is used.", file=sys.stderr)
@@ -32206,12 +32324,49 @@ def command_view_recommendation_plan(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def _print_saved_view_result(args: argparse.Namespace, result: dict[str, Any], kind: str) -> None:
+    if args.format == "json":
+        print_json(result)
+        return
+    summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+    print(f"Saved-view {kind}: {result.get('state', 'blocked')}")
+    if kind == "write":
+        print(f"- matching zets: {summary.get('matching_zettel_count')}")
+    print(f"- target: {summary.get('target_path') or 'none'}")
+    print(f"- plan: {summary.get('plan_sha256') or 'none'}")
+    for blocker in result.get("blockers", []):
+        print(f"BLOCKED: {blocker}")
+    print("Private view name and facet values: not echoed")
+
+
 def command_saved_view_write(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
+    if args.approve and not args.dry_run:
+        # Reopened 2026-09-24 (triage group 6): the group 3 plan-digest route.
+        if not args.affirm_view_reviewed:
+            return _exact_human_approval_cli_error(
+                args,
+                lifecycle_action="saved_view_write",
+                reason_code="saved_view_write_review_affirmation_required",
+            )
+        return _plan_digest_exact_route(
             args,
             lifecycle_action="saved_view_write",
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.saved_view_write,
+            plan=lambda: saved_view_workflows.saved_view_write_plan(
+                Path(args.archive_root), request_path=args.request,
+            ),
+            write=lambda digest, reviewer, binding, claim: saved_view_workflows.saved_view_write(
+                Path(args.archive_root),
+                request_path=args.request,
+                expected_plan_sha256=digest,
+                reviewed_by=reviewer,
+                affirm_view_reviewed=True,
+                exact_human_approval_claim=claim,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+            ),
+            printer=lambda result: _print_saved_view_result(args, result, "write"),
+            nothing_to_do=lambda preview: preview.get("state") == "already_recorded",
         )
     if bool(args.dry_run) == bool(args.approve):
         print("Provide exactly one of --dry-run or --approve.", file=sys.stderr)
@@ -32248,11 +32403,26 @@ def command_saved_view_write(args: argparse.Namespace) -> int:
 
 
 def command_saved_view_revert(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
+    if args.approve and not args.dry_run:
+        # Reopened 2026-09-24 (triage group 6): the group 3 plan-digest route.
+        return _plan_digest_exact_route(
             args,
             lifecycle_action="saved_view_revert",
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.saved_view_revert,
+            plan=lambda: saved_view_workflows.saved_view_revert_plan(
+                Path(args.archive_root), receipt_path=args.receipt,
+            ),
+            write=lambda digest, reviewer, binding, claim: saved_view_workflows.saved_view_revert(
+                Path(args.archive_root),
+                receipt_path=args.receipt,
+                expected_plan_sha256=digest,
+                reviewed_by=reviewer,
+                exact_human_approval_claim=claim,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+            ),
+            printer=lambda result: _print_saved_view_result(args, result, "revert"),
+            nothing_to_do=lambda preview: preview.get("state") == "already_reverted",
         )
     if bool(args.dry_run) == bool(args.approve):
         print("Provide exactly one of --dry-run or --approve.", file=sys.stderr)
@@ -32577,11 +32747,70 @@ def command_objet_rediscovery_plan(args: argparse.Namespace) -> int:
 
 
 def command_objet_source_metadata_write(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
+    if args.approve and not args.dry_run:
+        # Reopened 2026-09-24 (triage group 6): the group 3 plan-digest route.
+        if not (args.affirm_private_metadata_reviewed and args.affirm_external_writers_quiescent):
+            return _exact_human_approval_cli_error(
+                args,
+                lifecycle_action="private_objet_source_metadata_write",
+                reason_code="private_objet_source_metadata_write_review_affirmation_required",
+            )
+        from .private_objet_metadata_writer import _reviewed_by_valid
+
+        # One reviewer id in two namespaces: the approval broker binds
+        # `person:<id>`, the engine's receipt schema records `operator:<id>`.
+        # Both forms are validated before the dialog so a malformed id never
+        # consumes an approval.
+        reviewer_id = str(args.reviewed_by or "")
+        for prefix in ("person:", "operator:"):
+            if reviewer_id.startswith(prefix):
+                reviewer_id = reviewer_id[len(prefix):]
+                break
+        engine_reviewer = "operator:" + reviewer_id
+        if (
+            not reviewer_id
+            or not _reviewed_by_valid(engine_reviewer, archive_services.safe_projection_scalar)
+            or archive_services.safe_project_intake_actor_id("person:" + reviewer_id) is None
+        ):
+            return _exact_human_approval_cli_error(
+                args,
+                lifecycle_action="private_objet_source_metadata_write",
+                reason_code="private_objet_source_metadata_write_reviewer_required",
+            )
+        args.reviewed_by = "person:" + reviewer_id
+
+        def _write(digest, reviewer, binding, claim):
+            return archive_services.private_objet_source_metadata_write(
+                Path(args.archive_root),
+                intake=args.intake,
+                expected_intake_sha256=args.expected_intake_sha256,
+                expected_plan_sha256=digest,
+                dry_run=False,
+                approve=True,
+                reviewed_by=engine_reviewer,
+                affirm_private_metadata_reviewed=True,
+                affirm_external_writers_quiescent=True,
+                exact_human_approval_claim=claim,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+            )
+
+        return _plan_digest_exact_route(
             args,
             lifecycle_action="private_objet_source_metadata_write",
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.private_objet_source_metadata_write,
+            plan=lambda: archive_services.private_objet_source_metadata_write(
+                Path(args.archive_root),
+                intake=args.intake,
+                expected_intake_sha256=args.expected_intake_sha256,
+                dry_run=True,
+                approve=False,
+            ),
+            write=_write,
+            printer=print_json if args.format == "json" else (lambda result: print(
+                f"Private objet metadata writer: {result.get('action') or result.get('state') or 'blocked'}"
+            )),
+            nothing_to_do=lambda preview: not preview.get("would_change"),
         )
     if args.dry_run is args.approve:
         print(
@@ -33117,6 +33346,101 @@ def command_markup_style_guide(args: argparse.Namespace) -> int:
     return 0
 
 
+def _plan_digest_exact_route(
+    args: argparse.Namespace,
+    *,
+    lifecycle_action: str,
+    operation: ExactHumanApprovalOperation,
+    plan: Callable[[], dict[str, Any]],
+    write: Callable[[str, str, Any, Any], dict[str, Any]],
+    printer: Callable[[dict[str, Any]], None],
+    nothing_to_do: Callable[[dict[str, Any]], bool] | None = None,
+) -> int:
+    """--approve for legacy writers whose dry-run digests the exact effect set.
+
+    Triage group 3 onward (2026-09-24): one fresh preview, one dialog (or a
+    valid limited/allow_all session grant) bound to that plan digest; the
+    writer re-derives the plan under its own lock and refuses any drift.
+    A supplied --expected-plan-sha256 must still equal the fresh plan.
+    """
+
+    reviewer = archive_services.safe_project_intake_actor_id(getattr(args, "reviewed_by", None))
+    if reviewer is None:
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_reviewer_required",
+        )
+    archive_root = Path(args.archive_root)
+    try:
+        preview = plan()
+        summary = preview.get("summary") if isinstance(preview.get("summary"), dict) else {}
+        digest = preview.get("plan_sha256") or summary.get("plan_sha256")
+        if (
+            preview.get("ok") is not True
+            or preview.get("blockers")
+            or not isinstance(digest, str)
+            or re.fullmatch(r"(?:sha256:)?[0-9a-f]{64}", digest) is None
+        ):
+            return _exact_human_approval_cli_error(
+                args,
+                lifecycle_action=lifecycle_action,
+                reason_code=f"{lifecycle_action}_preflight_blocked",
+                preflight_blockers=preview.get("blockers"),
+            )
+        supplied = str(getattr(args, "expected_plan_sha256", None) or "").strip().lower()
+        if supplied and supplied != digest:
+            return _exact_human_approval_cli_error(
+                args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_plan_changed",
+            )
+        if nothing_to_do is not None and nothing_to_do(preview):
+            result = {
+                **preview,
+                "dry_run": False,
+                "approved": False,
+                "state": "nothing_to_write",
+                "write_status": "nothing_to_write",
+                "native_approval_dialog_opened": False,
+                "files_written": [],
+            }
+        else:
+            binding = operation_approval_binding.plan_digest_approval_binding(operation, digest)
+            context = binding.context(
+                archive_id=archive_services.read_archive_id(archive_root),
+                reviewer_claim=reviewer,
+            )
+            result = _execute_exact_human_approved_write(
+                archive_root, context, lambda claim: write(digest, reviewer, binding, claim),
+            )
+    except ExactHumanApprovalWorkflowError as error:
+        no_effect = error.code in {
+            "exact_human_approval_cancelled",
+            "exact_human_approval_operation_failed",
+            "exact_human_approval_writer_result_invalid",
+        }
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code=(
+                f"{lifecycle_action}_workflow_precondition_failed" if no_effect
+                else "exact_human_approval_state_unknown"
+            ),
+        )
+    except (
+        archive_services.ArchiveServiceError,
+        operation_approval_binding.OperationApprovalBindingError,
+        ExactHumanApprovalError,
+        ExactHumanApprovalWindowsError,
+        ArchivePathError,
+        OSError,
+        UnicodeError,
+        ValueError,
+    ):
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_workflow_failed_safely",
+        )
+    printer(result)
+    return 0 if result.get("ok") else 1
+
+
 def command_markup_normalization_plan(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print(
@@ -33142,10 +33466,30 @@ def command_markup_normalization_plan(args: argparse.Namespace) -> int:
 
 def command_markup_normalization(args: argparse.Namespace) -> int:
     if args.approve:
-        return _exact_human_approval_cli_error(
+        root = Path(args.archive_root)
+        options = dict(
+            policy=args.policy,
+            max_items=args.max_items,
+            max_changes=args.max_changes,
+            binding_manifest=args.binding_manifest,
+            only_ready=args.only_ready,
+        )
+        return _plan_digest_exact_route(
             args,
             lifecycle_action="markup_normalization",
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.markup_normalization,
+            plan=lambda: completion_workflows.markup_normalization_plan(root, **options),
+            write=lambda digest, reviewer, binding, claim: completion_workflows.markup_normalization_apply(
+                root,
+                **options,
+                expected_plan_sha256=digest,
+                reviewed_by=reviewer,
+                exact_human_approval_claim=claim,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+            ),
+            printer=lambda result: _print_markup_result(result, args.format),
+            nothing_to_do=lambda preview: not (preview.get("summary") or {}).get("ready_change_count"),
         )
     if not args.approve:
         print("markup-normalization requires --approve.", file=sys.stderr)
@@ -33169,11 +33513,23 @@ def command_markup_normalization(args: argparse.Namespace) -> int:
 
 
 def command_markup_normalization_revert(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
+    if args.approve and not args.dry_run:
+        root = Path(args.archive_root)
+        return _plan_digest_exact_route(
             args,
             lifecycle_action="markup_normalization_revert",
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.markup_normalization_revert,
+            plan=lambda: completion_workflows.markup_normalization_revert_plan(root, receipt=args.receipt),
+            write=lambda digest, reviewer, binding, claim: completion_workflows.markup_normalization_revert(
+                root,
+                receipt=args.receipt,
+                expected_plan_sha256=digest,
+                reviewed_by=reviewer,
+                exact_human_approval_claim=claim,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+            ),
+            printer=lambda result: _print_markup_result(result, args.format),
         )
     if args.dry_run == args.approve:
         print(
@@ -33202,11 +33558,26 @@ def command_markup_normalization_revert(args: argparse.Namespace) -> int:
 
 
 def command_markup_normalization_recovery(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
+    if args.approve and not args.dry_run:
+        root = Path(args.archive_root)
+        return _plan_digest_exact_route(
             args,
             lifecycle_action="markup_normalization_recovery",
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.markup_normalization_recovery,
+            plan=lambda: completion_workflows.markup_normalization_recovery_plan(
+                root, journal=args.journal, mode=args.mode,
+            ),
+            write=lambda digest, reviewer, binding, claim: completion_workflows.markup_normalization_recover(
+                root,
+                journal=args.journal,
+                mode=args.mode,
+                expected_plan_sha256=digest,
+                reviewed_by=reviewer,
+                exact_human_approval_claim=claim,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+            ),
+            printer=lambda result: _print_markup_result(result, args.format),
         )
     if args.dry_run == args.approve:
         print(
@@ -33275,10 +33646,21 @@ def command_principal_register_plan(args: argparse.Namespace) -> int:
 
 def command_principal_register(args: argparse.Namespace) -> int:
     if args.approve:
-        return _exact_human_approval_cli_error(
+        root = Path(args.archive_root)
+        return _plan_digest_exact_route(
             args,
             lifecycle_action="principal_register",
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.principal_register,
+            plan=lambda: completion_workflows.principal_registration_plan(root, principal_id=args.principal_id, kind=args.kind, display_name=args.display_name),
+            write=lambda digest, reviewer, binding, claim: completion_workflows.principal_register(
+                root, principal_id=args.principal_id, kind=args.kind, display_name=args.display_name,
+                expected_plan_sha256=digest,
+                reviewed_by=reviewer,
+                exact_human_approval_claim=claim,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+            ),
+            printer=print_json,
         )
     if not args.approve:
         print("principal-register requires --approve.", file=sys.stderr)
@@ -33392,10 +33774,21 @@ def command_principal_unregister_plan(args: argparse.Namespace) -> int:
 
 def command_principal_unregister(args: argparse.Namespace) -> int:
     if args.approve:
-        return _exact_human_approval_cli_error(
+        root = Path(args.archive_root)
+        return _plan_digest_exact_route(
             args,
             lifecycle_action="principal_unregister",
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.principal_unregister,
+            plan=lambda: completion_workflows.principal_unregistration_plan(root, principal_id=args.principal_id),
+            write=lambda digest, reviewer, binding, claim: completion_workflows.principal_unregister(
+                root, principal_id=args.principal_id,
+                expected_plan_sha256=digest,
+                reviewed_by=reviewer,
+                exact_human_approval_claim=claim,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+            ),
+            printer=print_json,
         )
     if not args.approve:
         print("principal-unregister requires --approve.", file=sys.stderr)
@@ -33548,13 +33941,116 @@ def command_project_bytecode_repair_plan(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
-def command_project_bytecode_repair(args: argparse.Namespace) -> int:
-    if args.approve:
+def _project_bytecode_repair_exact_route(args: argparse.Namespace) -> int:
+    """Reopened 2026-09-24 (triage group 6): one fresh plan, one dialog (or a
+    valid session grant) recorded in the project's archive and bound to the
+    repair plan digest. Refusals before the dialog write nothing."""
+
+    lifecycle_action = "project_bytecode_repair"
+    reviewer = archive_services.safe_project_intake_actor_id(getattr(args, "reviewed_by", None))
+    if reviewer is None:
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_reviewer_required",
+        )
+    if not bool(args.affirm_external_writers_quiescent):
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action=lifecycle_action,
+            reason_code=f"{lifecycle_action}_quiescence_required",
+        )
+    project_root = Path(args.project_root)
+    try:
+        preview = completion_workflows.project_bytecode_repair_plan(
+            project_root,
+            max_files=args.max_files,
+            target=args.target,
+            expected_materialization_plan_sha256=args.expected_materialization_plan_sha256,
+        )
+        summary = preview.get("summary") if isinstance(preview.get("summary"), dict) else {}
+        digest = preview.get("plan_sha256") or summary.get("plan_sha256")
+        if (
+            preview.get("ok") is not True
+            or preview.get("blockers")
+            or not isinstance(digest, str)
+            or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+        ):
+            return _exact_human_approval_cli_error(
+                args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_preflight_blocked",
+                preflight_blockers=preview.get("blockers"),
+            )
+        supplied = str(getattr(args, "expected_plan_sha256", None) or "").strip().lower()
+        if supplied and supplied != digest:
+            return _exact_human_approval_cli_error(
+                args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_plan_changed",
+            )
+        if not preview.get("would_change"):
+            result = {**preview, "dry_run": False, "approved": False, "state": "nothing_to_write",
+                      "write_status": "nothing_to_write", "native_approval_dialog_opened": False,
+                      "files_written": []}
+        else:
+            approval_root = archive_services.require_existing_archive_root(
+                archive_services.wom_kit_project_version_update_approval_archive_root(project_root)
+            )
+            binding = operation_approval_binding.plan_digest_approval_binding(
+                ExactHumanApprovalOperation.project_bytecode_repair, digest,
+            )
+            context = binding.context(
+                archive_id=archive_services.read_archive_id(approval_root), reviewer_claim=reviewer,
+            )
+            result = _execute_exact_human_approved_write(
+                approval_root,
+                context,
+                lambda claim: completion_workflows.project_bytecode_repair(
+                    project_root,
+                    max_files=args.max_files,
+                    expected_plan_sha256=digest,
+                    reviewed_by=reviewer,
+                    affirm_external_writers_quiescent=True,
+                    target=args.target,
+                    expected_materialization_plan_sha256=args.expected_materialization_plan_sha256,
+                    exact_human_approval_claim=claim,
+                    expected_exact_approval_plan_sha256=binding.plan_sha256,
+                    expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+                ),
+            )
+    except ExactHumanApprovalWorkflowError as error:
+        no_effect = error.code in {
+            "exact_human_approval_cancelled",
+            "exact_human_approval_operation_failed",
+            "exact_human_approval_writer_result_invalid",
+        }
         return _exact_human_approval_cli_error(
             args,
-            lifecycle_action="project_bytecode_repair",
-            reason_code="compound_exact_human_approval_binding_required",
+            lifecycle_action=lifecycle_action,
+            reason_code=(
+                f"{lifecycle_action}_workflow_precondition_failed" if no_effect
+                else "exact_human_approval_state_unknown"
+            ),
         )
+    except (
+        archive_services.ArchiveServiceError,
+        operation_approval_binding.OperationApprovalBindingError,
+        ExactHumanApprovalError,
+        ExactHumanApprovalWindowsError,
+        ArchivePathError,
+        OSError,
+        UnicodeError,
+        ValueError,
+    ):
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_workflow_failed_safely",
+        )
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(f"Project bytecode repair: {result.get('state', 'blocked')}")
+        for blocker in result.get("blockers", []):
+            print(f"BLOCKED: {blocker}")
+    return 0 if result.get("ok") or result.get("state") == "nothing_to_write" else 1
+
+
+def command_project_bytecode_repair(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _project_bytecode_repair_exact_route(args)
     if not args.approve:
         print("project-bytecode-repair requires --approve.", file=sys.stderr)
         return 1
@@ -33921,16 +34417,6 @@ def command_objet_capture(args: argparse.Namespace) -> int:
 
 
 def command_derive_text_capture(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action=(
-                "derived_text_capture_manifest_apply"
-                if args.from_manifest
-                else "derived_text_capture_apply"
-            ),
-            reason_code="compound_exact_human_approval_binding_required",
-        )
     if args.dry_run and args.approve:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
         return 1
@@ -33938,8 +34424,10 @@ def command_derive_text_capture(args: argparse.Namespace) -> int:
         print("Derived text capture requires --dry-run or --approve.", file=sys.stderr)
         return 1
     if args.approve and not args.reviewed_by:
-        print("Derived text capture requires --reviewed-by when --approve is used.", file=sys.stderr)
-        return 1
+        action = "derived_text_capture_manifest_apply" if args.from_manifest else "derived_text_capture_apply"
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action=action, reason_code=f"{action}_reviewer_required",
+        )
     single_fields = [
         args.text_file,
         args.source_object_id,
@@ -33965,6 +34453,47 @@ def command_derive_text_capture(args: argparse.Namespace) -> int:
         )
         return 1
 
+    if args.approve:
+        # Reopened 2026-09-24 (triage group 6): one fresh preview, then one
+        # dialog (or a valid session grant) bound to its plan digest.
+        capture = None if args.from_manifest else _derive_text_capture_kwargs(args)
+        return _plan_digest_exact_route(
+            args,
+            lifecycle_action=(
+                "derived_text_capture_manifest_apply" if args.from_manifest else "derived_text_capture_apply"
+            ),
+            operation=ExactHumanApprovalOperation.derived_text_capture,
+            plan=lambda: (
+                archive_services.derived_text_capture_manifest_dry_run(
+                    Path(args.archive_root), Path(args.from_manifest)
+                )
+                if args.from_manifest
+                else archive_services.derived_text_capture_dry_run(Path(args.archive_root), **capture)
+            ),
+            write=lambda digest, reviewer, binding, claim: (
+                archive_services.derived_text_capture_manifest_approved(
+                    Path(args.archive_root),
+                    Path(args.from_manifest),
+                    expected_plan_sha256=digest,
+                    reviewed_by=reviewer,
+                    exact_human_approval_claim=claim,
+                    expected_exact_approval_plan_sha256=binding.plan_sha256,
+                    expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+                )
+                if args.from_manifest
+                else archive_services.derived_text_capture_approved(
+                    Path(args.archive_root),
+                    expected_plan_sha256=digest,
+                    reviewed_by=reviewer,
+                    exact_human_approval_claim=claim,
+                    expected_exact_approval_plan_sha256=binding.plan_sha256,
+                    expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+                    **capture,
+                )
+            ),
+            printer=lambda result: _print_derive_text_capture_result(args, result),
+            nothing_to_do=lambda preview: not preview.get("would_change"),
+        )
     try:
         if args.from_manifest:
             if args.dry_run:
@@ -34003,7 +34532,27 @@ def command_derive_text_capture(args: argparse.Namespace) -> int:
     except (archive_services.ArchiveServiceError, OSError, json.JSONDecodeError) as exc:
         print(f"Derived text capture failed: {exc}", file=sys.stderr)
         return 1
+    _print_derive_text_capture_result(args, result)
+    return 0 if result.get("ok") else 1
 
+
+def _derive_text_capture_kwargs(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "text_file": Path(args.text_file),
+        "source_object_id": args.source_object_id,
+        "derivation_kind": args.derivation_kind,
+        "tool_name": args.tool_name,
+        "tool_version": args.tool_version,
+        "review_status": args.review_status,
+        "model_name": args.model_name,
+        "model_version": args.model_version,
+        "confidence": args.confidence,
+        "language": args.language,
+        "born_digital": args.born_digital,
+    }
+
+
+def _print_derive_text_capture_result(args: argparse.Namespace, result: dict[str, Any]) -> None:
     if args.format == "json":
         print_json(result)
     elif args.from_manifest:
@@ -34025,7 +34574,6 @@ def command_derive_text_capture(args: argparse.Namespace) -> int:
             print(f"BLOCKED: {blocker}")
         for warning in result.get("warnings", []):
             print(f"WARNING: {warning}")
-    return 0 if result.get("ok") else 1
 
 
 def command_derive_text_coverage(args: argparse.Namespace) -> int:
@@ -35527,71 +36075,6 @@ def command_sources(args: argparse.Namespace) -> int:
     return 0
 
 
-def command_scan_source(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="scan_source",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
-    if args.dry_run and args.approve:
-        print("Use either --dry-run or --approve, not both.", file=sys.stderr)
-        return 1
-    if not args.dry_run and not args.approve:
-        print("Source scan requires --dry-run or --approve.", file=sys.stderr)
-        return 1
-    if args.approve and not args.reviewed_by:
-        print("Source scan requires --reviewed-by when --approve is used.", file=sys.stderr)
-        return 1
-
-    try:
-        if args.dry_run:
-            result = archive_services.source_scan_dry_run(
-                Path(args.archive_root),
-                source_id=args.source,
-                source_root=args.source_root,
-                limit=args.limit,
-            )
-        else:
-            result = archive_services.scan_source(
-                Path(args.archive_root),
-                source_id=args.source,
-                source_root=args.source_root,
-                reviewed_by=args.reviewed_by,
-                limit=args.limit,
-            )
-    except (archive_services.ArchiveServiceError, OSError, json.JSONDecodeError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-
-    if args.format == "json":
-        print_json(result)
-        return 0 if result["ok"] else 1
-
-    mode = "dry-run" if result["dry_run"] else "applied"
-    state = "passed" if result["ok"] else "blocked"
-    print(f"Source scan {mode} {state}.")
-    print(f"Archive: {result['source_archive']}")
-    print(f"Source: {result['source_id']} ({result['source_type']})")
-    print(f"Scan mode: {result['scan_mode']}")
-    print(f"Items: {result['item_count']}")
-    if result["dry_run"]:
-        print(f"Proposed source map path: {result['proposed_source_map_path']}")
-        print(f"Proposed receipt path: {result['proposed_receipt_path']}")
-    else:
-        print(f"Source map path: {result['source_map_path']}")
-        print(f"Receipt path: {result['receipt_path']}")
-    if result.get("blockers"):
-        print("Blockers:")
-        for blocker in result["blockers"]:
-            print(f"- {blocker}")
-    if result.get("warnings"):
-        print("Warnings:")
-        for warning in result["warnings"]:
-            print(f"- {warning}")
-    return 0 if result["ok"] else 1
-
-
 def command_add_source(args: argparse.Namespace) -> int:
     if args.approve:
         return _exact_human_approval_cli_error(
@@ -36279,12 +36762,126 @@ def print_project_intake_item_plan_result(result: dict[str, Any], output_format:
             print(f"- {action}")
 
 
-def command_restore_drill(args: argparse.Namespace) -> int:
-    if args.approve:
+def _plan_json_digest(value: Any) -> str:
+    """Hex digest of a content-free plan projection (exact approval binding)."""
+
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str).encode("utf-8")
+    ).hexdigest()
+
+
+def _cli_exact_route(
+    args: argparse.Namespace,
+    *,
+    lifecycle_action: str,
+    operation: ExactHumanApprovalOperation,
+    reviewer: str | None,
+    preview: Callable[[], tuple[dict[str, Any], str | None]],
+    write: Callable[[str], dict[str, Any]],
+    printer: Callable[[dict[str, Any]], None],
+) -> int:
+    """--approve for writers whose effects the CLI itself performs (triage group 5).
+
+    ``preview`` returns (plan, digest); a None digest means nothing to write.
+    The approval (dialog or a valid limited/allow_all session grant) binds the
+    digest; inside the writer the plan is re-derived, compared, and the claim
+    reauthenticated before ``write`` runs.
+    """
+
+    if reviewer is None:
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_reviewer_required",
+        )
+    archive_root = Path(args.archive_root)
+    try:
+        plan, digest = preview()
+        if plan.get("ok") is not True or plan.get("blockers"):
+            return _exact_human_approval_cli_error(
+                args,
+                lifecycle_action=lifecycle_action,
+                reason_code=f"{lifecycle_action}_preflight_blocked",
+                preflight_blockers=plan.get("blockers"),
+            )
+        if digest is None:
+            printer({**plan, "dry_run": False, "write_status": "nothing_to_write",
+                     "native_approval_dialog_opened": False})
+            return 0
+        binding = operation_approval_binding.plan_digest_approval_binding(operation, digest)
+        context = binding.context(
+            archive_id=archive_services.read_archive_id(archive_root), reviewer_claim=reviewer,
+        )
+
+        def _write(claim) -> dict[str, Any]:
+            _fresh, fresh_digest = preview()
+            if fresh_digest != digest:
+                raise archive_services.ArchiveServiceError(f"{lifecycle_action}_plan_changed")
+            archive_services._require_exact_human_operation_approval(
+                archive_root,
+                binding,
+                reviewer_claim=reviewer,
+                expected_plan_sha256=binding.plan_sha256,
+                expected_target_binding_sha256=binding.target_binding_sha256,
+                claim=claim,
+            )
+            return write(reviewer)
+
+        result = _execute_exact_human_approved_write(archive_root, context, _write)
+    except ExactHumanApprovalWorkflowError as error:
+        no_effect = error.code in {
+            "exact_human_approval_cancelled",
+            "exact_human_approval_operation_failed",
+            "exact_human_approval_writer_result_invalid",
+        }
         return _exact_human_approval_cli_error(
             args,
+            lifecycle_action=lifecycle_action,
+            reason_code=(
+                f"{lifecycle_action}_workflow_precondition_failed" if no_effect
+                else "exact_human_approval_state_unknown"
+            ),
+        )
+    except (
+        archive_services.ArchiveServiceError,
+        operation_approval_binding.OperationApprovalBindingError,
+        ExactHumanApprovalError,
+        ExactHumanApprovalWindowsError,
+        ArchivePathError,
+        OSError,
+        UnicodeError,
+        ValueError,
+        sqlite3.Error,
+    ):
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_workflow_failed_safely",
+        )
+    printer(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_restore_drill(args: argparse.Namespace) -> int:
+    if args.approve and not args.dry_run:
+        def _preview() -> tuple[dict[str, Any], str | None]:
+            plan = archive_services.restore_drill_dry_run(Path(args.archive_root), Path(args.target))
+            return plan, _plan_json_digest({
+                "archive_id": plan.get("archive_id"),
+                "target_root": plan.get("target_root"),
+                "target_exists": plan.get("target_exists"),
+                # The approval claim itself lands in the excluded
+                # profiles/local/ area, so the excluded count is not bound.
+                "copy_plan": {
+                    key: value for key, value in (plan.get("copy_plan") or {}).items()
+                    if key != "excluded_files"
+                },
+            })
+
+        return _cli_exact_route(
+            args,
             lifecycle_action="restore_drill",
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.restore_drill,
+            reviewer=archive_services.safe_foreign_quarantine_actor_id(args.reviewed_by),
+            preview=_preview,
+            write=lambda reviewer: _restore_drill_approved_write(args, reviewer),
+            printer=lambda result: print_restore_drill_result(result, args.format),
         )
     if args.dry_run and args.approve:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
@@ -36302,10 +36899,16 @@ def command_restore_drill(args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return 1
 
-    if args.dry_run or not plan["ok"]:
-        print_restore_drill_result(plan, args.format)
-        return 0 if plan["ok"] else 1
+    print_restore_drill_result(plan, args.format)
+    return 0 if plan["ok"] else 1
 
+
+def _restore_drill_approved_write(args: argparse.Namespace, reviewer: str) -> dict[str, Any]:
+    """The approved restore drill; the exact-approval route has verified the plan."""
+
+    plan = archive_services.restore_drill_dry_run(Path(args.archive_root), Path(args.target))
+    if not plan["ok"]:
+        raise archive_services.ArchiveServiceError("restore_drill_plan_changed")
     archive_root = Path(args.archive_root).resolve()
     target = Path(args.target).expanduser().resolve()
     reviewed_at = datetime.now().astimezone().replace(microsecond=0).isoformat()
@@ -36313,15 +36916,15 @@ def command_restore_drill(args: argparse.Namespace) -> int:
     receipt_relative = f"{archive_services.RESTORE_DRILL_RECEIPTS_DIR}/{timestamp_slug}.restore-drill.json"
 
     try:
-        changed_archive_paths = archive_services.copy_restore_drill_tree(archive_root, target)
+        # The public copy helper stays closed; this route verified the claim.
+        changed_archive_paths = archive_services._copy_restore_drill_tree_legacy_core(archive_root, target)
         diagnostics = Doctor(target).run()
         errors = [item for item in diagnostics if item.severity == "ERROR"]
         warnings = [item for item in diagnostics if item.severity == "WARN"]
         index_result = archive_services.index_archive(target)
         search_result = archive_services.search_archive(target, "archive", limit=3)
-    except (archive_services.ArchiveServiceError, OSError, sqlite3.Error) as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
+    except (archive_services.ArchiveServiceError, OSError, sqlite3.Error):
+        raise
 
     validation_ok = not errors and not warnings
     result_status = "passed" if validation_ok else "failed"
@@ -36332,7 +36935,7 @@ def command_restore_drill(args: argparse.Namespace) -> int:
             "receipt_id": f"receipt:restore-drill:{archive_services.safe_slug(plan['archive_id'])}:{timestamp_slug}",
             "dry_run": False,
             "timestamp": reviewed_at,
-            "reviewed_by": args.reviewed_by,
+            "reviewed_by": reviewer,
             "reviewed_at": reviewed_at,
             "validation": {
                 "doctor_strict": {
@@ -36375,8 +36978,7 @@ def command_restore_drill(args: argparse.Namespace) -> int:
         "blockers": blockers,
         "warnings": [],
     }
-    print_restore_drill_result(final, args.format)
-    return 0 if validation_ok else 1
+    return final
 
 
 def print_restore_drill_result(result: dict[str, Any], output_format: str) -> None:
@@ -36800,11 +37402,49 @@ def command_transfer_ownership(args: argparse.Namespace) -> int:
 
 
 def command_identity_reconcile(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
+    if args.approve and not args.dry_run:
+        root = Path(args.archive_root)
+        if not args.affirm_principal_metadata_reviewed:
+            return _exact_human_approval_cli_error(
+                args,
+                lifecycle_action="archive_identity_reconcile",
+                reason_code="archive_identity_reconcile_review_affirmation_required",
+            )
+
+        bound: dict[str, Any] = {}
+
+        def _preview() -> tuple[dict[str, Any], str | None]:
+            plan = archive_services.archive_identity_reconcile_plan(root)
+            supplied = (args.expected_archive_sha256, args.expected_identity_sha256,
+                        args.expected_proposed_identity_sha256)
+            current = (plan.get("expected_archive_sha256"), plan.get("expected_identity_sha256"),
+                       plan.get("proposed_identity_sha256"))
+            if plan.get("status") != "repair_ready" or any(
+                value and str(value).strip().lower() != str(fresh or "").strip().lower()
+                for value, fresh in zip(supplied, current)
+            ):
+                return {**plan, "ok": False, "blockers": plan.get("blockers") or ["archive_identity_reconcile_plan_changed"]}, None
+            # Independent review 2026-09-25: the writer must receive the exact
+            # values bound into the approval, not a fresh re-read.
+            bound["current"] = current
+            return plan, archive_services.activity_group_approval_digest(*current)
+
+        return _cli_exact_route(
             args,
             lifecycle_action="archive_identity_reconcile",
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.archive_identity_reconcile,
+            reviewer=archive_services.safe_foreign_quarantine_actor_id(args.reviewed_by),
+            preview=_preview,
+            write=lambda reviewer: archive_services.reconcile_archive_identity(
+                root,
+                reviewed_by=reviewer,
+                expected_archive_sha256=bound["current"][0],
+                expected_identity_sha256=bound["current"][1],
+                expected_proposed_identity_sha256=bound["current"][2],
+                affirm_principal_metadata_reviewed=True,
+                _exact_route_verified=True,
+            ),
+            printer=print_json,
         )
     if args.dry_run == args.approve:
         print("identity-reconcile requires exactly one of --dry-run or --approve.", file=sys.stderr)
@@ -38477,7 +39117,16 @@ def _cleanup_zet_catalog_pass_output_file_legacy_core(
     approve: bool,
     reviewed_by: str | None,
     progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
+    exact_human_approval_claim: Any = None,
 ) -> dict[str, Any]:
+    if approve and exact_human_approval_claim is None:
+        # Triage group 2 (2026-09-24): deletion needs the exact approval claim.
+        return archive_services._compound_exact_human_approval_blocked(
+            lifecycle_action="zet_catalog_pass_cleanup",
+            reason_code="exact_human_approval_required",
+        )
     root = archive_services.require_existing_archive_root(archive_root)
     normalized_expected_sha256 = normalize_zet_catalog_pass_sha256(expected_sha256)
     if normalized_expected_sha256 is None:
@@ -38495,6 +39144,27 @@ def _cleanup_zet_catalog_pass_output_file_legacy_core(
         blockers.append("A human reviewer is required for approved private scratch deletion.")
 
     deleted = False
+    approval_receipt: dict[str, Any] | None = None
+    if not blockers and approve:
+        preview = _cleanup_zet_catalog_pass_output_file_legacy_core(
+            path_arg,
+            root,
+            expected_sha256=expected_sha256,
+            approve=False,
+            reviewed_by=None,
+        )
+        try:
+            binding = operation_approval_binding.zet_catalog_pass_cleanup_approval_binding(preview)
+        except operation_approval_binding.OperationApprovalBindingError as exc:
+            raise archive_services.ArchiveServiceError(exc.code) from None
+        approval_receipt = archive_services._require_exact_human_operation_approval(
+            root,
+            binding,
+            reviewer_claim=str(reviewed_by or ""),
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+            claim=exact_human_approval_claim,
+        )
     if not blockers and approve:
         before = artifact_path.stat()
         current_sha256 = f"sha256:{sha256_file(artifact_path)}"
@@ -38533,6 +39203,9 @@ def _cleanup_zet_catalog_pass_output_file_legacy_core(
             "reviewed_by_supplied": bool(reviewed_by),
             "bound_to_expected_sha256": True,
             "scope": "one_complete_private_catalog_pass_artifact",
+            "exact_human_approval_operation": (
+                approval_receipt.get("operation") if approval_receipt else None
+            ),
         },
         "write_boundary": {
             "private_scratch_file_deleted": deleted,
@@ -39606,25 +40279,6 @@ def build_parser() -> argparse.ArgumentParser:
     operator_feedback_body_check.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     operator_feedback_body_check.set_defaults(func=command_operator_feedback_body_check)
 
-    objet_capture_enable = subcommands.add_parser(
-        "objet-capture-enable",
-        aliases=["capture-enable"],
-        help="Inspect, approve, or revoke the owner capture-enablement record that lets a real (non-sandbox) archive run objet-capture.",
-    )
-    objet_capture_enable.add_argument("archive_root", help="Archive root to inspect, enable, or revoke.")
-    objet_capture_enable.add_argument("--dry-run", action="store_true", help="Read-only eligibility report; writes nothing.")
-    objet_capture_enable.add_argument("--approve", action="store_true", help="Write ops/capture-enablement.yml plus a receipt after owner review.")
-    objet_capture_enable.add_argument("--reviewed-by", help="Reviewer id required when --approve is used.")
-    objet_capture_enable.add_argument("--revoke", action="store_true", help="Revoke the existing enablement record (with --approve; --dry-run previews the revoke).")
-    objet_capture_enable.add_argument(
-        "--acknowledge-never-touch-name",
-        action="store_true",
-        help="Required at approve time when the root or a parent name matches the never-touch pattern (zettel-kasten-* / *-objets).",
-    )
-    objet_capture_enable.add_argument("--reenable", action="store_true", help="Required to approve enablement over a previously revoked record.")
-    objet_capture_enable.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
-    objet_capture_enable.set_defaults(func=command_objet_capture_enable)
-
     approval_handoff_plan = subcommands.add_parser(
         "approval-handoff-plan",
         aliases=["handoff-plan", "human-approval-handoff-plan"],
@@ -40344,6 +40998,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--expected-state-digest",
         help="Exact state_digest from a fresh dry-run; required for approval.",
     )
+    session_handoff_checkpoint.add_argument(
+        "--activity-root",
+        action="append",
+        help=(
+            "Archive-relative AI scratch folder of this activity (repeatable). Checks every page of exactly these "
+            "folders and counts files already preserved as objets as preserved."
+        ),
+    )
     session_handoff_checkpoint.add_argument("--format", choices=["json"], default="json", help="Output format.")
     session_handoff_checkpoint.set_defaults(func=command_session_handoff_checkpoint)
 
@@ -40880,7 +41542,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "v0.4.30: close reviewed started exact-approval claims as failed "
             "(operator_closed_started_claim_after_review) after a receipt scan; "
-            "one native dialog, never a session permission mode."
+            "one native dialog, or none under a valid limited/allow_all session grant (since v0.4.36)."
         ),
     )
     claim_finalize.add_argument("archive_root", help="Archive root whose claims are closed.")
@@ -41064,42 +41726,6 @@ def build_parser() -> argparse.ArgumentParser:
     prehashed_objet_ledger.add_argument("--reviewed-by", help="Reviewer id required when --approve is used.")
     prehashed_objet_ledger.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     prehashed_objet_ledger.set_defaults(func=command_prehashed_objet_ledger)
-
-    object_storage_upload_evidence = subcommands.add_parser(
-        "object-storage-upload-evidence",
-        aliases=["object-storage-external-upload-evidence", "objet-storage-upload-evidence"],
-        help="Record reviewed external object-storage upload evidence without calling providers.",
-    )
-    object_storage_upload_evidence.add_argument("archive_root", help="Archive root to update.")
-    object_storage_upload_evidence.add_argument(
-        "--ledger",
-        action="append",
-        required=True,
-        help="UTF-8 JSONL upload evidence ledger. May be repeated. Paths are not echoed.",
-    )
-    object_storage_upload_evidence.add_argument(
-        "--provider-kind",
-        choices=sorted(archive_services.OBJECT_STORAGE_ALLOWED_PROVIDERS),
-        default="cloudflare-r2",
-        help="Object-storage provider kind label.",
-    )
-    object_storage_upload_evidence.add_argument(
-        "--store-ref",
-        help="Safe store label/ref. Required with --approve. Do not pass URLs, bucket names, paths, tokens, or secrets.",
-    )
-    object_storage_upload_evidence.add_argument("--sha256-field", default="sha256", help="JSONL field containing sha256 or sha256:<hex>.")
-    object_storage_upload_evidence.add_argument("--size-field", default="bytes", help="Optional JSONL field containing byte size.")
-    object_storage_upload_evidence.add_argument(
-        "--status-field",
-        default="status",
-        help="JSONL field whose value must be uploaded, verified, succeeded, already_present, or ok.",
-    )
-    object_storage_upload_evidence.add_argument("--max-rows", type=int, default=100000, help="Maximum rows to inspect.")
-    object_storage_upload_evidence.add_argument("--dry-run", action="store_true", help="Preview manifest location updates without writing.")
-    object_storage_upload_evidence.add_argument("--approve", action="store_true", help="Write reviewed upload evidence receipt and manifest locations.")
-    object_storage_upload_evidence.add_argument("--reviewed-by", help="Reviewer id required when --approve is used.")
-    object_storage_upload_evidence.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
-    object_storage_upload_evidence.set_defaults(func=command_object_storage_upload_evidence)
 
     object_storage_upload_evidence_audit = subcommands.add_parser(
         "object-storage-upload-evidence-audit",
@@ -41656,48 +42282,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     object_storage_offload_parser.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     object_storage_offload_parser.set_defaults(func=command_object_storage_offload)
-
-    object_storage_wom_location_reconcile = subcommands.add_parser(
-        "object-storage-wom-location-reconcile",
-        aliases=[
-            "object-storage-upload-location-reconcile",
-            "object-storage-manifest-reconcile",
-            "objet-storage-wom-location-reconcile",
-        ],
-        help="Reconcile missing wom_uploaded manifest bindings from existing object-storage execution receipts.",
-    )
-    object_storage_wom_location_reconcile.add_argument("archive_root", help="Archive root to inspect or update.")
-    object_storage_wom_location_reconcile.add_argument(
-        "--receipt",
-        help="Optional archive-relative object-storage execution receipt path to target. Dry-run first.",
-    )
-    object_storage_wom_location_reconcile.add_argument(
-        "--provider-kind",
-        choices=sorted(archive_services.OBJECT_STORAGE_ALLOWED_PROVIDERS),
-        help="Optional object-storage provider kind filter.",
-    )
-    object_storage_wom_location_reconcile.add_argument(
-        "--store-ref",
-        help="Optional safe store label/ref filter. Do not pass URLs, bucket names, paths, tokens, or secrets.",
-    )
-    object_storage_wom_location_reconcile.add_argument(
-        "--max-items",
-        type=int,
-        help="Refuse if more than this many manifest binding writes would be planned.",
-    )
-    object_storage_wom_location_reconcile.add_argument("--reviewed-by", help="Safe reviewer id required when --approve is used.")
-    object_storage_wom_location_reconcile.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Preview missing/covered manifest bindings. No provider calls, no credential reads, no writes.",
-    )
-    object_storage_wom_location_reconcile.add_argument(
-        "--approve",
-        action="store_true",
-        help="Write planned manifest bindings and one audit receipt. Never calls providers or reads credentials.",
-    )
-    object_storage_wom_location_reconcile.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
-    object_storage_wom_location_reconcile.set_defaults(func=command_object_storage_wom_location_reconcile)
 
     imap_mailbox_operation_request = subcommands.add_parser(
         "imap-mailbox-operation-request-plan",
@@ -42348,72 +42932,6 @@ def build_parser() -> argparse.ArgumentParser:
     credential_keepassxc_command_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     credential_keepassxc_command_plan.set_defaults(func=command_credential_keepassxc_command_plan)
 
-    credential_keepassxc_write = subcommands.add_parser(
-        "credential-keepassxc-write",
-        aliases=["keepassxc-write"],
-        help="Execute a minimal KeePassXC CLI add after verifying an approval receipt.",
-    )
-    credential_keepassxc_write.add_argument("archive_root", help="Archive root to inspect.")
-    credential_keepassxc_write.add_argument("--credential-id", required=True, help="Safe credential label, e.g. cred:openai-api.")
-    credential_keepassxc_write.add_argument("--credential-ref", help="Optional secret: ref; exact value is not echoed.")
-    credential_keepassxc_write.add_argument(
-        "--credential-kind",
-        choices=sorted(archive_services.CREDENTIAL_REF_ALLOWED_KINDS),
-        help="Credential kind; defaults from action kind.",
-    )
-    credential_keepassxc_write.add_argument(
-        "--provider",
-        choices=sorted(archive_services.CREDENTIAL_REF_ALLOWED_PROVIDERS),
-        help="Optional provider context.",
-    )
-    credential_keepassxc_write.add_argument(
-        "--action-kind",
-        choices=sorted(archive_services.CREDENTIAL_ACCESS_BROKER_ACTIONS),
-        default="plaintext_secret_migration",
-        help="Credential action to policy-check before the write.",
-    )
-    credential_keepassxc_write.add_argument(
-        "--operation",
-        choices=["plaintext_secret_migration", "write_new_secret"],
-        default="plaintext_secret_migration",
-        help="KeePassXC write-like operation to execute.",
-    )
-    credential_keepassxc_write.add_argument(
-        "--approval-receipt",
-        required=True,
-        help="Archive-relative credential access approval receipt to verify before execution.",
-    )
-    credential_keepassxc_write.add_argument(
-        "--entry-label",
-        required=True,
-        help="Safe non-secret KeePassXC entry label. Do not pass an email, URL, token, password, or path.",
-    )
-    credential_keepassxc_write.add_argument(
-        "--group-label",
-        help="Optional safe non-secret KeePassXC group label. Do not pass a path.",
-    )
-    credential_keepassxc_write.add_argument(
-        "--database-ref",
-        default="keepassxc:human-selected-database",
-        help="Safe label for the human-selected database; never pass a .kdbx path here.",
-    )
-    credential_keepassxc_write.add_argument(
-        "--database-path",
-        help="Local .kdbx path used only for --approve execution. It is not echoed in JSON or receipts.",
-    )
-    credential_keepassxc_write.add_argument("--consumer", default="wom:adapter:keepassxc", help="Safe label for the local adapter.")
-    credential_keepassxc_write.add_argument("--reviewed-by", default="human:pending-review", help="Safe non-secret reviewer label.")
-    credential_keepassxc_write.add_argument(
-        "--platform",
-        choices=sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS),
-        default="windows",
-        help="Host platform context.",
-    )
-    credential_keepassxc_write.add_argument("--dry-run", action="store_true", help="Preview the write without executing keepassxc-cli.")
-    credential_keepassxc_write.add_argument("--approve", action="store_true", help="Execute keepassxc-cli add after local human approval.")
-    credential_keepassxc_write.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
-    credential_keepassxc_write.set_defaults(func=command_credential_keepassxc_write)
-
     credential_access_broker_plan = subcommands.add_parser(
         "credential-access-broker-plan",
         aliases=["credential-broker-plan", "secret-access-broker-plan"],
@@ -42750,23 +43268,6 @@ def build_parser() -> argparse.ArgumentParser:
     tiro_lossless_recovery_plan.add_argument("--dry-run", action="store_true", help="Required; write nothing.")
     tiro_lossless_recovery_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     tiro_lossless_recovery_plan.set_defaults(func=command_tiro_lossless_recovery_plan)
-
-    tiro_lossless_recovery_capture = subcommands.add_parser(
-        "tiro-lossless-recovery-capture",
-        aliases=["tiro-recovery-capture"],
-        help="Preview or approve preserving a private raw Tiro recovery bundle as a WOM objet.",
-    )
-    tiro_lossless_recovery_capture.add_argument("archive_root", help="Archive root to update.")
-    tiro_lossless_recovery_capture.add_argument(
-        "--bundle",
-        required=True,
-        help="Archive-relative raw Tiro recovery bundle JSON under workbench/.",
-    )
-    tiro_lossless_recovery_capture.add_argument("--dry-run", action="store_true", help="Preview object/receipt writes.")
-    tiro_lossless_recovery_capture.add_argument("--approve", action="store_true", help="Write the reviewed raw bundle as a WOM objet.")
-    tiro_lossless_recovery_capture.add_argument("--reviewed-by", help="Safe reviewer id required with --approve.")
-    tiro_lossless_recovery_capture.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
-    tiro_lossless_recovery_capture.set_defaults(func=command_tiro_lossless_recovery_capture)
 
     tiro_lossless_recovery_fetch_run = subcommands.add_parser(
         "tiro-lossless-recovery-fetch-run",
@@ -44059,7 +44560,14 @@ def build_parser() -> argparse.ArgumentParser:
     zet_revision_restore_proposal_from_snapshot.add_argument(
         "--approve",
         action="store_true",
-        help="Create one exact independent private proposal; does not approve or perform a canonical restore.",
+        help=(
+            "Create one exact independent private proposal after one exact approval (a native dialog, "
+            "or none under a valid session grant); does not approve or perform a canonical restore."
+        ),
+    )
+    zet_revision_restore_proposal_from_snapshot.add_argument(
+        "--reviewed-by",
+        help="Reviewer id (person:<id> or human:<id>) required for --approve.",
     )
     zet_revision_restore_proposal_from_snapshot.add_argument(
         "--format",
@@ -44332,12 +44840,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Required sha256:<64 lowercase hex> identity from the pass summary.",
     )
     zet_catalog_pass_cleanup.add_argument("--dry-run", action="store_true", help="Preview deletion after validation.")
-    zet_catalog_pass_cleanup.add_argument("--approve", action="store_true", help="Delete only the validated SHA-bound scratch artifact.")
+    zet_catalog_pass_cleanup.add_argument(
+        "--approve",
+        action="store_true",
+        help="Delete only the validated SHA-bound scratch artifact under exact human approval (one native dialog, or none under a valid limited/allow_all session grant).",
+    )
     zet_catalog_pass_cleanup.add_argument("--reviewed-by", help="Human reviewer id required with --approve; the value is never echoed.")
     zet_catalog_pass_cleanup.add_argument(
         "--progress",
         action="store_true",
         help="Stream content-free byte counts and 10-second heartbeats to stderr.",
+    )
+    zet_catalog_pass_cleanup.add_argument(
+        "--format",
+        choices=["json"],
+        default="json",
+        help="Output format; the result is always JSON.",
     )
     zet_catalog_pass_cleanup.set_defaults(func=command_zet_catalog_pass_cleanup)
 
@@ -44370,88 +44888,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     zet_abstract_backfill_plan.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     zet_abstract_backfill_plan.set_defaults(func=command_zet_abstract_backfill_plan)
-
-    zet_abstract_backfill_write = subcommands.add_parser(
-        "zet-abstract-backfill-write",
-        aliases=["abstract-backfill-write"],
-        help="Preview or approve a SHA-bound, human-reviewed transactional abstract revision batch.",
-    )
-    zet_abstract_backfill_write.add_argument("archive_root", help="Archive root containing canonical zets.")
-    zet_abstract_backfill_write.add_argument(
-        "--proposal",
-        required=True,
-        help="Private JSONL under .wom-scratch/abstract-backfill/; its path and values are never echoed.",
-    )
-    zet_abstract_backfill_write.add_argument(
-        "--expected-proposal-sha256",
-        required=True,
-        help="Required sha256:<64 lowercase hex> identity returned by the reviewed plan.",
-    )
-    zet_abstract_backfill_write.add_argument(
-        "--max-items",
-        type=int,
-        default=500,
-        help=f"Maximum proposal rows to inspect and write (1-{archive_services.ZET_ABSTRACT_BACKFILL_MAX_ITEMS}).",
-    )
-    zet_abstract_backfill_write.add_argument("--dry-run", action="store_true", help="Preview the exact transactional write; writes nothing.")
-    zet_abstract_backfill_write.add_argument("--approve", action="store_true", help="Apply the entire validated batch and write one revision receipt.")
-    zet_abstract_backfill_write.add_argument(
-        "--reviewed-by",
-        help="Safe human reviewer id required for a new approved write; never echoed.",
-    )
-    zet_abstract_backfill_write.add_argument(
-        "--affirm-abstracts-reviewed",
-        action="store_true",
-        help="Required with --approve: affirm that every proposed abstract was human-reviewed.",
-    )
-    zet_abstract_backfill_write.add_argument(
-        "--progress",
-        action="store_true",
-        help="Stream content-free byte and row counts plus 10-second heartbeats to stderr.",
-    )
-    zet_abstract_backfill_write.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
-    zet_abstract_backfill_write.set_defaults(func=command_zet_abstract_backfill_write)
-
-    zet_abstract_backfill_revert = subcommands.add_parser(
-        "zet-abstract-backfill-revert",
-        aliases=["abstract-backfill-revert"],
-        help="Audit or approve exact one-field rollback from an abstract backfill receipt.",
-    )
-    zet_abstract_backfill_revert.add_argument("archive_root", help="Archive root containing canonical zets.")
-    zet_abstract_backfill_revert.add_argument(
-        "--receipt",
-        required=True,
-        help="Private applied receipt under receipts/revisions/abstract-backfill/; its path and values are never echoed.",
-    )
-    zet_abstract_backfill_revert.add_argument(
-        "--expected-receipt-sha256",
-        required=True,
-        help="Required sha256:<64 lowercase hex> identity returned by the applied writer.",
-    )
-    zet_abstract_backfill_revert.add_argument(
-        "--max-items",
-        type=int,
-        default=500,
-        help=f"Maximum receipt rows to audit and revert (1-{archive_services.ZET_ABSTRACT_BACKFILL_MAX_ITEMS}).",
-    )
-    zet_abstract_backfill_revert.add_argument("--dry-run", action="store_true", help="Audit exact reversibility and preview removal; writes nothing.")
-    zet_abstract_backfill_revert.add_argument("--approve", action="store_true", help="Restore the whole validated batch and write one immutable revert receipt.")
-    zet_abstract_backfill_revert.add_argument(
-        "--reviewed-by",
-        help="Safe human reviewer id required for a new approved revert; never echoed.",
-    )
-    zet_abstract_backfill_revert.add_argument(
-        "--affirm-abstract-removal-reviewed",
-        action="store_true",
-        help="Required with --approve: affirm that removal of every recorded abstract was human-reviewed.",
-    )
-    zet_abstract_backfill_revert.add_argument(
-        "--progress",
-        action="store_true",
-        help="Stream content-free receipt and row counts plus 10-second heartbeats to stderr.",
-    )
-    zet_abstract_backfill_revert.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
-    zet_abstract_backfill_revert.set_defaults(func=command_zet_abstract_backfill_revert)
 
     zet_abstract_backfill_receipt_audit = subcommands.add_parser(
         "zet-abstract-backfill-receipt-audit",
@@ -44545,96 +44981,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     zet_abstract_backfill_recovery_plan.set_defaults(
         func=command_zet_abstract_backfill_recovery_plan
-    )
-
-    zet_abstract_backfill_recover = subcommands.add_parser(
-        "zet-abstract-backfill-recover",
-        aliases=["abstract-backfill-recover"],
-        help="Preview or approve one plan-digest-bound interrupted abstract transaction recovery.",
-    )
-    zet_abstract_backfill_recover.add_argument(
-        "archive_root",
-        help="Archive root containing the retained private transaction journal.",
-    )
-    zet_abstract_backfill_recover.add_argument(
-        "--operation",
-        choices=["apply", "revert"],
-        required=True,
-        help="Journal operation selected by the reviewed recovery plan.",
-    )
-    zet_abstract_backfill_recover.add_argument(
-        "--basis-sha256",
-        required=True,
-        help="Exact privacy-safe transaction basis SHA-256 from the reviewed case.",
-    )
-    zet_abstract_backfill_recover.add_argument(
-        "--expected-plan-digest",
-        required=True,
-        help="Exact complete recovery-plan digest reviewed by the operator.",
-    )
-    zet_abstract_backfill_recover.add_argument(
-        "--expected-action",
-        choices=sorted(
-            archive_services.ZET_ABSTRACT_BACKFILL_RECOVERY_ACTIONS
-        ),
-        required=True,
-        help="Exact fixed action selected by the reviewed recovery case.",
-    )
-    zet_abstract_backfill_recover.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Preview the exact SHA/action-bound case without writing.",
-    )
-    zet_abstract_backfill_recover.add_argument(
-        "--approve",
-        action="store_true",
-        help="Execute one freshly revalidated recovery case.",
-    )
-    zet_abstract_backfill_recover.add_argument(
-        "--reviewed-by",
-        help="Safe reviewer id recorded only in a newly finalized revert receipt; never echoed.",
-    )
-    zet_abstract_backfill_recover.add_argument(
-        "--affirm-recovery-reviewed",
-        action="store_true",
-        help="Required with --approve: affirm the exact recovery direction and current plan were reviewed.",
-    )
-    zet_abstract_backfill_recover.add_argument(
-        "--affirm-archive-quiescent",
-        action="store_true",
-        help="Required with --approve: affirm the original process stopped and no writer/editor is active.",
-    )
-    zet_abstract_backfill_recover.add_argument(
-        "--max-receipts",
-        type=int,
-        default=5000,
-        help="Maximum total apply/revert receipts to re-audit (1-5000).",
-    )
-    zet_abstract_backfill_recover.add_argument(
-        "--max-locks",
-        type=int,
-        default=5000,
-        help="Maximum recognized locks and journals to re-audit (1-5000 each).",
-    )
-    zet_abstract_backfill_recover.add_argument(
-        "--max-cases",
-        type=int,
-        default=100,
-        help="Maximum privacy-safe recovery cases to bind (1-500).",
-    )
-    zet_abstract_backfill_recover.add_argument(
-        "--progress",
-        action="store_true",
-        help="Stream content-free audit, write, receipt, and heartbeat progress to stderr.",
-    )
-    zet_abstract_backfill_recover.add_argument(
-        "--format",
-        choices=["text", "json"],
-        default="json",
-        help="Output format.",
-    )
-    zet_abstract_backfill_recover.set_defaults(
-        func=command_zet_abstract_backfill_recover
     )
 
     status_board = subcommands.add_parser(
@@ -45332,19 +45678,6 @@ def build_parser() -> argparse.ArgumentParser:
         func=command_external_locator_recovery_plan
     )
 
-    external_locator_revert = subcommands.add_parser(
-        "external-locator-revert",
-        help="Preview or approve exact restoration of a locator record from its receipt.",
-    )
-    external_locator_revert.add_argument("archive_root", help="Archive root to restore.")
-    external_locator_revert.add_argument("--receipt", required=True)
-    external_locator_revert.add_argument("--dry-run", action="store_true")
-    external_locator_revert.add_argument("--approve", action="store_true")
-    external_locator_revert.add_argument("--expected-plan-sha256")
-    external_locator_revert.add_argument("--reviewed-by")
-    external_locator_revert.add_argument("--format", choices=["text", "json"], default="text")
-    external_locator_revert.set_defaults(func=command_external_locator_revert)
-
     notion_objet_link_rewrite_plan = subcommands.add_parser(
         "notion-objet-link-rewrite-plan",
         help="Validate one reviewed Notion locator to objet conversion plan without writing.",
@@ -45397,24 +45730,6 @@ def build_parser() -> argparse.ArgumentParser:
     notion_objet_link_convert.add_argument("--reviewed-by", help="Safe reviewer id required with --approve.")
     notion_objet_link_convert.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     notion_objet_link_convert.set_defaults(func=command_notion_objet_link_convert)
-
-    notion_objet_manifest_locator_label = subcommands.add_parser(
-        "notion-objet-manifest-locator-label",
-        aliases=["notion-objet-locator-label"],
-        help="Preview or approve adding a reviewed Notion locator fingerprint label to one object manifest record.",
-    )
-    notion_objet_manifest_locator_label.add_argument("archive_root", help="Archive root to update.")
-    notion_objet_manifest_locator_label.add_argument("--object-id", required=True, help="Manifested object id, sha256:<64 hex>.")
-    notion_objet_manifest_locator_label.add_argument(
-        "--locator-fingerprint",
-        required=True,
-        help="Reviewed sha256 locator fingerprint from notion-objet-link-plan or notion-objet-link-index.",
-    )
-    notion_objet_manifest_locator_label.add_argument("--dry-run", action="store_true", help="Preview manifest label update without writing files.")
-    notion_objet_manifest_locator_label.add_argument("--approve", action="store_true", help="Write the reviewed non-secret locator label and receipt.")
-    notion_objet_manifest_locator_label.add_argument("--reviewed-by", help="Safe reviewer id required with --approve.")
-    notion_objet_manifest_locator_label.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
-    notion_objet_manifest_locator_label.set_defaults(func=command_notion_objet_manifest_locator_label)
 
     block_header = subcommands.add_parser("block-header", help="Preview the derived block header for one zet.")
     block_header.add_argument("archive_root", help="Archive root to inspect.")
@@ -46671,7 +46986,11 @@ def build_parser() -> argparse.ArgumentParser:
     ai_scratch_gc_target.add_argument("--zettel-id", help="Zet id whose explicit scratch refs should be cleaned.")
     ai_scratch_gc_target.add_argument("--path", help="Archive-relative zet path whose explicit scratch refs should be cleaned.")
     ai_scratch_gc.add_argument("--dry-run", action="store_true", help="Preview cleanup without deleting scratch files.")
-    ai_scratch_gc.add_argument("--approve", action="store_true", help="Delete explicit scratch files and write a cleanup receipt.")
+    ai_scratch_gc.add_argument(
+        "--approve",
+        action="store_true",
+        help="Delete explicit scratch files and write a cleanup receipt under exact human approval (one native dialog, or none under a valid limited/allow_all session grant).",
+    )
     ai_scratch_gc.add_argument("--reviewed-by", help="Reviewer id required when --approve is used, e.g. person:me.")
     ai_scratch_gc.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     ai_scratch_gc.set_defaults(func=command_ai_scratch_gc)
@@ -46808,7 +47127,11 @@ def build_parser() -> argparse.ArgumentParser:
     reconcile_target.add_argument("--path", help="Archive-relative canonical zettel path to reconcile.")
     reconcile_mode = remint_reconcile.add_mutually_exclusive_group()
     reconcile_mode.add_argument("--dry-run", action="store_true", help="Classify and preview without writing (default).")
-    reconcile_mode.add_argument("--approve", action="store_true", help="Re-issue the mint receipt after human review; requires --reviewed-by.")
+    reconcile_mode.add_argument(
+        "--approve",
+        action="store_true",
+        help="Re-issue the mint receipt under exact human approval (one native dialog, or none under a valid limited/allow_all session grant); requires --reviewed-by.",
+    )
     remint_reconcile.add_argument("--reviewed-by", help="Reviewer id required when --approve is used, e.g. person:me.")
     remint_reconcile.add_argument(
         "--content-changed-ack",
@@ -46840,7 +47163,11 @@ def build_parser() -> argparse.ArgumentParser:
     retire_draft_reconcile.add_argument("--zettel-id", required=True, help="Zettel id whose retire-draft receipt to reconcile.")
     retire_reconcile_mode = retire_draft_reconcile.add_mutually_exclusive_group()
     retire_reconcile_mode.add_argument("--dry-run", action="store_true", help="Classify and preview without writing (default).")
-    retire_reconcile_mode.add_argument("--approve", action="store_true", help="Re-issue the retire receipt after human review; requires --reviewed-by.")
+    retire_reconcile_mode.add_argument(
+        "--approve",
+        action="store_true",
+        help="Re-issue the retire receipt under exact human approval (one native dialog, or none under a valid limited/allow_all session grant); requires --reviewed-by.",
+    )
     retire_draft_reconcile.add_argument("--reviewed-by", help="Reviewer id required when --approve is used, e.g. person:me.")
     retire_draft_reconcile.add_argument(
         "--content-changed-ack",
@@ -46858,6 +47185,62 @@ def build_parser() -> argparse.ArgumentParser:
     )
     retire_draft_reconcile.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     retire_draft_reconcile.set_defaults(func=command_retire_draft_reconcile)
+
+    for batch_name, batch_help in (
+        (
+            "remint-reconcile-batch",
+            "Preview or approve re-issuing every drifted mint receipt from current bytes under one exact approval.",
+        ),
+        (
+            "retire-draft-reconcile-batch",
+            "Preview or approve re-issuing every drifted retired-draft receipt from current bytes under one exact approval.",
+        ),
+    ):
+        batch_parser = subcommands.add_parser(batch_name, help=batch_help)
+        batch_parser.add_argument("archive_root", help="Archive root to inspect or update.")
+        batch_mode = batch_parser.add_mutually_exclusive_group(required=True)
+        batch_mode.add_argument("--dry-run", action="store_true", help="List and classify drifted receipts without writing.")
+        batch_mode.add_argument(
+            "--approve",
+            action="store_true",
+            help="Re-issue the listed receipts under exact human approval (one native dialog, or none under a valid limited/allow_all session grant); requires --reviewed-by.",
+        )
+        batch_parser.add_argument("--reviewed-by", help="Reviewer id required when --approve is used, e.g. person:me.")
+        batch_parser.add_argument(
+            "--zettel-id",
+            action="append",
+            help="Limit the list to these zettel ids (repeatable). Default: every drifted receipt.",
+        )
+        batch_parser.add_argument(
+            "--drift-class",
+            choices=list(archive_services.RECEIPT_RECONCILE_DRIFT_FILTERS),
+            default="all",
+            help="List only format drift, only content changes, or all (default).",
+        )
+        batch_parser.add_argument(
+            "--content-changed-ack",
+            action="store_true",
+            help="Required with --approve when the list contains content changes (canonical body changed since mint).",
+        )
+        batch_parser.add_argument(
+            "--max-items",
+            type=int,
+            default=archive_services.RECEIPT_RECONCILE_DEFAULT_MAX_ITEMS,
+            help=f"Maximum listed items (1-{archive_services.RECEIPT_RECONCILE_MAX_ITEMS}); rerun for the rest.",
+        )
+        batch_parser.add_argument(
+            "--strip-bom",
+            action="store_true",
+            help="Opt-in: also remove one leading UTF-8 BOM from each canonical (content-preserving by definition).",
+        )
+        batch_parser.add_argument(
+            "--progress",
+            action=argparse.BooleanOptionalAction,
+            default=False,
+            help="Print content-free scan/write progress to stderr.",
+        )
+        batch_parser.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+        batch_parser.set_defaults(func=command_receipt_reconcile_batch)
 
     index = subcommands.add_parser("index", help="Build a generated local SQLite search index.")
     index.add_argument("archive_root", help="Archive root to index.")
@@ -47622,7 +48005,7 @@ def build_parser() -> argparse.ArgumentParser:
         "objet-capture",
         help="Dry-run or approve capturing selected staged files into the local content-addressed objet store.",
     )
-    objet_capture.add_argument("archive_root", help="Archive root (sandbox-marked, or enabled via objet-capture-enable).")
+    objet_capture.add_argument("archive_root", help="Archive root (sandbox-marked or with an existing capture-enablement record; objet-capture-selection and source-intake-chain need neither).")
     objet_capture.add_argument("--selection", required=True, help="B4 selection manifest JSON path.")
     objet_capture.add_argument("--dry-run", action="store_true", help="Preview the capture plan without writing files.")
     objet_capture.add_argument("--approve", action="store_true", help="Capture bytes, append manifest records, write a receipt.")
@@ -47681,9 +48064,16 @@ def build_parser() -> argparse.ArgumentParser:
     derive_text_capture.add_argument(
         "--approve",
         action="store_true",
-        help=COMPOUND_APPROVAL_BLOCKED_HELP,
+        help=(
+            "Capture the reviewed text after one exact approval (a native dialog, "
+            "or none under a valid session grant) bound to the fresh plan digest."
+        ),
     )
     derive_text_capture.add_argument("--reviewed-by", help="Reviewer id required for approved capture.")
+    derive_text_capture.add_argument(
+        "--expected-plan-sha256",
+        help="Optional plan_sha256 from the reviewed --dry-run; --approve refuses if the plan changed.",
+    )
     derive_text_capture.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     derive_text_capture.set_defaults(func=command_derive_text_capture)
 
@@ -48064,124 +48454,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     notion_ancestor_fetch_contract.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     notion_ancestor_fetch_contract.set_defaults(func=command_notion_ancestor_fetch_adapter_execution_contract)
-
-    notion_ancestor_fetch_run = subcommands.add_parser(
-        "notion-ancestor-fetch-adapter-run",
-        aliases=["notion-ancestor-fetch-run", "notion-ancestor-live-fetch"],
-        help="Run the approval-gated local Notion ancestor structure fetch adapter.",
-    )
-    notion_ancestor_fetch_run.add_argument("archive_root", help="Archive root to update.")
-    notion_ancestor_fetch_run.add_argument(
-        "--tree",
-        required=True,
-        help="Archive-relative sanitized nested-tree fixture JSON path. Absolute paths and provider URLs are rejected.",
-    )
-    notion_ancestor_fetch_run.add_argument(
-        "--output",
-        default="workbench/notion-ancestor-result.live.json",
-        help="Archive-relative sanitized ancestor result fixture path under workbench/. Existing files are not overwritten.",
-    )
-    notion_ancestor_fetch_run.add_argument(
-        "--source",
-        required=True,
-        choices=sorted(archive_services.NOTION_NESTED_TREE_SOURCES),
-        help="External nested tree source declared by the fixture.",
-    )
-    notion_ancestor_fetch_run.add_argument(
-        "--credential-id",
-        default="cred:notion-readonly",
-        help="Safe non-secret credential label for the approval receipt.",
-    )
-    notion_ancestor_fetch_run.add_argument(
-        "--credential-ref",
-        help="Required with --approve. Must be an env: ref for the first live Notion ancestor fetch; exact value is never echoed.",
-    )
-    notion_ancestor_fetch_run.add_argument("--credential-kind", default="provider_api_key", help="Credential kind label.")
-    notion_ancestor_fetch_run.add_argument("--credential-provider", default="notion", help="Credential provider label.")
-    notion_ancestor_fetch_run.add_argument(
-        "--store-kind",
-        default="environment",
-        choices=sorted(archive_services.CREDENTIAL_ACCESS_BROKER_STORE_KINDS),
-        help="Credential store kind. First live run supports environment only.",
-    )
-    notion_ancestor_fetch_run.add_argument(
-        "--adapter-kind",
-        default="environment_injection",
-        choices=sorted(archive_services.CREDENTIAL_ADAPTER_KINDS),
-        help="Credential adapter kind. First live run supports environment_injection only.",
-    )
-    notion_ancestor_fetch_run.add_argument(
-        "--approval-decision",
-        default="needs_review",
-        choices=sorted(archive_services.CREDENTIAL_ACCESS_APPROVAL_DECISIONS),
-        help="Use approve_once with --approve after writing a matching credential-access-approval receipt.",
-    )
-    notion_ancestor_fetch_run.add_argument(
-        "--approval-receipt",
-        help="Archive-relative credential access approval receipt path. Required with --approve; not echoed in result details.",
-    )
-    notion_ancestor_fetch_run.add_argument(
-        "--consumer",
-        default="wom:adapter:notion-ancestor-fetch",
-        help="Safe consumer label that must match the approval receipt.",
-    )
-    notion_ancestor_fetch_run.add_argument("--reviewed-by", default="human:pending-review", help="Safe reviewer label.")
-    notion_ancestor_fetch_run.add_argument(
-        "--platform",
-        default="windows",
-        choices=sorted(archive_services.CREDENTIAL_STORE_RECOMMENDATION_PLATFORMS),
-        help="Credential platform policy label.",
-    )
-    notion_ancestor_fetch_run.add_argument(
-        "--notion-version",
-        default=archive_services.NOTION_API_DEFAULT_VERSION,
-        help="Notion API version header. Defaults to the conservative stable version.",
-    )
-    notion_ancestor_fetch_run.add_argument("--timeout-seconds", type=int, default=30, help="Provider request timeout, 1-120 seconds.")
-    notion_ancestor_fetch_run.add_argument(
-        "--max-items",
-        type=int,
-        default=1000,
-        help="Maximum fixture nodes to parse while deriving missing ancestor requests. Oversized fixtures block.",
-    )
-    notion_ancestor_fetch_run.add_argument(
-        "--max-depth",
-        type=int,
-        default=16,
-        help="Maximum parent-chain crawl depth per missing ancestor. Range 1-64.",
-    )
-    notion_ancestor_fetch_run.add_argument(
-        "--scope-generation-id",
-        action="append",
-        help="Optional generation id filter for broad workspace fixtures. Repeat to include more than one generation.",
-    )
-    notion_ancestor_fetch_run.add_argument(
-        "--scope-root-ref",
-        action="append",
-        help="Optional safe root/ref filter matched against request refs before the live adapter receives the queue. Repeatable.",
-    )
-    notion_ancestor_fetch_run.add_argument(
-        "--scope-ancestor-ref",
-        action="append",
-        help="Optional exact ancestor_ref filter. Repeatable.",
-    )
-    notion_ancestor_fetch_run.add_argument(
-        "--scope-leaf-ref",
-        action="append",
-        help="Optional exact affected leaf ref filter. Repeatable.",
-    )
-    notion_ancestor_fetch_run.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Preview without reading environment variables, calling Notion, or writing files.",
-    )
-    notion_ancestor_fetch_run.add_argument(
-        "--approve",
-        action="store_true",
-        help="Run the local Notion ancestor structure fetch and write sanitized fixture plus non-secret receipt.",
-    )
-    notion_ancestor_fetch_run.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
-    notion_ancestor_fetch_run.set_defaults(func=command_notion_ancestor_fetch_adapter_run)
 
     notion_page_recovery_plan = subcommands.add_parser(
         "notion-page-recovery-plan",
@@ -50034,20 +50306,6 @@ def build_parser() -> argparse.ArgumentParser:
     sources.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     sources.set_defaults(func=command_sources)
 
-    scan_source = subcommands.add_parser("scan-source", help="Metadata-only scan of a registered source into a source map.")
-    scan_source.add_argument("archive_root", help="Archive root to inspect.")
-    scan_source.add_argument("--source", required=True, help="source_id from source-bindings.yml.")
-    scan_source.add_argument(
-        "--source-root",
-        help="Real local/export folder or manifest path for this run. It is used at runtime and not written to source maps.",
-    )
-    scan_source.add_argument("--dry-run", action="store_true", help="Preview source scan without writing archive files.")
-    scan_source.add_argument("--approve", action="store_true", help="Write source map and receipt after dry-run gates pass.")
-    scan_source.add_argument("--reviewed-by", help="Reviewer id required for approved source scan.")
-    scan_source.add_argument("--limit", type=int, default=2000, help="Maximum metadata items to map.")
-    scan_source.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
-    scan_source.set_defaults(func=command_scan_source)
-
     add_source = subcommands.add_parser("add-source", help="Register a source without hand-editing source-bindings.yml.")
     add_source.add_argument("archive_root", help="Archive root to update.")
     add_source.add_argument("--source-id", required=True, help="Stable source id, e.g. local:documents or ssd:archive-drive.")
@@ -50428,7 +50686,8 @@ def build_parser() -> argparse.ArgumentParser:
                      "Set-permission-mode (v0.4.24) uses --approve with the claimed session and a private request "
                      "{reviewer_claim, permission_mode: manual|limited|allow_all, operations: [...]}: the listed "
                      "operation kinds then run without a dialog until the session is paused, handed off or "
-                     "completed; project updates and credential writes always ask. Each write still publishes "
+                     "completed; since v0.4.36 every operation kind is grantable and only the grant itself opens a dialog "
+                     "(credential secrets are still typed by a person in their own window). Each write still publishes "
                      "its own one-use claim, and that claim records the permission mechanism. "
                      "v0.4.34: a limited/allow_all grant is presenter-bound and time-boxed (request key "
                      "grant_hours, 1..24, default 8): the approve result returns presenter_token exactly once; "
@@ -50796,7 +51055,6 @@ _UNAVAILABLE_WRITER_LIFECYCLE_ACTIONS = {
     "migrate": "migrate_archive",
     "notion-page-recovery": "authenticated_notion_page_recovery_execute",
     "object-storage-upload": "object_storage_upload_run",
-    "object-storage-upload-evidence": "object_storage_upload_evidence_register",
     "objet-capture-selection": "objet_capture_selection_record",
     "objet-source-metadata-write": "private_objet_source_metadata_write",
     "pack": "pack_work_context",

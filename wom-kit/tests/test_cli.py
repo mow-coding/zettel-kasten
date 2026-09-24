@@ -3657,10 +3657,15 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertFalse(result["ok"], result)
         self.assertEqual(result["state"], "blocked")
         self.assertEqual(result["lifecycle_action"], lifecycle_action)
-        self.assertEqual(
-            result["reason_codes"],
-            ["compound_exact_human_approval_binding_required"],
+        # 2026-09-24 reopen: the receipt reconcilers route --approve through
+        # exact approval; a target that cannot be planned is refused before
+        # any dialog, still without writes or private echo.
+        expected_codes = (
+            [f"{lifecycle_action}_preflight_blocked"]
+            if lifecycle_action in {"remint_reconcile", "retire_draft_reconcile"}
+            else ["compound_exact_human_approval_binding_required"]
         )
+        self.assertEqual(result["reason_codes"], expected_codes)
         self.assertFalse(result["private_values_echoed"])
         self.assertEqual(self.archive_tree_snapshot(archive_root), before)
         return result
@@ -5302,11 +5307,11 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertIn("zet-catalog-pass-read", command_names)
         self.assertIn("zet-catalog-pass-cleanup", command_names)
         self.assertIn("zet-abstract-backfill-plan", command_names)
-        self.assertIn("zet-abstract-backfill-write", command_names)
-        self.assertIn("zet-abstract-backfill-revert", command_names)
+        self.assertNotIn("zet-abstract-backfill-write", command_names)
+        self.assertNotIn("zet-abstract-backfill-revert", command_names)
         self.assertIn("zet-abstract-backfill-receipt-audit", command_names)
         self.assertIn("zet-abstract-backfill-recovery-plan", command_names)
-        self.assertIn("zet-abstract-backfill-recover", command_names)
+        self.assertNotIn("zet-abstract-backfill-recover", command_names)
         capability = next(item for item in commands if item["name"] == "capabilities")
         self.assertIn("--machine", capability["options"])
         project_update = next(item for item in commands if item["name"] == "project-version-update")
@@ -5434,32 +5439,6 @@ class ArchiveCliTests(unittest.TestCase):
             "--affirm-edge-changes-reviewed",
         ):
             self.assertIn(option, revision_restore_write["options"])
-        abstract_backfill_write = next(item for item in commands if item["name"] == "zet-abstract-backfill-write")
-        self.assertEqual(abstract_backfill_write["aliases"], ["abstract-backfill-write"])
-        for option in (
-            "--proposal",
-            "--expected-proposal-sha256",
-            "--max-items",
-            "--dry-run",
-            "--approve",
-            "--reviewed-by",
-            "--affirm-abstracts-reviewed",
-            "--progress",
-        ):
-            self.assertIn(option, abstract_backfill_write["options"])
-        abstract_backfill_revert = next(item for item in commands if item["name"] == "zet-abstract-backfill-revert")
-        self.assertEqual(abstract_backfill_revert["aliases"], ["abstract-backfill-revert"])
-        for option in (
-            "--receipt",
-            "--expected-receipt-sha256",
-            "--max-items",
-            "--dry-run",
-            "--approve",
-            "--reviewed-by",
-            "--affirm-abstract-removal-reviewed",
-            "--progress",
-        ):
-            self.assertIn(option, abstract_backfill_revert["options"])
         abstract_receipt_audit = next(
             item for item in commands if item["name"] == "zet-abstract-backfill-receipt-audit"
         )
@@ -5492,31 +5471,6 @@ class ArchiveCliTests(unittest.TestCase):
             "--progress",
         ):
             self.assertIn(option, abstract_recovery_plan["options"])
-        abstract_recover = next(
-            item
-            for item in commands
-            if item["name"] == "zet-abstract-backfill-recover"
-        )
-        self.assertEqual(
-            abstract_recover["aliases"],
-            ["abstract-backfill-recover"],
-        )
-        for option in (
-            "--operation",
-            "--basis-sha256",
-            "--expected-plan-digest",
-            "--expected-action",
-            "--dry-run",
-            "--approve",
-            "--reviewed-by",
-            "--affirm-recovery-reviewed",
-            "--affirm-archive-quiescent",
-            "--max-receipts",
-            "--max-locks",
-            "--max-cases",
-            "--progress",
-        ):
-            self.assertIn(option, abstract_recover["options"])
         serialized = json.dumps(result, ensure_ascii=False)
         self.assertNotIn(str(KIT_ROOT), serialized)
         self.assertNotIn(str(Path.home()), serialized)
@@ -20336,12 +20290,12 @@ if __name__ == "__main__":
         )
         self.assertEqual(write_result["files_written"], [])
         self.assertNotIn("mixed-state-lock-body", write_output)
-        # The parser-known closed writer is rejected without inspecting an
-        # incomplete runtime.  The live index writer above still hits its lock.
-        self.assertEqual(collision_code, 1, collision_output)
+        # Reopened in v0.4.40: the collision writer is a real project writer
+        # now, so the incomplete update lock stops it like the index writer.
+        self.assertEqual(collision_code, 3, collision_output)
         self.assertEqual(
             json.loads(collision_output)["reason_codes"],
-            ["compound_exact_human_approval_binding_required"],
+            ["project_update_recovery_required"],
         )
         self.assertEqual(json.loads(collision_output)["effects_state"], "none")
         self.assertNotIn("mixed-state-lock-body", collision_output)
@@ -23600,140 +23554,6 @@ if __name__ == "__main__":
             self.assertNotIn("Fake weekly archive review", output)
             self.assertNotIn("Facilitator", output)
             self.assertNotIn("example.invalid", output)
-
-    def test_tiro_lossless_recovery_plan_and_capture_preserve_raw_bundle_without_echoing_values(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
-            before_plan = self.snapshot_archive_files(archive_root)
-            credential_ref = "env:WOM_TEST_TIRO_TOKEN"
-
-            plan_code, plan_output = self.run_cli(
-                [
-                    "tiro-lossless-recovery-plan",
-                    str(archive_root),
-                    "--credential-ref",
-                    credential_ref,
-                    "--workspace-guid",
-                    "ws_fake_workspace",
-                    "--note-guid",
-                    "note_fake_guid",
-                    "--dry-run",
-                    "--format",
-                    "json",
-                ]
-            )
-            plan = json.loads(plan_output)
-            serialized_plan = json.dumps(plan, ensure_ascii=False)
-            self.assertEqual(plan_code, 0, plan_output)
-            self.assertTrue(plan["ok"], plan)
-            self.assertEqual(plan["lifecycle_action"], "tiro_lossless_recovery_plan")
-            categories = {item["category"] for item in plan["endpoint_inventory"]}
-            self.assertIn("paragraphs", categories)
-            self.assertIn("documents", categories)
-            self.assertIn("summaries", categories)
-            self.assertIn("user_word_memories", categories)
-            self.assertTrue(plan["bundle_contract"]["must_preserve_raw_provider_values_verbatim"])
-            self.assertFalse(plan["closed_actions"]["provider_api_called"])
-            self.assertFalse(plan["closed_actions"]["credential_value_read"])
-            self.assertFalse(plan["privacy_guards"]["credential_ref_echoed"])
-            self.assertNotIn(credential_ref, serialized_plan)
-            self.assertEqual(self.snapshot_archive_files(archive_root), before_plan)
-
-            bundle_path = archive_root / "workbench" / "tiro-lossless-raw.sample.json"
-            raw_bundle = {
-                "schema": "wom-tiro-lossless-recovery-bundle/v0.1",
-                "source": "tiro",
-                "workspaces": [{"guid": "ws_fake_workspace", "name": "Fake private workspace"}],
-                "notes": [{"guid": "note_fake_guid", "title": "Fake confidential meeting"}],
-                "note_details": {"note_fake_guid": {"webUrl": "https://tiro.example/fake/private"}},
-                "paragraphs_by_note": {
-                    "note_fake_guid": {
-                        "content": [
-                            {
-                                "uuid": "para_fake_1",
-                                "transcript": {"content": "Please keep this fake transcript intact."},
-                                "diarizedSegments": [
-                                    {
-                                        "speaker": {"label": "A", "personName": "Fake Speaker"},
-                                        "content": "Please keep this fake transcript intact.",
-                                        "timeFrom": 0,
-                                        "timeTo": 1000,
-                                    }
-                                ],
-                            }
-                        ]
-                    }
-                },
-                "documents_by_note": {"note_fake_guid": []},
-                "summaries_by_note": {"note_fake_guid": []},
-                "folders_by_note": {"note_fake_guid": []},
-                "user_word_memories": {"content": [{"entry": "FakeTerm"}]},
-                "fetch_gaps": [{"category": "audio_original_bytes", "reason": "not exposed in fake fixture"}],
-            }
-            bundle_path.write_text(json.dumps(raw_bundle, ensure_ascii=False, indent=2), encoding="utf-8")
-            raw_bytes = bundle_path.read_bytes()
-
-            dry_code, dry_output = self.run_cli(
-                [
-                    "tiro-lossless-recovery-capture",
-                    str(archive_root),
-                    "--bundle",
-                    "workbench/tiro-lossless-raw.sample.json",
-                    "--dry-run",
-                    "--format",
-                    "json",
-                ]
-            )
-            dry_result = json.loads(dry_output)
-            dry_serialized = json.dumps(dry_result, ensure_ascii=False)
-            self.assertEqual(dry_code, 0, dry_output)
-            self.assertTrue(dry_result["ok"], dry_result)
-            self.assertEqual(dry_result["capture_state"], "ready_for_approval")
-            self.assertTrue(dry_result["bundle_analysis"]["key_summaries"]["paragraphs_by_note"]["present"])
-            self.assertFalse(dry_result["object"]["raw_values_echoed"])
-            self.assertFalse(dry_result["closed_actions"]["provider_api_called"])
-            self.assertNotIn("Fake confidential meeting", dry_serialized)
-            self.assertNotIn("Fake Speaker", dry_serialized)
-            self.assertNotIn("Please keep this fake transcript intact.", dry_serialized)
-            self.assertNotIn("tiro.example", dry_serialized)
-            after_bundle = self.snapshot_archive_files(archive_root)
-
-            approve_code, approve_output = self.run_cli(
-                [
-                    "tiro-lossless-recovery-capture",
-                    str(archive_root),
-                    "--bundle",
-                    "workbench/tiro-lossless-raw.sample.json",
-                    "--approve",
-                    "--reviewed-by",
-                    "human:tester",
-                    "--format",
-                    "json",
-                ]
-            )
-            approve_result = json.loads(approve_output)
-            approve_serialized = json.dumps(approve_result, ensure_ascii=False)
-            self.assertEqual(approve_code, 1, approve_output)
-            self.assertFalse(approve_result["ok"], approve_result)
-            self.assertEqual(approve_result["state"], "blocked")
-            self.assertEqual(approve_result["lifecycle_action"], "tiro_lossless_recovery_capture")
-            self.assertEqual(
-                approve_result["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
-            )
-            self.assertFalse(approve_result["private_values_echoed"])
-            self.assertEqual(self.snapshot_archive_files(archive_root), after_bundle)
-
-            # Pre-v0.4 historical fixture: retain the byte-for-byte storage
-            # invariant without invoking the now-closed public capture writer.
-            object_logical = dry_result["object"]["logical_key"]
-            stored = archive_root.joinpath(*object_logical.split("/"))
-            stored.parent.mkdir(parents=True, exist_ok=True)
-            stored.write_bytes(raw_bytes)
-            self.assertEqual(stored.read_bytes(), raw_bytes)
-            self.assertNotIn("Fake confidential meeting", approve_serialized)
-            self.assertNotIn("Fake Speaker", approve_serialized)
-            self.assertNotIn("Please keep this fake transcript intact.", approve_serialized)
 
     def test_tiro_lossless_recovery_fetch_run_writes_raw_bundle_without_echoing_values(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -34722,7 +34542,7 @@ state:
             self.assertIn("notion-recover", result["cross_links"])
             self.assertIn("notion-ancestor-crawl-plan", result["cross_links"])
             self.assertIn("credential-access-approval", result["cross_links"])
-            self.assertIn("notion-ancestor-fetch-adapter-run", result["cross_links"])
+            self.assertNotIn("notion-ancestor-fetch-adapter-run", result["cross_links"])
             self.assertIn("notion-ancestor-merge-plan", result["cross_links"])
             self.assertTrue(result["current_capability"]["notion_nested_recovery_guidance_available"])
             self.assertTrue(result["current_capability"]["live_notion_ancestor_structure_fetch_adapter_implemented"])
@@ -35226,149 +35046,6 @@ state:
             self.assertEqual(no_dry_run_code, 1)
             self.assertIn("requires --dry-run", no_dry_run_output)
 
-    def test_credential_keepassxc_write_executes_cli_with_verified_receipt_without_echoing_secrets(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp_root = Path(tmp)
-            archive_root = self.copy_fake_archive(tmp_root / "archive")
-            database_path = tmp_root / "human-selected-vault.kdbx"
-            database_path.write_bytes(b"fake kdbx placeholder")
-
-            approve_code, approve_output = self.run_cli(
-                [
-                    "credential-access-approval",
-                    str(archive_root),
-                    "--credential-id",
-                    "cred:openai-api",
-                    "--credential-ref",
-                    "secret:keepassxc-openai-api",
-                    "--credential-kind",
-                    "openai_api_key",
-                    "--provider",
-                    "openai",
-                    "--action-kind",
-                    "plaintext_secret_migration",
-                    "--decision",
-                    "approve_once",
-                    "--store-kind",
-                    "password_manager",
-                    "--consumer",
-                    "wom:adapter:keepassxc",
-                    "--reviewed-by",
-                    "human:tester",
-                    "--approve",
-                    "--format",
-                    "json",
-                ]
-            )
-            approved = json.loads(approve_output)
-            self.assertEqual(approve_code, 0, approve_output)
-            before = self.snapshot_archive_files(archive_root)
-
-            dry_code, dry_output = self.run_cli(
-                [
-                    "credential-keepassxc-write",
-                    str(archive_root),
-                    "--credential-id",
-                    "cred:openai-api",
-                    "--credential-ref",
-                    "secret:keepassxc-openai-api",
-                    "--credential-kind",
-                    "openai_api_key",
-                    "--provider",
-                    "openai",
-                    "--action-kind",
-                    "plaintext_secret_migration",
-                    "--operation",
-                    "write_new_secret",
-                    "--approval-receipt",
-                    approved["receipt_path"],
-                    "--entry-label",
-                    "openai-api",
-                    "--group-label",
-                    "wom-secrets",
-                    "--database-ref",
-                    "keepassxc:personal-vault",
-                    "--consumer",
-                    "wom:adapter:keepassxc",
-                    "--reviewed-by",
-                    "human:tester",
-                    "--dry-run",
-                    "--format",
-                    "json",
-                ]
-            )
-            dry = json.loads(dry_output)
-            self.assertEqual(dry_code, 1, dry_output)
-            self.assertFalse(dry["ok"], dry)
-            self.assertEqual(dry["lifecycle_action"], "credential_keepassxc_write_plan")
-            self.assertEqual(dry["execution_status"], "blocked")
-            self.assertTrue(dry["policy_check_summary"]["approval_receipt_verified"])
-            self.assertEqual(dry["policy_check_summary"]["policy_result"], "legacy_unbound")
-            self.assertFalse(
-                dry["policy_check_summary"]["future_adapter_has_verified_receipt"]
-            )
-            self.assertTrue(dry["current_capability"]["command_execution_implemented"])
-            self.assertFalse(dry["execution_boundary"]["mcp_live_tool_exposed"])
-            self.assertFalse(dry["target"]["database_path_included"])
-            self.assertEqual(dry["target"]["entry_target"], "wom-secrets/openai-api")
-            self.assertEqual(dry["files_written"], [])
-            self.assertEqual(self.snapshot_archive_files(archive_root), before)
-            self.assertNotIn(str(database_path), dry_output)
-            self.assertNotIn("secret:keepassxc-openai-api", dry_output)
-
-            with patch.object(archive_services.shutil, "which", return_value="keepassxc-cli"):
-                with patch.object(archive_services, "_run_keepassxc_cli_add", return_value=0) as run_add:
-                    code, output = self.run_cli(
-                        [
-                            "credential-keepassxc-write",
-                            str(archive_root),
-                            "--credential-id",
-                            "cred:openai-api",
-                            "--credential-ref",
-                            "secret:keepassxc-openai-api",
-                            "--credential-kind",
-                            "openai_api_key",
-                            "--provider",
-                            "openai",
-                            "--action-kind",
-                            "plaintext_secret_migration",
-                            "--operation",
-                            "write_new_secret",
-                            "--approval-receipt",
-                            approved["receipt_path"],
-                            "--entry-label",
-                            "openai-api",
-                            "--group-label",
-                            "wom-secrets",
-                            "--database-ref",
-                            "keepassxc:personal-vault",
-                            "--database-path",
-                            str(database_path),
-                            "--consumer",
-                            "wom:adapter:keepassxc",
-                            "--reviewed-by",
-                            "human:tester",
-                            "--approve",
-                            "--format",
-                            "json",
-                        ]
-                    )
-
-            result = json.loads(output)
-            self.assertEqual(code, 1, output)
-            self.assertFalse(result["ok"], result)
-            self.assertEqual(result["state"], "blocked")
-            self.assertEqual(result["lifecycle_action"], "credential_keepassxc_write")
-            self.assertEqual(
-                result["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
-            )
-            self.assertEqual(result["files_written"], [])
-            self.assertFalse(result["private_values_echoed"])
-            run_add.assert_not_called()
-            self.assertEqual(self.snapshot_archive_files(archive_root), before)
-            self.assertNotIn(str(database_path), output)
-            self.assertNotIn("secret:keepassxc-openai-api", output)
     def test_credential_access_broker_plan_is_read_only_and_never_echoes_refs_or_secrets(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -36113,78 +35790,6 @@ state:
                 ],
                 lifecycle_action="prehashed_objet_ledger_register",
             )
-
-    def test_object_storage_upload_evidence_preview_updates_no_files_or_private_values(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
-            before = self.snapshot_archive_files(archive_root)
-            ledger = Path(tmp) / "r2-upload-ledger.jsonl"
-            sha_a = "acc6e73fb84988ecb538dfc0ceb883b88694e469a05172a5aeb0cce8902ce136"
-            sha_b = "9dabf9b965a3f789b1b36100f3f70515ce8dfd81b411b1503e1e2c3304303647"
-            ledger.write_text(
-                "\n".join(
-                    [
-                        json.dumps(
-                            {
-                                "sha256": sha_a,
-                                "bytes": 151,
-                                "status": "uploaded",
-                                "filename": "private-notion-export-name.pdf",
-                                "url": "https://example.com/private/r2/object",
-                            }
-                        ),
-                        json.dumps(
-                            {
-                                "sha256": f"sha256:{sha_b}",
-                                "bytes": "162",
-                                "status": "verified",
-                                "path": "LOCAL_DEVICE_PLACEHOLDER\\private\\r2\\object.bin",
-                            }
-                        ),
-                        json.dumps({"sha256": "f" * 64, "bytes": 99, "status": "failed"}),
-                    ]
-                ),
-                encoding="utf-8",
-            )
-
-            code, output = self.run_cli(
-                [
-                    "object-storage-upload-evidence",
-                    str(archive_root),
-                    "--ledger",
-                    str(ledger),
-                    "--provider-kind",
-                    "cloudflare-r2",
-                    "--store-ref",
-                    "r2-upload-20260616",
-                    "--dry-run",
-                    "--format",
-                    "json",
-                ]
-            )
-
-            self.assertEqual(code, 0, output)
-            result = json.loads(output)
-            self.assertTrue(result["ok"], result)
-            self.assertEqual(result["lifecycle_action"], "object_storage_upload_evidence_preview")
-            self.assertEqual(result["provider_kind"], "cloudflare-r2")
-            self.assertEqual(result["evidence"]["row_count"], 3)
-            self.assertEqual(result["evidence"]["successful_upload_count"], 2)
-            self.assertEqual(result["evidence"]["skipped_row_count"], 1)
-            self.assertEqual(result["manifest_update"]["matched_manifest_records"], 2)
-            self.assertEqual(result["manifest_update"]["would_add_locations"], 2)
-            self.assertFalse(result["current_capability"]["live_object_upload_adapter_implemented"])
-            self.assertFalse(result["closed_actions"]["provider_api_called"])
-            self.assertFalse(result["closed_actions"]["upload_performed"])
-            self.assertFalse(result["closed_actions"]["source_bytes_read"])
-            self.assertFalse(result["privacy_guards"]["ledger_paths_echoed"])
-            self.assertFalse(result["privacy_guards"]["row_values_echoed"])
-            self.assertFalse(result["privacy_guards"]["provider_urls_echoed"])
-            self.assertEqual(self.snapshot_archive_files(archive_root), before)
-            self.assertNotIn(str(ledger), output)
-            self.assertNotIn("private-notion-export-name.pdf", output)
-            self.assertNotIn("https://example.com/private", output)
-            self.assertNotIn("LOCAL_DEVICE_PLACEHOLDER", output)
 
     def test_object_storage_upload_evidence_approve_writes_receipt_and_manifest_locations(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -44730,213 +44335,6 @@ state:
             self.assertEqual(self.snapshot_archive_files(archive_root), before)
             self.assertNotIn(notion_url, approve_output)
             self.assertNotIn(str(archive_root), approve_output)
-    def test_notion_objet_manifest_locator_label_write_enables_index_matching_without_echoing_locator(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
-            manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
-            manifest_path.parent.mkdir(parents=True, exist_ok=True)
-
-            notion_url = "https://www.notion.so/private-workspace/Label-Page-abcdef1234567890"
-            locator_fingerprint = "sha256:" + hashlib.sha256(notion_url.lower().encode("utf-8")).hexdigest()
-            object_digest = "c" * 64
-            object_id = f"sha256:{object_digest}"
-            manifest_record = {
-                "object_id": object_id,
-                "sha256": object_digest,
-                "logical_key": f"objects/external/prehashed/notion_source_export/{object_digest[:2]}/{object_digest}",
-                "mime": "application/json",
-                "size_bytes": 654,
-                "locations": [
-                    {
-                        "provider": "external_prehashed",
-                        "store_kind": "notion_source_export",
-                        "store_ref": "notion-export-20260617",
-                        "availability": "declared_external",
-                        "content_addressed": True,
-                        "byte_verification_by_wom_kit": False,
-                    }
-                ],
-                "provenance": {"source": "prehashed_external_objet_ledger"},
-            }
-            with manifest_path.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(manifest_record, ensure_ascii=False, sort_keys=True) + "\n")
-
-            zettel_path = archive_root / "inbox" / "zet_notion_locator_label.md"
-            zettel_path.write_text(
-                "\n".join(
-                    [
-                        "---",
-                        "id: zet_notion_locator_label",
-                        "status: draft",
-                        "title: Label private title must not echo",
-                        "---",
-                        "",
-                        "Label private body must not echo.",
-                        f'<mention-page url="{notion_url}">Label private page title</mention-page>',
-                    ]
-                )
-                + "\n",
-                encoding="utf-8",
-            )
-
-            pre_code, pre_output = self.run_cli(
-                [
-                    "notion-objet-link-index",
-                    str(archive_root),
-                    "--dry-run",
-                    "--format",
-                    "json",
-                ]
-            )
-            pre_index = json.loads(pre_output)
-            self.assertEqual(pre_code, 0, pre_output)
-            self.assertEqual(pre_index["summary"]["zettel_locator_rows_with_manifest_candidate_count"], 0)
-            self.assertEqual(pre_index["summary"]["zettel_locator_rows_without_manifest_candidate_count"], 1)
-            self.assertEqual(pre_index["manifest_summary"]["notion_labeled_record_count"], 1)
-
-            before = self.snapshot_archive_files(archive_root)
-            dry_code, dry_output = self.run_cli(
-                [
-                    "notion-objet-manifest-locator-label",
-                    str(archive_root),
-                    "--object-id",
-                    object_id,
-                    "--locator-fingerprint",
-                    locator_fingerprint,
-                    "--dry-run",
-                    "--format",
-                    "json",
-                ]
-            )
-            dry_result = json.loads(dry_output)
-            serialized_dry = json.dumps(dry_result, ensure_ascii=False)
-            self.assertEqual(dry_code, 0, dry_output)
-            self.assertTrue(dry_result["ok"], dry_result)
-            self.assertEqual(dry_result["lifecycle_action"], "notion_objet_manifest_locator_label_plan")
-            self.assertEqual(dry_result["write_status"], "would_write")
-            self.assertTrue(dry_result["manifest_update"]["would_add_label"])
-            self.assertFalse(dry_result["manifest_update"]["already_labeled"])
-            self.assertEqual(dry_result["files_written"], [])
-            self.assertIn("objects/manifests/files.jsonl", dry_result["would_change"])
-            self.assertFalse(dry_result["privacy_guards"]["provider_urls_echoed"])
-            self.assertFalse(dry_result["privacy_guards"]["provider_locator_text_echoed"])
-            self.assertFalse(dry_result["privacy_guards"]["zettel_body_text_echoed"])
-            self.assertFalse(dry_result["closed_actions"]["provider_api_called"])
-            self.assertFalse(dry_result["closed_actions"]["zettel_body_read"])
-            self.assertEqual(self.snapshot_archive_files(archive_root), before)
-            for forbidden in (
-                notion_url,
-                "Label private title",
-                "Label private body",
-                "Label private page title",
-                str(archive_root),
-            ):
-                with self.subTest(forbidden=forbidden):
-                    self.assertNotIn(forbidden, serialized_dry)
-
-            missing_review_code, missing_review_output = self.run_cli(
-                [
-                    "notion-objet-manifest-locator-label",
-                    str(archive_root),
-                    "--object-id",
-                    object_id,
-                    "--locator-fingerprint",
-                    locator_fingerprint,
-                    "--approve",
-                    "--format",
-                    "json",
-                ]
-            )
-            missing_review = json.loads(missing_review_output)
-            self.assertEqual(missing_review_code, 1)
-            self.assertFalse(missing_review["ok"])
-            self.assertEqual(missing_review["state"], "blocked")
-            self.assertEqual(missing_review["lifecycle_action"], "notion_objet_manifest_locator_label")
-            self.assertEqual(
-                missing_review["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
-            )
-            self.assertFalse(missing_review["private_values_echoed"])
-
-            approve_code, approve_output = self.run_cli(
-                [
-                    "notion-objet-manifest-locator-label",
-                    str(archive_root),
-                    "--object-id",
-                    object_id,
-                    "--locator-fingerprint",
-                    locator_fingerprint,
-                    "--approve",
-                    "--reviewed-by",
-                    "person:fixture-reviewer",
-                    "--format",
-                    "json",
-                ]
-            )
-            approve_result = json.loads(approve_output)
-            serialized_approve = json.dumps(approve_result, ensure_ascii=False)
-            self.assertEqual(approve_code, 1, approve_output)
-            self.assertFalse(approve_result["ok"], approve_result)
-            self.assertEqual(approve_result["state"], "blocked")
-            self.assertEqual(approve_result["lifecycle_action"], "notion_objet_manifest_locator_label")
-            self.assertEqual(
-                approve_result["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
-            )
-            self.assertFalse(approve_result["private_values_echoed"])
-            self.assertNotIn(notion_url, serialized_approve)
-            self.assertNotIn("Label private", serialized_approve)
-            self.assertNotIn(str(archive_root), serialized_approve)
-
-            # Pre-v0.4 historical fixture: keep the read-only locator-index and
-            # idempotent planning coverage without reopening the public writer.
-            historical_record = dict(manifest_record)
-            historical_provenance = dict(historical_record["provenance"])
-            historical_provenance["provider_locator_sha256"] = locator_fingerprint.removeprefix("sha256:")
-            historical_record["provenance"] = historical_provenance
-            manifest_path.write_text(
-                json.dumps(historical_record, ensure_ascii=False, sort_keys=True) + "\n",
-                encoding="utf-8",
-            )
-            updated_records = [json.loads(line) for line in manifest_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-            self.assertEqual(updated_records[-1]["provenance"]["provider_locator_sha256"], locator_fingerprint.removeprefix("sha256:"))
-
-            post_code, post_output = self.run_cli(
-                [
-                    "notion-objet-link-index",
-                    str(archive_root),
-                    "--dry-run",
-                    "--format",
-                    "json",
-                ]
-            )
-            post_index = json.loads(post_output)
-            self.assertEqual(post_code, 0, post_output)
-            self.assertEqual(post_index["summary"]["zettel_locator_rows_with_manifest_candidate_count"], 1)
-            self.assertEqual(post_index["summary"]["zettel_locator_rows_without_manifest_candidate_count"], 0)
-            matched_entry = next(entry for entry in post_index["zettels"] if entry["id"] == "zet_notion_locator_label")
-            self.assertEqual(matched_entry["locators"][0]["candidates"][0]["object_id"], object_id)
-            self.assertNotIn(notion_url, post_output)
-            self.assertNotIn("Label private", post_output)
-
-            already_code, already_output = self.run_cli(
-                [
-                    "notion-objet-manifest-locator-label",
-                    str(archive_root),
-                    "--object-id",
-                    object_id,
-                    "--locator-fingerprint",
-                    locator_fingerprint,
-                    "--dry-run",
-                    "--format",
-                    "json",
-                ]
-            )
-            already = json.loads(already_output)
-            self.assertEqual(already_code, 0, already_output)
-            self.assertEqual(already["write_status"], "already_labeled")
-            self.assertEqual(already["would_change"], [])
-
     def test_prehashed_objet_ledger_approve_blocks_invalid_rows_without_writing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -45182,7 +44580,9 @@ state:
             actions = result["next_safe_actions"]
             self.assertTrue(any("objet-capture-selection" in action for action in actions), actions)
             self.assertTrue(any("objet-capture --selection" in action for action in actions), actions)
-            self.assertTrue(any("prehashed-objet-ledger" in action for action in actions), actions)
+            self.assertTrue(any("object-storage-adopt-existing" in action for action in actions), actions)
+            self.assertTrue(any("source-intake-chain" in action for action in actions), actions)
+            self.assertNotIn("objet-capture-enable", output)
             self.assertNotIn("future explicit objet capture", output)
             self.assertNotIn("objet setup planner", output)
 
@@ -53455,7 +52855,13 @@ state:
             plan = archive_services.archive_identity_reconcile_plan(archive_root)
             before = self.snapshot_archive_files(archive_root)
 
-            code, output = self.run_cli(
+            # 2026-09-24 reopen (triage group 5): approve asks for exact
+            # approval; a declined decision writes nothing.
+            def decline(*_args, **_kwargs):
+                raise archive_cli.ExactHumanApprovalWorkflowError("exact_human_approval_cancelled")
+
+            with patch.object(archive_cli, "_execute_exact_human_approved_write", side_effect=decline):
+                code, output = self.run_cli(
                 [
                     "identity-reconcile",
                     str(archive_root),
@@ -53479,7 +52885,7 @@ state:
             self.assertEqual(result["state"], "blocked")
             self.assertEqual(
                 result["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
+                ["archive_identity_reconcile_workflow_precondition_failed"],
             )
             self.assertFalse(result["private_values_echoed"])
             self.assertEqual(self.snapshot_archive_files(archive_root), before)
@@ -53539,7 +52945,7 @@ state:
             result = json.loads(output)
             self.assertEqual(
                 result["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
+                ["archive_identity_reconcile_preflight_blocked"]  # 2026-09-24 reopen: stale digest refused before any dialog,
             )
             self.assertFalse(result["private_values_echoed"])
             self.assertEqual(self.snapshot_archive_files(archive_root), before)
@@ -53600,7 +53006,7 @@ state:
             result = json.loads(output)
             self.assertEqual(
                 result["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
+                ["archive_identity_reconcile_preflight_blocked"]  # 2026-09-24 reopen: stale digest refused before any dialog,
             )
             self.assertFalse(result["private_values_echoed"])
             self.assertEqual(self.snapshot_archive_files(archive_root), before)
@@ -53831,6 +53237,7 @@ state:
             code, output = self.run_cli(["repair-gitignore", str(archive_root), "--approve"])
             self.assertEqual(code, 1, output)
             self.assertIn("write did not start", output)
+            self.assertIn("repair_gitignore_reviewer_required", output)
 
     def test_init_writes_archive_identity(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -55877,6 +55284,32 @@ state:
                 exit_code=91,
             )
             before = self.archive_tree_snapshot(archive_root)
+            def decline(*_args, **_kwargs):
+                raise archive_cli.ExactHumanApprovalWorkflowError("exact_human_approval_cancelled")
+
+            with patch.object(archive_cli, "_execute_exact_human_approved_write", side_effect=decline):
+                code, output = self.run_cli(
+                    [
+                        "zet-title-remap-revert-recover",
+                        str(archive_root),
+                        "--case-sha256",
+                        retained["recovery_case"]["case_sha256"],
+                        "--expected-plan-digest",
+                        retained["recovery_plan"]["plan_digest"],
+                        "--expected-action",
+                        retained["recovery_case"]["recommended_action"],
+                        "--approve",
+                        "--reviewed-by",
+                        "person:revert-recovery-fixed-gate-reviewer",
+                        "--affirm-recovery-reviewed",
+                        "--affirm-archive-quiescent",
+                        "--format",
+                        "json",
+                    ]
+                )
+            self.assertEqual(code, 1, output)
+            self.assertEqual(json.loads(output)["reason_codes"], ["zet_title_remap_revert_recover_workflow_precondition_failed"])
+            self.assertEqual(self.archive_tree_snapshot(archive_root), before)
             code, output = self.run_cli(
                 [
                     "zet-title-remap-revert-recover",
@@ -55896,15 +55329,11 @@ state:
                     "json",
                 ]
             )
-            self.assertEqual(code, 1, output)
+            # Reopened 2026-09-24: approval runs the reviewed recovery once.
+            self.assertEqual(code, 0, output)
             result = json.loads(output)
-            self.assertEqual(
-                result["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
-            )
-            self.assertEqual(result["state"], "blocked")
-            self.assertFalse(result["private_values_echoed"])
-            self.assertEqual(self.archive_tree_snapshot(archive_root), before)
+            self.assertTrue(result["ok"], result)
+            self.assertNotEqual(self.archive_tree_snapshot(archive_root), before)
 
     def test_zet_title_remap_revert_recover_hard_exit_replans_then_finalizes(
         self,
@@ -56542,6 +55971,32 @@ state:
             )
             self.assertEqual(preview_code, 0, preview_output)
             self.assertEqual(self.archive_tree_snapshot(archive_root), before)
+            def decline(*_args, **_kwargs):
+                raise archive_cli.ExactHumanApprovalWorkflowError("exact_human_approval_cancelled")
+
+            with patch.object(archive_cli, "_execute_exact_human_approved_write", side_effect=decline):
+                code, output = self.run_cli(
+                    [
+                        "zet-title-remap-recover",
+                        str(archive_root),
+                        "--case-sha256",
+                        retained["recovery_case"]["case_sha256"],
+                        "--expected-plan-digest",
+                        retained["recovery_plan"]["plan_digest"],
+                        "--expected-action",
+                        retained["recovery_case"]["recommended_action"],
+                        "--approve",
+                        "--reviewed-by",
+                        "person:title-recovery-fixed-gate-reviewer",
+                        "--affirm-recovery-reviewed",
+                        "--affirm-archive-quiescent",
+                        "--format",
+                        "json",
+                    ]
+                )
+            self.assertEqual(code, 1, output)
+            self.assertEqual(json.loads(output)["reason_codes"], ["zet_title_remap_recover_workflow_precondition_failed"])
+            self.assertEqual(self.archive_tree_snapshot(archive_root), before)
             code, output = self.run_cli(
                 [
                     "zet-title-remap-recover",
@@ -56561,15 +56016,11 @@ state:
                     "json",
                 ]
             )
-            self.assertEqual(code, 1, output)
+            # Reopened 2026-09-24: approval runs the reviewed recovery once.
+            self.assertEqual(code, 0, output)
             result = json.loads(output)
-            self.assertEqual(
-                result["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
-            )
-            self.assertEqual(result["state"], "blocked")
-            self.assertFalse(result["private_values_echoed"])
-            self.assertEqual(self.archive_tree_snapshot(archive_root), before)
+            self.assertTrue(result["ok"], result)
+            self.assertNotEqual(self.archive_tree_snapshot(archive_root), before)
 
     def test_zet_title_remap_recover_cleans_prepared_case_and_reacquires_missing_lock(
         self,
@@ -60033,14 +59484,14 @@ state:
                     "json",
                 ]
             )
+            # Reopened in v0.4.40: approve needs a reviewer before any dialog.
             self.assertEqual(approve_code, 1, approve_output)
-            fixed_close = json.loads(approve_output)
+            refused = json.loads(approve_output)
             self.assertEqual(
-                fixed_close["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
+                refused["reason_codes"],
+                ["zet_revision_restore_proposal_from_snapshot_reviewer_required"],
             )
-            self.assertEqual(fixed_close["capability_state"], "writer_unavailable")
-            self.assertEqual(fixed_close["effects_state"], "none")
+            self.assertEqual(refused["effects_state"], "none")
             self.assertFalse(proposal_path.exists())
 
             applied_copy = (
@@ -60112,6 +59563,48 @@ state:
             ):
                 self.assertNotIn(private_marker, preview_output)
                 self.assertNotIn(private_marker, approve_output)
+
+    def test_zet_revision_restore_proposal_from_snapshot_approves_through_exact_route(self) -> None:
+        # Reopened 2026-09-24 (triage group 6): one exact approval bound to the
+        # receipt digest and the preview plan digest creates the proposal.
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            fixture = self.create_zet_revision_proposal(archive_root)
+            applied = self.approve_zet_revision_fixture(
+                archive_root,
+                fixture,
+                revision_at="2026-07-14T15:41:00Z",
+            )["applied"]
+            receipt_relative = applied["receipt"]["path"]
+            receipt_sha256 = "sha256:" + hashlib.sha256(
+                (archive_root / receipt_relative).read_bytes()
+            ).hexdigest()
+            canonical_after_revision = fixture["canonical_path"].read_bytes()
+            base = [
+                "zet-revision-restore-proposal-from-snapshot",
+                str(archive_root),
+                "--receipt",
+                receipt_relative,
+                "--expected-receipt-sha256",
+                receipt_sha256,
+                "--format",
+                "json",
+            ]
+            code, output = self.run_cli([*base, "--dry-run"])
+            self.assertEqual(code, 0, output)
+            preview = json.loads(output)
+            proposal_path = archive_root / preview["restore_proposal"]["relative_path"]
+            code, output = self.run_cli([*base, "--approve", "--reviewed-by", "person:test"])
+            self.assertEqual(json.loads(output)["reason_codes"],
+                             ["zet_revision_restore_proposal_from_snapshot_plan_digest_required"])
+            self.assertFalse(proposal_path.exists())
+            code, output = self.run_cli([
+                *base, "--approve", "--reviewed-by", "person:test",
+                "--expected-plan-digest", preview["plan_digest"],
+            ])
+            self.assertEqual(code, 0, output)
+            self.assertTrue(proposal_path.is_file())
+            self.assertEqual(fixture["canonical_path"].read_bytes(), canonical_after_revision)
 
     def test_zet_revision_restore_proposal_from_snapshot_never_overwrites_collision(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -62410,17 +61903,11 @@ state:
             def assert_compound_cleanup_blocked(arguments: list[str]) -> None:
                 code, output = self.run_cli(arguments)
                 self.assertEqual(code, 1, output)
+                # v0.4.40: the command has a JSON --format, so the conflicting
+                # mode refusal is the machine-readable CLI error.
                 self.assertEqual(
-                    output.strip(),
-                    (
-                        "Choose exactly one execution mode: --dry-run or --approve. "
-                        "The command did not start."
-                        if "--dry-run" in arguments else
-                        "Writer unavailable in this installed WOM version. Exact compound "
-                        "human-approval binding is not implemented for this command; the "
-                        "write did not start. Use the command's dry-run, plan, or audit "
-                        "mode and check `archive capabilities --machine`."
-                    ),
+                    json.loads(output)["reason_codes"],
+                    ["capability_mode_conflicting"],
                 )
                 for private_value in (
                     wrong_sha256,
@@ -62432,10 +61919,17 @@ state:
                 self.assertEqual(output_path.read_bytes(), artifact_before)
                 self.assertEqual(self.archive_tree_snapshot(archive_root), tree_before)
 
+            def refuse_dialog(*_args, **_kwargs):
+                raise AssertionError("a refused cleanup must not open the approval dialog")
+
+            # 2026-09-24 reopen (triage group 2): --approve runs under exact
+            # approval; a wrong SHA or unknown input is refused before any
+            # dialog, deleting nothing and echoing no private value.
             with patch.object(
                 archive_cli,
-                "_cleanup_zet_catalog_pass_output_file_legacy_core",
-            ) as cleanup_core:
+                "_execute_exact_human_approved_write",
+                side_effect=refuse_dialog,
+            ):
                 for command, input_arg, approval_sha in (
                     (
                         "zet-catalog-pass-cleanup",
@@ -62449,7 +61943,7 @@ state:
                     ),
                 ):
                     with self.subTest(command=command):
-                        assert_compound_cleanup_blocked(
+                        code, output = self.run_cli(
                             [
                                 command,
                                 str(archive_root),
@@ -62462,7 +61956,23 @@ state:
                                 reviewer_marker,
                             ]
                         )
-
+                        self.assertEqual(code, 1, output)
+                        payload = json.loads(output)
+                        self.assertIn(
+                            payload["reason_codes"][0],
+                            {
+                                "zet_catalog_pass_cleanup_preflight_blocked",
+                                "zet_catalog_pass_cleanup_workflow_failed_safely",
+                            },
+                        )
+                        for private_value in (
+                            wrong_sha256,
+                            reviewer_marker,
+                            private_input_marker,
+                        ):
+                            self.assertNotIn(private_value, output)
+                        self.assertEqual(output_path.read_bytes(), artifact_before)
+                        self.assertEqual(self.archive_tree_snapshot(archive_root), tree_before)
                 assert_compound_cleanup_blocked(
                     [
                         "zet-catalog-pass-cleanup",
@@ -62477,7 +61987,6 @@ state:
                         reviewer_marker,
                     ]
                 )
-                cleanup_core.assert_not_called()
 
     def test_zet_abstract_backfill_plan_binds_private_proposal_to_exact_canonical_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -62737,369 +62246,6 @@ state:
         inserted = f"abstract: {json.dumps(abstract)}\r\n".encode("utf-8")
         self.assertTrue(candidate.startswith(b"\xef\xbb\xbf---\r\n" + inserted))
         self.assertEqual(candidate.replace(inserted, b"", 1), original)
-
-    def test_zet_abstract_backfill_write_requires_review_then_applies_once_with_receipt(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
-            fixture = self.create_abstract_backfill_proposal(archive_root, count=1)
-            self.assert_cli_compound_writer_fails_closed(
-                archive_root,
-                [
-                    "zet-abstract-backfill-write",
-                    str(archive_root),
-                    "--proposal",
-                    fixture["relative"],
-                    "--expected-proposal-sha256",
-                    fixture["sha256"],
-                    "--approve",
-                    "--reviewed-by",
-                    "person:fixed-gate-reviewer",
-                    "--affirm-abstracts-reviewed",
-                ],
-                lifecycle_action="zet_abstract_backfill_write",
-            )
-
-    def test_zet_abstract_backfill_write_blocks_wrong_proposal_hash_without_private_echo(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
-            fixture = self.create_abstract_backfill_proposal(
-                archive_root,
-                count=1,
-                name="PRIVATE_WRONG_HASH_PROPOSAL.jsonl",
-            )
-            code, output = self.run_cli(
-                [
-                    "zet-abstract-backfill-write",
-                    str(archive_root),
-                    "--proposal",
-                    fixture["relative"],
-                    "--expected-proposal-sha256",
-                    "sha256:" + ("0" * 64),
-                    "--dry-run",
-                ]
-            )
-            self.assertEqual(code, 1, output)
-            result = json.loads(output)
-            self.assertEqual(result["status"], "blocked")
-            self.assertIn("proposal_sha256_mismatch", result["blockers"])
-            for path, original in fixture["originals"].items():
-                self.assertEqual(path.read_bytes(), original)
-            for private_value in (
-                *fixture["abstracts"],
-                *(row["zettel_id"] for row in fixture["rows"]),
-                "PRIVATE_WRONG_HASH_PROPOSAL.jsonl",
-                str(archive_root),
-            ):
-                self.assertNotIn(private_value, output)
-
-            range_code, range_output = self.run_cli(
-                [
-                    "zet-abstract-backfill-write",
-                    str(archive_root),
-                    "--proposal",
-                    fixture["relative"],
-                    "--expected-proposal-sha256",
-                    fixture["sha256"],
-                    "--max-items",
-                    "0",
-                    "--dry-run",
-                ]
-            )
-            self.assertEqual(range_code, 1, range_output)
-            self.assertIn("max_items_out_of_range", json.loads(range_output)["blockers"])
-            for path, original in fixture["originals"].items():
-                self.assertEqual(path.read_bytes(), original)
-
-    def test_zet_abstract_backfill_write_rolls_back_all_canonical_bytes_on_item_failure(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
-            fixture = self.create_abstract_backfill_proposal(archive_root, count=1)
-            self.assert_cli_compound_writer_fails_closed(
-                archive_root,
-                [
-                    "zet-abstract-backfill-write",
-                    str(archive_root),
-                    "--proposal",
-                    fixture["relative"],
-                    "--expected-proposal-sha256",
-                    fixture["sha256"],
-                    "--approve",
-                    "--reviewed-by",
-                    "person:fixed-gate-reviewer",
-                    "--affirm-abstracts-reviewed",
-                ],
-                lifecycle_action="zet_abstract_backfill_write",
-            )
-
-    def test_zet_abstract_backfill_hard_exit_retains_private_partial_transaction_journal(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
-            fixture = self.create_abstract_backfill_proposal(archive_root, count=1)
-            self.assert_cli_compound_writer_fails_closed(
-                archive_root,
-                [
-                    "zet-abstract-backfill-write",
-                    str(archive_root),
-                    "--proposal",
-                    fixture["relative"],
-                    "--expected-proposal-sha256",
-                    fixture["sha256"],
-                    "--approve",
-                    "--reviewed-by",
-                    "person:fixed-gate-reviewer",
-                    "--affirm-abstracts-reviewed",
-                ],
-                lifecycle_action="zet_abstract_backfill_write",
-            )
-
-    def test_zet_abstract_backfill_nested_duplicate_proposals_share_one_digest_lock(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
-            fixture = self.create_abstract_backfill_proposal(archive_root, count=1)
-            self.assert_cli_compound_writer_fails_closed(
-                archive_root,
-                [
-                    "zet-abstract-backfill-write",
-                    str(archive_root),
-                    "--proposal",
-                    fixture["relative"],
-                    "--expected-proposal-sha256",
-                    fixture["sha256"],
-                    "--approve",
-                    "--reviewed-by",
-                    "person:fixed-gate-reviewer",
-                    "--affirm-abstracts-reviewed",
-                ],
-                lifecycle_action="zet_abstract_backfill_write",
-            )
-
-    def test_zet_abstract_backfill_write_rolls_back_when_receipt_write_fails(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
-            fixture = self.create_abstract_backfill_proposal(archive_root, count=1)
-            self.assert_cli_compound_writer_fails_closed(
-                archive_root,
-                [
-                    "zet-abstract-backfill-write",
-                    str(archive_root),
-                    "--proposal",
-                    fixture["relative"],
-                    "--expected-proposal-sha256",
-                    fixture["sha256"],
-                    "--approve",
-                    "--reviewed-by",
-                    "person:fixed-gate-reviewer",
-                    "--affirm-abstracts-reviewed",
-                ],
-                lifecycle_action="zet_abstract_backfill_write",
-            )
-
-    def test_zet_abstract_backfill_incomplete_runtime_rollback_retains_transaction_evidence(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
-            fixture = self.create_abstract_backfill_proposal(archive_root, count=1)
-            self.assert_cli_compound_writer_fails_closed(
-                archive_root,
-                [
-                    "zet-abstract-backfill-write",
-                    str(archive_root),
-                    "--proposal",
-                    fixture["relative"],
-                    "--expected-proposal-sha256",
-                    fixture["sha256"],
-                    "--approve",
-                    "--reviewed-by",
-                    "person:fixed-gate-reviewer",
-                    "--affirm-abstracts-reviewed",
-                ],
-                lifecycle_action="zet_abstract_backfill_write",
-            )
-
-    def test_zet_abstract_backfill_write_blocks_before_mutation_when_transaction_journal_fails(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
-            fixture = self.create_abstract_backfill_proposal(archive_root, count=1)
-            self.assert_cli_compound_writer_fails_closed(
-                archive_root,
-                [
-                    "zet-abstract-backfill-write",
-                    str(archive_root),
-                    "--proposal",
-                    fixture["relative"],
-                    "--expected-proposal-sha256",
-                    fixture["sha256"],
-                    "--approve",
-                    "--reviewed-by",
-                    "person:fixed-gate-reviewer",
-                    "--affirm-abstracts-reviewed",
-                ],
-                lifecycle_action="zet_abstract_backfill_write",
-            )
-
-    def test_zet_abstract_backfill_rollback_preserves_external_final_receipt_and_transaction_evidence(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
-            fixture = self.create_abstract_backfill_proposal(archive_root, count=1)
-            self.assert_cli_compound_writer_fails_closed(
-                archive_root,
-                [
-                    "zet-abstract-backfill-write",
-                    str(archive_root),
-                    "--proposal",
-                    fixture["relative"],
-                    "--expected-proposal-sha256",
-                    fixture["sha256"],
-                    "--approve",
-                    "--reviewed-by",
-                    "person:fixed-gate-reviewer",
-                    "--affirm-abstracts-reviewed",
-                ],
-                lifecycle_action="zet_abstract_backfill_write",
-            )
-
-    def test_zet_abstract_backfill_revert_releases_lock_when_transaction_journal_fails(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
-            self.assert_cli_compound_writer_fails_closed(
-                archive_root,
-                [
-                    "zet-abstract-backfill-revert",
-                    str(archive_root),
-                    "--receipt",
-                    "receipts/revisions/abstract-backfill/historical.json",
-                    "--expected-receipt-sha256",
-                    "sha256:" + ("1" * 64),
-                    "--approve",
-                    "--reviewed-by",
-                    "person:fixed-gate-reviewer",
-                    "--affirm-abstract-removal-reviewed",
-                ],
-                lifecycle_action="zet_abstract_backfill_revert",
-            )
-
-    def test_zet_abstract_backfill_revert_audits_then_restores_exact_originals_once(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
-            self.assert_cli_compound_writer_fails_closed(
-                archive_root,
-                [
-                    "zet-abstract-backfill-revert",
-                    str(archive_root),
-                    "--receipt",
-                    "receipts/revisions/abstract-backfill/historical.json",
-                    "--expected-receipt-sha256",
-                    "sha256:" + ("1" * 64),
-                    "--approve",
-                    "--reviewed-by",
-                    "person:fixed-gate-reviewer",
-                    "--affirm-abstract-removal-reviewed",
-                ],
-                lifecycle_action="zet_abstract_backfill_revert",
-            )
-
-    def test_zet_abstract_backfill_revert_blocks_wrong_receipt_hash_and_canonical_drift(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
-            self.assert_cli_compound_writer_fails_closed(
-                archive_root,
-                [
-                    "zet-abstract-backfill-revert",
-                    str(archive_root),
-                    "--receipt",
-                    "receipts/revisions/abstract-backfill/historical.json",
-                    "--expected-receipt-sha256",
-                    "sha256:" + ("1" * 64),
-                    "--approve",
-                    "--reviewed-by",
-                    "person:fixed-gate-reviewer",
-                    "--affirm-abstract-removal-reviewed",
-                ],
-                lifecycle_action="zet_abstract_backfill_revert",
-            )
-
-    def test_zet_abstract_backfill_revert_rolls_back_applied_state_on_item_failure(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
-            self.assert_cli_compound_writer_fails_closed(
-                archive_root,
-                [
-                    "zet-abstract-backfill-revert",
-                    str(archive_root),
-                    "--receipt",
-                    "receipts/revisions/abstract-backfill/historical.json",
-                    "--expected-receipt-sha256",
-                    "sha256:" + ("1" * 64),
-                    "--approve",
-                    "--reviewed-by",
-                    "person:fixed-gate-reviewer",
-                    "--affirm-abstract-removal-reviewed",
-                ],
-                lifecycle_action="zet_abstract_backfill_revert",
-            )
-
-    def test_zet_abstract_backfill_incomplete_revert_rollback_retains_transaction_evidence(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
-            self.assert_cli_compound_writer_fails_closed(
-                archive_root,
-                [
-                    "zet-abstract-backfill-revert",
-                    str(archive_root),
-                    "--receipt",
-                    "receipts/revisions/abstract-backfill/historical.json",
-                    "--expected-receipt-sha256",
-                    "sha256:" + ("1" * 64),
-                    "--approve",
-                    "--reviewed-by",
-                    "person:fixed-gate-reviewer",
-                    "--affirm-abstract-removal-reviewed",
-                ],
-                lifecycle_action="zet_abstract_backfill_revert",
-            )
-
-    def test_zet_abstract_backfill_revert_hard_exit_retains_partial_transaction_journal(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
-            self.assert_cli_compound_writer_fails_closed(
-                archive_root,
-                [
-                    "zet-abstract-backfill-revert",
-                    str(archive_root),
-                    "--receipt",
-                    "receipts/revisions/abstract-backfill/historical.json",
-                    "--expected-receipt-sha256",
-                    "sha256:" + ("1" * 64),
-                    "--approve",
-                    "--reviewed-by",
-                    "person:fixed-gate-reviewer",
-                    "--affirm-abstract-removal-reviewed",
-                ],
-                lifecycle_action="zet_abstract_backfill_revert",
-            )
-
-    def test_zet_abstract_backfill_revert_rolls_back_when_revert_receipt_write_fails(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
-            self.assert_cli_compound_writer_fails_closed(
-                archive_root,
-                [
-                    "zet-abstract-backfill-revert",
-                    str(archive_root),
-                    "--receipt",
-                    "receipts/revisions/abstract-backfill/historical.json",
-                    "--expected-receipt-sha256",
-                    "sha256:" + ("1" * 64),
-                    "--approve",
-                    "--reviewed-by",
-                    "person:fixed-gate-reviewer",
-                    "--affirm-abstract-removal-reviewed",
-                ],
-                lifecycle_action="zet_abstract_backfill_revert",
-            )
 
     def test_zet_abstract_backfill_revert_candidate_restores_bom_crlf_exact_bytes(self) -> None:
         original = (
@@ -63637,168 +62783,6 @@ state:
             ):
                 self.assertNotIn(private_value, serialized)
             self.assertFalse(any(complete["write_boundary"].values()))
-
-    def test_zet_abstract_backfill_recover_cli_requires_fresh_approval_and_cleans_prepared_evidence(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
-            self.assert_cli_compound_writer_fails_closed(
-                archive_root,
-                [
-                    "zet-abstract-backfill-recover",
-                    str(archive_root),
-                    "--operation",
-                    "apply",
-                    "--basis-sha256",
-                    "sha256:" + ("1" * 64),
-                    "--expected-plan-digest",
-                    "sha256:" + ("2" * 64),
-                    "--expected-action",
-                    "rollback_uncommitted_apply_to_before",
-                    "--approve",
-                    "--reviewed-by",
-                    "person:fixed-gate-reviewer",
-                    "--affirm-recovery-reviewed",
-                    "--affirm-archive-quiescent",
-                ],
-                lifecycle_action="zet_abstract_backfill_recover",
-            )
-
-    def test_zet_abstract_backfill_recover_rolls_interrupted_apply_back_to_before_hashes(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
-            self.assert_cli_compound_writer_fails_closed(
-                archive_root,
-                [
-                    "zet-abstract-backfill-recover",
-                    str(archive_root),
-                    "--operation",
-                    "apply",
-                    "--basis-sha256",
-                    "sha256:" + ("1" * 64),
-                    "--expected-plan-digest",
-                    "sha256:" + ("2" * 64),
-                    "--expected-action",
-                    "rollback_uncommitted_apply_to_before",
-                    "--approve",
-                    "--reviewed-by",
-                    "person:fixed-gate-reviewer",
-                    "--affirm-recovery-reviewed",
-                    "--affirm-archive-quiescent",
-                ],
-                lifecycle_action="zet_abstract_backfill_recover",
-            )
-
-    def test_zet_abstract_backfill_recover_moves_partial_revert_forward_and_finalizes_receipt(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
-            self.assert_cli_compound_writer_fails_closed(
-                archive_root,
-                [
-                    "zet-abstract-backfill-recover",
-                    str(archive_root),
-                    "--operation",
-                    "apply",
-                    "--basis-sha256",
-                    "sha256:" + ("1" * 64),
-                    "--expected-plan-digest",
-                    "sha256:" + ("2" * 64),
-                    "--expected-action",
-                    "rollback_uncommitted_apply_to_before",
-                    "--approve",
-                    "--reviewed-by",
-                    "person:fixed-gate-reviewer",
-                    "--affirm-recovery-reviewed",
-                    "--affirm-archive-quiescent",
-                ],
-                lifecycle_action="zet_abstract_backfill_recover",
-            )
-
-    def test_zet_abstract_backfill_recover_finalizes_fully_reverted_receipt_and_cleans_verified_residue(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
-            self.assert_cli_compound_writer_fails_closed(
-                archive_root,
-                [
-                    "zet-abstract-backfill-recover",
-                    str(archive_root),
-                    "--operation",
-                    "apply",
-                    "--basis-sha256",
-                    "sha256:" + ("1" * 64),
-                    "--expected-plan-digest",
-                    "sha256:" + ("2" * 64),
-                    "--expected-action",
-                    "rollback_uncommitted_apply_to_before",
-                    "--approve",
-                    "--reviewed-by",
-                    "person:fixed-gate-reviewer",
-                    "--affirm-recovery-reviewed",
-                    "--affirm-archive-quiescent",
-                ],
-                lifecycle_action="zet_abstract_backfill_recover",
-            )
-
-    def test_zet_abstract_backfill_recover_failure_retains_evidence_and_invalidates_old_plan(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
-            self.assert_cli_compound_writer_fails_closed(
-                archive_root,
-                [
-                    "zet-abstract-backfill-recover",
-                    str(archive_root),
-                    "--operation",
-                    "apply",
-                    "--basis-sha256",
-                    "sha256:" + ("1" * 64),
-                    "--expected-plan-digest",
-                    "sha256:" + ("2" * 64),
-                    "--expected-action",
-                    "rollback_uncommitted_apply_to_before",
-                    "--approve",
-                    "--reviewed-by",
-                    "person:fixed-gate-reviewer",
-                    "--affirm-recovery-reviewed",
-                    "--affirm-archive-quiescent",
-                ],
-                lifecycle_action="zet_abstract_backfill_recover",
-            )
-
-    def test_zet_abstract_backfill_recover_hard_exit_releases_guard_and_resumes_from_hashes(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
-            self.assert_cli_compound_writer_fails_closed(
-                archive_root,
-                [
-                    "zet-abstract-backfill-recover",
-                    str(archive_root),
-                    "--operation",
-                    "apply",
-                    "--basis-sha256",
-                    "sha256:" + ("1" * 64),
-                    "--expected-plan-digest",
-                    "sha256:" + ("2" * 64),
-                    "--expected-action",
-                    "rollback_uncommitted_apply_to_before",
-                    "--approve",
-                    "--reviewed-by",
-                    "person:fixed-gate-reviewer",
-                    "--affirm-recovery-reviewed",
-                    "--affirm-archive-quiescent",
-                ],
-                lifecycle_action="zet_abstract_backfill_recover",
-            )
 
     def test_zet_abstract_backfill_receipt_audit_distinguishes_completed_and_unresolved_locks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -67149,7 +66133,7 @@ state:
                         malformed_serialized,
                     )
 
-    def test_activity_group_membership_write_previews_but_approve_fails_closed(self) -> None:
+    def test_activity_group_membership_write_previews_and_a_declined_approve_writes_nothing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = Path(tmp) / "personal-archive"
             fixture = self.create_activity_group_write_fixture(
@@ -67172,7 +66156,14 @@ state:
             )
             before = self.snapshot_archive_files(archive_root)
 
-            approve_code, approve_stdout, approve_stderr = self.run_cli_split(
+            # 2026-09-24 reopen (triage group 4): approve asks for exact
+            # approval; a declined decision writes nothing and no real window
+            # opens.
+            def decline(*_args, **_kwargs):
+                raise archive_cli.ExactHumanApprovalWorkflowError("exact_human_approval_cancelled")
+
+            with patch.object(archive_cli, "_execute_exact_human_approved_write", side_effect=decline):
+                approve_code, approve_stdout, approve_stderr = self.run_cli_split(
                 [
                     "activity-group-membership-write",
                     str(archive_root),
@@ -67194,7 +66185,7 @@ state:
             blocked_cli = json.loads(approve_stdout)
             self.assertEqual(
                 blocked_cli["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
+                ["activity_group_membership_write_workflow_precondition_failed"],
             )
             self.assertFalse(blocked_cli["private_values_echoed"])
             self.assertEqual(self.snapshot_archive_files(archive_root), before)
@@ -70798,10 +69789,13 @@ state:
             self.assertTrue(result["bom_stripped"], result)
             review = result["human_review_plan"]
             self.assertIn("--strip-bom", review["commands"]["review_visible_dry_run"])
-            self.assertIsNone(review["commands"]["approve_if_intentional"])
-            self.assertEqual(review["approval_state"], "writer_unavailable")
-            self.assertFalse(result["approval_would_write"])
-            self.assertFalse(any("--approve" in action for action in result["next_safe_actions"]))
+            # 2026-09-24 reopen: the approval command is offered again and
+            # carries the content-change acknowledgement and review digest.
+            approve = review["commands"]["approve_if_intentional"]
+            self.assertIn("--content-changed-ack", approve)
+            self.assertIn("--strip-bom", approve)
+            self.assertNotIn("approval_state", review)
+            self.assertTrue(result["approval_would_write"])
 
     def test_remint_reconcile_strip_bom_apply_content_edit_matches_dry_run(self) -> None:  # 2.T5
         # Apply agrees with the 2.T4 dry-run: BOM + title edit without ack is BLOCKED;
@@ -70985,9 +69979,10 @@ state:
             self.assertNotIn(body_marker, serialized_review)
             self.assertNotIn(receipt_marker, serialized_review)
             self.assertFalse(review["content_included"])
-            self.assertIsNone(review["commands"]["approve_if_intentional"])
-            self.assertEqual(review["approval_state"], "writer_unavailable")
-            self.assertFalse(result["approval_would_write"])
+            # 2026-09-24 reopen: approval is offered again under exact approval.
+            self.assertIn("--content-changed-ack", review["commands"]["approve_if_intentional"])
+            self.assertNotIn("approval_state", review)
+            self.assertTrue(result["approval_would_write"])
 
     def test_retire_draft_reconcile_pointer_ref_mismatch_is_content_change(self) -> None:
         # v0.3.167 Item 2: the mint_receipt pointer ref has no format dimension; ANY
@@ -73855,24 +72850,10 @@ state:
                 encoding="utf-8",
             )
 
-            scan_code, scan_output = self.run_cli(
-                [
-                    "scan-source",
-                    str(archive_root),
-                    "--source",
-                    "imap:gmail",
-                    "--dry-run",
-                    "--format",
-                    "json",
-                ]
-            )
-
-            result = json.loads(scan_output)
-            self.assertEqual(scan_code, 1, scan_output)
-            self.assertFalse(result["ok"])
-            self.assertEqual(result["source_type"], "imap_mailbox")
-            self.assertEqual(result["source_root_resolution"]["method"], "imap_mailbox_planned")
-            self.assertTrue(any("IMAP mailbox live scans are not implemented" in item for item in result["blockers"]))
+            # scan-source was removed in v0.4.40; the binding stays registered
+            # and no live IMAP scan command exists.
+            code, output = self.run_cli(["scan-source", str(archive_root), "--source", "imap:gmail"])
+            self.assertEqual(code, 2, output)
 
     def test_add_source_blocks_duplicate_and_absolute_root_ref(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -75622,8 +74603,9 @@ state:
             self.assertEqual(blocked_code, 1, blocked_output)
             self.assertIn("restore_drill_required", blocked_output)
 
-            blocked_write = self.assert_cli_compound_writer_fails_closed(
-                archive_root,
+            # 2026-09-24 reopen (triage group 5): the approved restore drill
+            # itself copies the archive and records the receipt.
+            approved_code, approved_output = self.run_cli(
                 [
                     "restore-drill",
                     str(archive_root),
@@ -75632,20 +74614,12 @@ state:
                     "--approve",
                     "--reviewed-by",
                     "person:test",
-                ],
-                lifecycle_action="restore_drill",
+                    "--format",
+                    "json",
+                ]
             )
-            self.assertEqual(
-                blocked_write["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
-            )
-            self.assertFalse(target.exists())
-
-            historical = self.install_historical_restore_drill_fixture(
-                archive_root,
-                target,
-                copy_target=True,
-            )
+            self.assertEqual(approved_code, 0, approved_output)
+            historical = json.loads(approved_output)
             self.assertTrue((target / "archive.yml").is_file())
             self.assertTrue((target / "db" / "archive-index.sqlite").is_file())
             self.assertFalse((target / ".git").exists())
@@ -75688,133 +74662,6 @@ state:
                     result = json.loads(output)
                     self.assertFalse(result["ok"])
                     self.assertGreater(len(result["blockers"]), 0)
-
-    def test_scan_source_dry_run_is_metadata_only_and_writes_nothing(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            archive_root = Path(tmp) / "archive"
-            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:source-dry-run")
-            self.assertEqual(init_code, 0, init_output)
-            source_root = Path(tmp) / "scattered-docs"
-            source_root.mkdir()
-            (source_root / "note.txt").write_text("private content should not be read", encoding="utf-8")
-
-            code, output = self.run_cli(
-                [
-                    "scan-source",
-                    str(archive_root),
-                    "--source",
-                    "local:personal-documents",
-                    "--source-root",
-                    str(source_root),
-                    "--dry-run",
-                    "--format",
-                    "json",
-                ]
-            )
-            self.assertEqual(code, 0, output)
-            result = json.loads(output)
-            self.assertTrue(result["ok"])
-            self.assertTrue(result["dry_run"])
-            self.assertEqual(result["scan_mode"], "metadata_only")
-            self.assertEqual(result["item_count"], 1)
-            self.assertFalse(result["items"][0]["provenance"]["content_read"])
-            self.assertNotIn(str(source_root), output)
-            self.assertFalse((archive_root / result["proposed_source_map_path"]).exists())
-            self.assertFalse((archive_root / result["proposed_receipt_path"]).exists())
-
-    def test_scan_source_approve_writes_source_map_and_receipt(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            archive_root = Path(tmp) / "archive"
-            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:source-approve")
-            self.assertEqual(init_code, 0, init_output)
-            source_root = Path(tmp) / "scattered-docs"
-            source_root.mkdir()
-            (source_root / "plan.txt").write_text("fake plan", encoding="utf-8")
-
-            self.assert_cli_compound_writer_fails_closed(
-                archive_root,
-                [
-                    "scan-source",
-                    str(archive_root),
-                    "--source",
-                    "local:personal-documents",
-                    "--source-root",
-                    str(source_root),
-                    "--approve",
-                    "--reviewed-by",
-                    "person:test",
-                ],
-                lifecycle_action="scan_source",
-            )
-            doctor_code, doctor_output = self.run_cli(["doctor", str(archive_root), "--strict"])
-            self.assertEqual(doctor_code, 0, doctor_output)
-
-    def test_scan_source_supports_notion_and_google_drive_exports(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            archive_root = Path(tmp) / "archive"
-            init_code, init_output = self.init_personal_archive(archive_root, "archive:personal:external-source-map")
-            self.assertEqual(init_code, 0, init_output)
-            source_path = archive_root / "source-bindings.yml"
-            data = archive_cli.load_yaml(source_path.read_text(encoding="utf-8"))
-            data["sources"].extend(
-                [
-                    {
-                        "source_id": "notion:export",
-                        "source_type": "notion_export",
-                        "enabled": True,
-                        "root_ref": "NOTION_EXPORT_ROOT",
-                        "scope_policy": {"mode": "metadata_only", "include": ["**/*"], "exclude": [], "max_items": 2000},
-                        "visibility": {"scope": "private", "source_visibility": "private"},
-                    },
-                    {
-                        "source_id": "google-drive:export",
-                        "source_type": "google_drive_export",
-                        "enabled": True,
-                        "root_ref": "GOOGLE_DRIVE_EXPORT_MANIFEST",
-                        "scope_policy": {"mode": "metadata_only", "include": ["**/*"], "exclude": [], "max_items": 2000},
-                        "visibility": {"scope": "private", "source_visibility": "private"},
-                    },
-                ]
-            )
-            source_path.write_text(archive_cli.dump_yaml(data), encoding="utf-8")
-
-            notion_root = KIT_ROOT / "examples" / "external-imports" / "notion-export"
-            notion_code, notion_output = self.run_cli(
-                [
-                    "scan-source",
-                    str(archive_root),
-                    "--source",
-                    "notion:export",
-                    "--source-root",
-                    str(notion_root),
-                    "--dry-run",
-                    "--format",
-                    "json",
-                ]
-            )
-            self.assertEqual(notion_code, 0, notion_output)
-            notion_result = json.loads(notion_output)
-            self.assertEqual(notion_result["source_type"], "notion_export")
-            self.assertEqual(notion_result["item_count"], 1)
-
-            manifest = KIT_ROOT / "examples" / "external-imports" / "google-drive-export" / "manifest.json"
-            gdrive_code, gdrive_output = self.run_cli(
-                [
-                    "scan-source",
-                    str(archive_root),
-                    "--source",
-                    "google-drive:export",
-                    "--source-root",
-                    str(manifest),
-                    "--dry-run",
-                    "--format",
-                    "json",
-                ]
-            )
-            self.assertEqual(gdrive_code, 0, gdrive_output)
-            gdrive_result = json.loads(gdrive_output)
-            self.assertEqual(gdrive_result["source_type"], "google_drive_export")
-            self.assertEqual(gdrive_result["items"][0]["external_url"], "https://drive.google.com/file/d/fake-research-note/view")
 
     def test_doctor_flags_source_binding_absolute_path_and_source_map_escape(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -78064,25 +76911,14 @@ state:
         with tempfile.TemporaryDirectory() as tmp:
             source_root = self.copy_fake_archive(Path(tmp) / "source")
             target_root = self.copy_fake_archive_as_company_target(Path(tmp) / "target")
-            delegate_code, delegate_output = self.run_cli(
-                [
-                    "delegate-zet",
-                    str(source_root),
-                    "--view",
-                    "view.fake.company.derived",
-                    "--target-archive",
-                    "archive:company:fake-blue",
-                    "--counterparty-id",
-                    "archive:company:fake-blue",
-                    "--counterparty-fingerprint",
-                    "SHA256:fake-company-blue",
-                    "--dry-run",
-                    "--format",
-                    "json",
-                ]
+            # delegate-zet was removed in v0.4.40; same receipt preview service.
+            delegate_result = archive_services.delegate_zets_dry_run(
+                source_root,
+                view_id="view.fake.company.derived",
+                target_archive="archive:company:fake-blue",
+                counterparty_id="archive:company:fake-blue",
+                counterparty_fingerprint="SHA256:fake-company-blue",
             )
-            self.assertEqual(delegate_code, 0, delegate_output)
-            delegate_result = json.loads(delegate_output)
             delegate_path = self.write_json_receipt(
                 target_root,
                 delegate_result["proposed_delegate_receipt_path"],
@@ -78146,21 +76982,12 @@ state:
         with tempfile.TemporaryDirectory() as tmp:
             source_root = self.copy_fake_archive(Path(tmp) / "source")
             target_root = self.copy_fake_archive_as_company_target(Path(tmp) / "target")
-            delegate_code, delegate_output = self.run_cli(
-                [
-                    "delegate-zet",
-                    str(source_root),
-                    "--view",
-                    "view.fake.company.derived",
-                    "--target-policy",
-                    "claimable_once",
-                    "--dry-run",
-                    "--format",
-                    "json",
-                ]
+            # delegate-zet was removed in v0.4.40; same receipt preview service.
+            delegate_result = archive_services.delegate_zets_dry_run(
+                source_root,
+                view_id="view.fake.company.derived",
+                target_policy="claimable_once",
             )
-            self.assertEqual(delegate_code, 0, delegate_output)
-            delegate_result = json.loads(delegate_output)
             delegate_path = self.write_json_receipt(
                 target_root,
                 delegate_result["proposed_delegate_receipt_path"],
@@ -78225,25 +77052,14 @@ state:
         with tempfile.TemporaryDirectory() as tmp:
             source_root = self.copy_fake_archive(Path(tmp) / "source")
             target_root = self.copy_fake_archive_as_company_target(Path(tmp) / "target")
-            delegate_code, delegate_output = self.run_cli(
-                [
-                    "delegate-zet",
-                    str(source_root),
-                    "--view",
-                    "view.fake.company.derived",
-                    "--target-archive",
-                    "archive:company:fake-blue",
-                    "--counterparty-id",
-                    "archive:company:fake-blue",
-                    "--counterparty-fingerprint",
-                    "SHA256:fake-company-blue",
-                    "--dry-run",
-                    "--format",
-                    "json",
-                ]
+            # delegate-zet was removed in v0.4.40; same receipt preview service.
+            delegate_result = archive_services.delegate_zets_dry_run(
+                source_root,
+                view_id="view.fake.company.derived",
+                target_archive="archive:company:fake-blue",
+                counterparty_id="archive:company:fake-blue",
+                counterparty_fingerprint="SHA256:fake-company-blue",
             )
-            self.assertEqual(delegate_code, 0, delegate_output)
-            delegate_result = json.loads(delegate_output)
             delegate_path = self.write_json_receipt(
                 target_root,
                 delegate_result["proposed_delegate_receipt_path"],
@@ -80837,30 +79653,6 @@ class ObjetCaptureTests(unittest.TestCase):
         self.assertEqual(self._inventory(archive_root), before)
         return result
 
-    def _assert_objet_capture_enable_fails_closed(
-        self,
-        archive_root: Path,
-        *extra: str,
-    ) -> dict[str, Any]:
-        before = self._inventory(archive_root)
-        result = self._enable_cli(
-            archive_root,
-            "--approve",
-            "--reviewed-by",
-            "person:objet-capture-enable-fixed-gate-reviewer",
-            *extra,
-            expect_code=1,
-        )
-        self.assertEqual(result["state"], "blocked")
-        self.assertEqual(result["lifecycle_action"], "objet_capture_enable")
-        self.assertEqual(
-            result["reason_codes"],
-            ["compound_exact_human_approval_binding_required"],
-        )
-        self.assertFalse(result["private_values_echoed"])
-        self.assertEqual(self._inventory(archive_root), before)
-        return result
-
     def test_objet_capture_dry_run_writes_nothing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root, selection, digest = self._simple_capture_setup(tmp)
@@ -81419,7 +80211,8 @@ class ObjetCaptureTests(unittest.TestCase):
             self.assertEqual(result["blocked_by"], "sandbox_marker_required")
             self.assertIn("sandbox-marked archives", result["hint"])
             self.assertIn(".wom-sandbox", result["hint"])
-            self.assertIn("objet-capture-enable", result["hint"])
+            self.assertIn("source-intake-chain", result["hint"])
+            self.assertNotIn("objet-capture-enable", result["hint"])
             self.assertEqual(result["items"], [], "refusal output must be blocker-only")
             # Leak assertion: the staged filename/path from the selection must not be echoed.
             self.assertNotIn("note.txt", output)
@@ -83297,14 +82090,16 @@ class ObjetCaptureTests(unittest.TestCase):
             self.assertEqual(code, 1, output)
             code, output = self.run_cli(base + ["--dry-run", "--approve"])
             self.assertEqual(code, 1, output)
-            code, output = self.run_cli(base + ["--approve", "--format", "json"])
+            # Reopened in v0.4.40: a missing source objet is refused before
+            # any dialog.
+            code, output = self.run_cli(base + ["--approve", "--reviewed-by", "person:test", "--format", "json"])
             self.assertEqual(code, 1, output)
             blocked = json.loads(output)
             self.assertEqual(blocked["state"], "blocked")
             self.assertEqual(blocked["lifecycle_action"], "derived_text_capture_apply")
             self.assertEqual(
                 blocked["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
+                ["derived_text_capture_apply_preflight_blocked"],
             )
             self.assertFalse(blocked["private_values_echoed"])
             self.assertEqual(self._inventory(archive_root), before)
@@ -83761,45 +82556,6 @@ class ObjetCaptureTests(unittest.TestCase):
         )
         return record_path, receipt_path
 
-    def _enable_cli(self, archive_root: Path, *extra: str, expect_code: int = 0) -> dict[str, Any]:
-        code, output = self.run_cli(
-            ["objet-capture-enable", str(archive_root), *extra, "--format", "json"]
-        )
-        self.assertEqual(code, expect_code, output)
-        return json.loads(output)
-
-    def test_objet_capture_enable_dry_run_writes_nothing_and_reports_eligibility(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            archive_root = self._real_archive(tmp)
-            before = self._inventory(archive_root)
-            result = self._enable_cli(archive_root, "--dry-run")
-            self.assertTrue(result["ok"], result)
-            self.assertEqual(result["state"], "not_enabled")
-            self.assertFalse(result["never_touch_name_match"])
-            self.assertEqual(len(result["planned_writes"]), 2)
-            self.assertIn("ops/capture-enablement.yml", result["planned_writes"])
-            self.assertTrue(any(path.startswith("receipts/capture-enablement/") for path in result["planned_writes"]))
-            revoke_preview = self._enable_cli(archive_root, "--dry-run", "--revoke")
-            self.assertTrue(revoke_preview["ok"], revoke_preview)
-            self.assertEqual(revoke_preview["planned_writes"], [])
-            self.assertEqual(self._inventory(archive_root), before, "dry-run must not write anything")
-            self.assertFalse(list(archive_root.rglob("*.part-*")))
-            self.assertFalse((archive_root / "ops" / "capture-enablement.yml").exists())
-
-    def test_objet_capture_enable_approve_writes_receipt_before_record(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            archive_root = self._real_archive(tmp)
-            self._assert_objet_capture_enable_fails_closed(archive_root)
-
-    def test_objet_capture_enable_revoke_lifecycle_and_reenable_gate(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            archive_root = self._real_archive(tmp)
-            self._assert_objet_capture_enable_fails_closed(archive_root)
-
     def test_objet_capture_enablement_archive_id_mismatch_stays_blocked_as_invalid(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self._real_archive(tmp)
@@ -83813,25 +82569,6 @@ class ObjetCaptureTests(unittest.TestCase):
             self.assertFalse(refusal["ok"])
             self.assertEqual(refusal["blocked_by"], "sandbox_marker_required")
             self.assertEqual(refusal["enablement_state"], "invalid")
-
-    def test_objet_capture_enablement_malformed_record_fails_closed(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            archive_root = self._real_archive(tmp)
-            record_path = archive_root / "ops" / "capture-enablement.yml"
-            record_path.parent.mkdir(parents=True, exist_ok=True)
-            record_path.write_text("enabled: [true\nschema: {broken", encoding="utf-8")
-            staged_path, digest = self._stage(archive_root, "note.txt", b"malformed record")
-            plan_path, plan_sha = self._plan(archive_root)
-            selection = self._selection(
-                tmp, "archive:personal:capture", [self._item(staged_path, digest, plan_path, plan_sha)]
-            )
-            refusal = archive_services.objet_capture_dry_run(archive_root, selection)
-            self.assertFalse(refusal["ok"])
-            self.assertEqual(refusal["blocked_by"], "sandbox_marker_required")
-            self.assertEqual(refusal["enablement_state"], "invalid")
-            report = self._enable_cli(archive_root, "--dry-run")
-            self.assertEqual(report["state"], "invalid_record")
-            self.assertTrue(report["reason"])
 
     def test_objet_capture_enablement_record_with_broken_archive_yml_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -83952,27 +82689,6 @@ class ObjetCaptureTests(unittest.TestCase):
                 "gate must read only the two control files",
             )
 
-    def test_objet_capture_enablement_full_e2e_on_never_touch_named_root(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            archive_root = self._real_archive(tmp)
-            self._assert_objet_capture_enable_fails_closed(archive_root)
-
-    def test_objet_capture_enabled_root_still_blocks_matching_relative_component(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            archive_root = self._real_archive(tmp)
-            self._assert_objet_capture_enable_fails_closed(archive_root)
-
-    def test_objet_capture_enable_objets_store_without_archive_yml(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            archive_root = self._real_archive(tmp)
-            self._assert_objet_capture_enable_fails_closed(archive_root)
-
     def test_objet_capture_enablement_forged_record_pin_documents_boundary(self) -> None:
         # Pins the documented Safety Boundary honestly: anyone with archive write
         # access can forge a minimal archive.yml plus a matching record (with
@@ -83987,20 +82703,6 @@ class ObjetCaptureTests(unittest.TestCase):
                 store_root, archive_id="archive:forged:media", never_touch_acknowledged=True
             )
             self.assertEqual(archive_services.objet_capture_sandbox_blockers(store_root), [])
-
-    def test_objet_capture_enable_nested_objets_parent_requires_acknowledge_and_captures(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            archive_root = self._real_archive(tmp)
-            self._assert_objet_capture_enable_fails_closed(archive_root)
-
-    def test_objet_capture_selection_manifest_on_enabled_never_touch_root(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            archive_root = self._real_archive(tmp)
-            self._assert_objet_capture_enable_fails_closed(archive_root)
 
     def test_doctor_capture_enablement_diagnostics_and_validate_strict(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

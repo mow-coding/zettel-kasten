@@ -9,7 +9,7 @@ from wom_kit import __version__
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = KIT_ROOT.parent
-EXPECTED_CURRENT_VERSION = "0.4.39"
+EXPECTED_CURRENT_VERSION = "0.4.40"
 EXPECTED_CURRENT_TAG = f"v{EXPECTED_CURRENT_VERSION}"
 CURRENT_VERSION = f"v{__version__}"
 CURRENT_RELEASE_NOTE = f"{EXPECTED_CURRENT_TAG}.md"
@@ -19,7 +19,7 @@ CURRENT_WHEEL_URL = (
     f"releases/download/{EXPECTED_CURRENT_TAG}/"
     f"wom_kit-{EXPECTED_CURRENT_VERSION}-py3-none-any.whl"
 )
-CURRENT_RUNTIME_STATUS = f"Status: {CURRENT_VERSION} letter 173 cleanup reliability and one deliverable feedback letter"
+CURRENT_RUNTIME_STATUS = f"Status: {CURRENT_VERSION} closed-writer triage (27 reopened, 12 removed) and activity-scoped close"
 CURRENT_MATRIX_VERSION = f"Version: {CURRENT_VERSION} implementation and release scope"
 MATRIX_PATH = KIT_ROOT / "docs" / "capability-matrix.md"
 PRODUCT_ROADMAP_PATH = KIT_ROOT / "docs" / "product-roadmap.md"
@@ -1916,9 +1916,11 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
-        for text in (readme_text, readme_ko_text, kit_readme_text, upgrade_text, upgrade_ko_text, runtime_skill_text):
+        # The runtime skill dropped the command when it was removed in v0.4.40.
+        for text in (readme_text, readme_ko_text, kit_readme_text, upgrade_text, upgrade_ko_text):
             with self.subTest(document="operator-surface"):
                 self.assertIn("zet-abstract-backfill-write", text)
+        self.assertIn("removed in v0.4.40", " ".join(runtime_skill_text.split()))
         for text in (kit_readme_text, upgrade_text, upgrade_ko_text):
             with self.subTest(document="current-operator-boundary"):
                 self.assertIn("compound_exact_human_approval_binding_required", text)
@@ -1993,9 +1995,11 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
-        for text in (readme_text, readme_ko_text, kit_readme_text, upgrade_text, upgrade_ko_text, runtime_skill_text):
+        # The runtime skill dropped the command when it was removed in v0.4.40.
+        for text in (readme_text, readme_ko_text, kit_readme_text, upgrade_text, upgrade_ko_text):
             with self.subTest(document="operator-surface"):
                 self.assertIn("zet-abstract-backfill-revert", text)
+        self.assertIn("removed in v0.4.40", " ".join(runtime_skill_text.split()))
         for text in (kit_readme_text, upgrade_text, upgrade_ko_text):
             with self.subTest(document="current-operator-boundary"):
                 self.assertIn("compound_exact_human_approval_binding_required", text)
@@ -7363,7 +7367,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 )
                 root_line = (
                     '$womBootstrapRoot = Join-Path $env:LOCALAPPDATA '
-                    '"WOM\\bootstrap-v0439-$womBootstrapNonce"'
+                    '"WOM\\bootstrap-v0440-$womBootstrapNonce"'
                 )
                 absent_guard = "if (Test-Path -LiteralPath $womBootstrapRoot)"
                 absent_failure = 'throw "WOM bootstrap path must be new."'
@@ -7398,7 +7402,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn("wom-kit/docs/runtime-skill-install", text)
                 self.assertNotIn(
                     '$womBootstrapRoot = Join-Path $env:LOCALAPPDATA '
-                    '"WOM\\bootstrap-v0439"',
+                    '"WOM\\bootstrap-v0440"',
                     text,
                 )
                 self.assertNotIn(
@@ -7478,16 +7482,14 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         for text in (operator_source_text, operator_resource_text):
             with self.subTest(document="runtime-operator-contract"):
                 normalized_text = " ".join(text.split())
+                # v0.4.40 removed the batch writer, revert and executor; the
+                # contract now says so instead of describing closed branches.
                 self.assertIn(
-                    "Historical v0.3 applies published a private hash-only",
+                    "The batch writer, its revert, and its recovery executor were removed in v0.4.40",
                     normalized_text,
                 )
                 self.assertIn(
-                    "the revert approval branch is also fixed fail-closed",
-                    normalized_text,
-                )
-                self.assertIn(
-                    "compound_exact_human_approval_binding_required",
+                    "historical batch receipts, journals, and locks stay auditable",
                     normalized_text,
                 )
                 self.assertNotIn(

@@ -159,29 +159,29 @@ class Letter136PathsAndHelpTests(unittest.TestCase):
                 [".wom-scratch/session/same-name.md"],
             )
 
-            result = archive_services.ai_scratch_gc_for_zettel(
-                archive,
-                relative_path="inbox/zet_letter136_scratch_gc.md",
-                dry_run=False,
-                approve=True,
-                reviewed_by="person:letter136-reviewer",
-            )
-
-            self.assertFalse(result["ok"], result)
-            self.assertEqual(
-                result["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
-            )
-            self.assertEqual(result["files_written"], [])
-            self.assertFalse(result["private_values_echoed"])
+            # 2026-09-24 reopen (triage group 2): approve needs the exact
+            # approval claim; an unbound call is refused before any read.
+            with self.assertRaises(archive_services.ArchiveServiceError) as caught:
+                archive_services.ai_scratch_gc_for_zettel(
+                    archive,
+                    relative_path="inbox/zet_letter136_scratch_gc.md",
+                    dry_run=False,
+                    approve=True,
+                    reviewed_by="person:letter136-reviewer",
+                )
+            self.assertEqual(str(caught.exception), "exact_human_approval_required")
             self.assertTrue(managed.is_file())
             self.assertTrue(external.is_file())
 
-            with patch.object(
-                archive_services,
-                "ai_scratch_gc_for_zettel",
-                side_effect=AssertionError("approval reached scratch service"),
-            ) as service:
+            # The CLI binds only the archive-owned candidate; a declined
+            # approval deletes neither the managed nor the project file.
+            contexts = []
+
+            def decline(_root, context, _writer, **_kwargs):
+                contexts.append(context)
+                raise archive_cli.ExactHumanApprovalWorkflowError("exact_human_approval_cancelled")
+
+            with patch.object(archive_cli, "_execute_exact_human_approved_write", side_effect=decline):
                 code, output = self.run_cli(
                     [
                         "ai-scratch-gc",
@@ -197,13 +197,10 @@ class Letter136PathsAndHelpTests(unittest.TestCase):
                 )
             self.assertEqual(code, 1)
             payload = json.loads(output)
-            self.assertEqual(
-                payload["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
-            )
+            self.assertEqual(payload["reason_codes"], ["ai_scratch_gc_workflow_precondition_failed"])
             self.assertEqual(payload["files_written"], [])
             self.assertFalse(payload["private_values_echoed"])
-            service.assert_not_called()
+            self.assertEqual(len(contexts), 1)
             self.assertTrue(managed.is_file())
             self.assertTrue(external.is_file())
 

@@ -522,16 +522,15 @@ class SuggestedCommandModeResolverTests(unittest.TestCase):
 
         self.assertTrue(dry_run["invocation_surface_available"])
         self.assertTrue(dry_run["requested_mode_available"])
+        # 2026-09-24 reopen: approval is exact human approval again, still a
+        # separate mode from the dry-run the doctor suggests.
         self.assertEqual(
             dry_run["approval_status"],
-            command_status.APPROVAL_FIXED_CLOSED,
+            command_status.APPROVAL_AVAILABLE,
         )
-        self.assertFalse(dry_run["approval_mode_available_for_arguments"])
-        self.assertFalse(approval["requested_mode_available"])
-        self.assertEqual(
-            approval["requested_mode_reason_code"],
-            command_status.COMPOUND_APPROVAL_REASON_CODE,
-        )
+        self.assertEqual(dry_run["requested_mode"], "dry_run")
+        self.assertTrue(approval["requested_mode_available"])
+        self.assertEqual(approval["requested_mode"], "approve")
 
         frontmatter = command_status.resolve_suggested_command_mode(
             inventory,

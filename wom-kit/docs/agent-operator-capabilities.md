@@ -1,6 +1,6 @@
 # Agent Operator Capabilities Manifest
 
-Current release: v0.4.39 letter 173 cleanup reliability and one deliverable feedback letter; [feedback route](operator-feedback-lifecycle.md).
+Current release: v0.4.40 closed-writer triage (27 reopened, 12 removed) and activity-scoped close; [triage decision](archive-infra-decision-log-2026-09-24-closed-writer-triage.md).
 
 Status: v0.4.36 no-dialog grants, letter-168, and writer-session coverage gate
 
@@ -205,21 +205,21 @@ field remain `history_not_audited`. Inventory, shared capability availability,
 and command help consume the same content-free history. Current availability
 continues to be parser-derived; history does not grant execution authority.
 
-For the current v0.4.36 working-tree parser, the inventory snapshot is:
+For the current v0.4.40 working-tree parser, the inventory snapshot is:
 
 ```text
-canonical executable command paths: 322
+canonical executable command paths: 316
 alias invocation paths:              262
-all invocation paths:                584
-approval_available:                   63
-approval_fixed_closed:                59
+all invocation paths:                564
+approval_available:                   92
+approval_fixed_closed:                20
 approval_not_exposed:                204
 conditional approval paths:            10
-dry_run_exposed:                     278
+dry_run_exposed:                     271
 unmatched fixed-close entries:         0
 ```
 
-The 59 fixed-closed paths consist of 58 compound-approval migrations and
+The 20 fixed-closed paths consist of 19 compound-approval migrations and
 `operation-control`, whose reason is `operation_cancel_not_supported`.
 Its retained `--approve` syntax does not implement cancellation. Status, wait,
 and recovery-plan remain available with `--dry-run`; no cancel request is

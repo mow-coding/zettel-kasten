@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from wom_kit import completion_workflows, project_runtime
+from wom_kit import archive_cli, completion_workflows, project_runtime
 
 from . import test_completion_workflows as _completion_tests
 from . import test_letter129_project_update_collision_batch_core as _batch_core
@@ -868,8 +868,12 @@ class Letter129BoundRepairCanaryTests(unittest.TestCase):
             plan = json.loads(plan_output)
             self.assertTrue(plan["summary"]["collision_binding_verified"])
 
-            # A parser-known closed writer must not inspect the runtime at all.
-            # Keep the real receipt/payload checks in the read-only plan above.
+            # Reopened in v0.4.40: approve asks for exact approval; a declined
+            # decision removes nothing. Keep the real receipt/payload checks in
+            # the read-only plan above.
+            def decline(*_args, **_kwargs):
+                raise archive_cli.ExactHumanApprovalWorkflowError("exact_human_approval_cancelled")
+
             with patch.object(
                 project_runtime,
                 "current_project_runtime_binding",
@@ -877,7 +881,7 @@ class Letter129BoundRepairCanaryTests(unittest.TestCase):
                     "bound": True,
                     "reason_code": "current_project_runtime_bound",
                 },
-            ) as runtime_binding:
+            ), patch.object(archive_cli, "_execute_exact_human_approved_write", side_effect=decline):
                 repair_code, repair_output = run_cli(
                     [
                         "project-bytecode-repair",
@@ -896,13 +900,12 @@ class Letter129BoundRepairCanaryTests(unittest.TestCase):
                         "json",
                     ]
                 )
-            runtime_binding.assert_not_called()
             self.assertEqual(repair_code, 1, repair_output)
             repaired = json.loads(repair_output)
             self.assertEqual(repaired["state"], "blocked")
             self.assertEqual(
                 repaired["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
+                ["project_bytecode_repair_workflow_precondition_failed"],
             )
             self.assertFalse(repaired["private_values_echoed"])
 

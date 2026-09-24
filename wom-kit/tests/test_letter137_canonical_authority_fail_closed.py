@@ -11,12 +11,17 @@ from pathlib import Path
 from types import ModuleType
 from unittest import mock
 
+from wom_kit import command_status  # noqa: E402
 from wom_kit import (
     archive_cli,
     archive_services,
     completion_workflows,
     saved_view_workflows,
 )
+import sys as _removed_sys
+from pathlib import Path as _RemovedPath
+_removed_sys.path.insert(0, str(_RemovedPath(__file__).resolve().parent))
+from removed_commands_v0440 import REMOVED_COMMANDS_V0440  # noqa: E402
 
 
 COMPOUND_APPROVAL_BLOCKER = (
@@ -423,7 +428,15 @@ class Letter137CanonicalAuthorityCliBoundaryTests(
         result = json.loads(stdout.getvalue())
         self.assertEqual(result["state"], "blocked")
         self.assertEqual(result["lifecycle_action"], lifecycle_action)
-        self.assertEqual(result["reason_codes"], [COMPOUND_APPROVAL_BLOCKER])
+        # 2026-09-24 reopen (triage group 3): the markup writers route through
+        # exact approval; this private reviewer value is refused before any
+        # read, still without entering the approved service.
+        reopened = {"markup_normalization", "markup_normalization_revert", "markup_normalization_recovery",
+                    "principal_register", "principal_unregister"}
+        self.assertEqual(
+            result["reason_codes"],
+            [f"{lifecycle_action}_reviewer_required" if lifecycle_action in reopened else COMPOUND_APPROVAL_BLOCKER],
+        )
         self.assertIs(result["private_values_echoed"], False)
         rendered = stdout.getvalue() + stderr.getvalue()
         for private in (arguments[1], *PRIVATE_VALUES):
@@ -710,6 +723,8 @@ class Letter137CanonicalAuthorityCliBoundaryTests(
             )
             before = _snapshot(root_path)
             for arguments, module, service, action in calls:
+                if arguments[0] in REMOVED_COMMANDS_V0440 or arguments[0] in command_status.EXACT_APPROVAL_REOPENED_WRITERS:  # deleted or reopened in v0.4.40
+                    continue
                 with self.subTest(action=action, command=arguments[0]):
                     self._assert_cli_block(
                         arguments=arguments,
@@ -1058,6 +1073,8 @@ class Letter137CanonicalAuthorityCliBoundaryTests(
             )
             before = _snapshot(root_path)
             for arguments, module, service_name in calls:
+                if arguments[0] in REMOVED_COMMANDS_V0440:  # deleted in v0.4.40
+                    continue
                 with self.subTest(command=arguments[0]), mock.patch.object(
                     module,
                     service_name,

@@ -61,8 +61,8 @@ For operator feedback, run `archive operator-feedback-plan <archive-root> --dry-
 
 - BEFORE copying any local file into the archive or an objet store, run `archive source-intake <archive-root> --dry-run --local-path <file>` and follow its `next_safe_actions`.
 - Stage capture candidates inside the archive root under `staging/incoming/`, never in a raw in-root `objets/` folder.
-- Capture only via `objet-capture-selection` -> `objet-capture` with explicit owner approval; real archives also need an owner-approved `objet-capture-enable` record.
-- Bulk external stores are not per-file copies: register evidence with `prehashed-objet-ledger` and `object-storage-upload-evidence` instead.
+- Capture only via `objet-capture-selection` -> `objet-capture` (or `source-intake-chain` for one file) with explicit owner approval: one dialog, or a valid session grant.
+- Bulk external stores are not per-file copies: adopt verified remote copies with `object-storage-adopt-existing` instead.
 
 ## AI-Operator Discipline
 

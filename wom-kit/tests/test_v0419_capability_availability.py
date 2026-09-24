@@ -18,14 +18,12 @@ class V0419CapabilityAvailabilityTests(unittest.TestCase):
             "add-source": "add_source_binding",
             "discard-draft": "discard_draft_apply",
             "credential-lifecycle": "authenticated_credential_lifecycle_decision",
-            "github-repo": "approve_github_repository_setup_plan",
             "import-external": "import_external_archive",
             "migrate": "migrate_archive",
             "parcel": "pack_work_context",
             "notion-page-recovery": "authenticated_notion_page_recovery_execute",
             "objet-capture-selection": "objet_capture_selection_record",
             "prehashed-objet-ledger": "prehashed_objet_ledger_register",
-            "transfer-ownership": "transfer_archive_ownership",
             "revert-batch": "zettel_edge_batch_revert",
             "mint-zet-batch": "mint_zet_batch",
         }
@@ -45,10 +43,11 @@ class V0419CapabilityAvailabilityTests(unittest.TestCase):
 
     def test_fixed_closed_command_preserves_parser_json_default(self) -> None:
         output, errors = io.StringIO(), io.StringIO()
-        argv = ["principal-register", "synthetic-root-must-not-be-read", "--principal-id", "team:synthetic",
-                "--kind", "team", "--display-name", "Synthetic app", "--expected-plan-sha256",
-                "sha256:" + "a" * 64, "--approve", "--reviewed-by", "person:synthetic"]
-        with mock.patch.object(archive_cli, "command_principal_register") as handler:
+        # principal-register reopened in v0.4.40; credential-lifecycle stays closed.
+        argv = ["credential-lifecycle", "synthetic-root-must-not-be-read", "--workspace-fingerprint",
+                "sha256:" + "b" * 64, "--default-credential-id", "credential:synthetic",
+                "--approve", "--reviewed-by", "person:synthetic"]
+        with mock.patch.object(archive_cli, "command_credential_lifecycle") as handler:
             with redirect_stdout(output), redirect_stderr(errors):
                 code = archive_cli.main(argv)
         handler.assert_not_called()
@@ -81,6 +80,8 @@ class V0419CapabilityAvailabilityTests(unittest.TestCase):
             "discard-draft", "discard-draft-restore", "zettel-edge-batch",
             "mint-zet-batch", "retire-draft-batch", "zet-revision-write",
             "zet-revision-restore-write",
+            # 2026-09-24 reopen (58-writer triage, group 1).
+            "remint-reconcile", "retire-draft-reconcile",
         }
         expected_history = {
             "state": "previously_exposed_now_restricted",
@@ -113,7 +114,7 @@ class V0419CapabilityAvailabilityTests(unittest.TestCase):
                 self.assertIn("restricted this path at v0.4.0", help_text)
                 self.assertIn("Successful execution at those versions is not verified", help_text)
                 self.assertIn("earlier-version bypass is not supported", help_text)
-        for path in ("object-storage-upload", "create-draft"):
+        for path in ("object-storage-upload", "create-draft", "remint-reconcile"):
             self.assertEqual(by_path[path]["approval_exposure_history"], {
                 "state": "history_not_audited", "successful_use_verified": False,
             })
@@ -129,11 +130,13 @@ class V0419CapabilityAvailabilityTests(unittest.TestCase):
 
     def test_untrusted_history_is_rejected_without_echoing_private_values(self) -> None:
         inventory = self.inventory()
-        known = next(
-            row for row in inventory["commands"]
-            if row["canonical_path"] == "remint-reconcile"
-        )
-        history = known["approval_exposure_history"]
+        history = {
+            "state": "previously_exposed_now_restricted",
+            "exposed_at_tag": "v0.3.320",
+            "restricted_at_tag": "v0.4.0",
+            "evidence_basis": "public_tag_parser_and_dispatch",
+            "successful_use_verified": False,
+        }
         invalid_histories = [
             {**history, "exposed_at_tag": "PRIVATE-HISTORY-MARKER"},
             {**history, "successful_use_verified": True},
@@ -322,7 +325,7 @@ class V0419CapabilityAvailabilityTests(unittest.TestCase):
                     else:
                         self.assertIn("no approval window was opened", combined)
 
-    def test_reconcile_dry_runs_do_not_offer_unavailable_approval(self) -> None:
+    def test_reconcile_dry_runs_pass_through_the_reopened_approval(self) -> None:
         for command, service_name in (
             ("remint-reconcile", "remint_reconcile_plan"),
             ("retire-draft-reconcile", "retire_draft_reconcile_plan"),
@@ -365,14 +368,16 @@ class V0419CapabilityAvailabilityTests(unittest.TestCase):
                             result = archive_cli.main(argv)
                         self.assertEqual(result, 0)
                         self.assertEqual(original, saved)
-                        self.assertNotIn("--approve", stdout.getvalue())
-                        self.assertIn("writer_unavailable", stdout.getvalue())
+                        # 2026-09-24 reopen: the dry-run no longer projects a
+                        # closed writer; its own approval guidance is shown.
+                        self.assertNotIn("writer_unavailable", stdout.getvalue())
                         if output_format == "json":
                             payload = json.loads(stdout.getvalue())
                             self.assertEqual(payload["drift_class"], drift)
-                            self.assertFalse(payload["approval_would_write"])
-                            self.assertFalse(payload["approved_write_implemented"])
-                            self.assertFalse(payload["validation_digest_is_approval_authority"])
+                            self.assertEqual(payload["approval_would_write"], drift != "clean")
+                            self.assertNotIn("approved_write_implemented", payload)
+                            if not diagnostic:
+                                self.assertEqual(payload["next_safe_actions"], saved["next_safe_actions"])
                         if diagnostic:
                             self.assertNotIn("PRIVATE-BODY-MARKER", stdout.getvalue())
 
@@ -381,12 +386,12 @@ class V0419CapabilityAvailabilityTests(unittest.TestCase):
 
         dry_run = command_status.resolve_capability_availability(
             inventory,
-            "remint-reconcile",
+            "credential-lifecycle",
             requested_mode="dry_run",
         )
         approve = command_status.resolve_capability_availability(
             inventory,
-            "remint-reconcile",
+            "credential-lifecycle",
             requested_mode="approve",
         )
         available_writer = command_status.resolve_capability_availability(
@@ -812,8 +817,8 @@ class V0419CapabilityAvailabilityTests(unittest.TestCase):
         status = command_status.resolve_suggested_command_mode(
             inventory,
             (
-                "archive remint-reconcile <archive-root> "
-                "--zettel-id <id> --approve"
+                "archive credential-lifecycle <archive-root> "
+                "--workspace-fingerprint <sha> --default-credential-id <id> --approve"
             ),
             trusted_parser=parser,
         )
@@ -835,15 +840,17 @@ class V0419CapabilityAvailabilityTests(unittest.TestCase):
         stderr = io.StringIO()
         with mock.patch.object(
             archive_cli,
-            "command_remint_reconcile",
+            "command_credential_lifecycle",
             side_effect=AssertionError("unavailable handler must not run"),
         ) as handler, redirect_stdout(stdout), redirect_stderr(stderr):
             exit_code = archive_cli.main(
                 [
-                    "remint-reconcile",
+                    "credential-lifecycle",
                     private_marker,
-                    "--zettel-id",
-                    "zet_synthetic",
+                    "--workspace-fingerprint",
+                    "sha256:" + "b" * 64,
+                    "--default-credential-id",
+                    "credential:synthetic",
                     "--approve",
                     "--format",
                     "json",
@@ -976,13 +983,17 @@ class V0419CapabilityAvailabilityTests(unittest.TestCase):
             for row in payload["data"]["capability_availability"]["rows"]
         }
         self.assertEqual(
-            rows["remint-reconcile"]["approve_without_arguments"]["state"],
+            rows["credential-lifecycle"]["approve_without_arguments"]["state"],
             command_status.CAPABILITY_WRITER_UNAVAILABLE,
         )
         self.assertEqual(
             rows["project-version-update"]["approve_without_arguments"][
                 "state"
             ],
+            command_status.CAPABILITY_AVAILABLE,
+        )
+        self.assertEqual(
+            rows["remint-reconcile"]["approve_without_arguments"]["state"],
             command_status.CAPABILITY_AVAILABLE,
         )
 
@@ -1027,8 +1038,8 @@ class V0419CapabilityAvailabilityTests(unittest.TestCase):
             "--zettel-id <id> --dry-run"
         )
         unavailable_command = (
-            "archive remint-reconcile <archive-root> "
-            "--zettel-id <id> --approve"
+            "archive credential-lifecycle <archive-root> "
+            "--workspace-fingerprint <sha> --default-credential-id <id> --approve"
         )
         available_status = command_status.resolve_suggested_command_mode(
             inventory,

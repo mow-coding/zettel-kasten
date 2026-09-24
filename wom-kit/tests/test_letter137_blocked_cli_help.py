@@ -42,28 +42,32 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
 
     def test_every_fixed_closed_command_has_honest_approval_help(self) -> None:
         expected_additional_public_commands = {
-            "credential-keepassxc-write",
             "github-repo",
             "imap-mailbox-adapter-manifest-write",
             "imap-mailbox-header-metadata-scan",
-            "notion-objet-manifest-locator-label",
             "onboard",
-            "repair-gitignore",
-            "restore-drill",
             "runtime-skill-install",
             "runtime-skill-uninstall",
-            "scan-source",
-            "tiro-lossless-recovery-capture",
             "tiro-lossless-recovery-fetch-run",
-            "zet-catalog-pass-cleanup",
         }
         self.assertEqual(
             len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS),
-            58,
+            19,
         )
         for exact_batch_command in (
             "source-intake-batch",
             "objet-capture-batch",
+            # 2026-09-24 reopen (58-writer triage, group 1).
+            "remint-reconcile",
+            "retire-draft-reconcile",
+            # 2026-09-24 reopen (triage group 2).
+            "ai-scratch-gc",
+            "zet-catalog-pass-cleanup",
+            # 2026-09-24 reopen (triage group 3).
+            "markup-normalization",
+            "markup-normalization-recovery",
+            "markup-normalization-revert",
+            "zettel-objet-link-revert",
         ):
             self.assertNotIn(
                 exact_batch_command,
@@ -101,7 +105,7 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
             "revert-edge",
             archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS,
         )
-        self.assertIn(
+        self.assertNotIn(  # reopened in v0.4.40 (triage group 3)
             "zettel-objet-link-revert",
             archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS,
         )
@@ -205,7 +209,9 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
             ("zet-revision-plan", "approval_available"),
             ("zet-revision-write", "exact human approval"),
             ("zet-revision-restore-write", "exact-byte"),
-            ("remint-reconcile", f"Unavailable in v{archive_cli.__version__}"),
+            ("remint-reconcile", "exact human approval"),
+            ("remint-reconcile-batch", "exact human approval"),
+            ("import-external", f"Unavailable in v{archive_cli.__version__}"),
         ):
             with self.subTest(command=command_name):
                 completed = subprocess.run(
@@ -228,7 +234,7 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
                 )
                 self.assertIn(
                     expected,
-                    completed.stdout + completed.stderr,
+                    " ".join((completed.stdout + completed.stderr).split()),
                 )
 
 

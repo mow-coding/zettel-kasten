@@ -1,5 +1,7 @@
 # zet Abstract Backfill Write
 
+> Removed in v0.4.40: `archive zet-abstract-backfill-write` no longer exists; apply a reviewed abstract to one zet with `zet-revision-write`. This page is kept as historical record.
+
 Historical v0.3 record — Status: implemented as an approval-gated transactional write in v0.3.219
 
 Current v0.4.0 boundary: the plan and writer dry-run remain available, but the

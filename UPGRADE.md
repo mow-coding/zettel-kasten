@@ -24,6 +24,34 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.4.40 Closed writers reopened or removed
+
+Use the exact public wheel after publication. Twenty-seven writers that were fixed closed since v0.4.0 run again under exact approval: preview first, then approve the returned plan. Twelve commands were removed; scripts or notes that call them must switch:
+
+| Removed command | Use instead |
+|---|---|
+| `credential-keepassxc-write` | `credential-adopt` |
+| `external-locator-revert` | `external-locator-record --revert-recovery` |
+| `notion-ancestor-fetch-adapter-run` | `notion-recover` (still closed; see the release note) |
+| `notion-objet-manifest-locator-label` | `external-locator-record` |
+| `object-storage-wom-location-reconcile` | `object-storage-adopt-existing` |
+| `scan-source` | `source-intake-batch --manifest` |
+| `tiro-lossless-recovery-capture` | `source-intake-chain` |
+| `zet-abstract-backfill-write` | `zet-revision-write` for one zet |
+| `zet-abstract-backfill-revert`, `zet-abstract-backfill-recover` | none; historical receipts stay auditable with the read-only audit and recovery plan |
+| `objet-capture-enable`, `object-storage-upload-evidence` | none; never usable since v0.4.0 (`objet-capture-enable`: capture a file on a real archive with `source-intake-chain`) |
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0440-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.40/wom_kit-0.4.40-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+The customer must still run the reviewed `project-version-update` workflow. Bootstrap installation alone does not update a pinned project runtime.
+
 ## v0.4.39 Letter 173 fixes and one deliverable letter
 
 Use the exact public wheel after publication. An approval after a clean `activity-cleanup` preview no longer fails because of Windows folder-size changes; rerun the preview and approve the returned plan. Git backup may proceed past an ignored attribute file that cannot reach committable paths. A feedback letter needs no hand-picked number and no separate review copy.

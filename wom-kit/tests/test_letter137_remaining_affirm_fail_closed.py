@@ -11,6 +11,7 @@ from pathlib import Path
 from types import ModuleType
 from unittest import mock
 
+from wom_kit import command_status  # noqa: E402
 from wom_kit import (
     archive_cli,
     archive_services,
@@ -397,30 +398,14 @@ class Letter137RemainingAffirmCliBoundaryTests(_RemainingAffirmAssertions):
                     "project_bytecode_repair",
                     "project_bytecode_repair",
                 ),
-                (
-                    [
-                        "identity-reconcile",
-                        root,
-                        "--approve",
-                        "--reviewed-by",
-                        PRIVATE_REVIEWER,
-                        "--expected-archive-sha256",
-                        PRIVATE_DIGEST,
-                        "--expected-identity-sha256",
-                        PRIVATE_DIGEST,
-                        "--expected-proposed-identity-sha256",
-                        PRIVATE_DIGEST,
-                        "--affirm-principal-metadata-reviewed",
-                        "--format",
-                        "json",
-                    ],
-                    archive_services,
-                    "reconcile_archive_identity",
-                    "archive_identity_reconcile",
-                ),
+                # identity-reconcile was reopened under exact approval on
+                # 2026-09-24 (triage group 5); test_group5_restore_gitignore_identity_exact
+                # covers its CLI route. The service stays blocked without it.
             )
             before = _snapshot(Path(root))
             for arguments, module, service, action in calls:
+                if arguments[0] in command_status.EXACT_APPROVAL_REOPENED_WRITERS:  # reopened in v0.4.40
+                    continue
                 with self.subTest(action=action):
                     self._assert_cli_block(
                         arguments=arguments,

@@ -1,5 +1,7 @@
 # Notion Objet Manifest Locator Label
 
+> Removed in v0.4.40: `archive notion-objet-manifest-locator-label` no longer exists; use `external-locator-record`. This page is kept as historical record.
+
 Status: v0.4.0 dry-run-only manifest locator label preview
 
 `archive notion-objet-manifest-locator-label --dry-run` previews one reviewed,

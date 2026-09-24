@@ -1717,6 +1717,206 @@ def retire_draft_batch_approval_binding(
     )
 
 
+_RECEIPT_RECONCILE_OPERATIONS = {
+    "mint": ExactHumanApprovalOperation.remint_reconcile,
+    "retire_draft": ExactHumanApprovalOperation.retire_draft_reconcile,
+}
+_RECEIPT_RECONCILE_DRIFT_CLASSES = frozenset({"format_drift", "content_change"})
+
+
+def receipt_reconcile_batch_approval_binding(
+    dry_run: Mapping[str, Any],
+) -> ExactOperationApprovalBinding:
+    """Bind one reviewed receipt-reconcile list to each item's exact evidence.
+
+    Every item carries ``approval_item_sha256``: the digest of its zettel id,
+    drift class, review-plan digest and the current bytes of every receipt ref.
+    The writer re-derives each item digest immediately before its write, so an
+    item whose evidence moved after approval is refused, never laundered.
+    """
+
+    plan = _plain_mapping(dry_run)
+    if plan.get("ok") is not True or plan.get("dry_run") is not True:
+        raise _fail("operation_approval_plan_blocked")
+    kind = plan.get("reconcile_kind")
+    operation = _RECEIPT_RECONCILE_OPERATIONS.get(kind) if type(kind) is str else None
+    batch_id = plan.get("batch_id")
+    items = plan.get("items")
+    if (
+        operation is None
+        or plan.get("lifecycle_action") != "receipt_reconcile_batch_plan"
+        or plan.get("write_status") != "would_write"
+        or plan.get("blockers") != []
+        or type(batch_id) is not str
+        or not batch_id.startswith("receipt-reconcile:")
+        or type(plan.get("strip_bom")) is not bool
+        or not isinstance(items, list)
+        or not items
+    ):
+        raise _fail("operation_approval_plan_invalid")
+    item_digests: list[str] = []
+    class_counts = {name: 0 for name in sorted(_RECEIPT_RECONCILE_DRIFT_CLASSES)}
+    for item in items:
+        row = _plain_mapping(item)
+        drift_class = row.get("drift_class")
+        if row.get("write_status") != "would_write" or drift_class not in _RECEIPT_RECONCILE_DRIFT_CLASSES:
+            raise _fail("operation_approval_plan_invalid")
+        item_digests.append(_sha_ref(row.get("approval_item_sha256")))
+        class_counts[drift_class] += 1
+    if len(set(item_digests)) != len(item_digests):
+        raise _fail("operation_approval_plan_invalid")
+    target = {
+        "reconcile_kind": kind,
+        "item_bindings": sorted(item_digests),
+        "item_count": len(item_digests),
+        "batch_id_digest": _sha256(batch_id),
+    }
+    basis = {
+        "schema_version": BINDING_SCHEMA_VERSION,
+        "operation": operation.value,
+        "target": target,
+        "strip_bom": plan.get("strip_bom"),
+        "class_counts": class_counts,
+        "warnings": plan.get("warnings"),
+    }
+    label = (
+        f"형식 차이 {class_counts['format_drift']}건 · 내용 변경 {class_counts['content_change']}건"
+    )
+    return ExactOperationApprovalBinding(
+        operation=operation,
+        plan_sha256=_sha256(basis),
+        target_binding_sha256=_sha256(target),
+        warning_codes=_warning_codes(plan.get("warnings")),
+        review_binding_codes=(
+            "drift_class_counts",
+            "item_binding_set",
+            "receipt_ref_digests",
+            "warning_codes",
+        ),
+        target_preview=ExactHumanApprovalTargetPreview(
+            kind="zet",
+            primary=_required_target_preview_identity(f"{len(item_digests)} items"),
+            primary_label=_optional_bound_preview_label(label),
+        ),
+    )
+
+
+def ai_scratch_gc_approval_binding(
+    projection: Mapping[str, Any],
+) -> ExactOperationApprovalBinding:
+    """Bind one zet's reviewed scratch cleanup projection.
+
+    The projection (target zet, every candidate's path, state, sha256 and
+    size, missing refs, blockers) is the same object the writer re-derives and
+    compares immediately before deleting anything.
+    """
+
+    plan = _plain_mapping(projection)
+    target_block = _plain_mapping(plan.get("target"))
+    candidates = plan.get("candidates")
+    if (
+        not isinstance(candidates, list)
+        or plan.get("blockers") != []
+        or _plain_mapping(plan.get("policy")).get("safe_to_cleanup") is not True
+    ):
+        raise _fail("operation_approval_plan_blocked")
+    ready = []
+    for item in candidates:
+        row = _plain_mapping(item)
+        if row.get("state") != "ready":
+            raise _fail("operation_approval_plan_invalid")
+        ready.append([_sha256(row.get("path")), _sha_ref(row.get("sha256")), row.get("bytes")])
+    if not ready:
+        raise _fail("operation_approval_plan_blocked")
+    target = {
+        "zettel_id_digest": _sha256(target_block.get("zettel_id")),
+        "zettel_path_digest": _sha256(target_block.get("zettel_path")),
+        "candidate_bindings": sorted(ready),
+        "candidate_count": len(ready),
+    }
+    basis = {
+        "schema_version": BINDING_SCHEMA_VERSION,
+        "operation": "ai_scratch_gc",
+        "target": target,
+        "projection_digest": _sha256(plan),
+    }
+    return ExactOperationApprovalBinding(
+        operation=ExactHumanApprovalOperation.ai_scratch_gc,
+        plan_sha256=_sha256(basis),
+        target_binding_sha256=_sha256(target),
+        warning_codes=(),
+        review_binding_codes=("candidate_digest_set", "zet_identity"),
+        target_preview=ExactHumanApprovalTargetPreview(
+            kind="zet",
+            primary=_required_target_preview_identity(target_block.get("zettel_id")),
+            primary_label=_optional_bound_preview_label(f"임시 파일 {len(ready)}개"),
+        ),
+    )
+
+
+def zet_catalog_pass_cleanup_approval_binding(
+    preview: Mapping[str, Any],
+) -> ExactOperationApprovalBinding:
+    """Bind the one SHA-verified private catalog-pass artifact."""
+
+    plan = _plain_mapping(preview)
+    artifact = _plain_mapping(plan.get("artifact"))
+    if (
+        plan.get("ok") is not True
+        or plan.get("status") != "ready_for_approval"
+        or plan.get("blockers") != []
+        or artifact.get("expected_sha256_matches") is not True
+        or artifact.get("structurally_complete_before_cleanup") is not True
+    ):
+        raise _fail("operation_approval_plan_blocked")
+    target = {
+        "artifact_path_digest": _sha256(artifact.get("path")),
+        "artifact_sha256": _sha_ref(artifact.get("sha256")),
+    }
+    basis = {
+        "schema_version": BINDING_SCHEMA_VERSION,
+        "operation": "zet_catalog_pass_cleanup",
+        "target": target,
+        "scope": _plain_mapping(plan.get("approval")).get("scope"),
+    }
+    return ExactOperationApprovalBinding(
+        operation=ExactHumanApprovalOperation.zet_catalog_pass_cleanup,
+        plan_sha256=_sha256(basis),
+        target_binding_sha256=_sha256(target),
+        warning_codes=_warning_codes(plan.get("warnings")),
+        review_binding_codes=("artifact_digest",),
+    )
+
+
+def plan_digest_approval_binding(
+    operation: ExactHumanApprovalOperation,
+    plan_sha256: str,
+) -> ExactOperationApprovalBinding:
+    """Bind a writer whose dry-run already digests its exact effect set.
+
+    Used by legacy writers (triage group 3 onward) that re-derive their plan
+    under their own lock and refuse unless it still equals the reviewed
+    ``plan_sha256``; the approval binds that digest and nothing looser.
+    """
+
+    if type(operation) is not ExactHumanApprovalOperation:
+        raise _fail("operation_approval_plan_invalid")
+    plan = _sha_ref(plan_sha256)
+    target = {"operation": operation.value, "plan_sha256": plan}
+    basis = {
+        "schema_version": BINDING_SCHEMA_VERSION,
+        "operation": operation.value,
+        "target": target,
+    }
+    return ExactOperationApprovalBinding(
+        operation=operation,
+        plan_sha256=_sha256(basis),
+        target_binding_sha256=_sha256(target),
+        warning_codes=(),
+        review_binding_codes=("plan_digest",),
+    )
+
+
 def zettel_edge_batch_revert_approval_binding(
     dry_run: Mapping[str, Any],
 ) -> ExactOperationApprovalBinding:
@@ -2672,14 +2872,18 @@ __all__ = [
     "ExactOperationApprovalBinding",
     "OperationApprovalBindingError",
     "assert_same_binding",
+    "ai_scratch_gc_approval_binding",
     "build_operation_exact_human_approval_receipt",
     "exact_operation_manifest_approval_binding",
     "mint_zet_approval_binding",
     "objet_capture_approval_binding",
+    "plan_digest_approval_binding",
     "promote_zet_approval_binding",
+    "receipt_reconcile_batch_approval_binding",
     "retire_draft_approval_binding",
     "warning_override_approval_binding",
     "zettel_edge_approval_binding",
     "zettel_edge_revert_approval_binding",
     "zettel_objet_link_approval_binding",
+    "zet_catalog_pass_cleanup_approval_binding",
 ]

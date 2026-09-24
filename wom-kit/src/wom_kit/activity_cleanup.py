@@ -35,6 +35,26 @@ MAX_CONTROL_BYTES = 32 * 1024 * 1024
 DOMAIN = b"wom-kit/activity-cleanup/v1\0"
 
 
+def _in_archive_ai_scratch(root, path):
+    """True for a path under the archive's own AI scratch roots (letter 173 D)."""
+    root, path = root.resolve(), path.resolve()
+    return path.is_relative_to(root) and any(
+        path.is_relative_to(root / prefix.rstrip("/")) for prefix in services.AI_SCRATCH_ROOT_PREFIXES)
+
+
+def _zet_referenced_scratch(root):
+    """Archive-relative scratch paths any draft or zet still references explicitly."""
+    referenced = set()
+    for zet in services.iter_zettel_paths(root):
+        try:
+            frontmatter, body = services.require_readable_zettel_content(zet)
+        except (services.ArchiveServiceError, OSError, UnicodeError, ValueError):
+            continue
+        for ref in services.zettel_ai_scratch_references(frontmatter, body):
+            referenced.add(str(ref.get("path") or "").casefold())
+    return referenced
+
+
 class ActivityCleanupError(ValueError):
     def __init__(self, code):
         self.code = code
@@ -221,8 +241,13 @@ def plan(root, request_path, *, resume=False, key_provider=None, progress=None):
         if not isinstance(value, str) or not Path(value).is_absolute():
             raise ActivityCleanupError("activity_cleanup_absolute_root_required")
         path = _safe_path(value)
-        # WOM's own mutable state is handled by its dedicated lifecycle writers.
-        if root.is_relative_to(path) or (path.is_relative_to(root) and not path.is_relative_to(root / "staging")):
+        # WOM's own mutable state is handled by its dedicated lifecycle writers;
+        # the archive's AI scratch roots are activity material (letter 173 D).
+        # Resolved spellings: a Windows 8.3 alias must not look external.
+        real, real_root = path.resolve(), root.resolve()
+        if real_root.is_relative_to(real) or (real.is_relative_to(real_root)
+                                              and not real.is_relative_to(real_root / "staging")
+                                              and not _in_archive_ai_scratch(root, path)):
             raise ActivityCleanupError("activity_cleanup_archive_state_not_external_source")
         if any(path.is_relative_to(scope["path"]) or Path(scope["path"]).is_relative_to(path) for scope in scopes):
             raise ActivityCleanupError("activity_cleanup_overlapping_roots")
@@ -258,6 +283,15 @@ def plan(root, request_path, *, resume=False, key_provider=None, progress=None):
             "object_id": "sha256:" + state["sha256"]})
         _notify(progress, "activity-cleanup-hash", "file", len(selected), len(items))
     _notify(progress, "activity-cleanup-hash", "done", len(selected), len(items))
+    in_archive = [item for item in selected if _in_archive_ai_scratch(root, Path(item["path"]))]
+    if in_archive:
+        # Deleting a file a draft or zet still points at would break that note;
+        # mint-time cleanup or ai-scratch-gc owns those references.
+        referenced = _zet_referenced_scratch(root)
+        for item in in_archive:
+            relative = Path(item["path"]).resolve().relative_to(root.resolve()).as_posix().casefold()
+            if relative in referenced:
+                blockers.append("activity_cleanup_scratch_still_referenced_by_zet")
     directories = []
     directory_requests = request.get("remove_empty_directories", [])
     if not isinstance(directory_requests, list) or any(not isinstance(v, str) or not Path(v).is_absolute() for v in directory_requests):

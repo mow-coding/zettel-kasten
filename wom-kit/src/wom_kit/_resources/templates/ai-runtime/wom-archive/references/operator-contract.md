@@ -144,10 +144,10 @@ edit installed-version pins. Preview first:
 archive project-version-update <project-or-archive-root> --target vX.Y.Z --dry-run --progress --format json
 ```
 
-In v0.4.0 stop after the dry-run. `project-version-update` approval is fixed
-fail-closed before private project reads or mutation with
-`compound_exact_human_approval_binding_required`; editor quiescence or an
-affirmation flag cannot substitute for the missing exact-human binding.
+`project-version-update --approve` runs under exact human approval: one
+native dialog, or none under a valid limited/allow_all session grant. Editor
+quiescence and affirmation flags are required inputs, not a substitute for
+that approval.
 
 When a result carries `materialization_plan_sha256` and an opaque
 `update-entry:NNNN`, use only the separate CLI collision surface. For the
@@ -165,10 +165,10 @@ same target and materialization digest:
 archive project-bytecode-repair-plan <project-or-archive-root> --target vX.Y.Z --expected-materialization-plan-sha256 sha256:<digest> --dry-run --format json
 ```
 
-The repair planner remains read-only. In v0.4.0 the repair approval branch is
-fixed fail-closed with `compound_exact_human_approval_binding_required`; it
-removes no cache file, fetches nothing, changes no `HEAD`/pin, and does not
-retry or grant update approval.
+The repair planner remains read-only. Since v0.4.40
+`project-bytecode-repair --approve` removes exactly the reviewed cache files
+under exact human approval recorded in the project's archive; it fetches
+nothing, changes no `HEAD`/pin, and does not retry or grant update approval.
 Run a fresh updater preview and separate approval afterward. Counts alone do
 not authorize repair; mixed or unsupported sets remain unavailable.
 
@@ -284,34 +284,13 @@ archive zet-abstract-backfill-plan <archive-root> --proposal .wom-scratch/abstra
 ```
 
 Treat `ready_for_human_review` as a preview only. A human must inspect every
-private proposed abstract. After that review, preview the separate writer with
-the exact `proposal.sha256` returned by the plan:
+private proposed abstract. The batch writer, its revert, and its recovery
+executor were removed in v0.4.40 (never usable after v0.4.0). Apply a reviewed
+abstract to one canonical zet with `zet-revision-write` (below); historical
+batch receipts, journals, and locks stay auditable with the read-only audit
+and recovery plan. Never hand-edit zets or infer removal authority.
 
-```bash
-archive zet-abstract-backfill-write <archive-root> --proposal .wom-scratch/abstract-backfill/<private>.jsonl --expected-proposal-sha256 <proposal.sha256> --dry-run --progress --format json
-```
-
-In v0.4.0 stop after the plan and writer dry-run. The apply approval branch is
-fixed fail-closed before private target read or mutation with
-`compound_exact_human_approval_binding_required`; an affirmation or reviewer
-label cannot authorize it. Historical v0.3 applies published a private
-hash-only transaction journal before mutation. Preserve any retained journal
-and lock for audit; their existence does not reactivate the executor.
-
-If a human later decides to remove that whole applied abstract batch, never
-hand-edit the zets and never infer removal authority. Retain the applied
-writer's `receipt.sha256`, then audit the receipt and exact inverse first:
-
-```bash
-archive zet-abstract-backfill-revert <archive-root> --receipt receipts/revisions/abstract-backfill/<digest>.zet-abstract-backfill.json --expected-receipt-sha256 <receipt.sha256> --dry-run --progress --format json
-```
-
-In v0.4.0 the revert approval branch is also fixed fail-closed before private
-target read or mutation with the same blocker. Preserve historical receipts,
-journals, and locks for audit. The scratch lock does not protect against
-external editors, and historical evidence does not grant new removal authority.
-
-After one or more abstract apply/revert batches, and at session handoff, audit
+After historical abstract apply/revert batches, and at session handoff, audit
 the whole bounded receipt lifecycle:
 
 ```bash
@@ -342,27 +321,9 @@ receipt. A divergent/invalid journal or any deterministic final receipt that
 exists but does not fully verify is a manual forensic hold. The planner itself
 never executes and no case is immediately safe to run.
 
-For one non-forensic case, bind the exact operation, basis SHA-256, complete
-plan digest, and fixed action to the separate executor preview:
-
-```bash
-archive zet-abstract-backfill-recover <archive-root> --operation <apply|revert> --basis-sha256 <case.basis_sha256> --expected-plan-digest <plan.plan_digest> --expected-action <case.recommended_action> --dry-run --max-receipts 5000 --max-locks 5000 --max-cases 100 --progress --format json
-```
-
-In v0.4.0 stop after the recovery plan and executor dry-run. Approval is fixed
-fail-closed before private target read or mutation with
-`compound_exact_human_approval_binding_required`; archive quiescence and
-affirmation flags cannot authorize recovery. The historical executor reran the
-complete plan under a recovery-only OS advisory guard, reacquired a missing
-matching basis lock, and revalidated every participant
-hash. It never executes `manual_forensic_hold`. Historical failure or forced
-termination retained the journal and lock and did not reverse already completed
-safe-direction recovery writes; in v0.4.0 use a fresh plan for diagnosis only
-and do not attempt resumption. The historical guard does not lock external editors, older WOM versions,
-or ordinary different-basis writers, so never infer archive quiescence from a
-lock filename. Recovery-produced revert receipts require WOM-kit v0.3.267 or
-newer for audit because they truthfully record
-`rollback_on_runtime_failure: false`.
+Recovery cases are diagnosis only: the executor was removed in v0.4.40, so
+preserve retained journals and locks and escalate any unresolved case to a
+human instead of attempting resumption.
 `--max-locks` independently caps locks and journals. Never auto-delete a lock or
 journal, and never edit an immutable receipt to silence this audit.
 
@@ -419,10 +380,9 @@ current, proposal, and plan hashes to the separate writer preview:
 archive zet-revision-restore-write <archive-root> --receipt receipts/revisions/canonical/<digest>.zet-revision.json --expected-receipt-sha256 <sha256> --restore-proposal .wom-scratch/revisions/restores/<private>.md --expected-current-sha256 <sha256> --expected-restore-proposal-sha256 <sha256> --expected-restore-proposal-semantic-sha256 <sha256> --expected-restore-plan-digest <sha256> --revision-at <timezone-aware-event-time> --dry-run --format json
 ```
 
-In v0.4.0 stop after this writer preview. Restore approval is fixed fail-closed
-before private target read or mutation with
-`compound_exact_human_approval_binding_required`; review labels and affirmation
-flags cannot authorize it. Never delete the shared revision lock manually or
+`zet-revision-restore-write --approve` restores under exact human approval
+(one dialog, or none under a valid session grant) bound to the reviewed
+hashes; review labels and affirmation flags alone cannot authorize it. Never delete the shared revision lock manually or
 copy the proposal over the canonical zet. MCP has no restore writer.
 
 Use paged `zet-catalog` when the host needs one stdout page, manual continuation,
@@ -547,8 +507,8 @@ request, manifest, and reviewer. Ambiguous, absent, changed, or unauthenticated
 evidence blocks the resume.
 
 Follow returned `next_safe_actions` only. General/unscoped legacy
-`objet-capture-selection`, `objet-capture`, and `objet-capture-enable`
-approval branches remain fixed closed. The narrow v0.4.9 exact one-file chain
+`objet-capture-selection` and `objet-capture` approval branches remain
+fixed closed (`objet-capture-enable` was removed in v0.4.40). The narrow v0.4.9 exact one-file chain
 and the v0.4.10 authenticated batch chain are the only exceptions. A preview
 alone is never authority to copy, capture, import, or upload, and a raw in-root
 `objets/` folder is not an approved destination.
@@ -570,14 +530,12 @@ approval, invoke same-claim capture resume, or attempt bounded per-item replay.
 Neither decision authorizes provider access, upload, linking, drafting,
 minting, or cleanup.
 
-Object-storage plans and audits remain available, but v0.4.0 fixed-closes
-approval for `object-storage`, `prehashed-objet-ledger`,
-`object-storage-upload-evidence`, `object-storage-upload`,
-`object-storage-adopt-existing`, and
-`object-storage-wom-location-reconcile`. Each returns
-`compound_exact_human_approval_binding_required` before private ledger/object,
-credential, provider, or archive target read; provider call; mutation; or
-receipt publication. Do not present historical upload/adopt/reconcile commands
+Object-storage plans and audits remain available. `object-storage-upload`
+(v0.4.33) and `object-storage-adopt-existing` write under exact human approval:
+one native dialog, or none under a valid limited/allow_all session grant.
+`prehashed-objet-ledger` approval stays fixed closed. `object-storage-upload-evidence`
+and `object-storage-wom-location-reconcile` were removed in v0.4.40; use upload or
+adopt-existing, which verify the remote bytes. Do not present removed commands
 as runnable instructions.
 
 ## External Locators, Relation Review, And Markup Normalization
@@ -589,9 +547,10 @@ provider locator to appear more than once when each occurrence is distinct.
 Recovery output reveals only whether those coordinates exist, never their
 values. Multiple locators may coexist, but their presence proves neither live
 remote reachability nor global recoverability. Use the read-only
-`external-locator-recovery-plan` and mutation previews only. In v0.4.0 locator
-record, deactivate, and revert approvals are fixed fail-closed before private
-target read or mutation with `compound_exact_human_approval_binding_required`.
+`external-locator-recovery-plan` and mutation previews first. Since v0.4.40
+`external-locator-deactivate --approve` retires one reviewed duplicate under
+exact human approval bound to its plan digest; `external-locator-revert` was
+removed (use `external-locator-record --revert-recovery`).
 
 Use `relation-semantics-guide` before reviewing ambiguous continuation,
 recurrence, sequence, third-party Principal, or format-variant meaning.
@@ -634,8 +593,9 @@ archive principal-register-plan <archive-root> --principal-id company:example --
 archive principal-list <archive-root> --format json
 ```
 
-In v0.4.0 register and unregister approvals are fixed fail-closed before private
-target read or mutation with `compound_exact_human_approval_binding_required`.
+Since v0.4.40 `principal-register` / `principal-unregister --approve` run under
+exact human approval bound to the reviewed plan digest (one dialog, or none
+under a valid session grant).
 The generated SQLite `principals` table is a disposable projection;
 `archive.yml` plus `principals/*.yml` remain authoritative.
 
@@ -671,10 +631,10 @@ inspect it with:
 archive markup-normalization-recovery <archive-root> --journal <archive-relative-journal> --mode resume|rollback --dry-run --format json
 ```
 
-In v0.4.0 normalization apply, recovery, and revert approvals are fixed
-fail-closed before private target read or mutation with
-`compound_exact_human_approval_binding_required`. Do not delete a historical
-journal or edit affected zets by hand.
+Since v0.4.40 normalization apply, recovery, and revert run under exact human
+approval bound to each writer's reviewed plan digest (one dialog, or none under
+a valid session grant). Do not delete a historical journal or edit affected
+zets by hand.
 
 ```bash
 archive create-draft <archive-root> --dry-run --source-intake-plan <source-intake-plan.json> --prompt-boundary-report <prompt-boundary-report.json> --expected-archive-id <id> --expected-type <type> --profile-id <profile-id> --creation-mode ai_assisted --created-by ai_runtime:codex --assisted-by ai_runtime:codex --format json
@@ -719,10 +679,10 @@ To preview binding an already-manifested objet into structured zettel
 frontmatter, use `zettel-objet-link --dry-run`. In v0.4.1 this single link apply
 is available only as a fresh plan-digest-bound replay with native exact-human
 approval. The strict `assets` item is `{object_id, role, label?}`; `object_id`
-must be the complete `sha256:<64 hex>` value. `zettel-objet-link-revert`
-remains preview-only and fixed closed: its approval branch fails before private
-target read or mutation with `compound_exact_human_approval_binding_required`. Historical
-receipts remain auditable but grant no new write or revert authority. Mint
+must be the complete `sha256:<64 hex>` value. Since v0.4.40
+`zettel-objet-link-revert --approve` restores the exact prior bytes under exact
+human approval bound to its plan digest. Historical receipts remain auditable
+but grant no new write or revert authority. Mint
 review warns on truncated objet hashes and on likely tool traces or stale
 internal status claims.
 
@@ -1180,8 +1140,8 @@ API failure or retry it automatically.
 ## Approved Notion Recovery Capability
 
 This section records the historical v0.3.320 capability design. In v0.4.0
-`notion-page-recovery`, `notion-recover`, and
-`notion-ancestor-fetch-adapter-run` execution are fixed fail-closed with
+`notion-page-recovery` and `notion-recover` execution are fixed fail-closed
+(`notion-ancestor-fetch-adapter-run` was removed in v0.4.40) with
 `compound_exact_human_approval_binding_required` before credential/private
 target read, provider call, object write, or receipt publication. Their
 read-only plan and dry-run surfaces remain available; the capability semantics

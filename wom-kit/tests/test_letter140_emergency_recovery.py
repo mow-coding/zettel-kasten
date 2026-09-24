@@ -156,7 +156,7 @@ class Letter140StructuredRootFailureTests(unittest.TestCase):
         self.assertNotIn("private-root", stdout)
         self.assertNotIn("private-zettel", stdout)
 
-    def test_revert_remains_fixed_closed_with_policy_contract(self) -> None:
+    def test_revert_without_reviewer_is_refused_with_policy_contract(self) -> None:
         code, stdout, stderr = self.run_cli(
             [
                 "zettel-objet-link-revert",
@@ -176,9 +176,10 @@ class Letter140StructuredRootFailureTests(unittest.TestCase):
         self.assertEqual(payload["schema"], "wom-kit/cli-error/v0.1")
         self.assertEqual(payload["command"], "zettel-objet-link-revert")
         self.assertEqual(payload["error_class"], "policy")
+        # 2026-09-24 reopen: refused before any read because no reviewer was given.
         self.assertEqual(
             payload["reason_codes"],
-            ["compound_exact_human_approval_binding_required"],
+            ["zettel_objet_link_revert_reviewer_required"],
         )
         self.assertEqual(payload["effects_state"], "none")
         self.assertEqual(payload["files_written"], [])

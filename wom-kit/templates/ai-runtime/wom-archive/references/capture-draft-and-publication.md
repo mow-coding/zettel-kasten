@@ -128,11 +128,10 @@ a minted/canonical zet.
 
 To add a preserved objet to the draft's structured `assets`, use
 `zettel-objet-link --dry-run` and its fresh plan-digest-bound, native
-exact-human-approved replay. In v0.4.1 this single link apply is the only
-newly reopened Zettel–Objet writer. The objet must already exist in the manifest
-and the object id must contain all 64 SHA-256 hexadecimal characters. Use
-`zettel-objet-link-revert --dry-run` only to plan exact-byte recovery. Revert
-approval remains fixed closed, so never claim that the recovery was performed.
+exact-human-approved replay (since v0.4.1). The objet must already be in the
+manifest with a full 64-hex SHA-256 id. Since v0.4.40 `zettel-objet-link-revert
+--approve` restores the exact prior bytes under the same exact approval; preview
+it with `--dry-run` first and report only what its result states.
 
 ## Mint Only A Complete Reviewed zet
 

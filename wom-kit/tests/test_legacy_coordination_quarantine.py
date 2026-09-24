@@ -287,50 +287,30 @@ class LegacyCoordinationQuarantineTests(unittest.TestCase):
             self.assertEqual(blocked_copy["files_written"], [])
             self.assertFalse(ordered_target.exists())
 
-            code, output = self.run_archive_cli(
-                [
-                    "restore-drill",
-                    str(archive_root),
-                    "--target",
-                    str(target),
-                    "--approve",
-                    "--reviewed-by",
-                    "person:test",
-                    "--format",
-                    "json",
-                ]
-            )
+            # restore-drill was reopened under exact approval in v0.4.40; a
+            # declined decision copies nothing and echoes no private value.
+            def decline(*_args, **_kwargs):
+                raise archive_cli.ExactHumanApprovalWorkflowError("exact_human_approval_cancelled")
+
+            with patch.object(archive_cli, "_execute_exact_human_approved_write", side_effect=decline):
+                code, output = self.run_archive_cli(
+                    [
+                        "restore-drill",
+                        str(archive_root),
+                        "--target",
+                        str(target),
+                        "--approve",
+                        "--reviewed-by",
+                        "person:test",
+                        "--format",
+                        "json",
+                    ]
+                )
             self.assertEqual(code, 1, output)
             blocked_result = json.loads(output)
-            availability = blocked_result["capability_availability"]
-            self.assertEqual(availability["state"], "writer_unavailable")
-            self.assertFalse(availability["prerequisites_evaluated"])
-            self.assertEqual(
-                blocked_result,
-                {
-                    "schema": "wom-kit/cli-error/v0.1",
-                    "ok": False,
-                    "state": "blocked",
-                    "capability_state": "writer_unavailable",
-                    "command": "restore-drill",
-                    "canonical_command_path": "restore-drill",
-                    "error_class": "policy",
-                    "status_class": "blocked",
-                    "effects_state": "none",
-                    "exit_code": 1,
-                    "lifecycle_action": "restore_drill",
-                    "reason_codes": [
-                        "compound_exact_human_approval_binding_required"
-                    ],
-                    "capability_reason_codes": [
-                        "writer_unavailable",
-                        "compound_exact_human_approval_binding_required",
-                    ],
-                    "capability_availability": availability,
-                    "files_written": [],
-                    "private_values_echoed": False,
-                },
-            )
+            self.assertEqual(blocked_result["lifecycle_action"], "restore_drill")
+            self.assertEqual(blocked_result["files_written"], [])
+            self.assertFalse(blocked_result["private_values_echoed"])
             self.assertNotIn("private-state.txt", output)
             self.assertNotIn("private_sentinel", output)
             self.assertFalse(target.exists())

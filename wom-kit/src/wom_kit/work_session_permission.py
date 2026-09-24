@@ -9,9 +9,9 @@ plan and target digests, the claim records that the permission mode was the
 mechanism, and the grant dies with the claim it was granted under (pause,
 handoff, complete and recover clear it).
 
-Always-dialog operations can never be granted: project updates, remote
-providers, the session lifecycle itself, repairs and overrides. Credential
-writers use their own Windows credential native path and are unaffected.
+Since v0.4.36 (the 2026-09-17 decision restored) every operation kind is
+grantable; only set-permission-mode itself always asks. Credential secret
+entry keeps its own Windows window where a person types the secret.
 
 v0.4.34 (beta letter 165 [A]): a grant is presenter-bound and time-boxed.
 ``set-permission-mode --approve`` mints a random presenter secret whose

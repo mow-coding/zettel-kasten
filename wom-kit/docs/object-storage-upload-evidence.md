@@ -1,5 +1,7 @@
 # Object Storage Upload Evidence
 
+> Removed in v0.4.40: `archive object-storage-upload-evidence` no longer exists; adopt a verified remote copy with `object-storage-adopt-existing`. This page is kept as historical record.
+
 Status: v0.3.85 approval-gated upload evidence registration checkpoint
 Date: 2026-06-17
 

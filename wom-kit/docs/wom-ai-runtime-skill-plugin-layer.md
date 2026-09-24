@@ -8,8 +8,9 @@ fixed-closed canonical command paths. Their approval branches return
 credential, or provider reads and write nothing. The one removal from the
 v0.4.0 fixed-close set is CLI `zettel-objet-link` apply, which is available only
 as a fresh plan-digest-bound replay with native exact-human approval.
-`zettel-objet-link-revert` remains preview-only and fixed closed, and MCP has no
-exact-human link writer. Historical workflow text must not be used to revive
+`zettel-objet-link-revert` was preview-only and fixed closed through v0.4.39;
+v0.4.40 reopened it under the same plan-digest-bound exact approval (2026-09-24
+triage). MCP has no exact-human link writer. Historical workflow text must not be used to revive
 another writer. Except for that single link apply, the v0.4.0 fixed-close
 descriptions below remain current in v0.4.2.
 Nested derive capture, non-exact/non-AI draft creation, real init, and

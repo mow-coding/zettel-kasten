@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any
 
 from . import archive_services
+from .exact_human_approval_windows import ExactHumanApprovalOperation
+from .operation_approval_binding import OperationApprovalBindingError, plan_digest_approval_binding
 
 
 SAVED_VIEW_WRITE_REQUEST_SCHEMA = "wom-kit/saved-view-write-request/v0.1"
@@ -552,13 +554,16 @@ def saved_view_write(
     expected_plan_sha256: str,
     reviewed_by: str | None,
     affirm_view_reviewed: bool,
+    exact_human_approval_claim: Any = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
 ) -> dict[str, Any]:
-    return archive_services._compound_exact_human_approval_blocked(
-        lifecycle_action="saved_view_write",
-    )
-
-    # Dormant legacy implementation retained for compatibility analysis.
-    # It is not an approval authority.
+    # Reopened 2026-09-24 (triage group 6): only a reauthenticated exact
+    # approval bound to the reviewed plan digest reaches the writer.
+    if exact_human_approval_claim is None:
+        return archive_services._compound_exact_human_approval_blocked(
+            lifecycle_action="saved_view_write",
+        )
     root = archive_services.require_existing_archive_root(archive_root)
     reviewer = _safe_actor(reviewed_by)
     initial, _private = _write_plan_core(root, request_path)
@@ -581,6 +586,19 @@ def saved_view_write(
     if not initial["ok"] or initial["state"] == "already_recorded":
         return initial
 
+    try:
+        archive_services._require_exact_human_operation_approval(
+            root,
+            plan_digest_approval_binding(
+                ExactHumanApprovalOperation.saved_view_write, expected_plan_sha256
+            ),
+            reviewer_claim=reviewer,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+            claim=exact_human_approval_claim,
+        )
+    except OperationApprovalBindingError as exc:
+        raise archive_services.ArchiveServiceError(exc.code) from None
     with _SavedViewLock(root):
         fresh, private = _write_plan_core(root, request_path)
         fresh_plan = fresh["summary"]["plan_sha256"]
@@ -970,13 +988,16 @@ def saved_view_revert(
     receipt_path: str,
     expected_plan_sha256: str,
     reviewed_by: str | None,
+    exact_human_approval_claim: Any = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
 ) -> dict[str, Any]:
-    return archive_services._compound_exact_human_approval_blocked(
-        lifecycle_action="saved_view_revert",
-    )
-
-    # Dormant legacy implementation retained for compatibility analysis.
-    # It is not an approval authority.
+    # Reopened 2026-09-24 (triage group 6): only a reauthenticated exact
+    # approval bound to the reviewed plan digest reaches the writer.
+    if exact_human_approval_claim is None:
+        return archive_services._compound_exact_human_approval_blocked(
+            lifecycle_action="saved_view_revert",
+        )
     root = archive_services.require_existing_archive_root(archive_root)
     reviewer = _safe_actor(reviewed_by)
     initial, _private = _revert_plan_core(root, receipt_path)
@@ -997,6 +1018,19 @@ def saved_view_revert(
     if not initial["ok"] or initial["state"] == "already_reverted":
         return initial
 
+    try:
+        archive_services._require_exact_human_operation_approval(
+            root,
+            plan_digest_approval_binding(
+                ExactHumanApprovalOperation.saved_view_revert, expected_plan_sha256
+            ),
+            reviewer_claim=reviewer,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+            claim=exact_human_approval_claim,
+        )
+    except OperationApprovalBindingError as exc:
+        raise archive_services.ArchiveServiceError(exc.code) from None
     with _SavedViewLock(root):
         fresh, private = _revert_plan_core(root, receipt_path)
         if (

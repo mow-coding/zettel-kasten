@@ -523,6 +523,16 @@ class Letter140ZettelObjetBindingTests(unittest.TestCase):
             "zet_revision_write",
             "zet_revision_restore_write",
             "source_intake_chain",
+            # v0.4.40 reopened writers whose receipts embed the approval.
+            "remint_reconcile",
+            "retire_draft_reconcile",
+            "ai_scratch_gc",
+            "markup_normalization",
+            "markup_normalization_revert",
+            "markup_normalization_recovery",
+            "zettel_objet_link_revert",
+            "principal_register",
+            "principal_unregister",
         }
         self.assertEqual(set(source["properties"]["operation"]["enum"]), expected)
         self.assertEqual(

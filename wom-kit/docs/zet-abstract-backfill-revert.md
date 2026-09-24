@@ -1,5 +1,7 @@
 # zet Abstract Backfill Revert
 
+> Removed in v0.4.40: `archive zet-abstract-backfill-revert` no longer exists; no replacement; historical receipts stay auditable with `zet-abstract-backfill-receipt-audit`. This page is kept as historical record.
+
 Historical v0.3 record — Status: implemented as a receipt-audited approval-gated revert in v0.3.220
 
 Current v0.4.0 boundary: the receipt audit and revert dry-run remain available,

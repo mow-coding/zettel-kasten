@@ -39,7 +39,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable, Iterable, Iterator, Mapping, Protocol
+from typing import Any, Callable, Iterable, Iterator, Mapping, Protocol, Sequence
 
 from . import __version__ as WOM_KIT_VERSION
 from .paths import (
@@ -118,7 +118,10 @@ from .operation_approval_binding import (
     mint_zet_approval_binding,
     objet_capture_approval_binding,
     project_version_update_approval_binding,
+    ai_scratch_gc_approval_binding,
+    plan_digest_approval_binding,
     promote_zet_approval_binding,
+    receipt_reconcile_batch_approval_binding,
     retire_draft_approval_binding,
     warning_override_approval_binding,
     zettel_edge_approval_binding,
@@ -1333,8 +1336,10 @@ MINT_RETIRED_DRAFT_BATCH_RECEIPTS_DIR = "receipts/mint/retired-drafts/batches"
 MINT_RECONCILE_RECEIPTS_DIR = "receipts/mint/reconciles"
 # v0.3.167 Item 2: sibling audit receipts for retire-draft-reconcile.
 MINT_RETIRE_DRAFT_RECONCILE_RECEIPTS_DIR = "receipts/mint/retired-draft-reconciles"
-# Reserved for the deferred remint-reconcile-batch tier (do not implement now):
+# remint-reconcile-batch receipts (2026-09-24 reopen); the retired-draft batch
+# receipts live in the sibling reconcile directory's batches/ folder.
 MINT_RECONCILE_BATCH_RECEIPTS_DIR = "receipts/mint/reconciles/batches"
+MINT_RETIRE_DRAFT_RECONCILE_BATCH_RECEIPTS_DIR = "receipts/mint/retired-draft-reconciles/batches"
 # Frontmatter keys mint injects/manages on the canonical (see mint_zettel where it
 # builds canonical_frontmatter). These are EXCLUDED from reconcile's content-identity
 # comparison because they are mint-managed, not content. source_refs is TRANSFORMED
@@ -16532,10 +16537,27 @@ def zet_title_remap_recover(
         None,
     ]
     | None = None,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
 ) -> dict[str, Any]:
-    if type(dry_run) is not bool or type(approve) is not bool or approve:
+    # Reopened 2026-09-24 (reclassified from Retire): approve needs the
+    # exact approval claim bound to the case, plan digest and action.
+    if type(dry_run) is not bool or type(approve) is not bool or (
+        approve and exact_human_approval_claim is None
+    ):
         return _compound_exact_human_approval_blocked(
             lifecycle_action="zet_title_remap_recover",
+        )
+    if approve:
+        _activity_group_exact_gate(
+            archive_root,
+            operation=ExactHumanApprovalOperation.zet_title_remap_recover,
+            digests=(case_sha256, expected_plan_digest, expected_action),
+            reviewed_by=reviewed_by,
+            claim=exact_human_approval_claim,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
         )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
@@ -17401,10 +17423,27 @@ def zet_title_remap_revert_recover(
         None,
     ]
     | None = None,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
 ) -> dict[str, Any]:
-    if type(dry_run) is not bool or type(approve) is not bool or approve:
+    # Reopened 2026-09-24 (reclassified from Retire): approve needs the
+    # exact approval claim bound to the case, plan digest and action.
+    if type(dry_run) is not bool or type(approve) is not bool or (
+        approve and exact_human_approval_claim is None
+    ):
         return _compound_exact_human_approval_blocked(
             lifecycle_action="zet_title_remap_revert_recover",
+        )
+    if approve:
+        _activity_group_exact_gate(
+            archive_root,
+            operation=ExactHumanApprovalOperation.zet_title_remap_revert_recover,
+            digests=(case_sha256, expected_plan_digest, expected_action),
+            reviewed_by=reviewed_by,
+            claim=exact_human_approval_claim,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
         )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
@@ -18832,7 +18871,7 @@ def zet_catalog(
                 "Report missing or unreadable first-read text as an abstract gap; do not claim that every abstract was read or auto-write replacements."
             )
             next_safe_actions.append(
-                "For a selected missing-abstract zet, read its canonical body and integrity.file_sha256 with read-zettel, prepare a private .wom-scratch/abstract-backfill proposal row, run zet-abstract-backfill-plan, require human review, then preview and explicitly approve zet-abstract-backfill-write with the exact proposal SHA-256; never infer approval."
+                "For a selected missing-abstract zet, read its canonical body and integrity.file_sha256 with read-zettel, prepare a private .wom-scratch/abstract-backfill proposal row, run zet-abstract-backfill-plan, require human review, then apply the reviewed abstract to that one zet with zet-revision-write (preview first, then its exact approval); never infer approval."
             )
         if not identity_coverage["all_entries_uniquely_addressable"]:
             next_safe_actions.append(
@@ -22808,12 +22847,30 @@ def zet_revision_restore_proposal_from_snapshot(
     expected_plan_digest: str | None = None,
     dry_run: bool = False,
     approve: bool = False,
+    reviewed_by: str | None = None,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Preview snapshot restoration; legacy direct approval is fixed closed."""
 
-    if type(dry_run) is not bool or type(approve) is not bool or approve:
+    # Reopened 2026-09-24 (triage group 6): approve needs the exact approval
+    # bound to the receipt digest and the preview's plan digest.
+    if type(dry_run) is not bool or type(approve) is not bool or (
+        approve and exact_human_approval_claim is None
+    ):
         return _compound_exact_human_approval_blocked(
             lifecycle_action="zet_revision_restore_proposal_from_snapshot",
+        )
+    if approve:
+        _activity_group_exact_gate(
+            archive_root,
+            operation=ExactHumanApprovalOperation.zet_revision_restore_proposal_from_snapshot,
+            digests=(str(expected_receipt_sha256 or ""), str(expected_plan_digest or "")),
+            reviewed_by=reviewed_by,
+            claim=exact_human_approval_claim,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
         )
     return _zet_revision_restore_proposal_from_snapshot_core(
         archive_root,
@@ -22821,7 +22878,7 @@ def zet_revision_restore_proposal_from_snapshot(
         expected_receipt_sha256=expected_receipt_sha256,
         expected_plan_digest=expected_plan_digest,
         dry_run=dry_run,
-        approve=False,
+        approve=approve,
     )
 
 
@@ -46655,6 +46712,52 @@ def _activity_group_membership_write(
             cleanup_empty_archive_dirs(root, [receipt_path])
 
 
+def activity_group_approval_digest(*digests: str) -> str:
+    """One hex digest over the reviewed request and plan digests (triage group 4)."""
+
+    joined = "\n".join(str(value or "").strip().lower() for value in digests)
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()
+
+
+def _activity_group_exact_gate(
+    archive_root: Path | str,
+    *,
+    operation: ExactHumanApprovalOperation,
+    digests: tuple[str, ...],
+    reviewed_by: str | None,
+    claim: _ClaimedExactHumanApproval | None,
+    expected_plan_sha256: str | None,
+    expected_target_binding_sha256: str | None,
+) -> None:
+    """Reauthenticate the claim before the membership writer takes its locks.
+
+    The writer itself still re-verifies both reviewed digests under its lock;
+    the approval binds exactly those digests, so any drift fails there.
+    """
+
+    _require_exact_human_approval_inputs_before_archive_read(
+        claim=claim,
+        expected_plan_sha256=expected_plan_sha256,
+        expected_target_binding_sha256=expected_target_binding_sha256,
+    )
+    root = require_existing_archive_root(archive_root)
+    reviewer = safe_foreign_quarantine_actor_id(reviewed_by)
+    if reviewer is None:
+        raise ArchiveServiceError("activity_group_membership_reviewer_invalid")
+    try:
+        binding = plan_digest_approval_binding(operation, activity_group_approval_digest(*digests))
+    except OperationApprovalBindingError as exc:
+        raise ArchiveServiceError(exc.code) from None
+    _require_exact_human_operation_approval(
+        root,
+        binding,
+        reviewer_claim=reviewer,
+        expected_plan_sha256=expected_plan_sha256,
+        expected_target_binding_sha256=expected_target_binding_sha256,
+        claim=claim,
+    )
+
+
 def activity_group_membership_write(
     archive_root: Path | str,
     *,
@@ -46670,10 +46773,26 @@ def activity_group_membership_write(
         [str, str, int | None, int | None], None
     ]
     | None = None,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
 ) -> dict[str, Any]:
-    if type(dry_run) is not bool or type(approve) is not bool or approve:
+    # Triage group 4 (2026-09-24): approve needs the exact approval claim.
+    if type(dry_run) is not bool or type(approve) is not bool or (
+        approve and exact_human_approval_claim is None
+    ):
         return _compound_exact_human_approval_blocked(
             lifecycle_action="activity_group_membership_write",
+        )
+    if approve:
+        _activity_group_exact_gate(
+            archive_root,
+            operation=ExactHumanApprovalOperation.activity_group_membership_write,
+            digests=(expected_request_sha256, expected_review_plan_sha256),
+            reviewed_by=reviewed_by,
+            claim=exact_human_approval_claim,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
         )
     return _activity_group_membership_write(
         archive_root,
@@ -46705,10 +46824,26 @@ def activity_group_membership_removal_write(
         [str, str, int | None, int | None], None
     ]
     | None = None,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
 ) -> dict[str, Any]:
-    if type(dry_run) is not bool or type(approve) is not bool or approve:
+    # Triage group 4 (2026-09-24): approve needs the exact approval claim.
+    if type(dry_run) is not bool or type(approve) is not bool or (
+        approve and exact_human_approval_claim is None
+    ):
         return _compound_exact_human_approval_blocked(
             lifecycle_action="activity_group_membership_removal_write",
+        )
+    if approve:
+        _activity_group_exact_gate(
+            archive_root,
+            operation=ExactHumanApprovalOperation.activity_group_membership_removal_write,
+            digests=(expected_request_sha256, expected_review_plan_sha256),
+            reviewed_by=reviewed_by,
+            claim=exact_human_approval_claim,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
         )
     return _activity_group_membership_write(
         archive_root,
@@ -48912,10 +49047,24 @@ def activity_group_membership_recover(
         [str, str, int | None, int | None], None
     ]
     | None = None,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
 ) -> dict[str, Any]:
-    if type(approve) is not bool or approve:
+    # Triage group 4 (2026-09-24): approve needs the exact approval claim.
+    if type(approve) is not bool or (approve and exact_human_approval_claim is None):
         return _compound_exact_human_approval_blocked(
             lifecycle_action="activity_group_membership_recover",
+        )
+    if approve:
+        _activity_group_exact_gate(
+            archive_root,
+            operation=ExactHumanApprovalOperation.activity_group_membership_recover,
+            digests=(expected_request_sha256, expected_recovery_plan_sha256),
+            reviewed_by=reviewed_by,
+            claim=exact_human_approval_claim,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
         )
     return _activity_group_membership_recover(
         archive_root,
@@ -48941,10 +49090,24 @@ def activity_group_membership_removal_recover(
         [str, str, int | None, int | None], None
     ]
     | None = None,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
 ) -> dict[str, Any]:
-    if type(approve) is not bool or approve:
+    # Triage group 4 (2026-09-24): approve needs the exact approval claim.
+    if type(approve) is not bool or (approve and exact_human_approval_claim is None):
         return _compound_exact_human_approval_blocked(
             lifecycle_action="activity_group_membership_removal_recover",
+        )
+    if approve:
+        _activity_group_exact_gate(
+            archive_root,
+            operation=ExactHumanApprovalOperation.activity_group_membership_removal_recover,
+            digests=(expected_request_sha256, expected_recovery_plan_sha256),
+            reviewed_by=reviewed_by,
+            claim=exact_human_approval_claim,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
         )
     return _activity_group_membership_recover(
         archive_root,
@@ -52625,6 +52788,7 @@ def remint_reconcile_apply(
     content_changed_ack: bool = False,
     reviewed_plan_sha256: str | None = None,
     strip_bom: bool = False,
+    _exact_approval: _ReconcileExactApproval | None = None,
 ) -> dict[str, Any]:
     """Re-issue an honest mint receipt after human review. Writes both receipts.
 
@@ -52638,9 +52802,12 @@ def remint_reconcile_apply(
     proceeds under that already-acked run. Guards: no-op refusal when no leading
     BOM; a hard normalized-content invariant asserted before the atomic rewrite.
     """
-    return _compound_exact_human_approval_blocked(
-        lifecycle_action="remint_reconcile",
-    )
+    # Writable only inside receipt_reconcile_batch, after the exact approval
+    # (dialog or session grant) was reauthenticated for the whole list.
+    if type(_exact_approval) is not _ReconcileExactApproval:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="remint_reconcile",
+        )
 
     reviewer = (reviewed_by or "").strip()
     if not reviewer:
@@ -52668,6 +52835,8 @@ def remint_reconcile_apply(
             raise ArchiveServiceError(
                 "Reconcile blocked: archive evidence changed after the human review dry-run; rerun the dry-run and review the new plan."
             )
+
+    _receipt_reconcile_require_item(root, "mint", plan, _exact_approval, strip_bom=strip_bom)
 
     receipt_relative = plan["mint_receipt_path"]
     canonical_relative = plan["canonical_path"]
@@ -52771,6 +52940,8 @@ def remint_reconcile_apply(
         bom_stripped=bom_stripped,
         reviewed_plan_sha256=reviewed_plan_digest,
     )
+    provenance["exact_human_approval_id"] = _exact_approval.receipt["exact_human_approval"]["approval_id"]
+    provenance["batch_id"] = _exact_approval.batch_id
 
     # In-place mint-receipt update: preserve ALL fields; only recompute the three
     # shas and append/extend the reconcile provenance history (append-only).
@@ -52835,6 +53006,9 @@ def remint_reconcile_apply(
         audit_receipt["reviewed_plan_sha256"] = reviewed_plan_digest
     if source_note:
         audit_receipt["source_note"] = source_note
+    audit_receipt["batch_id"] = _exact_approval.batch_id
+    audit_receipt["approval_item_sha256"] = _exact_approval.item_sha256
+    audit_receipt["exact_human_approval"] = _exact_approval.receipt
     _atomic_write_json(reconcile_receipt_path, audit_receipt)
 
     result = dict(plan)
@@ -53258,15 +53432,17 @@ def retire_draft_reconcile_apply(
     content_changed_ack: bool = False,
     reviewed_plan_sha256: str | None = None,
     strip_bom: bool = False,
+    _exact_approval: _ReconcileExactApproval | None = None,
 ) -> dict[str, Any]:
     """Re-issue an honest retire-draft receipt after human review. Writes both the
     updated retire receipt (recomputed ref shas + append-only reconcile history) and
     a sibling immutable audit receipt. Refuses unless the plan is ok and the
     content_change ack gate is satisfied. Never edits content (except an opt-in
     --strip-bom on the canonical target, mirroring remint-reconcile Item 3)."""
-    return _compound_exact_human_approval_blocked(
-        lifecycle_action="retire_draft_reconcile",
-    )
+    if type(_exact_approval) is not _ReconcileExactApproval:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="retire_draft_reconcile",
+        )
 
     reviewer = (reviewed_by or "").strip()
     if not reviewer:
@@ -53289,6 +53465,8 @@ def retire_draft_reconcile_apply(
             raise ArchiveServiceError(
                 "Retire-draft reconcile blocked: archive evidence changed after the human review dry-run; rerun the dry-run and review the new plan."
             )
+
+    _receipt_reconcile_require_item(root, "retire_draft", plan, _exact_approval, strip_bom=strip_bom)
 
     zid = plan["zettel_id"]
     receipt_relative = plan["retire_receipt_path"]
@@ -53357,6 +53535,8 @@ def retire_draft_reconcile_apply(
     }
     if reviewed_plan_digest:
         provenance["reviewed_plan_sha256"] = reviewed_plan_digest
+    provenance["exact_human_approval_id"] = _exact_approval.receipt["exact_human_approval"]["approval_id"]
+    provenance["batch_id"] = _exact_approval.batch_id
     existing = updated_receipt.get("reconcile")
     history: list[dict[str, Any]] = []
     if isinstance(existing, dict) and isinstance(existing.get("history"), list):
@@ -53408,6 +53588,9 @@ def retire_draft_reconcile_apply(
     }
     if reviewed_plan_digest:
         audit_receipt["reviewed_plan_sha256"] = reviewed_plan_digest
+    audit_receipt["batch_id"] = _exact_approval.batch_id
+    audit_receipt["approval_item_sha256"] = _exact_approval.item_sha256
+    audit_receipt["exact_human_approval"] = _exact_approval.receipt
     _atomic_write_json(audit_path, audit_receipt)
 
     result = dict(plan)
@@ -53440,6 +53623,549 @@ def retire_draft_reconcile_apply(
     if bom_strip_note:
         result["bom_strip_note"] = bom_strip_note
     return result
+
+
+# ---------------------------------------------------------------------------
+# Receipt reconcile under exact human approval (2026-09-24 reopen, 58-writer
+# triage group 1).  Letters 147/148/156 reported 3,345 mint and 3,346 retired
+# draft receipt mismatches (mostly assets added after mint) with the only
+# repair writer closed.  One reviewed list, one exact approval (dialog or a
+# valid session grant), and every item re-verified from current bytes
+# immediately before its own write.
+# ---------------------------------------------------------------------------
+
+RECEIPT_RECONCILE_BATCH_RECEIPTS_DIRS = {
+    "mint": MINT_RECONCILE_BATCH_RECEIPTS_DIR,
+    "retire_draft": MINT_RETIRE_DRAFT_RECONCILE_BATCH_RECEIPTS_DIR,
+}
+RECEIPT_RECONCILE_KINDS = ("mint", "retire_draft")
+RECEIPT_RECONCILE_DRIFT_FILTERS = ("all", "format_drift", "content_change")
+RECEIPT_RECONCILE_DEFAULT_MAX_ITEMS = 1_000
+RECEIPT_RECONCILE_MAX_ITEMS = 10_000
+_RECEIPT_RECONCILE_ITEM_SCHEMA = "wom-kit/receipt-reconcile-item/v0.1"
+_RECEIPT_RECONCILE_BATCH_SCHEMA = "wom-kit/receipt-reconcile-batch-receipt/v0.1"
+_RECEIPT_RECONCILE_SOURCES = {
+    "mint": (MINT_RECEIPTS_DIR, ".mint.json", ("target", "snapshot", "source")),
+    "retire_draft": (
+        MINT_RETIRED_DRAFT_RECEIPTS_DIR,
+        ".retire-draft.json",
+        _RETIRE_RECONCILE_ALL_REFS,
+    ),
+}
+_RECEIPT_RECONCILE_COMMANDS = {
+    "mint": "remint-reconcile-batch",
+    "retire_draft": "retire-draft-reconcile-batch",
+}
+
+
+class _ReconcileExactApproval:
+    """Private proof that the batch writer reauthenticated the approval claim.
+
+    Only ``receipt_reconcile_batch`` constructs it, after
+    ``_require_exact_human_operation_approval`` succeeded for the whole list;
+    the single-item apply functions refuse to write without one.
+    """
+
+    __slots__ = ("receipt", "batch_id", "item_sha256")
+
+    def __init__(self, *, receipt: dict[str, Any], batch_id: str, item_sha256: str) -> None:
+        self.receipt = receipt
+        self.batch_id = batch_id
+        self.item_sha256 = item_sha256
+
+
+def _receipt_reconcile_plain_sha(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    value = value.removeprefix("sha256:")
+    return value if SHA256_RE.match(value) else None
+
+
+def _receipt_reconcile_file_sha(root: Path, relative: Any) -> str | None:
+    if not isinstance(relative, str) or not relative:
+        return None
+    try:
+        path = resolve_archive_relative_path(root, relative)
+    except ArchivePathError:
+        return None
+    try:
+        return sha256_path(path) if path.is_file() else None
+    except OSError:
+        return None
+
+
+def _receipt_reconcile_read_receipt(root: Path, relative: Any) -> dict[str, Any]:
+    if not isinstance(relative, str) or not relative:
+        return {}
+    try:
+        return read_json_object(resolve_archive_relative_path(root, relative), "Receipt")
+    except (ArchiveServiceError, ArchivePathError, OSError):
+        return {}
+
+
+def _receipt_reconcile_has_drift(root: Path, kind: str, receipt: dict[str, Any]) -> bool:
+    """Cheap pre-filter: does any recorded ref sha differ from current bytes?
+
+    A retired or missing source draft is not drift (both reconcilers preserve
+    its recorded sha); every other missing ref is left to the classifier.
+    """
+
+    for ref in _RECEIPT_RECONCILE_SOURCES[kind][2]:
+        section = receipt.get(ref) if isinstance(receipt.get(ref), dict) else {}
+        current = _receipt_reconcile_file_sha(root, section.get("path"))
+        if current is None:
+            if ref == "source":
+                continue
+            return True
+        if current != _receipt_reconcile_plain_sha(section.get("sha256")):
+            return True
+    return False
+
+
+def _receipt_reconcile_item_evidence(
+    root: Path,
+    kind: str,
+    plan: dict[str, Any],
+    *,
+    strip_bom: bool,
+) -> tuple[str, dict[str, Any]]:
+    """Return (approval_item_sha256, ref paths) for one classified plan."""
+
+    if kind == "mint":
+        receipt_relative = plan.get("mint_receipt_path")
+        receipt = _receipt_reconcile_read_receipt(root, receipt_relative)
+        source = receipt.get("source") if isinstance(receipt.get("source"), dict) else {}
+        ref_paths: dict[str, Any] = {
+            "canonical": plan.get("canonical_path"),
+            "snapshot": plan.get("draft_snapshot_path"),
+            "source": source.get("path"),
+        }
+    else:
+        receipt_relative = plan.get("retire_receipt_path")
+        receipt = _receipt_reconcile_read_receipt(root, receipt_relative)
+        ref_paths = {
+            ref: receipt[ref].get("path") if isinstance(receipt.get(ref), dict) else None
+            for ref in _RETIRE_RECONCILE_ALL_REFS
+        }
+    ref_paths["receipt"] = receipt_relative
+    ref_paths = {
+        name: ref_paths[name] if isinstance(ref_paths[name], str) else None
+        for name in sorted(ref_paths)
+    }
+    evidence = {
+        "schema": _RECEIPT_RECONCILE_ITEM_SCHEMA,
+        "reconcile_kind": kind,
+        "zettel_id": plan.get("zettel_id"),
+        "drift_class": plan.get("drift_class"),
+        "classification_basis": plan.get("classification_basis"),
+        "review_plan_sha256": plan.get("review_plan_sha256"),
+        "ref_paths": ref_paths,
+        "ref_sha256": {name: _receipt_reconcile_file_sha(root, rel) for name, rel in ref_paths.items()},
+        "strip_bom": strip_bom,
+    }
+    digest = "sha256:" + hashlib.sha256(
+        json.dumps(evidence, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return digest, ref_paths
+
+
+def _receipt_reconcile_require_item(
+    root: Path,
+    kind: str,
+    plan: dict[str, Any],
+    approval: _ReconcileExactApproval,
+    *,
+    strip_bom: bool,
+) -> None:
+    """Refuse an item whose evidence moved after the list was approved."""
+
+    digest, _paths = _receipt_reconcile_item_evidence(root, kind, plan, strip_bom=strip_bom)
+    if not hmac.compare_digest(digest, approval.item_sha256):
+        raise ArchiveServiceError("receipt_reconcile_item_changed_after_approval")
+
+
+def _receipt_reconcile_item(
+    root: Path,
+    kind: str,
+    plan: dict[str, Any],
+    *,
+    strip_bom: bool,
+) -> dict[str, Any]:
+    """Content-free item row plus the digest the approval binds for it."""
+
+    digest, ref_paths = _receipt_reconcile_item_evidence(root, kind, plan, strip_bom=strip_bom)
+    row: dict[str, Any] = {
+        "zettel_id": plan.get("zettel_id"),
+        "drift_class": plan.get("drift_class"),
+        "receipt_path": ref_paths.get("receipt"),
+        "approval_item_sha256": digest,
+        "write_status": "would_write",
+    }
+    if kind == "mint":
+        row["canonical_path"] = plan.get("canonical_path")
+        row["changed_frontmatter_fields"] = sorted(
+            {
+                str(change.get("field"))
+                for change in plan.get("frontmatter_field_changes") or []
+                if isinstance(change, dict) and change.get("field")
+            }
+        )
+        row["body_changed"] = plan.get("body_changed")
+    else:
+        row["changed_refs"] = [
+            str(report.get("ref"))
+            for report in plan.get("ref_reports") or []
+            if isinstance(report, dict) and report.get("drift_class") not in {None, "clean"}
+        ]
+    if plan.get("review_plan_sha256"):
+        row["review_plan_sha256"] = plan.get("review_plan_sha256")
+    return row
+
+
+def _receipt_reconcile_single_plan(
+    root: Path,
+    kind: str,
+    zettel_id: str,
+    receipt: dict[str, Any],
+    *,
+    strip_bom: bool,
+) -> dict[str, Any]:
+    if kind == "mint":
+        target = receipt.get("target") if isinstance(receipt.get("target"), dict) else {}
+        target_relative = target.get("path") if isinstance(target.get("path"), str) else None
+        if target_relative:
+            return remint_reconcile_plan(root, relative_path=target_relative, strip_bom=strip_bom)
+        return remint_reconcile_plan(root, zettel_id=zettel_id, strip_bom=strip_bom)
+    return retire_draft_reconcile_plan(root, zettel_id=zettel_id, strip_bom=strip_bom)
+
+
+def _receipt_reconcile_batch_plan(
+    root: Path,
+    *,
+    kind: str,
+    zettel_ids: Sequence[str] | None,
+    drift_class: str,
+    max_items: int,
+    strip_bom: bool,
+    reviewed_plan_sha256: str | None,
+    progress: Callable[[str, str, int | None, int | None], None] | None,
+) -> dict[str, Any]:
+    directory, suffix, _refs = _RECEIPT_RECONCILE_SOURCES[kind]
+    requested = [str(value).strip() for value in (zettel_ids or []) if str(value).strip()]
+    requested_set = set(requested)
+    candidates: list[tuple[str, Path]] = []
+    base = resolve_archive_relative_path(root, directory)
+    if base.is_dir():
+        for path in sorted(base.iterdir(), key=lambda item: item.name):
+            if path.is_file() and path.name.endswith(suffix):
+                zid = path.name[: -len(suffix)]
+                if not requested_set or zid in requested_set:
+                    candidates.append((zid, path))
+    found = {zid for zid, _path in candidates}
+    blocked_items = [
+        {"zettel_id": zid, "write_status": "blocked", "reason_code": "receipt_reconcile_receipt_missing"}
+        for zid in requested
+        if zid not in found
+    ]
+    items: list[dict[str, Any]] = []
+    clean_count = 0
+    excluded_by_class = 0
+    total = len(candidates)
+    for index, (zid, path) in enumerate(candidates, start=1):
+        if progress is not None and (index == 1 or index == total or index % 100 == 0):
+            try:
+                progress("receipt-reconcile-scan", f"{index}/{total}", index, total)
+            except Exception:
+                pass
+        try:
+            receipt = read_json_object(path, "Receipt")
+        except ArchiveServiceError:
+            receipt = {}
+        if receipt and not _receipt_reconcile_has_drift(root, kind, receipt):
+            clean_count += 1
+            continue
+        try:
+            plan = _receipt_reconcile_single_plan(root, kind, zid, receipt, strip_bom=strip_bom)
+        except (ArchiveServiceError, ArchivePathError, OSError, UnicodeError):
+            blocked_items.append(
+                {"zettel_id": zid, "write_status": "blocked", "reason_code": "receipt_reconcile_plan_failed"}
+            )
+            continue
+        if not plan.get("ok") or plan.get("blockers"):
+            blocked_items.append(
+                {"zettel_id": zid, "write_status": "blocked", "reason_code": "receipt_reconcile_plan_blocked"}
+            )
+            continue
+        if plan.get("drift_class") == "clean":
+            clean_count += 1
+            continue
+        if plan.get("drift_class") not in {"format_drift", "content_change"}:
+            blocked_items.append(
+                {"zettel_id": zid, "write_status": "blocked", "reason_code": "receipt_reconcile_unclassified"}
+            )
+            continue
+        if drift_class != "all" and plan.get("drift_class") != drift_class:
+            excluded_by_class += 1
+            continue
+        if reviewed_plan_sha256 is not None and plan.get("review_plan_sha256") != reviewed_plan_sha256:
+            blocked_items.append(
+                {"zettel_id": zid, "write_status": "blocked", "reason_code": "receipt_reconcile_reviewed_plan_changed"}
+            )
+            continue
+        items.append(_receipt_reconcile_item(root, kind, plan, strip_bom=strip_bom))
+    remaining = max(0, len(items) - max_items)
+    items = items[:max_items]
+    class_counts = {
+        name: sum(1 for item in items if item["drift_class"] == name)
+        for name in ("format_drift", "content_change")
+    }
+    field_counts: dict[str, int] = {}
+    for item in items:
+        for field in item.get("changed_frontmatter_fields") or item.get("changed_refs") or []:
+            field_counts[field] = field_counts.get(field, 0) + 1
+    batch_id = "receipt-reconcile:" + hashlib.sha256(
+        json.dumps(
+            [kind, strip_bom, [item["approval_item_sha256"] for item in items]],
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    command = _RECEIPT_RECONCILE_COMMANDS[kind]
+    next_safe_actions: list[str] = []
+    if items:
+        next_safe_actions.append(
+            f"Review the class counts, then rerun `archive {command} <archive-root> --approve "
+            "--reviewed-by person:<you> --format json` with the same selection options; one dialog "
+            "(none under a valid limited/allow_all session grant) covers the whole list."
+        )
+    if remaining:
+        next_safe_actions.append(
+            f"{remaining} more item(s) remain after --max-items; rerun the dry-run after this batch."
+        )
+    if kind == "mint":
+        next_safe_actions.append(
+            "After mint receipts are reconciled, run `archive retire-draft-reconcile-batch <archive-root> "
+            "--dry-run --format json`: retired-draft receipts point at the mint receipt and need the same repair."
+        )
+    if blocked_items:
+        next_safe_actions.append(
+            "Blocked items were not included; run the single reconcile dry-run for one of them to see its blockers."
+        )
+    if not items and not blocked_items:
+        next_safe_actions.append("Nothing to reconcile; rerun doctor to confirm.")
+    return {
+        "ok": True,
+        "dry_run": True,
+        "lifecycle_action": "receipt_reconcile_batch_plan",
+        "reconcile_kind": kind,
+        "write_status": "would_write" if items else "nothing_to_write",
+        "batch_id": batch_id,
+        "strip_bom": strip_bom,
+        "drift_class_filter": drift_class,
+        "items": items,
+        "blocked_items": blocked_items,
+        "summary": {
+            "receipt_count": total,
+            "clean_count": clean_count,
+            "item_count": len(items),
+            "format_drift_count": class_counts["format_drift"],
+            "content_change_count": class_counts["content_change"],
+            "changed_field_counts": dict(sorted(field_counts.items())),
+            "blocked_count": len(blocked_items),
+            "excluded_by_class_count": excluded_by_class,
+            "remaining_after_max_items": remaining,
+        },
+        "blockers": [],
+        "warnings": [],
+        "files_written": [],
+        "next_safe_actions": next_safe_actions,
+        "private_values_echoed": False,
+    }
+
+
+def receipt_reconcile_batch(
+    archive_root: Path | str,
+    *,
+    kind: str,
+    zettel_ids: Sequence[str] | None = None,
+    drift_class: str = "all",
+    max_items: int = RECEIPT_RECONCILE_DEFAULT_MAX_ITEMS,
+    strip_bom: bool = False,
+    reviewed_plan_sha256: str | None = None,
+    dry_run: bool = True,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
+) -> dict[str, Any]:
+    """Plan or write one reviewed list of mint / retired-draft receipt reconciles."""
+
+    if type(dry_run) is not bool or type(approve) is not bool or dry_run == approve:
+        raise ArchiveServiceError("receipt_reconcile_mode_invalid")
+    if kind not in RECEIPT_RECONCILE_KINDS or drift_class not in RECEIPT_RECONCILE_DRIFT_FILTERS:
+        raise ArchiveServiceError("receipt_reconcile_argument_invalid")
+    if type(max_items) is not int or not 1 <= max_items <= RECEIPT_RECONCILE_MAX_ITEMS:
+        raise ArchiveServiceError("receipt_reconcile_max_items_invalid")
+    reviewed_digest = (
+        normalize_reconcile_review_plan_sha256(reviewed_plan_sha256)
+        if reviewed_plan_sha256 is not None
+        else None
+    )
+    if approve:
+        _require_exact_human_approval_inputs_before_archive_read(
+            claim=exact_human_approval_claim,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+        )
+    root = require_existing_archive_root(archive_root)
+    plan = _receipt_reconcile_batch_plan(
+        root,
+        kind=kind,
+        zettel_ids=zettel_ids,
+        drift_class=drift_class,
+        max_items=max_items,
+        strip_bom=bool(strip_bom),
+        reviewed_plan_sha256=reviewed_digest,
+        progress=progress_callback,
+    )
+    if not approve:
+        return plan
+    reviewer = (reviewed_by or "").strip()
+    if not reviewer:
+        raise ArchiveServiceError("receipt_reconcile_reviewer_required")
+    if not plan["items"]:
+        raise ArchiveServiceError("receipt_reconcile_nothing_to_write")
+    try:
+        binding = receipt_reconcile_batch_approval_binding(plan)
+    except OperationApprovalBindingError as exc:
+        raise ArchiveServiceError(exc.code) from None
+    approval = _require_exact_human_operation_approval(
+        root,
+        binding,
+        reviewer_claim=reviewer,
+        expected_plan_sha256=expected_exact_approval_plan_sha256,
+        expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+        claim=exact_human_approval_claim,
+    )
+    written: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+    files_written: list[str] = []
+    total = len(plan["items"])
+    for index, item in enumerate(plan["items"], start=1):
+        if progress_callback is not None and (index == 1 or index == total or index % 50 == 0):
+            try:
+                progress_callback("receipt-reconcile-write", f"{index}/{total}", index, total)
+            except Exception:
+                pass
+        token = _ReconcileExactApproval(
+            receipt=approval,
+            batch_id=plan["batch_id"],
+            item_sha256=item["approval_item_sha256"],
+        )
+        content_change = item["drift_class"] == "content_change"
+        try:
+            if kind == "mint":
+                result = remint_reconcile_apply(
+                    root,
+                    relative_path=item.get("canonical_path"),
+                    reviewed_by=reviewer,
+                    content_changed_ack=content_change,
+                    reviewed_plan_sha256=item.get("review_plan_sha256") if content_change else None,
+                    strip_bom=bool(strip_bom),
+                    _exact_approval=token,
+                )
+            else:
+                result = retire_draft_reconcile_apply(
+                    root,
+                    zettel_id=str(item.get("zettel_id") or ""),
+                    reviewed_by=reviewer,
+                    content_changed_ack=content_change,
+                    reviewed_plan_sha256=item.get("review_plan_sha256") if content_change else None,
+                    strip_bom=bool(strip_bom),
+                    _exact_approval=token,
+                )
+        except (ArchiveServiceError, ArchivePathError, OSError, UnicodeError, ValueError) as exc:
+            failed.append(
+                {
+                    "zettel_id": item.get("zettel_id"),
+                    "drift_class": item["drift_class"],
+                    "approval_item_sha256": item["approval_item_sha256"],
+                    "write_status": "failed",
+                    "blockers": _lifecycle_batch_item_failure_blockers(
+                        exc, "receipt_reconcile_item_write_io_failed"
+                    ),
+                }
+            )
+            continue
+        files_written.extend(result.get("updated_paths") or [])
+        files_written.extend(result.get("created_paths") or [])
+        written.append(
+            {
+                "zettel_id": item.get("zettel_id"),
+                "drift_class": item["drift_class"],
+                "approval_item_sha256": item["approval_item_sha256"],
+                "write_status": "reconciled",
+                "reconcile_receipt_path": result.get("reconcile_receipt_path"),
+            }
+        )
+    batch_receipt_relative = (
+        f"{RECEIPT_RECONCILE_BATCH_RECEIPTS_DIRS[kind]}/"
+        f"{plan['batch_id'].removeprefix('receipt-reconcile:')[:24]}."
+        f"{kind.replace('_', '-')}-reconcile-batch.json"
+    )
+    batch_receipt_path = resolve_archive_relative_path(root, batch_receipt_relative)
+    if batch_receipt_path.exists():
+        batch_receipt_relative = batch_receipt_relative[: -len(".json")] + f".{secrets.token_hex(4)}.json"
+        batch_receipt_path = resolve_archive_relative_path(root, batch_receipt_relative)
+    batch_receipt = {
+        "schema": _RECEIPT_RECONCILE_BATCH_SCHEMA,
+        "receipt_id": f"receipt:receipt-reconcile-batch:{plan['batch_id']}",
+        "receipt_path": batch_receipt_relative,
+        "action": "receipt_reconcile_batch",
+        "reconcile_kind": kind,
+        "dry_run": False,
+        "timestamp": datetime.now().astimezone().replace(microsecond=0).isoformat(),
+        "archive_id": read_archive_id(root),
+        "reviewed_by": reviewer,
+        "batch_id": plan["batch_id"],
+        "strip_bom": bool(strip_bom),
+        "item_count": total,
+        "reconciled_count": len(written),
+        "failed_count": len(failed),
+        "items": written + failed,
+        "exact_human_approval": approval,
+    }
+    _atomic_write_json(batch_receipt_path, batch_receipt)
+    files_written.append(batch_receipt_relative)
+    next_safe_actions = [
+        "Rerun `archive doctor <archive-root> --format json` to confirm the receipt errors cleared."
+    ]
+    if kind == "mint":
+        next_safe_actions.append(
+            "Then run `archive retire-draft-reconcile-batch <archive-root> --dry-run --format json` "
+            "for the retired-draft receipts."
+        )
+    if failed:
+        next_safe_actions.insert(
+            0,
+            "Some items changed or failed after approval and were not written; rerun the dry-run to review them again.",
+        )
+    if plan["summary"]["remaining_after_max_items"]:
+        next_safe_actions.append("More items remain after --max-items; rerun the dry-run for the next list.")
+    return {
+        **plan,
+        "ok": not failed,
+        "dry_run": False,
+        "approved": True,
+        "write_status": "written" if not failed else ("partial" if written else "failed"),
+        "items": written + failed,
+        "reconciled_count": len(written),
+        "failed_count": len(failed),
+        "batch_receipt_path": batch_receipt_relative,
+        "files_written": files_written,
+        "next_safe_actions": next_safe_actions,
+    }
 
 
 def resolve_mint_lifecycle_batch_plan_path(
@@ -60374,6 +61100,13 @@ def cleanup_empty_ai_scratch_dirs(root: Path, paths: list[Path]) -> None:
             current = current.parent
 
 
+def ai_scratch_gc_approval_projection(preview: dict[str, Any]) -> dict[str, Any]:
+    """Projection an exact approval binds for a standalone ai-scratch-gc preview."""
+
+    plan = preview.get("cleanup_plan") if isinstance(preview.get("cleanup_plan"), dict) else {}
+    return _ai_scratch_gc_approval_projection(plan)
+
+
 def ai_scratch_gc_receipt_path(zettel_id: str) -> str:
     safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", zettel_id).strip("._-") or "zet"
     stamp = datetime.now().astimezone().strftime("%Y%m%dT%H%M%S%f%z")
@@ -60444,12 +61177,62 @@ def ai_scratch_gc_for_zettel(
     approve: bool = False,
     reviewed_by: str | None = None,
     mint_receipt_path: str | None = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
 ) -> dict[str, Any]:
-    """Expose planning only until standalone cleanup has an exact binding."""
+    """Plan, or delete one zet's explicit AI scratch refs under exact approval.
 
-    if type(dry_run) is not bool or type(approve) is not bool or approve:
+    Triage group 2 (2026-09-24): the standalone writer reuses the mint-time
+    cleanup core. The approved projection is re-derived and compared
+    immediately before any file is deleted.
+    """
+
+    if type(dry_run) is not bool or type(approve) is not bool or dry_run == approve:
         return _compound_exact_human_approval_blocked(
             lifecycle_action="ai_scratch_gc",
+        )
+    if approve:
+        _require_exact_human_approval_inputs_before_archive_read(
+            claim=exact_human_approval_claim,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+        )
+        reviewer = (reviewed_by or "").strip()
+        if not reviewer:
+            raise ArchiveServiceError("ai_scratch_gc_reviewer_required")
+        root = require_existing_archive_root(archive_root)
+        preview = _ai_scratch_gc_for_zettel_core(
+            root,
+            zettel_id=zettel_id,
+            relative_path=relative_path,
+            dry_run=True,
+            approve=False,
+        )
+        if not preview.get("ok"):
+            raise ArchiveServiceError("ai_scratch_gc_preflight_blocked")
+        projection = ai_scratch_gc_approval_projection(preview)
+        try:
+            binding = ai_scratch_gc_approval_binding(projection)
+        except OperationApprovalBindingError as exc:
+            raise ArchiveServiceError(exc.code) from None
+        approval = _require_exact_human_operation_approval(
+            root,
+            binding,
+            reviewer_claim=reviewer,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+            claim=exact_human_approval_claim,
+        )
+        return _ai_scratch_gc_for_zettel_core(
+            root,
+            zettel_id=zettel_id,
+            relative_path=relative_path,
+            dry_run=False,
+            approve=True,
+            reviewed_by=reviewer,
+            _approved_cleanup_projection=projection,
+            _exact_operation_approval=approval,
         )
     return _ai_scratch_gc_for_zettel_core(
         archive_root,
@@ -60472,6 +61255,7 @@ def _ai_scratch_gc_for_zettel_core(
     reviewed_by: str | None = None,
     mint_receipt_path: str | None = None,
     _approved_cleanup_projection: dict[str, Any] | None = None,
+    _exact_operation_approval: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if approve and type(_approved_cleanup_projection) is not dict:
         return _compound_exact_human_approval_blocked(
@@ -60584,6 +61368,8 @@ def _ai_scratch_gc_for_zettel_core(
             "provider_api_called": False,
         },
     }
+    if _exact_operation_approval is not None:
+        receipt["exact_human_approval"] = _exact_operation_approval
     try:
         receipt_path.parent.mkdir(parents=True, exist_ok=True)
         write_json_new_file(receipt_path, receipt)
@@ -68943,7 +69729,7 @@ def external_export_plan(
                 + " --export-goal targeted_pages --media-policy avoid_bulk_media --dry-run --format json"
             ),
             "scan_after_manual_export": (
-                "archive scan-source <archive-root> --source <source-id> --source-root <local-export-root> "
+                "archive source-intake-batch <archive-root> --manifest <intake-manifest-for-the-export> "
                 "--dry-run --format json"
             ),
             "import_after_review": import_after_review,
@@ -69092,7 +69878,7 @@ def external_export_large_media_trap(
             },
         ],
         "after_text_pass": [
-            "run scan-source on the manually exported text slice",
+            "run source-intake-batch on the manually exported text slice",
             "use source-intake or project-intake receipts to decide what matters",
             "route selected media to object-storage recommendation or objet-capture planning",
         ],
@@ -74296,7 +75082,7 @@ def tiro_lossless_recovery_plan(
             "would_change": [],
             "next_safe_actions": [
                 "Use an approved local adapter or Tiro CLI/API export to create the private raw bundle.",
-                "Run tiro-lossless-recovery-capture on the raw bundle before deriving text or drafting zets.",
+                "Preserve the raw bundle with source-intake-chain before deriving text or drafting zets.",
                 "Record gaps for audio bytes or undocumented surfaces instead of silently dropping them.",
             ],
             "warnings": unique_preserve_order(warnings),
@@ -75410,7 +76196,7 @@ def tiro_lossless_recovery_fetch_run(
                 "schema": TIRO_LOSSLESS_RECOVERY_BUNDLE_SCHEMA,
                 "summary": bundle_summary,
                 "raw_values_echoed": False,
-                "next_capture_command": f"archive tiro-lossless-recovery-capture <archive-root> --bundle {normalized_output_path} --dry-run --format json",
+                "next_capture_command": f"archive source-intake-chain <archive-root> --source-intake-plan <plan> --staged-path {normalized_output_path} --dry-run --format json",
             },
             "receipt": {
                 "proposed_receipt_path": None if receipt_written else receipt_relative,
@@ -75463,7 +76249,7 @@ def tiro_lossless_recovery_fetch_run(
             "would_change": would_change,
             "files_written": files_written,
             "next_safe_actions": [
-                "Run tiro-lossless-recovery-capture on the written raw bundle to store it as a WOM objet.",
+                "Preserve the written raw bundle with source-intake-chain to store it as a WOM objet.",
                 "Run derived-text capture only after the raw Tiro bundle object is preserved.",
                 "Keep speaker correction, relationship inference, and summary cleanup in a separate AI enrichment layer.",
             ],
@@ -79679,7 +80465,7 @@ def imap_mailbox_plan(
         },
         "future_workflow": [
             "Register imap_mailbox as a source only after reviewing the credential refs.",
-            "Future scan-source IMAP mode should SELECT the mailbox read-only and fetch headers only for dry-run.",
+            "A future IMAP intake mode should SELECT the mailbox read-only and fetch headers only for dry-run.",
             "Future approved fetch should preserve each RFC822 message as a .eml source objet.",
             "Future attachment handling should split MIME attachments into separate objets.",
             "Future derived-text capture should extract text/plain and reviewed text/html separately from the .eml source objet.",
@@ -86445,7 +87231,7 @@ def beginner_setup_manual(
                         "commands_preserved": [
                             "notion-ancestor-crawl-plan",
                             "credential-access-approval",
-                            "notion-ancestor-fetch-adapter-run",
+                            "notion-recover",
                             "notion-ancestor-merge-plan",
                         ],
                     },
@@ -86558,7 +87344,7 @@ def beginner_setup_manual(
                     "credential-ref-plan",
                     "credential-access-approval-plan",
                     "credential-keepassxc-command-plan",
-                    "credential-keepassxc-write",
+                    "credential-adopt",
                     "derive-text-doctor",
                     "derive-text-coverage",
                     "object-storage-recommendation" if include_object_storage else "",
@@ -86567,7 +87353,6 @@ def beginner_setup_manual(
                     "notion-recover" if include_notion_nested_recovery else "",
                     "notion-ancestor-crawl-plan" if include_notion_nested_recovery else "",
                     "credential-access-approval" if include_notion_nested_recovery else "",
-                    "notion-ancestor-fetch-adapter-run" if include_notion_nested_recovery else "",
                     "notion-ancestor-merge-plan" if include_notion_nested_recovery else "",
                 ]
                 if item
@@ -96455,7 +97240,7 @@ def real_pilot_plan(
             "Create the team archive separately; do not nest it inside the personal archive.",
             "Run preflight on each archive before registering real sources.",
             "Register one narrow source at a time with add-source --dry-run first.",
-            "Run scan-source --dry-run and review the item count before any approved scan.",
+            "Run source-intake-batch --dry-run and review the item count before any approved intake.",
             "Run doctor --strict, index, then search to confirm the map is useful.",
         ],
         "do_not_do_yet": [
@@ -96511,9 +97296,7 @@ def pilot_source_suggestion(archive_root: str, item: dict[str, str]) -> dict[str
         f"--root-ref {root_ref} "
         "--dry-run"
     )
-    scan_command = f"archive scan-source {archive_root} --source {source_id} --dry-run"
-    if not root_ref.startswith("archive:"):
-        scan_command += " --source-root <real-local-or-export-path>"
+    scan_command = f"archive source-intake-batch {archive_root} --manifest <batch-request.json> --dry-run"
     return {
         "source_id": source_id,
         "source_type": source_type,
@@ -100687,10 +101470,14 @@ def reconcile_archive_identity(
     expected_identity_sha256: str,
     expected_proposed_identity_sha256: str,
     affirm_principal_metadata_reviewed: bool,
+    _exact_route_verified: bool = False,
 ) -> dict[str, Any]:
-    return _compound_exact_human_approval_blocked(
-        lifecycle_action="archive_identity_reconcile",
-    )
+    # Triage group 5 (2026-09-24): writable only from the CLI exact route,
+    # after the claim was reauthenticated against the fresh plan digests.
+    if _exact_route_verified is not True:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="archive_identity_reconcile",
+        )
 
     # Dormant legacy implementation retained for compatibility analysis.
     # It is not an approval authority.
@@ -103398,7 +104185,7 @@ def project_intake_next_session_questions(
 
 def project_intake_next_safe_actions(staging_convention: dict[str, Any]) -> list[str]:
     actions = [
-        "Review this dry-run plan with the user before running source-intake, create-draft, scan-source, or mint-zet.",
+        "Review this dry-run plan with the user before running source-intake, create-draft, source-intake-batch, or mint-zet.",
         "Run archive doctor --strict before approving any later write step.",
         "Inspect one project folder with the user; do not bulk-classify, bulk-upload, bulk-mint, or delete the staged folder.",
         "Preserve originals as objets only after explicit review and approval in a later capability.",
@@ -105270,11 +106057,11 @@ def preflight_next_actions(blockers: list[str], warnings: list[str]) -> list[str
         return [
             "Review warnings with the human owner/operator.",
             "Prefer one narrow source for the first scan.",
-            "Run scan-source --dry-run and check item_count before approving a scan.",
+            "Run source-intake-batch --dry-run and check the item count before approving an intake.",
         ]
     return [
         "Start with one narrow source registration dry-run.",
-        "Run metadata-only scan-source --dry-run.",
+        "Run source-intake-batch --dry-run.",
         "Approve only after reviewing item_count, source root, and receipt preview.",
     ]
 
@@ -111147,6 +111934,115 @@ def session_handoff_checkpoint_receipt_matches(
     )
 
 
+SESSION_HANDOFF_ACTIVITY_SCOPE_SCHEMA = "wom-kit/session-handoff-activity-scope/v1"
+SESSION_HANDOFF_ACTIVITY_MAX_PAGES = 1000
+
+
+def _objet_manifest_sha256_set(root: Path) -> set[str] | None:
+    """Content hashes the objet manifest already holds; None when unreadable."""
+
+    manifest = root / ZETTEL_OBJET_LINK_MANIFEST_RELATIVE_PATH
+    hashes: set[str] = set()
+    if not manifest.is_file():
+        return hashes
+    try:
+        if manifest.stat().st_size > ZETTEL_OBJET_LINK_MANIFEST_MAX_BYTES:
+            return None
+        with manifest.open("r", encoding="utf-8") as stream:
+            for line in stream:
+                line = line.strip()
+                if not line:
+                    continue
+                row = json.loads(line)
+                value = row.get("sha256") if isinstance(row, dict) else None
+                if isinstance(value, str) and SHA256_RE.match(value.removeprefix("sha256:")):
+                    hashes.add(value.removeprefix("sha256:"))
+    except (OSError, UnicodeError, ValueError):
+        return None
+    return hashes
+
+
+def session_handoff_activity_scope(root: Path, activity_roots: list[str]) -> dict[str, Any]:
+    """Letter 173 D: every artifact under the named activity roots, all pages.
+
+    A file whose bytes the objet manifest already holds is counted as
+    ``preserved_as_objet`` instead of waiting for a separate fate review. The
+    result is content-free: artifact refs, fates and counts only.
+    """
+
+    items: list[dict[str, Any]] = []
+    cursor: str | None = None
+    snapshot_sha: str | None = None
+    generation_sha: str | None = None
+    roots: list[str] = []
+    complete = True
+    blockers: list[str] = []
+    for _page in range(SESSION_HANDOFF_ACTIVITY_MAX_PAGES):
+        page = ai_artifact_inventory(
+            root, include_roots=list(activity_roots), max_items=1000, cursor=cursor,
+            show_relative_paths=True, dry_run=True,
+        )
+        pagination = page.get("pagination") if isinstance(page.get("pagination"), dict) else {}
+        if not page.get("ok") or page.get("blockers"):
+            complete = False
+            blockers.extend(str(item) for item in page.get("blockers") or [])
+            break
+        if snapshot_sha is None:
+            snapshot_sha = pagination.get("snapshot_sha256")
+            generation_sha = pagination.get("generation_sha256")
+            roots = list((page.get("scan_policy") or {}).get("roots") or [])
+        elif pagination.get("snapshot_sha256") != snapshot_sha:
+            complete = False
+            blockers.append("session_handoff_activity_inventory_changed_between_pages")
+            break
+        items.extend(item for item in page.get("items") or [] if isinstance(item, dict))
+        cursor = pagination.get("next_cursor")
+        if not cursor:
+            complete = complete and pagination.get("state") == "complete"
+            break
+    else:
+        complete = False
+        blockers.append("session_handoff_activity_inventory_too_many_pages")
+    preserved = _objet_manifest_sha256_set(root)
+    if preserved is None:
+        complete = False
+        blockers.append("session_handoff_objet_manifest_unreadable")
+        preserved = set()
+    fate_rows: list[list[Any]] = []
+    fate_counts: dict[str, int] = {}
+    kind_counts: dict[str, int] = {}
+    for item in items:
+        fate = str(item.get("fate_state") or "unknown")
+        relative = item.get("relative_path")
+        if fate == "unreviewed_ai_artifact" and isinstance(relative, str) and preserved:
+            try:
+                path = resolve_archive_relative_path(root, relative)
+                if path.is_file() and sha256_path(path) in preserved:
+                    fate = "preserved_as_objet"
+            except (ArchivePathError, OSError):
+                pass
+        fate_counts[fate] = fate_counts.get(fate, 0) + 1
+        kind = str(item.get("artifact_kind") or "unknown")
+        kind_counts[kind] = kind_counts.get(kind, 0) + 1
+        fate_rows.append([item.get("artifact_ref"), fate, item.get("bytes")])
+    fate_rows.sort(key=lambda row: str(row[0]))
+    snapshot = {
+        "schema": SESSION_HANDOFF_ACTIVITY_SCOPE_SCHEMA,
+        "activity_roots": roots,
+        "complete": complete,
+        "snapshot_sha256": snapshot_sha,
+        "generation_sha256": generation_sha,
+        "total_candidate_count": len(items),
+        "item_count": len(items),
+        "truncated": False,
+        "skipped_non_plain_file_count": 0,
+        "fate_counts": dict(sorted(fate_counts.items())),
+        "artifact_kind_counts": dict(sorted(kind_counts.items())),
+        "fate_rows_sha256": sha256_json_value(fate_rows),
+    }
+    return {"complete": complete, "blockers": sorted(set(blockers)), "snapshot": snapshot}
+
+
 def session_handoff_checkpoint(
     archive_root: Path | str,
     *,
@@ -111155,12 +112051,14 @@ def session_handoff_checkpoint(
     reviewed_by: str | None = None,
     confirm_chat_reviewed: bool = False,
     expected_state_digest: str | None = None,
+    activity_roots: list[str] | None = None,
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     blockers: list[str] = []
     warnings: list[str] = []
     reviewer = safe_foreign_quarantine_actor_id(reviewed_by)
+    activity_roots = [str(value) for value in (activity_roots or []) if str(value).strip()]
 
     if dry_run is approve:
         blockers.append("Choose exactly one mode: --dry-run or --approve.")
@@ -111203,6 +112101,16 @@ def session_handoff_checkpoint(
     inventory_digest = sha256_json_value(inventory_snapshot)
     fate_counts = inventory_snapshot["fate_counts"]
     unreviewed_count = int(fate_counts.get("unreviewed_ai_artifact") or 0)
+    # Letter 173 D: with explicit activity roots the checkpoint covers exactly
+    # that activity, reads every page, and counts objet-preserved copies as
+    # preserved. Without roots the legacy page-projection contract is unchanged.
+    activity_scope: dict[str, Any] | None = None
+    if activity_roots:
+        activity_scope = session_handoff_activity_scope(root, activity_roots)
+        inventory_snapshot = activity_scope["snapshot"]
+        inventory_digest = sha256_json_value(inventory_snapshot)
+        fate_counts = inventory_snapshot["fate_counts"]
+        unreviewed_count = int(fate_counts.get("unreviewed_ai_artifact") or 0)
 
     durable_gaps: list[str] = []
     if operational_context.get("status") != "present" or not operational_context.get("ok"):
@@ -111211,6 +112119,8 @@ def session_handoff_checkpoint(
         durable_gaps.append("the current operational context bytes do not match an approval receipt.")
     if inventory_snapshot["truncated"]:
         durable_gaps.append("AI artifact inventory is truncated; a full fate review is not proven.")
+    if activity_scope is not None and not activity_scope["complete"]:
+        durable_gaps.append("the activity-scope inventory is incomplete: " + ", ".join(activity_scope["blockers"] or ["unknown"]))
     if unreviewed_count:
         durable_gaps.append(f"{unreviewed_count} AI artifact candidate(s) still need a reviewed fate.")
 
@@ -111222,6 +112132,8 @@ def session_handoff_checkpoint(
         "ai_artifact_fate_counts": fate_counts,
         "ai_artifact_inventory_truncated": inventory_snapshot["truncated"],
     }
+    if activity_scope is not None:
+        state_evidence["activity_roots"] = inventory_snapshot["activity_roots"]
     state_digest = sha256_json_value(state_evidence)
     proposed_receipt_path = session_handoff_checkpoint_receipt_relative_path(state_digest)
     checkpoint_root = archive_internal_path(root, SESSION_HANDOFF_CHECKPOINT_RECEIPTS_DIR)
@@ -111265,7 +112177,7 @@ def session_handoff_checkpoint(
         "operational_context_receipt_ref": context_evidence.get("matching_receipt_ref"),
         "ai_artifact_inventory_generation_digest": full_inventory_digest,
     })
-    if not full_complete:
+    if not full_complete and activity_scope is None:
         # Unknown current observations cannot be promoted by an old receipt.
         durable_gaps.append("AI artifact generation is incomplete or unavailable; counts and absence remain unknown.")
         current_checkpoint_verified = False
@@ -111322,6 +112234,14 @@ def session_handoff_checkpoint(
             "reviewed_by": reviewer,
             "reviewed_at": reviewed_at,
             "ready_for_context_reset": True,
+            **({"activity_scope": {
+                "activity_roots": inventory_snapshot["activity_roots"],
+                "total_candidate_count": inventory_snapshot["total_candidate_count"],
+                "fate_counts": fate_counts,
+                "fate_rows_sha256": inventory_snapshot["fate_rows_sha256"],
+                "all_pages_read": True,
+                "objet_preserved_copies_counted": True,
+            }} if activity_scope is not None else {}),
             "closed_actions": {
                 "chat_transcript_body_read_by_wom": False,
                 "ai_artifact_bodies_read": False,
@@ -111364,6 +112284,11 @@ def session_handoff_checkpoint(
         next_safe_actions = ["Resolve blockers and rerun the dry-run before approval."]
 
     ready_for_context_reset = bool(current_checkpoint_verified and not durable_gaps and not blockers)
+    if activity_scope is None and inventory_snapshot.get("truncated"):
+        next_safe_actions.append(
+            "More than one page of AI artifacts exists; rerun with --activity-root <archive-relative folder> "
+            "(repeatable) to check exactly this activity across every page."
+        )
     return {
         "ok": not blockers,
         "dry_run": bool(dry_run),
@@ -111388,6 +112313,10 @@ def session_handoff_checkpoint(
             "next_safe_action": "Review the full-generation summary separately; never substitute diagnostic_state_digest for the legacy expected_state_digest.",
         },
         "ready_for_context_reset": ready_for_context_reset,
+        "activity_scope": (
+            {**activity_scope["snapshot"], "blockers": activity_scope["blockers"]}
+            if activity_scope is not None else None
+        ),
         "readiness_scope": {
             "bounded_ai_artifact_inventory": True,
             "archive_wide_ai_artifact_absence_proven": False,
@@ -115473,6 +116402,142 @@ def wom_kit_project_update_source_versions_observation(
     }
 
 
+WOM_KIT_GENERATED_BETA_MAX_TREE_BYTES = 16 * 1024 * 1024
+WOM_KIT_GENERATED_BETA_MAX_BLOB_BYTES = 4 * 1024 * 1024
+
+
+def _wom_kit_generated_beta_binding_verified(
+    mirror_path: Path,
+    target_commit: str,
+    target_version: str,
+    *,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
+) -> str | None:
+    """Accept an opt-in beta tag that is only a generated version binding on main.
+
+    beta-delivery publishes ``vX.Y.ZbN`` on one generated commit whose single
+    parent is a reviewed main commit. That commit is not an ancestor of main, so
+    it is accepted only when every changed file equals the parent with exactly
+    the generator's substitutions (versions, lock name, lock hash, release note).
+    Any other difference keeps the ordinary "not reachable" refusal. Returns the
+    verified parent commit, or ``None``.
+    """
+
+    match = re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.([1-9][0-9]*)b[1-9][0-9]*", target_version or "")
+    if match is None:
+        return None
+    beta = target_version
+    base = f"{match.group(1)}.{match.group(2)}.{int(match.group(3)) - 1}"
+
+    def git(args: list[str], limit: int) -> str | None:
+        available, code, text = _wom_kit_project_update_git_observation(
+            mirror_path, args, max_output_bytes=limit, runner=runner)
+        return text if available and code == 0 else None
+
+    def blob(commit: str, relative: str) -> bytes | None:
+        size_text = git(["cat-file", "-s", f"{commit}:{relative}"], 256)
+        try:
+            size = int(size_text or "")
+        except ValueError:
+            return None
+        if not 0 <= size <= WOM_KIT_GENERATED_BETA_MAX_BLOB_BYTES:
+            return None
+        observed = _wom_kit_project_update_git_blob_observation(
+            mirror_path, f"{commit}:{relative}", size, runner=runner)
+        return observed.get("blob") if observed.get("state") == "passed" else None
+
+    commit_text = git(["cat-file", "-p", target_commit], 64 * 1024)
+    if commit_text is None:
+        return None
+    header = commit_text.split("\n\n", 1)[0].splitlines()
+    parents = [line[7:].strip().lower() for line in header if line.startswith("parent ")]
+    if len(parents) != 1 or not re.fullmatch(r"[0-9a-f]{40,64}", parents[0]):
+        return None
+    parent = parents[0]
+    available, code, _ = _wom_kit_project_update_git_observation(
+        mirror_path, ["merge-base", "--is-ancestor", parent, "refs/remotes/origin/main"], runner=runner)
+    if not available or code != 0:
+        return None
+
+    def tree(commit: str) -> dict[str, str] | None:
+        text = git(["ls-tree", "-r", "-z", "--full-tree", commit], WOM_KIT_GENERATED_BETA_MAX_TREE_BYTES)
+        if text is None:
+            return None
+        rows: dict[str, str] = {}
+        for entry in text.split("\0"):
+            if not entry:
+                continue
+            meta, _, path = entry.partition("\t")
+            parts = meta.split()
+            if len(parts) != 3 or parts[1] != "blob" or not path:
+                return None
+            rows[path] = parts[0] + " " + parts[2]
+        return rows
+
+    parent_tree, target_tree = tree(parent), tree(target_commit)
+    if parent_tree is None or target_tree is None:
+        return None
+    new_lock = f"wom-kit/project-runtime-supply-lock-v{beta}.json"
+    beta_note = f"wom-kit/docs/releases/v{beta}.md"
+    beta_packaged = f"wom-kit/src/wom_kit/_resources/release-notes/v{beta}.md"
+    base_packaged = f"wom-kit/src/wom_kit/_resources/release-notes/v{base}.md"
+    manifest_path = "wom-kit/src/wom_kit/_resources/resource-manifest.json"
+    version_files = ("wom-kit/pyproject.toml", "wom-kit/src/wom_kit/__init__.py", "wom_kit/__init__.py")
+    modified = {*version_files, "wom-kit/project-runtime-policy.json",
+                "wom-kit/src/wom_kit/project_runtime.py", manifest_path}
+    added = {new_lock, beta_note, beta_packaged}
+    changed = {path for path in set(parent_tree) | set(target_tree) if parent_tree.get(path) != target_tree.get(path)}
+    if (changed != modified | added | {base_packaged}
+            or any(path not in parent_tree or path not in target_tree for path in modified)
+            or any(path in parent_tree or path not in target_tree for path in added)
+            or base_packaged not in parent_tree or base_packaged in target_tree
+            or any(target_tree[path].split()[0] != "100644" for path in modified | added)):
+        return None
+    try:
+        for relative in version_files:
+            before, after = blob(parent, relative), blob(target_commit, relative)
+            if before is None or after is None or before == after:
+                return None
+            if after != before.replace(f'"{base}"'.encode(), f'"{beta}"'.encode()):
+                return None
+        parent_policy = json.loads(blob(parent, "wom-kit/project-runtime-policy.json") or b"")
+        target_policy = json.loads(blob(target_commit, "wom-kit/project-runtime-policy.json") or b"")
+        old_lock = parent_policy["supply_lock"]
+        old_lock_bytes, new_lock_bytes = blob(parent, old_lock), blob(target_commit, new_lock)
+        if old_lock_bytes is None or new_lock_bytes is None:
+            return None
+        if json.loads(new_lock_bytes) != {**json.loads(old_lock_bytes), "target_tag": "v" + beta}:
+            return None
+        new_lock_sha = "sha256:" + hashlib.sha256(new_lock_bytes).hexdigest()
+        if target_policy != {**parent_policy, "supply_lock": new_lock, "supply_lock_sha256": new_lock_sha}:
+            return None
+        runtime_before = blob(parent, "wom-kit/src/wom_kit/project_runtime.py")
+        runtime_after = blob(target_commit, "wom-kit/src/wom_kit/project_runtime.py")
+        if runtime_before is None or runtime_after is None or runtime_after != runtime_before.replace(
+                old_lock.encode(), new_lock.encode()).replace(
+                str(parent_policy["supply_lock_sha256"]).encode(), new_lock_sha.encode()):
+            return None
+        note, packaged_note = blob(target_commit, beta_note), blob(target_commit, beta_packaged)
+        if note is None or note != packaged_note:
+            return None
+        parent_manifest = json.loads(blob(parent, manifest_path) or b"")
+        target_manifest = json.loads(blob(target_commit, manifest_path) or b"")
+        if ({key: value for key, value in parent_manifest.items() if key not in {"version", "files"}}
+                != {key: value for key, value in target_manifest.items() if key not in {"version", "files"}}
+                or parent_manifest.get("version") != base or target_manifest.get("version") != beta):
+            return None
+        old_rows = [row for row in parent_manifest["files"] if row.get("packaged") != f"release-notes/v{base}.md"]
+        new_rows = [row for row in target_manifest["files"] if row.get("packaged") != f"release-notes/v{beta}.md"]
+        note_rows = [row for row in target_manifest["files"] if row.get("packaged") == f"release-notes/v{beta}.md"]
+        if (old_rows != new_rows or len(note_rows) != 1 or note_rows[0] != {
+                "source": f"docs/releases/v{beta}.md", "packaged": f"release-notes/v{beta}.md",
+                "bytes": len(note), "sha256": hashlib.sha256(note).hexdigest()}):
+            return None
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
+    return parent
+
+
 def wom_kit_project_update_target_evidence(
     mirror_path: Path,
     target_tag: str,
@@ -115669,6 +116734,16 @@ def wom_kit_project_update_target_evidence(
         )
         return evidence
     evidence["target_reachable_from_origin_main"] = ancestor_return_code == 0
+    if not evidence["target_reachable_from_origin_main"]:
+        # An opt-in beta is a generated version binding on a reviewed main
+        # commit; it counts as main's code only after exact verification.
+        generated_parent = _wom_kit_generated_beta_binding_verified(
+            mirror_path, target_commit, target_version or "", runner=runner,
+        )
+        if generated_parent is not None:
+            evidence["target_reachable_from_origin_main"] = True
+            evidence["target_ancestry_basis"] = "generated_beta_binding_on_origin_main"
+            evidence["generated_beta_parent_commit"] = generated_parent
     if not evidence["target_reachable_from_origin_main"]:
         evidence["observation_state"] = "failed"
         evidence["observation_reason_code"] = (
@@ -119594,6 +120669,9 @@ def wom_kit_project_version_update_collision(
     reviewed_by: str | None = None,
     affirm_external_writers_quiescent: bool = False,
     reveal_target_relative_path: bool = False,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Inspect or preserve one exact, digest-bound update collision.
 
@@ -119602,9 +120680,26 @@ def wom_kit_project_version_update_collision(
     the exact same key in the verified target Git tree.
     """
 
-    if type(dry_run) is not bool or type(approve) is not bool or approve:
+    # Reopened 2026-09-24 (triage group 6): approve needs the exact approval
+    # recorded in the project's archive and bound to the materialization
+    # plan digest, the entry ref and the action.
+    if type(dry_run) is not bool or type(approve) is not bool or (
+        approve and exact_human_approval_claim is None
+    ):
         return _compound_exact_human_approval_blocked(
             lifecycle_action="project_version_update_collision",
+        )
+    if approve:
+        _activity_group_exact_gate(
+            require_existing_archive_root(
+                wom_kit_project_version_update_approval_archive_root(inspection_root)
+            ),
+            operation=ExactHumanApprovalOperation.project_version_update_collision,
+            digests=(str(expected_plan_sha256 or ""), str(entry_ref or ""), str(action or "")),
+            reviewed_by=reviewed_by,
+            claim=exact_human_approval_claim,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
         )
 
     return _wom_kit_project_version_update_collision_legacy_core(
@@ -143542,7 +144637,7 @@ def runtime_context_write_action_routes() -> list[dict[str, Any]]:
             "approved_command": "archive external-locator-record <archive-root> --zettel-id <id> --locator-type <type> --locator-ref <same-private-value> --expected-plan-sha256 <sha256> --approve --reviewed-by <human-actor> --format json",
             "deactivate_preview_command": "archive external-locator-deactivate-plan <archive-root> --zettel-id <id> --locator-id <duplicate> --keep-locator-id <keeper> --dry-run --format json",
             "deactivate_approved_command": "archive external-locator-deactivate <archive-root> --zettel-id <id> --locator-id <duplicate> --keep-locator-id <keeper> --expected-plan-sha256 <sha256> --approve --reviewed-by <human-actor> --format json",
-            "revert_command": "archive external-locator-revert <archive-root> --receipt <receipt> --dry-run --format json",
+            "revert_command": "archive external-locator-record <archive-root> --revert-recovery <receipt> --dry-run --format json",
             "requires_human_approval": True,
             "locator_value_echoed": False,
             "remote_reachability_claimed": False,
@@ -143836,7 +144931,7 @@ def runtime_context_ai_runtime_order() -> list[dict[str, Any]]:
             "step": 7,
             "action": "enumerate_zet_abstracts",
             "command": "archive zet-catalog-pass <archive-root> --status canonical --projection reading --output .wom-scratch/diagnostics/<new-name>.jsonl --dry-run --progress --format json",
-            "continuation": "require archive_wide_coverage_claim_ready=true and retain output.sha256 from the compact stdout summary; use zet-catalog-pass-read with that SHA-256 and page indexes from zero so a complete artifact is validated before at most one private page is returned; retain the first full diagnostics, check abstract and follow-up readiness separately, and when an abstract is missing use read-zettel to read that selected canonical body plus integrity.file_sha256 before preparing a private zet-abstract-backfill-plan proposal; never auto-write an abstract or infer approval from a green plan, require human review, then preview and explicitly approve zet-abstract-backfill-write with the exact proposal SHA-256; after any abstract apply/revert batch run zet-abstract-backfill-receipt-audit and never auto-delete reported locks or edit receipts; never load the whole catalog file into one response, never commit it, then preview and approve zet-catalog-pass-cleanup with the same SHA-256 after use; restart the complete pass if catalog_snapshot_changed",
+            "continuation": "require archive_wide_coverage_claim_ready=true and retain output.sha256 from the compact stdout summary; use zet-catalog-pass-read with that SHA-256 and page indexes from zero so a complete artifact is validated before at most one private page is returned; retain the first full diagnostics, check abstract and follow-up readiness separately, and when an abstract is missing use read-zettel to read that selected canonical body plus integrity.file_sha256 before preparing a private zet-abstract-backfill-plan proposal; never auto-write an abstract or infer approval from a green plan, require human review, then apply each reviewed abstract to its zet with zet-revision-write (preview, then its exact approval); after any abstract apply/revert batch run zet-abstract-backfill-receipt-audit and never auto-delete reported locks or edit receipts; never load the whole catalog file into one response, never commit it, then preview and approve zet-catalog-pass-cleanup with the same SHA-256 after use; restart the complete pass if catalog_snapshot_changed",
             "mcp_alternative": "use zet_catalog pages with cursor, snapshot id, continuation token, full first response, compact continuation responses, and completion revalidation",
             "optional_seed_order": "when the host goal already provides verified zet ids, add --order seeded_connection_walk and repeated --start-zettel-id values; the walk still includes every disconnected component",
             "optional_route_evidence": "keep projection=reading for compact coverage; switch to routed_reading only with seeded_connection_walk when per-item seed, tie-passage, and disconnected-component reasons are needed",
@@ -144156,9 +145251,15 @@ def source_mount_step(binding: dict[str, Any], *, local_profile_present: bool) -
     archive_relative = root_ref.startswith("archive:") or source_type == "object_manifest"
     if archive_relative:
         container_root = root_ref.removeprefix("archive:") if root_ref.startswith("archive:") else "objects/manifests/files.jsonl"
-    docker_command = f"docker compose run --rm archive-cli scan-source /archives/<archive-folder> --source {source_id} --dry-run"
+    docker_command = (
+        "docker compose run --rm archive-cli source-intake-batch /archives/<archive-folder> "
+        "--manifest <batch-request.json> --dry-run"
+    )
     if not archive_relative:
-        docker_command = f"docker compose run --rm archive-cli scan-source /archives/<archive-folder> --source {source_id} --source-root {container_root} --dry-run"
+        docker_command = (
+            "docker compose run --rm archive-cli source-intake-batch /archives/<archive-folder> "
+            f"--manifest <batch-request.json listing files under {container_root}> --dry-run"
+        )
     return {
         "source_id": source_id,
         "source_type": source_type,
@@ -144170,7 +145271,7 @@ def source_mount_step(binding: dict[str, Any], *, local_profile_present: bool) -
         "compose_volume_hint": None
         if archive_relative
         else f"${{{root_ref}}}:{container_root}:ro",
-        "host_native_scan_command": f"archive scan-source <archive> --source {source_id} --dry-run",
+        "host_native_scan_command": "archive source-intake-batch <archive> --manifest <batch-request.json> --dry-run",
         "docker_scan_command": docker_command,
         "manual_required": not archive_relative,
     }
@@ -145185,8 +146286,8 @@ def source_intake_next_safe_actions(result: dict[str, Any]) -> list[str]:
             "register or scan the source in metadata-only mode if needed",
             "stage the file inside the archive root, then prepare an approved selection with objet-capture-selection",
             "when a vendor transcript exists next to the original, build ONE paired selection with objet-capture-selection --derived-text-staged-path <archive-relative-transcript> so a single approval covers both halves",
-            "run objet-capture --selection <selection-path> --dry-run first; capture requires a sandbox-marked archive or an owner-approved capture-enablement record (inspect with `archive objet-capture-enable <archive-root> --dry-run`)",
-            "for bytes already stored externally, register evidence with prehashed-objet-ledger and object-storage-upload-evidence",
+            "run objet-capture --selection <selection-path> --dry-run first; on a real archive capture one file with source-intake-chain (one exact approval, or a valid session grant; no enablement record needed)",
+            "for bytes already stored externally, adopt the verified remote copy with object-storage-adopt-existing",
             *actions,
         ]
     if status == "provider_reference":
@@ -157497,12 +158598,49 @@ def private_objet_source_metadata_write(
     reviewed_by: str | None = None,
     affirm_private_metadata_reviewed: bool = False,
     affirm_external_writers_quiescent: bool = False,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Plan or apply one reviewed private objet metadata observation."""
 
-    if type(dry_run) is not bool or type(approve) is not bool or approve:
+    # Reopened 2026-09-24 (triage group 6): approve needs the exact
+    # approval bound to the engine's own reviewed plan digest.
+    if type(dry_run) is not bool or type(approve) is not bool or (
+        approve and exact_human_approval_claim is None
+    ):
         return _compound_exact_human_approval_blocked(
             lifecycle_action="private_objet_source_metadata_write",
+        )
+    if approve:
+        _require_exact_human_approval_inputs_before_archive_read(
+            claim=exact_human_approval_claim,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+        )
+        # The engine's receipt schema records reviewers as `operator:<id>`;
+        # the approval broker binds the same id as `person:<id>`.
+        reviewer = safe_project_intake_actor_id(
+            "person:" + reviewed_by.removeprefix("operator:")
+            if isinstance(reviewed_by, str) and reviewed_by.startswith("operator:")
+            else reviewed_by
+        )
+        if reviewer is None:
+            raise ArchiveServiceError("private_objet_source_metadata_reviewer_invalid")
+        try:
+            binding = plan_digest_approval_binding(
+                ExactHumanApprovalOperation.private_objet_source_metadata_write,
+                str(expected_plan_sha256 or ""),
+            )
+        except OperationApprovalBindingError as exc:
+            raise ArchiveServiceError(exc.code) from None
+        _require_exact_human_operation_approval(
+            require_existing_archive_root(archive_root),
+            binding,
+            reviewer_claim=reviewer,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+            claim=exact_human_approval_claim,
         )
 
     return _private_objet_source_metadata_write_legacy_core(
@@ -157511,7 +158649,7 @@ def private_objet_source_metadata_write(
         expected_intake_sha256=expected_intake_sha256,
         expected_plan_sha256=expected_plan_sha256,
         dry_run=dry_run,
-        approve=False,
+        approve=approve,
         reviewed_by=reviewed_by,
         affirm_private_metadata_reviewed=affirm_private_metadata_reviewed,
         affirm_external_writers_quiescent=(
@@ -160992,6 +162130,7 @@ def _derived_text_write_receipt(root: Path, receipt: dict[str, Any], captured_at
 def _derived_text_capture_run(
     archive_root: Path | str,
     *,
+    _verified_basis: Mapping[str, Any] | None = None,
     text_file: Path | str,
     source_object_id: str,
     derivation_kind: str,
@@ -161000,6 +162139,7 @@ def _derived_text_capture_run(
     review_status: str,
     approve: bool,
     reviewed_by: str | None,
+    _exact_verified: bool = False,
     model_name: str | None = None,
     model_version: str | None = None,
     confidence: float | int | None = None,
@@ -161010,6 +162150,40 @@ def _derived_text_capture_run(
     archive_id = read_archive_id(root)
     captured_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     raw_bytes, file_blockers = _derived_text_read_source_file(text_file)
+    if _verified_basis is not None:
+        # Independent review 2026-09-25: plan these exact bytes first and
+        # refuse unless they are the approved item, then write the same bytes.
+        check = _derived_text_capture_core(
+            root,
+            archive_id,
+            raw_bytes=raw_bytes,
+            file_blockers=file_blockers,
+            text_filename=Path(text_file).name,
+            source_object_id=source_object_id,
+            derivation_kind=derivation_kind,
+            tool_name=tool_name,
+            tool_version=tool_version,
+            review_status=review_status,
+            approve=False,
+            reviewed_by=None,
+            captured_at=captured_at,
+            model_name=model_name,
+            model_version=model_version,
+            confidence=confidence,
+            language=language,
+            born_digital=born_digital,
+            source_presence="manifest_lookup",
+        )
+        if any(check.get(key) != _verified_basis.get(key) for key in DERIVED_TEXT_IDENTITY_FIELDS):
+            return {
+                **check,
+                "ok": False,
+                "dry_run": False,
+                "item_status": "blocked",
+                "action": "blocked",
+                "blockers": ["derived_text_capture_item_changed_after_approval"],
+                "would_change": [],
+            }
     return _derived_text_capture_core(
         root,
         archive_id,
@@ -161030,6 +162204,7 @@ def _derived_text_capture_run(
         language=language,
         born_digital=born_digital,
         source_presence="manifest_lookup",
+        _exact_verified=_exact_verified,
     )
 
 
@@ -161055,6 +162230,7 @@ def _derived_text_capture_core(
     born_digital: bool = False,
     source_presence: str = "manifest_lookup",
     paired_with: dict[str, Any] | None = None,
+    _exact_verified: bool = False,
 ) -> dict[str, Any]:
     blockers = _derived_text_metadata_blockers(
         source_object_id=source_object_id,
@@ -161141,6 +162317,9 @@ def _derived_text_capture_core(
         language=language,
         born_digital=born_digital,
         paired_with=paired_with,
+        # Only the verified exact-approval path passes the flag, so a
+        # historical fixture that swaps in the legacy core keeps working.
+        **({"_exact_verified": True} if _exact_verified else {}),
     )
 
 
@@ -161167,8 +162346,11 @@ def _derived_text_register(
     language: str | None = None,
     born_digital: bool = False,
     paired_with: dict[str, Any] | None = None,
+    _exact_verified: bool = False,
 ) -> dict[str, Any]:
-    if approve:
+    # Reopened 2026-09-24 (triage group 6): only the exact-approval path
+    # (derived_text_capture_approved) reaches the approved core.
+    if approve and not _exact_verified:
         return _compound_exact_human_approval_blocked(
             lifecycle_action="derived_text_register",
         )
@@ -161185,7 +162367,7 @@ def _derived_text_register(
         tool_name=tool_name,
         tool_version=tool_version,
         review_status=review_status,
-        approve=False,
+        approve=approve,
         reviewed_by=reviewed_by,
         captured_at=captured_at,
         model_name=model_name,
@@ -161492,7 +162674,7 @@ def derived_text_capture_dry_run(
     language: str | None = None,
     born_digital: bool = False,
 ) -> dict[str, Any]:
-    return _derived_text_capture_run(
+    result = _derived_text_capture_run(
         archive_root,
         text_file=text_file,
         source_object_id=source_object_id,
@@ -161507,6 +162689,172 @@ def derived_text_capture_dry_run(
         confidence=confidence,
         language=language,
         born_digital=born_digital,
+    )
+    digest = derived_text_capture_plan_sha256(result)
+    if digest is not None:
+        result["plan_sha256"] = digest
+    return result
+
+# Reopened 2026-09-24 (triage group 6): the exact effect set of a capture is
+# the stored text identity, its source objet and derivation metadata, and the
+# planned action. The approval binds this digest; the writer re-derives it.
+# The identity of one capture item; the planned action may legitimately move
+# (for example to skip_already_present) after earlier batch items are written.
+DERIVED_TEXT_IDENTITY_FIELDS = (
+    "archive_id",
+    "source_object_id",
+    "derived_text_id",
+    "derivation_kind",
+    "review_status",
+    "text_sha256",
+    "text_logical_key",
+    "size_bytes",
+    "source_text_encoding",
+    "source_text_sha256",
+)
+DERIVED_TEXT_PLAN_FIELDS = (
+    "archive_id",
+    "source_object_id",
+    "derived_text_id",
+    "derivation_kind",
+    "review_status",
+    "text_sha256",
+    "text_logical_key",
+    "size_bytes",
+    "source_text_encoding",
+    "source_text_sha256",
+    "planned_action",
+)
+
+
+def derived_text_capture_plan_sha256(result: Mapping[str, Any]) -> str | None:
+    if result.get("ok") is not True or result.get("blockers"):
+        return None
+    if isinstance(result.get("items"), list):
+        basis: Any = {
+            "archive_id": result.get("archive_id"),
+            "items": [
+                {
+                    **{key: item.get(key) for key in DERIVED_TEXT_PLAN_FIELDS},
+                    "item_id": item.get("item_id"),
+                    "manifest_line": item.get("manifest_line"),
+                }
+                for item in result["items"]
+                if isinstance(item, Mapping)
+            ],
+        }
+    else:
+        basis = {key: result.get(key) for key in DERIVED_TEXT_PLAN_FIELDS}
+    return sha256_json_hex(basis)
+
+
+def _derived_text_capture_exact_gate(
+    archive_root: Path | str,
+    *,
+    expected_plan_sha256: str,
+    reviewed_by: str | None,
+    claim: _ClaimedExactHumanApproval | None,
+    expected_exact_approval_plan_sha256: str | None,
+    expected_exact_approval_target_binding_sha256: str | None,
+) -> tuple[Path, str]:
+    _require_exact_human_approval_inputs_before_archive_read(
+        claim=claim,
+        expected_plan_sha256=expected_exact_approval_plan_sha256,
+        expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+    )
+    root = require_existing_archive_root(archive_root)
+    reviewer = safe_project_intake_actor_id(reviewed_by)
+    if reviewer is None:
+        raise ArchiveServiceError("derived_text_capture_reviewer_invalid")
+    try:
+        binding = plan_digest_approval_binding(
+            ExactHumanApprovalOperation.derived_text_capture, expected_plan_sha256
+        )
+    except OperationApprovalBindingError as exc:
+        raise ArchiveServiceError(exc.code) from None
+    _require_exact_human_operation_approval(
+        root,
+        binding,
+        reviewer_claim=reviewer,
+        expected_plan_sha256=expected_exact_approval_plan_sha256,
+        expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+        claim=claim,
+    )
+    return root, reviewer
+
+
+def _derived_text_plan_changed(fresh: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        **fresh,
+        "ok": False,
+        "dry_run": False,
+        "state": "blocked",
+        "blockers": ["derived_text_capture_plan_changed"],
+        "would_change": [],
+    }
+
+
+def derived_text_capture_approved(
+    archive_root: Path | str,
+    *,
+    expected_plan_sha256: str,
+    reviewed_by: str | None,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None,
+    expected_exact_approval_plan_sha256: str | None,
+    expected_exact_approval_target_binding_sha256: str | None,
+    **capture: Any,
+) -> dict[str, Any]:
+    root, reviewer = _derived_text_capture_exact_gate(
+        archive_root,
+        expected_plan_sha256=expected_plan_sha256,
+        reviewed_by=reviewed_by,
+        claim=exact_human_approval_claim,
+        expected_exact_approval_plan_sha256=expected_exact_approval_plan_sha256,
+        expected_exact_approval_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+    )
+    fresh = derived_text_capture_dry_run(root, **capture)
+    if fresh.get("plan_sha256") != expected_plan_sha256:
+        return _derived_text_plan_changed(fresh)
+    return _derived_text_capture_run(
+        root,
+        approve=True,
+        reviewed_by=reviewer,
+        _exact_verified=True,
+        _verified_basis=fresh,
+        **capture,
+    )
+
+
+def derived_text_capture_manifest_approved(
+    archive_root: Path | str,
+    manifest_path: Path | str,
+    *,
+    expected_plan_sha256: str,
+    reviewed_by: str | None,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None,
+    expected_exact_approval_plan_sha256: str | None,
+    expected_exact_approval_target_binding_sha256: str | None,
+) -> dict[str, Any]:
+    root, reviewer = _derived_text_capture_exact_gate(
+        archive_root,
+        expected_plan_sha256=expected_plan_sha256,
+        reviewed_by=reviewed_by,
+        claim=exact_human_approval_claim,
+        expected_exact_approval_plan_sha256=expected_exact_approval_plan_sha256,
+        expected_exact_approval_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+    )
+    fresh = derived_text_capture_manifest_dry_run(root, manifest_path)
+    if fresh.get("plan_sha256") != expected_plan_sha256:
+        return _derived_text_plan_changed(fresh)
+    return _derived_text_capture_manifest_run(
+        root,
+        manifest_path,
+        approve=True,
+        reviewed_by=reviewer,
+        _exact_verified=True,
+        _verified_items={
+            str(item.get("item_id")): item for item in fresh.get("items") or [] if isinstance(item, Mapping)
+        },
     )
 
 
@@ -161654,6 +163002,8 @@ def _derived_text_capture_manifest_run(
     *,
     approve: bool,
     reviewed_by: str | None,
+    _exact_verified: bool = False,
+    _verified_items: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
@@ -161740,7 +163090,26 @@ def _derived_text_capture_manifest_run(
                 )
             )
             continue
-        if approve:
+        if approve and _exact_verified:
+            verified_item = (_verified_items or {}).get(item_id)
+            if verified_item is None:
+                item_result = _derived_text_capture_manifest_item_blocked(
+                    archive_id=archive_id,
+                    line_number=line_number,
+                    item_id=item_id,
+                    blockers=["derived_text_capture_item_changed_after_approval"],
+                    approve=approve,
+                )
+            else:
+                item_result = _derived_text_capture_run(
+                    root,
+                    approve=True,
+                    reviewed_by=str(reviewed_by),
+                    _exact_verified=True,
+                    _verified_basis=verified_item,
+                    **kwargs,
+                )
+        elif approve:
             item_result = derived_text_capture_apply(
                 root,
                 reviewed_by=str(reviewed_by),
@@ -161793,12 +163162,16 @@ def derived_text_capture_manifest_dry_run(
     archive_root: Path | str,
     manifest_path: Path | str,
 ) -> dict[str, Any]:
-    return _derived_text_capture_manifest_run(
+    result = _derived_text_capture_manifest_run(
         archive_root,
         manifest_path,
         approve=False,
         reviewed_by=None,
     )
+    digest = derived_text_capture_plan_sha256(result)
+    if digest is not None:
+        result["plan_sha256"] = digest
+    return result
 
 
 def derived_text_capture_manifest_apply(
@@ -162029,12 +163402,12 @@ OBJET_CAPTURE_REFUSAL_HINTS = {
         "objet-capture runs on sandbox-marked archives (a .wom-sandbox marker file or top-level "
         "environment: sandbox in archive.yml), or on a real archive with a valid owner "
         "capture-enablement record; the owner can inspect eligibility with "
-        "'archive objet-capture-enable <archive-root> --dry-run' (read-only)"
+        "'archive objet-capture-selection' or 'archive source-intake-chain' (no enablement record needed)"
     ),
     "external_live_never_touch": (
         "this path matches the external live-store protection pattern; capture refuses it by design; "
         "if this is your own archive root, the owner can inspect enablement eligibility with "
-        "'archive objet-capture-enable <archive-root> --dry-run' (read-only)"
+        "'archive objet-capture-selection' or 'archive source-intake-chain' (no enablement record needed)"
     ),
 }
 
@@ -166159,9 +167532,8 @@ def objet_capture_enable(
 
     next_safe_actions = [
         "Review this eligibility report with the archive owner before approving.",
-        "Approve with: archive objet-capture-enable <archive-root> --approve --reviewed-by <actor>"
-        + (" --acknowledge-never-touch-name" if never_touch_match else ""),
-        "Revoke later with: archive objet-capture-enable <archive-root> --revoke --approve --reviewed-by <actor>",
+        "objet-capture-enable was removed in v0.4.40; capture on a real archive with source-intake-chain",
+        "an existing enablement record stays readable; no new record is needed",
         "Revocation is advisory and forward-only: already-captured bytes, manifest records, and capture receipts remain.",
     ]
 

@@ -1808,10 +1808,8 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("foreign_block_trust_check", tool_names)
             self.assertIn("foreign_block_attestation_packet_check", tool_names)
             self.assertIn("foreign_block_quarantine_plan", tool_names)
-            self.assertIn("quarantine_foreign_block_check", tool_names)
             self.assertIn("foreign_block_quarantine_review_index", tool_names)
             self.assertIn("foreign_block_quarantine_decision_check", tool_names)
-            self.assertIn("record_quarantine_decision_check", tool_names)
             self.assertIn("foreign_block_quarantine_decision_review_index", tool_names)
             self.assertIn("foreign_block_decision_outcome_plan", tool_names)
             self.assertIn("foreign_block_attestation_review_candidate_plan", tool_names)
@@ -1826,7 +1824,6 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("promotion_check", tool_names)
             self.assertIn("mint_zettel_check", tool_names)
             self.assertIn("share_check", tool_names)
-            self.assertIn("delegate_zet_check", tool_names)
             self.assertIn("attest_zet_check", tool_names)
             self.assertIn("anchor_zet_check", tool_names)
             self.assertIn("archive_onboarding_plan", tool_names)
@@ -1836,7 +1833,6 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("restore_drill_plan", tool_names)
             self.assertIn("external_import_plan", tool_names)
             self.assertIn("list_sources", tool_names)
-            self.assertIn("source_scan_plan", tool_names)
             self.assertIn("source_registration_plan", tool_names)
             self.assertIn("source_mount_plan", tool_names)
             self.assertIn("zet_catalog", tool_names)
@@ -1920,13 +1916,10 @@ class McpServerTests(unittest.TestCase):
                 tools_by_name["zet_catalog"]["inputSchema"]["properties"]["start_zettel_ids"]["maxItems"],
                 archive_services.ZET_CATALOG_MAX_SEED_IDS,
             )
-            self.assertIn("ownership_transfer_check", tool_names)
             share_required = tools_by_name["share_check"]["inputSchema"]["required"]
-            delegate_schema = tools_by_name["delegate_zet_check"]["inputSchema"]
             self.assertIn("target_archive", share_required)
             self.assertNotIn("target_policy", tools_by_name["share_check"]["inputSchema"]["properties"])
-            self.assertNotIn("target_archive", delegate_schema["required"])
-            self.assertIn("target_policy", delegate_schema["properties"])
+            self.assertIn("delegate_zet_check", tool_names)  # restored 2026-09-25 (ZET sharing design)
             self.assertNotIn("promote_zettel", tool_names)
             self.assertNotIn("archive_promote", tool_names)
             self.assertNotIn("mint_zettel", tool_names)
@@ -2430,9 +2423,10 @@ class McpServerTests(unittest.TestCase):
     ) -> None:
         parser = archive_cli.build_parser()
         inventory = archive_cli._parser_capability_inventory(parser)
+        # transfer-ownership stays fixed closed; remint-reconcile reopened (2026-09-24).
         suggested_command = (
-            "archive remint-reconcile <archive-root> "
-            "--zettel-id <id> --approve"
+            "archive transfer-ownership <archive-root> "
+            "--new-owner <id> --approve"
         )
         status = archive_cli.command_status.resolve_suggested_command_mode(
             inventory,
@@ -8136,63 +8130,6 @@ class McpServerTests(unittest.TestCase):
         finally:
             self.stop_server(process)
 
-    def test_source_scan_plan_lists_sources_and_never_writes_files(self) -> None:
-        process = self.start_server()
-        try:
-            with tempfile.TemporaryDirectory() as tmp:
-                archive_root = self.install_historical_personal_archive_fixture(
-                    Path(tmp) / "archive",
-                    archive_id="archive:personal:mcp-source",
-                    principal_id="person:mcp-source",
-                )
-
-                source_root = Path(tmp) / "source-root"
-                source_root.mkdir()
-                (source_root / "mcp-source-note.txt").write_text("metadata only", encoding="utf-8")
-
-                list_response = self.send(
-                    process,
-                    {
-                        "jsonrpc": "2.0",
-                        "id": 2,
-                        "method": "tools/call",
-                        "params": {
-                            "name": "list_sources",
-                            "arguments": {"archive_root": str(archive_root)},
-                        },
-                    },
-                )
-                self.assertFalse(list_response["result"]["isError"])
-                self.assertGreaterEqual(list_response["result"]["structuredContent"]["source_count"], 2)
-
-                scan_response = self.send(
-                    process,
-                    {
-                        "jsonrpc": "2.0",
-                        "id": 3,
-                        "method": "tools/call",
-                        "params": {
-                            "name": "source_scan_plan",
-                            "arguments": {
-                                "archive_root": str(archive_root),
-                                "source": "local:personal-documents",
-                                "source_root": str(source_root),
-                            },
-                        },
-                    },
-                )
-                result = scan_response["result"]
-                self.assertFalse(result["isError"])
-                structured = result["structuredContent"]
-                self.assertTrue(structured["dry_run"])
-                self.assertTrue(structured["ok"])
-                self.assertEqual(structured["scan_mode"], "metadata_only")
-                self.assertEqual(structured["item_count"], 1)
-                self.assertFalse((archive_root / structured["proposed_source_map_path"]).exists())
-                self.assertFalse((archive_root / structured["proposed_receipt_path"]).exists())
-        finally:
-            self.stop_server(process)
-
     def test_source_registration_and_mount_plans_never_write_files(self) -> None:
         process = self.start_server()
         try:
@@ -11947,27 +11884,15 @@ class McpServerTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tmp:
                 source_root = self.copy_fake_archive(Path(tmp) / "source")
                 target_root = self.copy_fake_archive_as_company_target(Path(tmp) / "target")
-                delegate_response = self.send(
-                    process,
-                    {
-                        "jsonrpc": "2.0",
-                        "id": 1,
-                        "method": "tools/call",
-                        "params": {
-                            "name": "delegate_zet_check",
-                            "arguments": {
-                                "archive_root": str(source_root),
-                                "view": "view.fake.company.derived",
-                                "target_archive": "archive:company:fake-blue",
-                                "counterparty_id": "archive:company:fake-blue",
-                                "counterparty_fingerprint": "SHA256:fake-company-blue",
-                            },
-                        },
-                    },
+                # delegate_zet_check was removed in v0.4.40; the receipt preview
+                # the attest/anchor checks consume comes from the same service.
+                delegated = mcp_server.archive_services.delegate_zets_dry_run(
+                    source_root,
+                    view_id="view.fake.company.derived",
+                    target_archive="archive:company:fake-blue",
+                    counterparty_id="archive:company:fake-blue",
+                    counterparty_fingerprint="SHA256:fake-company-blue",
                 )
-                delegate_result = delegate_response["result"]
-                self.assertFalse(delegate_result["isError"])
-                delegated = delegate_result["structuredContent"]
                 self.assertTrue(delegated["ok"])
                 self.assertEqual(delegated["lifecycle_action"], "delegate")
                 self.assertEqual(len(delegated["delegated_zets"]), 1)
@@ -12031,25 +11956,11 @@ class McpServerTests(unittest.TestCase):
                 self.assertEqual(len(anchored["anchored_zets"]), 1)
                 self.assertFalse((target_root / anchored["proposed_anchor_metadata_path"]).exists())
 
-                claimable_delegate_response = self.send(
-                    process,
-                    {
-                        "jsonrpc": "2.0",
-                        "id": 4,
-                        "method": "tools/call",
-                        "params": {
-                            "name": "delegate_zet_check",
-                            "arguments": {
-                                "archive_root": str(source_root),
-                                "view": "view.fake.company.derived",
-                                "target_policy": "claimable_once",
-                            },
-                        },
-                    },
+                claimable_delegated = mcp_server.archive_services.delegate_zets_dry_run(
+                    source_root,
+                    view_id="view.fake.company.derived",
+                    target_policy="claimable_once",
                 )
-                claimable_delegate_result = claimable_delegate_response["result"]
-                self.assertFalse(claimable_delegate_result["isError"])
-                claimable_delegated = claimable_delegate_result["structuredContent"]
                 self.assertTrue(claimable_delegated["ok"])
                 self.assertIsNone(claimable_delegated["target_archive"])
                 self.assertEqual(claimable_delegated["delegation_capability"]["target_policy"], "claimable_once")

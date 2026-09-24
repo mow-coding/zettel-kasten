@@ -169,7 +169,6 @@ Search [operator-contract.md](operator-contract.md) for these exact advanced
 workflows before using them:
 
 - `zet-abstract-backfill`
-- `zet-abstract-backfill-revert`
 - `zet-revision-plan`
 - `zet-revision-write`
 - `zet-revision-restore-proposal-from-snapshot`

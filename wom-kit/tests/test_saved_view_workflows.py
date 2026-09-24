@@ -562,28 +562,44 @@ def test_cli_round_trip_is_json_and_content_free(tmp_path: Path) -> None:
     assert plan["state"] == "create"
     assert PRIVATE_NAME not in output
     assert PRIVATE_VALUE not in output
-    code, output = _run_cli(
-        [
-            "saved-view-write",
-            str(root),
-            "--request",
-            request,
-            "--approve",
-            "--expected-plan-sha256",
-            plan["summary"]["plan_sha256"],
-            "--reviewed-by",
-            "person:unit-test",
-            "--affirm-view-reviewed",
-            "--format",
-            "json",
-        ]
-    )
+    # v0.4.40 reopened saved-view-write --approve through exact approval.
+    # The native dialog is replaced by one that declines, so no real window
+    # can open on any platform and nothing is written.
+    from wom_kit import exact_human_approval_windows as windows
+
+    class _DecliningNative:
+        calls = 0
+
+        def show(self, **_kwargs):
+            _DecliningNative.calls += 1
+            return 2, True  # IDCANCEL
+
+        def show_collection(self, **_kwargs):
+            _DecliningNative.calls += 1
+            return 2, True
+
+    with mock.patch.object(windows, "_CtypesTaskDialogNative", return_value=_DecliningNative()):
+        code, output = _run_cli(
+            [
+                "saved-view-write",
+                str(root),
+                "--request",
+                request,
+                "--approve",
+                "--expected-plan-sha256",
+                plan["summary"]["plan_sha256"],
+                "--reviewed-by",
+                "person:unit-test",
+                "--affirm-view-reviewed",
+                "--format",
+                "json",
+            ]
+        )
     assert code == 1
     result = json.loads(output)
     assert result["state"] == "blocked"
-    assert result["reason_codes"] == [
-        "compound_exact_human_approval_binding_required"
-    ]
+    assert result["reason_codes"] == ["saved_view_write_workflow_precondition_failed"]
+    assert _DecliningNative.calls == 1
     assert result["files_written"] == []
     assert result["private_values_echoed"] is False
     assert PRIVATE_NAME not in output

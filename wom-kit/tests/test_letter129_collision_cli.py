@@ -371,11 +371,10 @@ class Letter129CollisionCliTests(unittest.TestCase):
         self.assertEqual(repair_code, 1)
         repair_service.assert_not_called()
         self.assertEqual(repair_stdout, "")
-        self.assertIn(
-            "Exact compound human-approval binding is not implemented",
-            repair_stderr,
-        )
-        self.assertIn("the write did not start", repair_stderr)
+        # Reopened in v0.4.40: a project without a verified mirror is refused
+        # before any dialog and before the writer runs.
+        self.assertIn("project_bytecode_repair_preflight_blocked", repair_stderr)
+        self.assertIn("the write did not start", repair_stderr.lower())
         self.assertNotIn("partial", repair_stdout + repair_stderr)
 
     def test_approved_repair_fixed_closes_before_service_or_write(self) -> None:
@@ -416,9 +415,11 @@ class Letter129CollisionCliTests(unittest.TestCase):
         self.assertEqual(code, 1)
         repair_service.assert_not_called()
         self.assertEqual(result["state"], "blocked")
+        # Reopened in v0.4.40: the preview refuses before any dialog and the
+        # writer is never called.
         self.assertEqual(
             result["reason_codes"],
-            ["compound_exact_human_approval_binding_required"],
+            ["project_bytecode_repair_preflight_blocked"],
         )
         self.assertFalse(result["private_values_echoed"])
         self.assertEqual(before, after)
