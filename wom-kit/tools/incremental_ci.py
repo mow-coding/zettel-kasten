@@ -176,11 +176,23 @@ def failed_tests(log: str) -> set[str]:
     return result
 
 
+# Jobs that only run in the incremental or delivery-tools lane. A full-lane run
+# lists them as skipped (GitHub keeps the unexpanded matrix name for a skipped
+# matrix job). They are allowed in a baseline only when actually skipped.
+LANE_ONLY_SKIPPED_JOB = re.compile(
+    r'Delivery tools (?:\$\{\{ matrix\.os \}\}|ubuntu-latest|windows-latest)'
+    r'|Focused regression (?:\$\{\{ matrix\.os \}\} py\$\{\{ matrix\.python \}\}'
+    r'|(?:ubuntu-latest|windows-latest) py3\.1[02])')
+
+
 def validate_jobs(jobs: list[dict], targets: list[str], load_log) -> dict:
     by_name = {j['name']: j for j in jobs}
     required = {'Release readiness gate', 'Classify exact change', INSTALLED_JOB, *SCALE_JOBS, *TEST_JOBS}
+    extra = set(by_name) - required - {'Required CI'}
     if (len(by_name) != len(jobs) or not required.issubset(by_name)
-            or set(by_name) - required - {'Required CI'}):
+            or any(not LANE_ONLY_SKIPPED_JOB.fullmatch(name)
+                   or by_name[name].get('status') != 'completed'
+                   or by_name[name].get('conclusion') != 'skipped' for name in extra)):
         raise ValueError('incomplete_full_baseline')
     observed = {}
     for name in required:
