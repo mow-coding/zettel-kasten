@@ -9271,6 +9271,12 @@ def _legacy_coordination_retire_route(args: argparse.Namespace) -> int:
         return _exact_human_approval_cli_error(
             args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_reviewer_required",
         )
+    if not legacy_retire.cleanup.LEGACY_COORDINATION_CLEANUP_APPLY_SUPPORTED:
+        # The bound filesystem moves are Windows-only; refuse before the dialog.
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_preflight_blocked",
+            preflight_blockers=["cleanup_apply_platform_unsupported"],
+        )
     try:
         preview = legacy_retire.legacy_coordination_retire_plan(workspace, args.destination, **limits)
         digest = preview.get("plan_sha256")

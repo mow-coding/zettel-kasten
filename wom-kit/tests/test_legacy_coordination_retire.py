@@ -13,6 +13,7 @@ from __future__ import annotations
 from contextlib import ExitStack, redirect_stderr, redirect_stdout
 import io
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -74,6 +75,7 @@ class LegacyCoordinationRetireTests(unittest.TestCase):
         self.assertNotIn(str(self.workspace), json.dumps(preview))
         self.assertTrue((self.workspace / ".mow-harness").is_dir())
 
+    @unittest.skipUnless(os.name == "nt", "approved apply is Windows-only")
     def test_approve_moves_everything_under_one_dialog_and_writes_a_receipt(self) -> None:
         code, result = self.run_cli("--approve", "--reviewed-by", REVIEWER)
         self.assertEqual(code, 0, result)
@@ -91,6 +93,7 @@ class LegacyCoordinationRetireTests(unittest.TestCase):
         self.assertEqual(again["write_status"], "nothing_to_write")
         self.assertEqual(self.native.calls, 1)
 
+    @unittest.skipUnless(os.name == "nt", "approved apply is Windows-only")
     def test_a_declined_dialog_moves_nothing(self) -> None:
         self.native.approve = False
         code, _error = self.run_cli("--approve", "--reviewed-by", REVIEWER)
@@ -108,6 +111,14 @@ class LegacyCoordinationRetireTests(unittest.TestCase):
         self.assertEqual(error["reason_codes"], ["legacy_coordination_retire_preflight_blocked"])
         self.assertEqual(self.native.calls, 0)
         self.assertTrue((self.workspace / ".mow-harness").is_dir())
+
+    def test_an_unsupported_platform_is_refused_before_the_dialog(self) -> None:
+        with patch.object(retire.cleanup, "LEGACY_COORDINATION_CLEANUP_APPLY_SUPPORTED", False):
+            code, error = self.run_cli("--approve", "--reviewed-by", REVIEWER)
+        self.assertEqual(code, 1)
+        self.assertEqual(error["reason_codes"], ["legacy_coordination_retire_preflight_blocked"])
+        self.assertIn("cleanup_apply_platform_unsupported", json.dumps(error))
+        self.assertEqual(self.native.calls, 0)
 
     def test_the_writer_stays_blocked_without_a_claim(self) -> None:
         plan = retire.legacy_coordination_retire_plan(self.workspace, self.destination)

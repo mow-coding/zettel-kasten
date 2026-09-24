@@ -320,10 +320,11 @@ class NotionPropertyBackfillCliTests(unittest.TestCase):
         # draft-revision-write and activity-cleanup. v0.4.40 reopens 27
         # writers (plus two new batch commands) from the 58-writer triage and
         # deletes 12 closed commands (five sharing/ownership commands were
-        # restored closed on 2026-09-25).
+        # restored closed on 2026-09-25). v0.4.41 opens the new-user entry,
+        # the Notion recovery chain and trash, and seven more writers.
         self.assertEqual(
             inventory["counts"]["approval_available_command_count"],
-            94,
+            106,
         )
         self.assertEqual(
             by_path["operator-feedback-archive"]["approval_status"],
@@ -331,7 +332,7 @@ class NotionPropertyBackfillCliTests(unittest.TestCase):
         )
         self.assertEqual(
             inventory["counts"]["approval_fixed_closed_command_count"],
-            18,
+            8,  # v0.4.41: five ZET commands, IMAP header scan, notion-recover, operation-control
         )
         # Unsupported cancellation is a separate fixed-close reason, not a
         # change to the sole approved Notion migration target above.
@@ -349,7 +350,7 @@ class NotionPropertyBackfillCliTests(unittest.TestCase):
         )
         self.assertEqual(
             inventory["counts"]["conditional_approval_command_count"],
-            11,  # v0.4.30: revert-edge unconditional; v0.4.41: legacy retire scope
+            10,  # v0.4.30: revert-edge unconditional; v0.4.41: legacy retire scope added, relation-candidate-decide now unconditional
         )
         self.assertEqual(by_path["create-draft"]["approval_scope"]["kind"], "namespace_predicate")
 

@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from . import legacy_coordination_cleanup as cleanup
+from .process_launch import noninteractive_creationflags
 
 RETIRE_PLAN_SCHEMA = "wom-kit/legacy-coordination-retire-plan/v0.1"
 RETIRE_RESULT_SCHEMA = "wom-kit/legacy-coordination-retire-result/v0.1"
@@ -96,7 +97,7 @@ def _git_blockers(workspace_root: Path) -> list[str]:
                 ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 env=environment, timeout=10, check=False,
-                creationflags=cleanup.noninteractive_creationflags(),
+                creationflags=noninteractive_creationflags(),
             )
         except FileNotFoundError:
             return ["git_executable_unavailable"]
@@ -121,7 +122,7 @@ def _git_blockers(workspace_root: Path) -> list[str]:
                 ["git", "-C", str(observed), "--literal-pathspecs", "ls-files", "-z", "--", pathspec],
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                 env=environment, timeout=10, check=False,
-                creationflags=cleanup.noninteractive_creationflags(),
+                creationflags=noninteractive_creationflags(),
             )
         except (OSError, subprocess.SubprocessError):
             return ["git_tracking_check_failed"]
@@ -347,6 +348,8 @@ def legacy_coordination_retire(
             "files_written": [receipt] if receipt else [],
         }
 
+    if not cleanup.LEGACY_COORDINATION_CLEANUP_APPLY_SUPPORTED:
+        return result("blocked", ["cleanup_apply_platform_unsupported"], moved=False)
     normalized, _root_identity, root_blockers = cleanup._validate_workspace_root_path(workspace)
     if root_blockers:
         return result("blocked", root_blockers, moved=False)
