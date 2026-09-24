@@ -1,6 +1,6 @@
 # Archive Infra Decision Log: Closed-Writer Triage (2026-09-24)
 
-Status: owner decision recorded; groups 1-2 implemented for v0.4.40.
+Status: owner decision recorded; groups 1-3 implemented for v0.4.40.
 
 ## Decision (owner, 2026-09-24)
 
@@ -72,3 +72,26 @@ deletes only what one zet explicitly references.
   JSON-only `--format` so refusals are machine-readable.
 
 Evidence: `wom-kit/tests/test_scratch_cleanup_exact.py`.
+
+## Group 3: Markup Normalization and Objet-Link Revert (v0.4.40)
+
+Letters 115-117 applied 1,994 normalizations before v0.4.0 closed the writer
+(142 later listed 1,075 candidates); 136 used objet-link revert and 159 was
+blocked without it.
+
+- One shared route binds the exact approval to the digest each writer's own
+  dry-run already computes (`plan_digest_approval_binding`). The writer
+  re-derives its plan under its own lock and refuses any drift; a supplied
+  `--expected-plan-sha256` must still equal the fresh plan; a plan with nothing
+  ready opens no dialog.
+- `markup-normalization`, `-revert` and `-recovery` and
+  `zettel-objet-link-revert` stay closed when called without the claim; every
+  receipt they write carries the approval reference.
+- The dormant revert code still called the pre-v0.4 objet-link lock
+  signature; it now takes the same per-zet control artifact lock as the
+  forward link.
+- A legacy test reached a real native dialog once while group 3 was being
+  verified (synthetic temporary archive, no customer data); every reopened
+  command's legacy tests now replace the dialog.
+
+Evidence: `wom-kit/tests/test_markup_and_link_revert_exact.py`.

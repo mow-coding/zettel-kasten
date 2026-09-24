@@ -69,9 +69,9 @@ EMPTY_ALLOWLIST_SHA256 = (
 )
 
 # v0.4.36 adds only operator-feedback-archive to the previous pinned CLI paths.
-CLI_COUNT = 589
+CLI_COUNT = 591  # v0.4.40: two receipt reconcile batch commands
 CLI_CANONICAL_SHA256 = (
-    "c071a8ff50e1da8c2f564daca37490b86f3ca54be756898841d525b2b35976a3"
+    "99c6a2c3ad2f0fd6a8b4566a31c1299d432bd653b8e2e46141c9de4c0665d541"
 )
 MCP_COUNT = 137
 MCP_CANONICAL_SHA256 = (

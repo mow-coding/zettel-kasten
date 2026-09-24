@@ -34,7 +34,11 @@
         "source_intake_chain",
         "remint_reconcile",
         "retire_draft_reconcile",
-        "ai_scratch_gc"
+        "ai_scratch_gc",
+        "markup_normalization",
+        "markup_normalization_revert",
+        "markup_normalization_recovery",
+        "zettel_objet_link_revert"
       ]
     },
     "plan_sha256": {"$ref": "#/$defs/sha256_ref"},

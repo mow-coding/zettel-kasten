@@ -163,9 +163,9 @@ class V0430ReleaseDocsTests(unittest.TestCase):
         routed = sum(1 for row in manifest["paths"].values() if row.get("route"))
         # v0.4.23 integrated create-draft (LR-06a); v0.4.24 through v0.4.27 change no writer;
         # v0.4.29 adds object-storage-restore and v0.4.30 object-storage-offload (both pending, target v0.4.30).
-        self.assertEqual(len(statuses), 69)  # v0.4.40: 2026-09-24 triage reopen
+        self.assertEqual(len(statuses), 73)  # v0.4.40: 2026-09-24 triage reopen
         self.assertEqual(statuses.count("session_integrated") - routed, 6)
-        self.assertEqual(routed, 15)  # v0.4.40: 2026-09-24 triage reopen
+        self.assertEqual(routed, 19)  # v0.4.40: 2026-09-24 triage reopen
         self.assertEqual(statuses.count("pending"), 29)  # v0.4.36: five rows integrated through the environment route
         self.assertEqual(statuses.count("legacy_exception"), 19)
         self.assertEqual(manifest["paths"]["create-draft"]["status"], "session_integrated")

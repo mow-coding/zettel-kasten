@@ -88,9 +88,6 @@ COMPOUND_APPROVAL_FIXED_CLOSED_COMMANDS = frozenset(
         "imap-mailbox-header-metadata-scan",
         "import-external",
         "legacy-coordination-cleanup",
-        "markup-normalization",
-        "markup-normalization-recovery",
-        "markup-normalization-revert",
         "notion-ancestor-fetch-adapter-run",
         "notion-objet-manifest-locator-label",
         "notion-objet-link-convert",
@@ -124,7 +121,6 @@ COMPOUND_APPROVAL_FIXED_CLOSED_COMMANDS = frozenset(
         "zet-revision-restore-proposal-from-snapshot",
         "zet-title-remap-recover",
         "zet-title-remap-revert-recover",
-        "zettel-objet-link-revert",
     }
 )
 
@@ -158,6 +154,11 @@ EXACT_APPROVAL_REOPENED_WRITERS = frozenset({
     # Triage group 2: one zet's explicit AI scratch refs; one catalog-pass file.
     "ai-scratch-gc",
     "zet-catalog-pass-cleanup",
+    # Triage group 3: markup normalization writers and objet-link revert.
+    "markup-normalization",
+    "markup-normalization-recovery",
+    "markup-normalization-revert",
+    "zettel-objet-link-revert",
 })
 
 # Public parser and dispatch exposure was audited at v0.3.320 and its explicit

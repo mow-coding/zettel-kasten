@@ -127,7 +127,7 @@ class Letter137ZettelObjetLinkCompoundFailClosedTests(unittest.TestCase):
         ):
             self.assertNotIn(private, rendered)
 
-    def test_cli_apply_routes_through_exact_human_workflow_while_revert_stays_closed(self) -> None:
+    def test_cli_apply_routes_through_exact_human_workflow_and_revert_refuses_unknown_receipt(self) -> None:
         shutil.copytree(
             KIT_ROOT / "examples" / "fake-life-archive",
             self.root,
@@ -246,7 +246,15 @@ class Letter137ZettelObjetLinkCompoundFailClosedTests(unittest.TestCase):
             apply_kwargs["expected_exact_approval_target_binding_sha256"],
             approval_contexts[0].target_binding_sha256,
         )
-        self._assert_fixed_block(reverted, "zettel_objet_link_revert")
+        # 2026-09-24 reopen (triage group 3): revert routes through exact
+        # approval; an unknown private receipt is refused before any dialog
+        # and before the revert writer, with nothing written.
+        self.assertEqual(reverted["lifecycle_action"], "zettel_objet_link_revert")
+        self.assertIn(
+            reverted["reason_codes"][0],
+            {"zettel_objet_link_revert_preflight_blocked", "zettel_objet_link_revert_workflow_failed_safely"},
+        )
+        self.assertEqual(reverted["files_written"], [])
         rendered = json.dumps([applied, reverted], ensure_ascii=False)
         for private in (
             PRIVATE_LABEL,

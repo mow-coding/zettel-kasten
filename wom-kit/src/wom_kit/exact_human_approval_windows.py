@@ -226,6 +226,12 @@ class ExactHumanApprovalOperation(Enum):
     # catalog-pass scratch file.
     ai_scratch_gc = "ai_scratch_gc"
     zet_catalog_pass_cleanup = "zet_catalog_pass_cleanup"
+    # Triage group 3: markup normalization writers and objet-link revert,
+    # bound to each service's own reviewed plan digest.
+    markup_normalization = "markup_normalization"
+    markup_normalization_revert = "markup_normalization_revert"
+    markup_normalization_recovery = "markup_normalization_recovery"
+    zettel_objet_link_revert = "zettel_objet_link_revert"
 
 
 def _validated_target_preview_text(value: str | None) -> str | None:
@@ -526,6 +532,10 @@ _OPERATION_LABELS = {
     ExactHumanApprovalOperation.retire_draft_reconcile: "퇴역 영수증 재정합",
     ExactHumanApprovalOperation.ai_scratch_gc: "zet 하나의 AI 임시 파일 정리",
     ExactHumanApprovalOperation.zet_catalog_pass_cleanup: "카탈로그 작업 임시 파일 정리",
+    ExactHumanApprovalOperation.markup_normalization: "마크업 정규화 적용",
+    ExactHumanApprovalOperation.markup_normalization_revert: "마크업 정규화 되돌리기",
+    ExactHumanApprovalOperation.markup_normalization_recovery: "중단된 마크업 정규화 복구",
+    ExactHumanApprovalOperation.zettel_objet_link_revert: "zet-오브제 연결 되돌리기",
 }
 
 _OPERATION_QUESTIONS = {
@@ -639,6 +649,18 @@ _OPERATION_QUESTIONS = {
     ),
     ExactHumanApprovalOperation.zet_catalog_pass_cleanup: (
         "다 쓴 카탈로그 작업 임시 파일 하나를 지울까요?"
+    ),
+    ExactHumanApprovalOperation.markup_normalization: (
+        "검토한 정규화 계획대로 정본 zet를 고칠까요?"
+    ),
+    ExactHumanApprovalOperation.markup_normalization_revert: (
+        "이 정규화 영수증 이전의 바이트로 되돌릴까요?"
+    ),
+    ExactHumanApprovalOperation.markup_normalization_recovery: (
+        "중단된 정규화 작업을 계획대로 마무리하거나 되돌릴까요?"
+    ),
+    ExactHumanApprovalOperation.zettel_objet_link_revert: (
+        "이 연결 영수증 이전의 바이트로 zet를 되돌릴까요?"
     ),
 }
 
@@ -821,6 +843,18 @@ _OPERATION_SUMMARIES = {
     ExactHumanApprovalOperation.zet_catalog_pass_cleanup: (
         "SHA-256이 확인된 비공개 카탈로그 작업 파일 하나만 지웁니다. 다른 파일은 건드리지 않습니다."
     ),
+    ExactHumanApprovalOperation.markup_normalization: (
+        "계획에 든 정본 zet만 스냅샷을 남기고 고친 뒤 영수증을 남깁니다. 영수증으로 원래 바이트로 되돌릴 수 있습니다."
+    ),
+    ExactHumanApprovalOperation.markup_normalization_revert: (
+        "영수증에 기록된 스냅샷 바이트로 정본을 되돌리고 되돌리기 영수증을 남깁니다. 원래 영수증은 지우지 않습니다."
+    ),
+    ExactHumanApprovalOperation.markup_normalization_recovery: (
+        "중단된 작업 기록(저널)의 정확한 바이트로 끝내거나 되돌리고 복구 영수증을 남깁니다."
+    ),
+    ExactHumanApprovalOperation.zettel_objet_link_revert: (
+        "연결 영수증의 스냅샷 바이트로 zet 하나를 되돌리고 되돌리기 영수증을 남깁니다. 오브제는 건드리지 않습니다."
+    ),
 }
 
 _OPERATION_APPROVE_BUTTONS = {
@@ -871,6 +905,10 @@ _OPERATION_APPROVE_BUTTONS = {
     ExactHumanApprovalOperation.retire_draft_reconcile: "재정합 실행",
     ExactHumanApprovalOperation.ai_scratch_gc: "임시 파일 정리",
     ExactHumanApprovalOperation.zet_catalog_pass_cleanup: "임시 파일 정리",
+    ExactHumanApprovalOperation.markup_normalization: "정규화 적용",
+    ExactHumanApprovalOperation.markup_normalization_revert: "정규화 되돌리기",
+    ExactHumanApprovalOperation.markup_normalization_recovery: "복구 실행",
+    ExactHumanApprovalOperation.zettel_objet_link_revert: "연결 되돌리기",
 }
 
 

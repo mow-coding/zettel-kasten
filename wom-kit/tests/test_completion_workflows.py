@@ -3154,7 +3154,7 @@ class CompletionWorkflowTests(unittest.TestCase):
             )
             self.assertFalse(replay["ok"], replay)
 
-    def test_zettel_objet_link_exact_approval_writes_while_revert_stays_closed(self) -> None:
+    def test_zettel_objet_link_exact_approval_writes_and_a_declined_revert_writes_nothing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.fake_archive(Path(tmp) / "archive")
             indexed = completion_workflows.archive_services.index_archive(
@@ -3279,28 +3279,34 @@ class CompletionWorkflowTests(unittest.TestCase):
                 for path in archive_root.rglob("*")
                 if path.is_file()
             }
-            revert_code, revert_output = self.run_cli(
-                [
-                    "zettel-objet-link-revert",
-                    str(archive_root),
-                    "--receipt",
-                    applied["summary"]["receipt_path"],
-                    "--expected-plan-sha256",
-                    revert_plan["summary"]["plan_sha256"],
-                    "--approve",
-                    "--reviewed-by",
-                    "person:test",
-                    "--format",
-                    "json",
-                ]
-            )
+            # 2026-09-24 reopen (triage group 3): the revert asks for exact
+            # approval; a declined decision writes nothing. The native dialog is
+            # replaced so a test never opens a real window.
+            def decline(_root, _context, _writer, **_kwargs):
+                raise archive_cli.ExactHumanApprovalWorkflowError("exact_human_approval_cancelled")
+
+            with mock.patch.object(archive_cli, "_execute_exact_human_approved_write", side_effect=decline):
+                revert_code, revert_output = self.run_cli(
+                    [
+                        "zettel-objet-link-revert",
+                        str(archive_root),
+                        "--receipt",
+                        applied["summary"]["receipt_path"],
+                        "--expected-plan-sha256",
+                        revert_plan["summary"]["plan_sha256"],
+                        "--approve",
+                        "--reviewed-by",
+                        "person:test",
+                        "--format",
+                        "json",
+                    ]
+                )
             self.assertEqual(revert_code, 1, revert_output)
             reverted = json.loads(revert_output)
             self.assertEqual(
                 reverted["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
+                ["zettel_objet_link_revert_workflow_precondition_failed"],
             )
-            self.assertEqual(reverted["capability_state"], "writer_unavailable")
             self.assertEqual(reverted["files_written"], [])
             self.assertEqual(reverted["effects_state"], "none")
             self.assertFalse(reverted["private_values_echoed"])

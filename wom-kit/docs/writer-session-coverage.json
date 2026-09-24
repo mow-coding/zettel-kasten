@@ -37,6 +37,26 @@
       "route": "environment",
       "evidence": ["test_scratch_cleanup_exact"]
     },
+    "markup-normalization": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_markup_and_link_revert_exact"]
+    },
+    "markup-normalization-recovery": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_markup_and_link_revert_exact"]
+    },
+    "markup-normalization-revert": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_markup_and_link_revert_exact"]
+    },
+    "zettel-objet-link-revert": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_markup_and_link_revert_exact"]
+    },
     "draft-revision-write": {
       "status": "session_integrated",
       "route": "environment",

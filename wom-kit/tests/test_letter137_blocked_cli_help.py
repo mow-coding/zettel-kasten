@@ -58,7 +58,7 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
         }
         self.assertEqual(
             len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS),
-            54,
+            50,
         )
         for exact_batch_command in (
             "source-intake-batch",
@@ -69,6 +69,11 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
             # 2026-09-24 reopen (triage group 2).
             "ai-scratch-gc",
             "zet-catalog-pass-cleanup",
+            # 2026-09-24 reopen (triage group 3).
+            "markup-normalization",
+            "markup-normalization-recovery",
+            "markup-normalization-revert",
+            "zettel-objet-link-revert",
         ):
             self.assertNotIn(
                 exact_batch_command,
@@ -106,7 +111,7 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
             "revert-edge",
             archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS,
         )
-        self.assertIn(
+        self.assertNotIn(  # reopened in v0.4.40 (triage group 3)
             "zettel-objet-link-revert",
             archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS,
         )
@@ -212,7 +217,7 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
             ("zet-revision-restore-write", "exact-byte"),
             ("remint-reconcile", "exact human approval"),
             ("remint-reconcile-batch", "exact human approval"),
-            ("markup-normalization", f"Unavailable in v{archive_cli.__version__}"),
+            ("import-external", f"Unavailable in v{archive_cli.__version__}"),
         ):
             with self.subTest(command=command_name):
                 completed = subprocess.run(

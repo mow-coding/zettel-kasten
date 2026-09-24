@@ -1888,6 +1888,35 @@ def zet_catalog_pass_cleanup_approval_binding(
     )
 
 
+def plan_digest_approval_binding(
+    operation: ExactHumanApprovalOperation,
+    plan_sha256: str,
+) -> ExactOperationApprovalBinding:
+    """Bind a writer whose dry-run already digests its exact effect set.
+
+    Used by legacy writers (triage group 3 onward) that re-derive their plan
+    under their own lock and refuse unless it still equals the reviewed
+    ``plan_sha256``; the approval binds that digest and nothing looser.
+    """
+
+    if type(operation) is not ExactHumanApprovalOperation:
+        raise _fail("operation_approval_plan_invalid")
+    plan = _sha_ref(plan_sha256)
+    target = {"operation": operation.value, "plan_sha256": plan}
+    basis = {
+        "schema_version": BINDING_SCHEMA_VERSION,
+        "operation": operation.value,
+        "target": target,
+    }
+    return ExactOperationApprovalBinding(
+        operation=operation,
+        plan_sha256=_sha256(basis),
+        target_binding_sha256=_sha256(target),
+        warning_codes=(),
+        review_binding_codes=("plan_digest",),
+    )
+
+
 def zettel_edge_batch_revert_approval_binding(
     dry_run: Mapping[str, Any],
 ) -> ExactOperationApprovalBinding:
@@ -2848,6 +2877,7 @@ __all__ = [
     "exact_operation_manifest_approval_binding",
     "mint_zet_approval_binding",
     "objet_capture_approval_binding",
+    "plan_digest_approval_binding",
     "promote_zet_approval_binding",
     "receipt_reconcile_batch_approval_binding",
     "retire_draft_approval_binding",

@@ -26,6 +26,8 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from . import archive_services, command_status, operation_approval_binding
+from .operation_approval_binding import OperationApprovalBindingError, plan_digest_approval_binding
+from .exact_human_approval_windows import ExactHumanApprovalOperation
 from .exact_human_approval import (
     _ClaimedExactHumanApproval,
     exact_human_approval_archive_identity_sha256,
@@ -7757,13 +7759,18 @@ def zettel_objet_link_revert(
     receipt: Path | str,
     expected_plan_sha256: str | None,
     reviewed_by: str | None,
+    exact_human_approval_claim: Any = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
 ) -> dict[str, Any]:
     # Revert reads a historical receipt, snapshot, and canonical zettel before
     # replacing bytes and writing another receipt.  Block the whole compound
     # effect before any of those reads until its exact binding exists.
-    return _compound_exact_human_approval_binding_blocked(
-        "zettel_objet_link_revert"
-    )
+    # Triage group 3 (2026-09-24): writes again under exact approval.
+    if exact_human_approval_claim is None:
+        return _compound_exact_human_approval_binding_blocked(
+            "zettel_objet_link_revert"
+        )
 
     # Retained unreachable implementation documents the legacy effect set.
     result, private = _zettel_objet_link_revert_plan_core(
@@ -7792,7 +7799,51 @@ def zettel_objet_link_revert(
             "files_written": [],
         }
     root: Path = private["root"]
-    with _ZettelObjetLinkLock(root, private["safe_zettel_id"]):
+    try:
+        exact_operation_approval = archive_services._require_exact_human_operation_approval(
+            root,
+            plan_digest_approval_binding(
+                ExactHumanApprovalOperation.zettel_objet_link_revert, expected
+            ),
+            reviewer_claim=reviewer,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+            claim=exact_human_approval_claim,
+        )
+    except OperationApprovalBindingError as exc:
+        raise archive_services.ArchiveServiceError(exc.code) from None
+    # The forward link and its revert serialize on one per-zet control
+    # artifact; a first revert may create it (no link receipt without it is
+    # expected, but an absent artifact is created exactly as the link does).
+    control_artifact_path = _zettel_objet_link_known_internal_path(
+        root,
+        f"{ZETTEL_OBJET_LINK_RECEIPTS_DIR}/.locks/"
+        f"{hashlib.sha256(private['safe_zettel_id'].encode('utf-8')).hexdigest()}.lock",
+    )
+    parent_stack = ExitStack()
+    try:
+        control_parent_binding = parent_stack.enter_context(
+            archive_services._activity_group_bound_directory_chain(
+                root,
+                control_artifact_path.parent,
+                create=True,
+            )
+        )
+        try:
+            _zettel_objet_link_bound_lstat(control_parent_binding, control_artifact_path)
+            control_state = "existing_exact"
+        except FileNotFoundError:
+            control_state = "absent"
+    except BaseException:
+        parent_stack.close()
+        raise
+    with _ZettelObjetLinkLock(
+        root,
+        control_artifact_path,
+        expected_state=control_state,
+        parent_binding=control_parent_binding,
+        parent_stack=parent_stack,
+    ):
         fresh, fresh_private = _zettel_objet_link_revert_plan_core(
             root,
             receipt=receipt,
@@ -7813,6 +7864,7 @@ def zettel_objet_link_revert(
             }
         timestamp = _now()
         revert_receipt = {
+            "exact_human_approval": exact_operation_approval,
             "schema": ZETTEL_OBJET_LINK_REVERT_RECEIPT_SCHEMA,
             "action": "restore_zettel_before_objet_link",
             "archive_id": archive_services.read_archive_id(root),
@@ -12856,10 +12908,15 @@ def markup_normalization_apply(
     only_ready: bool = False,
     expected_plan_sha256: str | None,
     reviewed_by: str | None,
+    exact_human_approval_claim: Any = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
 ) -> dict[str, Any]:
-    return archive_services._compound_exact_human_approval_blocked(
-        lifecycle_action="markup_normalization",
-    )
+    # Triage group 3 (2026-09-24): writes again under exact approval.
+    if exact_human_approval_claim is None:
+        return archive_services._compound_exact_human_approval_blocked(
+            lifecycle_action="markup_normalization",
+        )
 
     # Dormant legacy implementation retained for compatibility analysis.
     # It is not an approval authority.
@@ -12896,6 +12953,19 @@ def markup_normalization_apply(
         }
 
     root: Path = private["root"]
+    try:
+        exact_operation_approval = archive_services._require_exact_human_operation_approval(
+            root,
+            plan_digest_approval_binding(
+                ExactHumanApprovalOperation.markup_normalization, expected
+            ),
+            reviewer_claim=reviewer,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+            claim=exact_human_approval_claim,
+        )
+    except OperationApprovalBindingError as exc:
+        raise archive_services.ArchiveServiceError(exc.code) from None
     transaction_relative = (
         f"{MARKUP_NORMALIZATION_SCRATCH_DIR}/transactions/{expected}"
     )
@@ -13053,6 +13123,7 @@ def markup_normalization_apply(
             )
 
         receipt = {
+            "exact_human_approval": exact_operation_approval,
             "schema": MARKUP_NORMALIZATION_RECEIPT_SCHEMA,
             "archive_id": archive_services.read_archive_id(root),
             "plan_sha256": expected,
@@ -13282,10 +13353,15 @@ def markup_normalization_revert(
     receipt: Path | str,
     expected_plan_sha256: str | None,
     reviewed_by: str | None,
+    exact_human_approval_claim: Any = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
 ) -> dict[str, Any]:
-    return archive_services._compound_exact_human_approval_blocked(
-        lifecycle_action="markup_normalization_revert",
-    )
+    # Triage group 3 (2026-09-24): writes again under exact approval.
+    if exact_human_approval_claim is None:
+        return archive_services._compound_exact_human_approval_blocked(
+            lifecycle_action="markup_normalization_revert",
+        )
 
     # Dormant legacy implementation retained for compatibility analysis.
     # It is not an approval authority.
@@ -13315,6 +13391,19 @@ def markup_normalization_revert(
             "files_written": [],
         }
     root: Path = private["root"]
+    try:
+        exact_operation_approval = archive_services._require_exact_human_operation_approval(
+            root,
+            plan_digest_approval_binding(
+                ExactHumanApprovalOperation.markup_normalization_revert, expected
+            ),
+            reviewer_claim=reviewer,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+            claim=exact_human_approval_claim,
+        )
+    except OperationApprovalBindingError as exc:
+        raise archive_services.ArchiveServiceError(exc.code) from None
     with _MarkupMutationLock(root):
         fresh, fresh_private = _markup_revert_plan_core(
             root,
@@ -13352,6 +13441,7 @@ def markup_normalization_revert(
             revert_receipt_relative,
         )
         revert_receipt = {
+            "exact_human_approval": exact_operation_approval,
             "schema": MARKUP_NORMALIZATION_REVERT_RECEIPT_SCHEMA,
             "archive_id": archive_services.read_archive_id(root),
             "source_receipt_sha256": source_receipt_sha256,
@@ -13675,10 +13765,15 @@ def markup_normalization_recover(
     mode: str,
     expected_plan_sha256: str | None,
     reviewed_by: str | None,
+    exact_human_approval_claim: Any = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
 ) -> dict[str, Any]:
-    return archive_services._compound_exact_human_approval_blocked(
-        lifecycle_action="markup_normalization_recovery",
-    )
+    # Triage group 3 (2026-09-24): writes again under exact approval.
+    if exact_human_approval_claim is None:
+        return archive_services._compound_exact_human_approval_blocked(
+            lifecycle_action="markup_normalization_recovery",
+        )
 
     # Dormant legacy implementation retained for compatibility analysis.
     # It is not an approval authority.
@@ -13722,6 +13817,19 @@ def markup_normalization_recover(
         }
 
     root: Path = private["root"]
+    try:
+        exact_operation_approval = archive_services._require_exact_human_operation_approval(
+            root,
+            plan_digest_approval_binding(
+                ExactHumanApprovalOperation.markup_normalization_recovery, expected
+            ),
+            reviewer_claim=reviewer,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+            claim=exact_human_approval_claim,
+        )
+    except OperationApprovalBindingError as exc:
+        raise archive_services.ArchiveServiceError(exc.code) from None
     with _MarkupMutationLock(root):
         fresh, fresh_private = _markup_recovery_plan_core(
             root,
@@ -13773,6 +13881,7 @@ def markup_normalization_recover(
             recovery_receipt_relative,
         )
         recovery_receipt = {
+            "exact_human_approval": exact_operation_approval,
             "schema": MARKUP_NORMALIZATION_RECOVERY_RECEIPT_SCHEMA,
             "archive_id": archive_services.read_archive_id(root),
             "source_journal_sha256": source_journal_sha256,
@@ -13814,6 +13923,7 @@ def markup_normalization_recover(
                 receipt_relative,
             )
             normalization_receipt = {
+                "exact_human_approval": exact_operation_approval,
                 "schema": MARKUP_NORMALIZATION_RECEIPT_SCHEMA,
                 "archive_id": archive_services.read_archive_id(root),
                 "plan_sha256": journal_doc["plan_sha256"],

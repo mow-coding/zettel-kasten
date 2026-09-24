@@ -26849,8 +26849,22 @@ def command_zettel_objet_link_revert(args: argparse.Namespace) -> int:
                 receipt=args.receipt,
             )
         else:
-            result = _zettel_objet_link_compound_write_blocked(
-                "zettel_objet_link_revert"
+            root = Path(args.archive_root)
+            return _plan_digest_exact_route(
+                args,
+                lifecycle_action="zettel_objet_link_revert",
+                operation=ExactHumanApprovalOperation.zettel_objet_link_revert,
+                plan=lambda: completion_workflows.zettel_objet_link_revert_plan(root, receipt=args.receipt),
+                write=lambda digest, reviewer, binding, claim: completion_workflows.zettel_objet_link_revert(
+                    root,
+                    receipt=args.receipt,
+                    expected_plan_sha256=digest,
+                    reviewed_by=reviewer,
+                    exact_human_approval_claim=claim,
+                    expected_exact_approval_plan_sha256=binding.plan_sha256,
+                    expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+                ),
+                printer=lambda result: _print_zettel_objet_link_result(result, args.format),
             )
     except Exception:
         print("zettel-objet-link-revert failed safely.", file=sys.stderr)
@@ -33381,6 +33395,101 @@ def command_markup_style_guide(args: argparse.Namespace) -> int:
     return 0
 
 
+def _plan_digest_exact_route(
+    args: argparse.Namespace,
+    *,
+    lifecycle_action: str,
+    operation: ExactHumanApprovalOperation,
+    plan: Callable[[], dict[str, Any]],
+    write: Callable[[str, str, Any, Any], dict[str, Any]],
+    printer: Callable[[dict[str, Any]], None],
+    nothing_to_do: Callable[[dict[str, Any]], bool] | None = None,
+) -> int:
+    """--approve for legacy writers whose dry-run digests the exact effect set.
+
+    Triage group 3 onward (2026-09-24): one fresh preview, one dialog (or a
+    valid limited/allow_all session grant) bound to that plan digest; the
+    writer re-derives the plan under its own lock and refuses any drift.
+    A supplied --expected-plan-sha256 must still equal the fresh plan.
+    """
+
+    reviewer = archive_services.safe_project_intake_actor_id(getattr(args, "reviewed_by", None))
+    if reviewer is None:
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_reviewer_required",
+        )
+    archive_root = Path(args.archive_root)
+    try:
+        preview = plan()
+        summary = preview.get("summary") if isinstance(preview.get("summary"), dict) else {}
+        digest = preview.get("plan_sha256") or summary.get("plan_sha256")
+        if (
+            preview.get("ok") is not True
+            or preview.get("blockers")
+            or not isinstance(digest, str)
+            or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+        ):
+            return _exact_human_approval_cli_error(
+                args,
+                lifecycle_action=lifecycle_action,
+                reason_code=f"{lifecycle_action}_preflight_blocked",
+                preflight_blockers=preview.get("blockers"),
+            )
+        supplied = str(getattr(args, "expected_plan_sha256", None) or "").strip().lower()
+        if supplied and supplied != digest:
+            return _exact_human_approval_cli_error(
+                args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_plan_changed",
+            )
+        if nothing_to_do is not None and nothing_to_do(preview):
+            result = {
+                **preview,
+                "dry_run": False,
+                "approved": False,
+                "state": "nothing_to_write",
+                "write_status": "nothing_to_write",
+                "native_approval_dialog_opened": False,
+                "files_written": [],
+            }
+        else:
+            binding = operation_approval_binding.plan_digest_approval_binding(operation, digest)
+            context = binding.context(
+                archive_id=archive_services.read_archive_id(archive_root),
+                reviewer_claim=reviewer,
+            )
+            result = _execute_exact_human_approved_write(
+                archive_root, context, lambda claim: write(digest, reviewer, binding, claim),
+            )
+    except ExactHumanApprovalWorkflowError as error:
+        no_effect = error.code in {
+            "exact_human_approval_cancelled",
+            "exact_human_approval_operation_failed",
+            "exact_human_approval_writer_result_invalid",
+        }
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code=(
+                f"{lifecycle_action}_workflow_precondition_failed" if no_effect
+                else "exact_human_approval_state_unknown"
+            ),
+        )
+    except (
+        archive_services.ArchiveServiceError,
+        operation_approval_binding.OperationApprovalBindingError,
+        ExactHumanApprovalError,
+        ExactHumanApprovalWindowsError,
+        ArchivePathError,
+        OSError,
+        UnicodeError,
+        ValueError,
+    ):
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action=lifecycle_action, reason_code=f"{lifecycle_action}_workflow_failed_safely",
+        )
+    printer(result)
+    return 0 if result.get("ok") else 1
+
+
 def command_markup_normalization_plan(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print(
@@ -33406,10 +33515,30 @@ def command_markup_normalization_plan(args: argparse.Namespace) -> int:
 
 def command_markup_normalization(args: argparse.Namespace) -> int:
     if args.approve:
-        return _exact_human_approval_cli_error(
+        root = Path(args.archive_root)
+        options = dict(
+            policy=args.policy,
+            max_items=args.max_items,
+            max_changes=args.max_changes,
+            binding_manifest=args.binding_manifest,
+            only_ready=args.only_ready,
+        )
+        return _plan_digest_exact_route(
             args,
             lifecycle_action="markup_normalization",
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.markup_normalization,
+            plan=lambda: completion_workflows.markup_normalization_plan(root, **options),
+            write=lambda digest, reviewer, binding, claim: completion_workflows.markup_normalization_apply(
+                root,
+                **options,
+                expected_plan_sha256=digest,
+                reviewed_by=reviewer,
+                exact_human_approval_claim=claim,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+            ),
+            printer=lambda result: _print_markup_result(result, args.format),
+            nothing_to_do=lambda preview: not (preview.get("summary") or {}).get("ready_change_count"),
         )
     if not args.approve:
         print("markup-normalization requires --approve.", file=sys.stderr)
@@ -33433,11 +33562,23 @@ def command_markup_normalization(args: argparse.Namespace) -> int:
 
 
 def command_markup_normalization_revert(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
+    if args.approve and not args.dry_run:
+        root = Path(args.archive_root)
+        return _plan_digest_exact_route(
             args,
             lifecycle_action="markup_normalization_revert",
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.markup_normalization_revert,
+            plan=lambda: completion_workflows.markup_normalization_revert_plan(root, receipt=args.receipt),
+            write=lambda digest, reviewer, binding, claim: completion_workflows.markup_normalization_revert(
+                root,
+                receipt=args.receipt,
+                expected_plan_sha256=digest,
+                reviewed_by=reviewer,
+                exact_human_approval_claim=claim,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+            ),
+            printer=lambda result: _print_markup_result(result, args.format),
         )
     if args.dry_run == args.approve:
         print(
@@ -33466,11 +33607,26 @@ def command_markup_normalization_revert(args: argparse.Namespace) -> int:
 
 
 def command_markup_normalization_recovery(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
+    if args.approve and not args.dry_run:
+        root = Path(args.archive_root)
+        return _plan_digest_exact_route(
             args,
             lifecycle_action="markup_normalization_recovery",
-            reason_code="compound_exact_human_approval_binding_required",
+            operation=ExactHumanApprovalOperation.markup_normalization_recovery,
+            plan=lambda: completion_workflows.markup_normalization_recovery_plan(
+                root, journal=args.journal, mode=args.mode,
+            ),
+            write=lambda digest, reviewer, binding, claim: completion_workflows.markup_normalization_recover(
+                root,
+                journal=args.journal,
+                mode=args.mode,
+                expected_plan_sha256=digest,
+                reviewed_by=reviewer,
+                exact_human_approval_claim=claim,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+            ),
+            printer=lambda result: _print_markup_result(result, args.format),
         )
     if args.dry_run == args.approve:
         print(

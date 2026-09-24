@@ -153,9 +153,13 @@ class V0400ReleaseDocsTests(unittest.TestCase):
                 "retire-draft-reconcile",  # reopened in v0.4.40
                 "ai-scratch-gc",  # reopened in v0.4.40
                 "zet-catalog-pass-cleanup",  # reopened in v0.4.40
+                "markup-normalization",  # reopened in v0.4.40
+                "markup-normalization-recovery",  # reopened in v0.4.40
+                "markup-normalization-revert",  # reopened in v0.4.40
+                "zettel-objet-link-revert",  # reopened in v0.4.40
             }
         )
-        self.assertEqual(len(current_blocked), 54)  # v0.4.40: 2026-09-24 triage reopen
+        self.assertEqual(len(current_blocked), 50)  # v0.4.40: 2026-09-24 triage reopen
         self.assertEqual(len(historical_blocked), 79)
         self.assertNotIn("migrate", current_blocked)
         self.assertNotIn("zettel-objet-link", current_blocked)
@@ -164,7 +168,7 @@ class V0400ReleaseDocsTests(unittest.TestCase):
         self.assertNotIn("objet-capture", current_blocked)
         self.assertNotIn("objet-capture-selection", current_blocked)
         self.assertNotIn("revert-edge", current_blocked)
-        self.assertIn("zettel-objet-link-revert", current_blocked)
+        self.assertNotIn("zettel-objet-link-revert", current_blocked)  # reopened in v0.4.40
 
         release = RELEASE_PATH.read_text(encoding="utf-8")
         self.assertIn("exactly 79 top-level", release)
