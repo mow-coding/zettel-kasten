@@ -1,5 +1,7 @@
 # zet Abstract Backfill Recovery Executor
 
+> Removed in v0.4.40: `archive zet-abstract-backfill-recover` no longer exists; no replacement; inspect historical cases with `zet-abstract-backfill-recovery-plan`. This page is kept as historical record.
+
 Historical v0.3 record — Status: implemented as a single-case approval-gated CLI writer in v0.3.267
 
 Current v0.4.0 boundary: the recovery plan and executor dry-run remain

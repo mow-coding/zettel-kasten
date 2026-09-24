@@ -1,5 +1,7 @@
 # Credential KeePassXC Write
 
+> Removed in v0.4.40: `archive credential-keepassxc-write` no longer exists; store a credential with `credential-adopt`. This page is kept as historical record.
+
 Status: v0.4.0 dry-run-only KeePassXC command preview; write fixed closed
 Date: 2026-06-15
 

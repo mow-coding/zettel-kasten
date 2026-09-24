@@ -1,5 +1,7 @@
 # Notion Ancestor Fetch Adapter Run
 
+> Removed in v0.4.40: `archive notion-ancestor-fetch-adapter-run` no longer exists; use `notion-recover` (still closed until Notion recovery is redesigned). This page is kept as historical record.
+
 Status: v0.4.0 adapter preview; approval and provider execution are fixed closed
 
 Current v0.4.0 boundary: approval is fixed fail-closed before credential read,
