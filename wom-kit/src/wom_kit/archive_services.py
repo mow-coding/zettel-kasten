@@ -115473,6 +115473,142 @@ def wom_kit_project_update_source_versions_observation(
     }
 
 
+WOM_KIT_GENERATED_BETA_MAX_TREE_BYTES = 16 * 1024 * 1024
+WOM_KIT_GENERATED_BETA_MAX_BLOB_BYTES = 4 * 1024 * 1024
+
+
+def _wom_kit_generated_beta_binding_verified(
+    mirror_path: Path,
+    target_commit: str,
+    target_version: str,
+    *,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
+) -> str | None:
+    """Accept an opt-in beta tag that is only a generated version binding on main.
+
+    beta-delivery publishes ``vX.Y.ZbN`` on one generated commit whose single
+    parent is a reviewed main commit. That commit is not an ancestor of main, so
+    it is accepted only when every changed file equals the parent with exactly
+    the generator's substitutions (versions, lock name, lock hash, release note).
+    Any other difference keeps the ordinary "not reachable" refusal. Returns the
+    verified parent commit, or ``None``.
+    """
+
+    match = re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.([1-9][0-9]*)b[1-9][0-9]*", target_version or "")
+    if match is None:
+        return None
+    beta = target_version
+    base = f"{match.group(1)}.{match.group(2)}.{int(match.group(3)) - 1}"
+
+    def git(args: list[str], limit: int) -> str | None:
+        available, code, text = _wom_kit_project_update_git_observation(
+            mirror_path, args, max_output_bytes=limit, runner=runner)
+        return text if available and code == 0 else None
+
+    def blob(commit: str, relative: str) -> bytes | None:
+        size_text = git(["cat-file", "-s", f"{commit}:{relative}"], 256)
+        try:
+            size = int(size_text or "")
+        except ValueError:
+            return None
+        if not 0 <= size <= WOM_KIT_GENERATED_BETA_MAX_BLOB_BYTES:
+            return None
+        observed = _wom_kit_project_update_git_blob_observation(
+            mirror_path, f"{commit}:{relative}", size, runner=runner)
+        return observed.get("blob") if observed.get("state") == "passed" else None
+
+    commit_text = git(["cat-file", "-p", target_commit], 64 * 1024)
+    if commit_text is None:
+        return None
+    header = commit_text.split("\n\n", 1)[0].splitlines()
+    parents = [line[7:].strip().lower() for line in header if line.startswith("parent ")]
+    if len(parents) != 1 or not re.fullmatch(r"[0-9a-f]{40,64}", parents[0]):
+        return None
+    parent = parents[0]
+    available, code, _ = _wom_kit_project_update_git_observation(
+        mirror_path, ["merge-base", "--is-ancestor", parent, "refs/remotes/origin/main"], runner=runner)
+    if not available or code != 0:
+        return None
+
+    def tree(commit: str) -> dict[str, str] | None:
+        text = git(["ls-tree", "-r", "-z", "--full-tree", commit], WOM_KIT_GENERATED_BETA_MAX_TREE_BYTES)
+        if text is None:
+            return None
+        rows: dict[str, str] = {}
+        for entry in text.split("\0"):
+            if not entry:
+                continue
+            meta, _, path = entry.partition("\t")
+            parts = meta.split()
+            if len(parts) != 3 or parts[1] != "blob" or not path:
+                return None
+            rows[path] = parts[0] + " " + parts[2]
+        return rows
+
+    parent_tree, target_tree = tree(parent), tree(target_commit)
+    if parent_tree is None or target_tree is None:
+        return None
+    new_lock = f"wom-kit/project-runtime-supply-lock-v{beta}.json"
+    beta_note = f"wom-kit/docs/releases/v{beta}.md"
+    beta_packaged = f"wom-kit/src/wom_kit/_resources/release-notes/v{beta}.md"
+    base_packaged = f"wom-kit/src/wom_kit/_resources/release-notes/v{base}.md"
+    manifest_path = "wom-kit/src/wom_kit/_resources/resource-manifest.json"
+    version_files = ("wom-kit/pyproject.toml", "wom-kit/src/wom_kit/__init__.py", "wom_kit/__init__.py")
+    modified = {*version_files, "wom-kit/project-runtime-policy.json",
+                "wom-kit/src/wom_kit/project_runtime.py", manifest_path}
+    added = {new_lock, beta_note, beta_packaged}
+    changed = {path for path in set(parent_tree) | set(target_tree) if parent_tree.get(path) != target_tree.get(path)}
+    if (changed != modified | added | {base_packaged}
+            or any(path not in parent_tree or path not in target_tree for path in modified)
+            or any(path in parent_tree or path not in target_tree for path in added)
+            or base_packaged not in parent_tree or base_packaged in target_tree
+            or any(target_tree[path].split()[0] != "100644" for path in modified | added)):
+        return None
+    try:
+        for relative in version_files:
+            before, after = blob(parent, relative), blob(target_commit, relative)
+            if before is None or after is None or before == after:
+                return None
+            if after != before.replace(f'"{base}"'.encode(), f'"{beta}"'.encode()):
+                return None
+        parent_policy = json.loads(blob(parent, "wom-kit/project-runtime-policy.json") or b"")
+        target_policy = json.loads(blob(target_commit, "wom-kit/project-runtime-policy.json") or b"")
+        old_lock = parent_policy["supply_lock"]
+        old_lock_bytes, new_lock_bytes = blob(parent, old_lock), blob(target_commit, new_lock)
+        if old_lock_bytes is None or new_lock_bytes is None:
+            return None
+        if json.loads(new_lock_bytes) != {**json.loads(old_lock_bytes), "target_tag": "v" + beta}:
+            return None
+        new_lock_sha = "sha256:" + hashlib.sha256(new_lock_bytes).hexdigest()
+        if target_policy != {**parent_policy, "supply_lock": new_lock, "supply_lock_sha256": new_lock_sha}:
+            return None
+        runtime_before = blob(parent, "wom-kit/src/wom_kit/project_runtime.py")
+        runtime_after = blob(target_commit, "wom-kit/src/wom_kit/project_runtime.py")
+        if runtime_before is None or runtime_after is None or runtime_after != runtime_before.replace(
+                old_lock.encode(), new_lock.encode()).replace(
+                str(parent_policy["supply_lock_sha256"]).encode(), new_lock_sha.encode()):
+            return None
+        note, packaged_note = blob(target_commit, beta_note), blob(target_commit, beta_packaged)
+        if note is None or note != packaged_note:
+            return None
+        parent_manifest = json.loads(blob(parent, manifest_path) or b"")
+        target_manifest = json.loads(blob(target_commit, manifest_path) or b"")
+        if ({key: value for key, value in parent_manifest.items() if key not in {"version", "files"}}
+                != {key: value for key, value in target_manifest.items() if key not in {"version", "files"}}
+                or parent_manifest.get("version") != base or target_manifest.get("version") != beta):
+            return None
+        old_rows = [row for row in parent_manifest["files"] if row.get("packaged") != f"release-notes/v{base}.md"]
+        new_rows = [row for row in target_manifest["files"] if row.get("packaged") != f"release-notes/v{beta}.md"]
+        note_rows = [row for row in target_manifest["files"] if row.get("packaged") == f"release-notes/v{beta}.md"]
+        if (old_rows != new_rows or len(note_rows) != 1 or note_rows[0] != {
+                "source": f"docs/releases/v{beta}.md", "packaged": f"release-notes/v{beta}.md",
+                "bytes": len(note), "sha256": hashlib.sha256(note).hexdigest()}):
+            return None
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
+    return parent
+
+
 def wom_kit_project_update_target_evidence(
     mirror_path: Path,
     target_tag: str,
@@ -115669,6 +115805,16 @@ def wom_kit_project_update_target_evidence(
         )
         return evidence
     evidence["target_reachable_from_origin_main"] = ancestor_return_code == 0
+    if not evidence["target_reachable_from_origin_main"]:
+        # An opt-in beta is a generated version binding on a reviewed main
+        # commit; it counts as main's code only after exact verification.
+        generated_parent = _wom_kit_generated_beta_binding_verified(
+            mirror_path, target_commit, target_version or "", runner=runner,
+        )
+        if generated_parent is not None:
+            evidence["target_reachable_from_origin_main"] = True
+            evidence["target_ancestry_basis"] = "generated_beta_binding_on_origin_main"
+            evidence["generated_beta_parent_commit"] = generated_parent
     if not evidence["target_reachable_from_origin_main"]:
         evidence["observation_state"] = "failed"
         evidence["observation_reason_code"] = (
