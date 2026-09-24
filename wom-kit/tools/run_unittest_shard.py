@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -150,6 +151,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
         flush=True,
     )
+    # Test modules run as ``wom-kit.tests.test_x`` from the repository root,
+    # so a module that imports a sibling fixture module by bare name must not
+    # depend on an earlier module in the same shard having extended sys.path.
+    # Byte-balanced assignment moves modules between shards whenever a test
+    # file is added, which made that accidental ordering fail (test_storage_cost).
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(
+        part for part in (str(args.tests_dir), env.get("PYTHONPATH", "")) if part
+    )
     completed = subprocess.run(
         [
             sys.executable,
@@ -160,6 +170,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             *(module.relative_path for module in selected),
         ],
         check=False,
+        env=env,
     )
     return completed.returncode
 
