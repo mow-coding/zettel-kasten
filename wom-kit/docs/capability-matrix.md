@@ -1,8 +1,8 @@
 ﻿# WOM-kit Capability Matrix
 
-Version: v0.4.40 implementation and release scope
+Version: v0.4.41 implementation and release scope
 
-Status: v0.4.40 closed-writer triage (27 reopened, 12 removed) and activity-scoped close; [triage decision](archive-infra-decision-log-2026-09-24-closed-writer-triage.md).
+Status: v0.4.41 new-user entry, working Notion recovery with trash cleanup, and seven more writers reopened; [triage decision](archive-infra-decision-log-2026-09-24-closed-writer-triage.md).
 
 Status: v0.4.36 no-dialog grants, letter-168, and session-owned writes truth
 Date: 2026-09-04

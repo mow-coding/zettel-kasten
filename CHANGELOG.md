@@ -6,6 +6,15 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.41 - 2026-09-25
+
+- New users can create an archive again: `onboard --approve` and `init --approve` after one exact approval; Windows setup approves with the native command (letter 102).
+- `runtime-skill-install` / `-uninstall --approve --archive-root` (letters 100-105).
+- Notion recovery works end to end: `credential-lifecycle --approve` makes an adopted credential ready, `notion-page-recovery-request-build` builds the request, `notion-page-recovery --approve` runs it (letters 116-119, 142, 148, 156).
+- New `notion-page-trash` moves verified-recovered pages to the Notion trash (never a permanent delete) and back with `--restore`.
+- `legacy-coordination-cleanup --destination` retires the old coordination folder by moving it.
+- `relation-candidate-decide --decision accept` (letter 108) and `import-external --approve` (letter 141) run again under exact approval.
+
 ## v0.4.40 - 2026-09-25
 
 - Reopen 27 writers fixed closed since v0.4.0 under the exact approval contract (one dialog, or none under a valid session grant): receipt reconcile with new batch commands, scratch cleanup, markup normalization, objet-link revert, principals, activity groups, restore drill, .gitignore repair, identity reconcile, title-remap recovery, derive-text capture, saved views, private objet source metadata, locator deactivation, bytecode repair, update-collision relocation, and the snapshot restore proposal.
