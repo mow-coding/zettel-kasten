@@ -108,6 +108,46 @@ class ActivityCleanupTests(unittest.TestCase):
         self.assertIn(result["reason_codes"][0], {"activity_cleanup_plan_changed", "activity_cleanup_native_delete_not_supported"})
         self.assertFalse((self.root / cleanup.ROOT).exists())
 
+    def test_private_journal_stays_out_of_git_tracked_receipts(self):
+        # The intent holds absolute paths, reasons and storage endpoints; an
+        # archive Git backup must never pick it up (receipts/ is tracked).
+        store = cleanup.Journal(self.root, "synthetic-activity", self.key)
+        store.write("intent", {"synthetic": True})
+        self.assertTrue((self.root / "profiles/local/activity-cleanup/synthetic-activity/intent.json").is_file())
+        self.assertFalse((self.root / "receipts/activity-cleanup").exists())
+        self.assertEqual(store.read("intent"), {"synthetic": True})
+        gitignore = self.root / ".gitignore"
+        gitignore.write_text(gitignore.read_text(encoding="utf-8").replace("profiles/local/\n", ""), encoding="utf-8")
+        with self.assertRaises(cleanup.ActivityCleanupError) as refused:
+            store.write("approval", {"synthetic": True})
+        self.assertEqual(refused.exception.code, "activity_cleanup_private_journal_not_ignored")
+        self.assertFalse((self.root / "profiles/local/activity-cleanup/synthetic-activity/approval.json").exists())
+
+    def test_v0438_journal_under_receipts_is_still_resumable(self):
+        store = cleanup.Journal(self.root, "legacy-activity", self.key)
+        legacy = self.root / "receipts/activity-cleanup/legacy-activity/intent.json"
+        legacy.parent.mkdir(parents=True)
+        document = {"legacy": True}
+        legacy.write_bytes(cleanup.encoded({"document": document, "mac": store._mac(document)}))
+        self.assertEqual(store.read("intent"), document)
+        legacy.write_bytes(cleanup.encoded({"document": {"legacy": False}, "mac": store._mac(document)}))
+        with self.assertRaises(cleanup.ActivityCleanupError):
+            store.read("intent")
+
+    def test_remote_proof_store_is_private_and_refuses_an_unignored_boundary(self):
+        from wom_kit.remote_preservation_proof import ProofStore
+        store = ProofStore(self.root, key_provider=self.key)
+        proof = {"schema": "wom-kit/remote-preservation-proof/v1", "binding": {"remote": {"bucket": "synthetic"}},
+                 "sha256": "0" * 64, "size": 1, "etag": '"synthetic"', "execution_sha256": "sha256:" + "1" * 64}
+        store.save(proof)
+        self.assertTrue(any((self.root / "profiles/local/remote-byte-proofs").rglob("*.json")))
+        self.assertFalse((self.root / "receipts/providers/remote-byte-proofs").exists())
+        self.assertEqual(store.load(proof["binding"]), proof)
+        gitignore = self.root / ".gitignore"
+        gitignore.write_text(gitignore.read_text(encoding="utf-8").replace("profiles/local/\n", ""), encoding="utf-8")
+        with self.assertRaises(Exception):
+            store.save({**proof, "size": 2})
+
     def test_preview_reports_content_free_stages_and_counts(self):
         # Letter 173 B: a long preview/approve must not look like a hang.
         import io

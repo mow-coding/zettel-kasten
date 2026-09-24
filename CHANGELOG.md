@@ -9,6 +9,7 @@ This project uses semantic versioning for public compatibility checkpoints.
 ## v0.4.39 - 2026-09-24
 
 - Keep reviewed activity-cleanup plans stable when Windows reports folder-size changes without content changes; report no effects for refusals before approval; add content-free progress and a progress log.
+- Move activity-cleanup journals and remote preservation proofs from Git-tracked `receipts/` to the ignored `profiles/local/` boundary; refuse to write them when that boundary is not ignored.
 - Let Git backup proceed past an ignored attribute file that cannot reach committable paths, and name the fixed cause in the session backup route.
 - Prepare one deliverable feedback letter: two user states (before delivery / delivered), automatic next letter number, one compose approval, no command-less review stop. Synthetic validation is recorded separately from client acceptance.
 

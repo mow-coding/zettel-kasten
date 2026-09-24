@@ -14,7 +14,10 @@ from pathlib import Path
 
 DOMAIN = b"wom-kit/remote-preservation-proof/v1\0"
 SCHEMA = "wom-kit/remote-preservation-proof/v1"
-ROOT = "receipts/providers/remote-byte-proofs"
+# Bindings name the storage endpoint, bucket and region. Keep them under the
+# private Git-ignored profile boundary; v0.4.38 proofs under receipts/ are not
+# read (they are only an optimization and a fresh GET replaces them).
+ROOT = "profiles/local/remote-byte-proofs"
 
 
 def strong_etag(value):
@@ -65,10 +68,15 @@ class ProofStore:
 
     def save(self, proof):
         from .object_storage_offload import _create_or_match_document
+        from .operator_feedback_body import _require_effective_gitignore
         signed = {"proof": proof, "mac": self._mac(proof)}
         raw = _canonical(signed) + b"\n"
         name = hashlib.sha256(raw).hexdigest() + ".json"
-        _create_or_match_document(self.root, self._directory(proof["binding"]) + "/" + name,
+        relative = self._directory(proof["binding"]) + "/" + name
+        # Refuses (and the caller keeps only the in-run proof) unless the private
+        # boundary is provably ignored and the path is untracked.
+        _require_effective_gitignore(self.root, relative)
+        _create_or_match_document(self.root, relative,
             raw, failure_code="object_storage_offload_receipt_conflict")
 
 

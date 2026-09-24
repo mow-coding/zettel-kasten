@@ -23,7 +23,11 @@ from .exact_human_approval import PERMISSION_INTERACTIVE_INTENT_MECHANISM
 from .operation_approval_binding import ExactOperationApprovalBinding
 from .process_launch import noninteractive_creationflags
 
-ROOT = "receipts/activity-cleanup"
+# The intent holds absolute external paths, reasons, a whole-root inventory and
+# storage endpoints. It lives under the private, Git-ignored profile boundary so
+# an archive Git backup never commits it; v0.4.38 journals are read for resume.
+ROOT = "profiles/local/activity-cleanup"
+LEGACY_ROOT = "receipts/activity-cleanup"
 SCHEMA = "wom-kit/activity-cleanup-request/v1"
 ROLES = frozenset({"deliverable", "source", "evidence", "temporary", "unknown"})
 MAX_ITEMS = 100000
@@ -335,14 +339,23 @@ class Journal:
         from .exact_human_approval_workflow import _production_key_provider
         provider = self.key_provider or _production_key_provider()
         return provider.use_key(self.root, lambda key: hmac.new(bytes(key), DOMAIN + encoded(value), hashlib.sha256).hexdigest(), create_if_missing=False)
-    def relative(self, name):
+    def relative(self, name, *, base=None):
         if not re.fullmatch(r"[a-z0-9-]+", name):
             raise ActivityCleanupError("activity_cleanup_journal_name_invalid")
-        return ROOT + "/" + self.activity + "/" + name + ".json"
+        return (base or ROOT) + "/" + self.activity + "/" + name + ".json"
+    def _require_private(self, relative):
+        from .operator_feedback_body import _require_effective_gitignore
+        try:
+            _require_effective_gitignore(self.root, relative)
+        except Exception:
+            raise ActivityCleanupError("activity_cleanup_private_journal_not_ignored") from None
     def read(self, name):
         path = services.archive_internal_path(self.root, self.relative(name))
         if not path.exists():
-            return None
+            legacy = services.archive_internal_path(self.root, self.relative(name, base=LEGACY_ROOT))
+            if not legacy.exists():
+                return None
+            path = legacy
         try:
             _safe_path(path)
             if path.stat().st_size > MAX_CONTROL_BYTES:
@@ -355,6 +368,7 @@ class Journal:
             raise ActivityCleanupError("activity_cleanup_journal_invalid") from None
     def write(self, name, document):
         from .object_storage_offload import _create_or_match_document
+        self._require_private(self.relative(name))
         raw = encoded({"document": document, "mac": self._mac(document)})
         _create_or_match_document(self.root, self.relative(name), raw,
             failure_code="object_storage_offload_receipt_conflict", max_bytes=MAX_CONTROL_BYTES)

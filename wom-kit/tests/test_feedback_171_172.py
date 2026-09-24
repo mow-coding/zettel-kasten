@@ -140,6 +140,12 @@ class RemotePreservationTests(unittest.TestCase):
             root = rs._build_root(Path(tmp))
             store = proofs.ProofStore(root, rs._KeyProvider())
             transport, state, calls, oid = self._transport()
+            # Without the private boundary no proof is persisted (letter 173 privacy fix).
+            proofs.PreservationVerifier(transport, store_ref="synthetic", execution_sha256="unignored",
+                                        proof_store=store).verify(key="synthetic-object", object_id=oid, size=len(state["data"]))
+            self.assertFalse((root / proofs.ROOT).exists())
+            calls.clear()
+            (root / ".gitignore").write_text("profiles/local/\n", encoding="utf-8")
             for execution in ("first", "second"):
                 verifier = proofs.PreservationVerifier(transport, store_ref="synthetic", execution_sha256=execution, proof_store=store)
                 result = verifier.verify(key="synthetic-object", object_id=oid, size=len(state["data"]))
