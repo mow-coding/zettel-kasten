@@ -9,6 +9,7 @@ original preimage. No Git operation changes the work-session registry.
 from contextlib import contextmanager
 from contextvars import copy_context
 from dataclasses import dataclass
+import re
 import signal
 import threading
 
@@ -46,27 +47,38 @@ _ERRORS = frozenset({
 })
 
 
+_SAFE_CAUSE_CODE_RE = re.compile(r"[a-z][a-z0-9_]{0,95}")
+
+
 class WorkSessionGitWorkflowError(RuntimeError):
-    def __init__(self, code="work_session_git_invalid", *, original_commit_verified=False):
+    def __init__(self, code="work_session_git_invalid", *, original_commit_verified=False, cause_code=None):
         self.code = code if type(code) is str and code in _ERRORS else "work_session_git_invalid"
         self.original_commit_verified = original_commit_verified is True
+        # Letter 173 C: a fixed, content-free sub-cause (for example the ordinary
+        # plan's attribute blocker) instead of a bare "unavailable".
+        self.cause_code = cause_code if type(cause_code) is str and _SAFE_CAUSE_CODE_RE.fullmatch(cause_code) else None
         super().__init__(self.code)
 
 
 def _safe_call(call):
-    code, committed = "work_session_git_unavailable", False
+    code, committed, cause = "work_session_git_unavailable", False, None
     try:
         return call()
     except WorkSessionGitWorkflowError as error:
-        code, committed = error.code, error.original_commit_verified
+        code, committed, cause = error.code, error.original_commit_verified, error.cause_code
     except Exception as error:
         candidate = getattr(error, "code", None)
         if type(candidate) is str and candidate in _ERRORS:
             code = candidate
         elif isinstance(error, registry.WorkSessionRegistryError) and error.args == ("work_session_lock_required",):
             code = "work_session_lock_required"
+        if type(candidate) is str and _SAFE_CAUSE_CODE_RE.fullmatch(candidate) and candidate != code:
+            cause = candidate
+        inner = getattr(error, "cause_code", None)
+        if type(inner) is str and _SAFE_CAUSE_CODE_RE.fullmatch(inner):
+            cause = inner
     # Do not retain callback, filesystem, claim, or private source exceptions.
-    raise WorkSessionGitWorkflowError(code, original_commit_verified=committed)
+    raise WorkSessionGitWorkflowError(code, original_commit_verified=committed, cause_code=cause)
 
 
 def _assert_actor(routing, selected):

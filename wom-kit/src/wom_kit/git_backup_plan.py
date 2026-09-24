@@ -1294,7 +1294,7 @@ def _archive_attribute_preflight(root: Path) -> list[str]:
             "repository_attributes_not_supported",
         ),
     )
-    for args, blocker in projections:
+    for index, (args, blocker) in enumerate(projections):
         result = _local_git_raw(
             root,
             args,
@@ -1303,8 +1303,41 @@ def _archive_attribute_preflight(root: Path) -> list[str]:
         if result is None or result[0] != 0:
             return ["archive_attribute_preflight_scan_failed"]
         if result[1]:
+            if index == len(projections) - 1 and _ignored_attributes_are_inert(root, result[1]):
+                continue
             return [blocker]
     return []
+
+
+GIT_BACKUP_PLAN_MAX_INERT_ATTRIBUTE_FILES = 64
+
+
+def _ignored_attributes_are_inert(root: Path, raw: bytes) -> bool:
+    """Letter 173 C: an ignored attribute file under a folder that holds no tracked
+    and no committable untracked path cannot change any byte Git would commit.
+
+    Anything else (root-level file, too many files, unreadable projection, or a
+    committable path in its folder) keeps the existing fail-closed blocker.
+    """
+
+    paths = [item for item in raw.split(b"\0") if item]
+    if not paths or len(paths) > GIT_BACKUP_PLAN_MAX_INERT_ATTRIBUTE_FILES:
+        return False
+    for item in paths:
+        try:
+            relative = item.decode("utf-8")
+        except UnicodeDecodeError:
+            return False
+        parent = relative.rsplit("/", 1)[0] if "/" in relative else ""
+        if not parent or parent.startswith(".git/") or parent == ".git":
+            return False
+        scope = f":(literal){parent}/"
+        for args in (["ls-files", "--cached", "-z", "--", scope],
+                     ["ls-files", "--others", "--exclude-standard", "-z", "--", scope]):
+            observed = _local_git_raw(root, args, max_output_bytes=GIT_BACKUP_PLAN_MAX_GIT_OUTPUT_BYTES)
+            if observed is None or observed[0] != 0 or observed[1]:
+                return False
+    return True
 
 
 def _tracked_attribute_preflight(root: Path) -> list[str]:
