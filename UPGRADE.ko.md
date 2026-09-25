@@ -2,6 +2,21 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.4.42 IMAP 메일 원본과 첨부 보존
+
+공개된 뒤 정확한 wheel을 사용하세요. 메일 전체를 보존하려면 `add-source`로 메일함을 등록하고 `imap-mailbox-message-fetch --dry-run` 뒤 `--approve`로 가져옵니다. 가져온 `.eml` 파일은 `source-intake-batch --manifest <요청 파일>`로 오브제에 등록합니다. 없어진 명령은 없습니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0442-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.42/wom_kit-0.4.42-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+고객은 여전히 검토된 `project-version-update` 절차를 실행해야 합니다. 부트스트랩 설치만으로 프로젝트에 고정된 런타임은 바뀌지 않습니다.
+
 ## v0.4.41 새 아카이브, Notion 회수와 휴지통 정리
 
 공개된 뒤 정확한 wheel을 사용하세요. 새 사용자는 `onboard --approve`로 아카이브를 만들 수 있습니다. Notion 회수는 먼저 `credential-lifecycle --dry-run` 뒤 `--approve`로 채택한 자격증명을 기본값으로 한 번 기록하고, `notion-page-recovery-request-build`로 요청을 만든 뒤 `notion-page-recovery --approve`로 실행합니다. 그다음 `notion-page-trash`로 회수가 검증된 페이지를 Notion 휴지통으로 옮길 수 있습니다. 없어진 명령은 없습니다.

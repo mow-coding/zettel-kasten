@@ -6,6 +6,11 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.42 - 2026-09-25
+
+- New `imap-mailbox-message-fetch` keeps whole mail messages with their attachments: the dry-run reads no credential; after one exact approval the mailbox is opened read-only (no message is marked read) and each message is stored byte for byte as `.eml` with a ready `source-intake-batch` request.
+- `imap-mailbox-header-metadata-scan` stays closed and is superseded by the fetch.
+
 ## v0.4.41 - 2026-09-25
 
 - New users can create an archive again: `onboard --approve` and `init --approve` after one exact approval; Windows setup approves with the native command (letter 102).

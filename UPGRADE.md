@@ -24,6 +24,21 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.4.42 Whole IMAP messages with attachments
+
+Use the exact public wheel after publication. To keep whole mail, register the mailbox with `add-source`, run `imap-mailbox-message-fetch --dry-run`, then `--approve`; capture the fetched `.eml` files with `source-intake-batch --manifest <request>`. No command was removed.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0442-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.42/wom_kit-0.4.42-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+The customer must still run the reviewed `project-version-update` workflow. Bootstrap installation alone does not update a pinned project runtime.
+
 ## v0.4.41 New archives, Notion recovery and trash cleanup
 
 Use the exact public wheel after publication. New users can create an archive with `onboard --approve`. For Notion recovery, record the default adopted credential once with `credential-lifecycle --dry-run` then `--approve`, build the request with `notion-page-recovery-request-build`, and run `notion-page-recovery --approve`; `notion-page-trash` can then move the verified pages to the Notion trash. No command was removed.

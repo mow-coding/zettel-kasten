@@ -1,6 +1,6 @@
 # Agent Operator Capabilities Manifest
 
-Current release: v0.4.41 new-user entry, working Notion recovery with trash cleanup, and seven more writers reopened; [triage decision](archive-infra-decision-log-2026-09-24-closed-writer-triage.md).
+Current release: v0.4.42 whole IMAP messages with their attachments kept under one approval; [triage decision](archive-infra-decision-log-2026-09-24-closed-writer-triage.md).
 
 Status: v0.4.36 no-dialog grants, letter-168, and writer-session coverage gate
 
