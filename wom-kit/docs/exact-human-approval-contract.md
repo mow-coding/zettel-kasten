@@ -173,8 +173,8 @@ and does not infer success, failure, or cancellation, automatically retry, or
 delete that evidence. A full authenticated terminal handoff and terminal
 cleanup outcome reconstruction remain a v0.4.16 follow-up.
 
-The current parser-derived inventory is 107 approval-available, 8 fixed-closed,
-and 204 not-exposed paths (v0.4.41 adds the Notion request builder and `notion-page-trash`, opens `onboard`, `init --approve`, `runtime-skill-install`/`-uninstall` and relation accept; v0.4.38 adds two approval-gated writers and two other commands; v0.4.36 added `operator-feedback-archive`; v0.4.33
+The current parser-derived inventory is 103 approval-available, 6 fixed-closed,
+and 192 not-exposed paths (v0.4.41 adds the Notion request builder and `notion-page-trash`, opens `onboard`, `init --approve`, `runtime-skill-install`/`-uninstall` and relation accept; v0.4.38 adds two approval-gated writers and two other commands; v0.4.36 added `operator-feedback-archive`; v0.4.33
 reopened `object-storage-upload`). v0.4.21 added `source-intake-chain` (the
 record → selection → capture intake of one staged original under one exact
 approval; each step re-verifies the chain claim before it writes, and the
@@ -300,7 +300,10 @@ accepts the approve request as is (`reviewer_claim` ignored) and a refused
 shape names `required_keys` / `optional_keys`.
 
 Since v0.4.34 (beta letter 165) a `limited` / `allow_all` grant is
-presenter-bound and time-boxed. The approve mints a random presenter secret
+presenter-bound and time-boxed; since v0.4.44 (owner decision 2026-09-25) the
+time box applies only when the request names `grant_hours`, otherwise the
+grant lasts until `set-permission-mode manual`, `recover`, or the session is
+paused, handed off or completed (`expires_at` is then null). The approve mints a random presenter secret
 before its dialog, so the reviewed plan binds `presenter_sha256`, `granted_at`
 and `expires_at` (`grant_hours` 1..24, default 8; one more dialog line names
 the box); the secret is returned exactly once in that approve result

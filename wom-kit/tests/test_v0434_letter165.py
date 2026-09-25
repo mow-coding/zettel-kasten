@@ -67,7 +67,8 @@ class PresenterBoundGrantTests(_permission_fixture.SessionPermissionModeTests):
                             *task["refs"], "--work-session-ref", task["session"],
                             request={"permission_mode": "limited", "operations": ["create_draft"], "grant_hours": 2})
         self.assertEqual(preview["result"]["would_box"],
-                         {"grant_hours": 2, "expires_at_relative": True, "presenter_token_returned_once": True})
+                         {"grant_hours": 2, "until_released": False, "expires_at_relative": True,
+                          "presenter_token_returned_once": True})
         self.assertTrue(preview["result"]["presenter_bound"])
         refused = self.call("work-session", "--action", "set-permission-mode", "--dry-run", "--request-stdin",
                             *task["refs"], "--work-session-ref", task["session"],
@@ -88,13 +89,13 @@ class PresenterBoundGrantTests(_permission_fixture.SessionPermissionModeTests):
         self.assertEqual(set(row["permission"]), permission.PERMISSION_V2_KEYS)
         self.assertEqual(row["permission"]["presenter_sha256"], permission.presenter_sha256(token))
         self.assertNotIn(token, json.dumps(row))
-        granted = datetime.strptime(row["permission"]["granted_at"], "%Y-%m-%dT%H:%M:%SZ")
-        expires = datetime.strptime(row["permission"]["expires_at"], "%Y-%m-%dT%H:%M:%SZ")
-        self.assertEqual(expires - granted, timedelta(hours=permission.GRANT_HOURS_DEFAULT))
+        # v0.4.44 (owner decision 2026-09-25): no grant_hours means no time limit.
+        datetime.strptime(row["permission"]["granted_at"], "%Y-%m-%dT%H:%M:%SZ")
+        self.assertIsNone(row["permission"]["expires_at"])
         # the dialog carried the grant box line, bound with the presenter hash
         items = permission.preview_items(archive_identity_sha256="sha256:" + "a" * 64, permission=row["permission"])
         self.assertEqual(items[-1].kind, "grant_box")
-        self.assertIn("8시간", items[-1].title)
+        self.assertIn("해제할 때까지 유지", items[-1].title)
         # inspect / list show the box, never the hash
         item = self.inspect(task)
         self.assertTrue(item["presenter_bound"])
@@ -112,7 +113,8 @@ class PresenterBoundGrantTests(_permission_fixture.SessionPermissionModeTests):
         with patch.object(permission, "_clock", lambda: datetime.now(timezone.utc) + timedelta(hours=9)):
             second = self.call("work-session", "--action", "list", "--kind", "session", "--page-size", "1",
                                "--cursor", first["pagination"]["next_cursor"])
-            self.assertEqual(second["counts"]["expired_grant_count"], 1)
+            # v0.4.44: a grant without grant_hours never expires by time.
+            self.assertEqual(second["counts"]["expired_grant_count"], 0)
         # resuming the original decision never re-issues the secret
         resumed = self.call("work-session", "--action", "set-permission-mode", "--resume",
                             *task["refs"], "--work-session-ref", task["session"], request=None)
@@ -152,10 +154,19 @@ class PresenterBoundGrantTests(_permission_fixture.SessionPermissionModeTests):
                          (None, "work_session_presenter_missing"))
         self.assertEqual(permission.resolve_grant_outcome(self.root, presenter="x" * 43, **refs),
                          (None, "work_session_presenter_mismatch"))
+        # v0.4.44 (owner decision 2026-09-25): a grant without grant_hours has no
+        # time limit; it lasts until released or the session ends.
         with patch.object(permission, "_clock", lambda: datetime.now(timezone.utc) + timedelta(hours=9)):
-            self.assertEqual(permission.resolve_grant_outcome(self.root, presenter=token, **refs),
-                             (None, "work_session_grant_expired"))
-            self.assertTrue(self.inspect(task)["grant_expired"])
+            grant, reason = permission.resolve_grant_outcome(self.root, presenter=token, **refs)
+            self.assertIsNotNone(grant)
+            self.assertIsNone(reason)
+            self.assertIsNone(grant.expires_at)
+            self.assertFalse(self.inspect(task)["grant_expired"])
+        boxed = {**{"mode": "limited", "operations": ["create_draft"]}}
+        row = permission.bind_grant(boxed, presenter_sha256="sha256:" + "a" * 64, grant_hours=2)
+        self.assertFalse(permission.permission_expired(row))
+        self.assertTrue(permission.permission_expired(
+            row, now=datetime.now(timezone.utc) + timedelta(hours=3)))
         with patch.object(permission, "permission_shape", return_value="legacy"):
             self.assertEqual(permission.resolve_grant_outcome(self.root, presenter=token, **refs),
                              (None, "work_session_grant_legacy_shape"))

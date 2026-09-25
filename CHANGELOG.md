@@ -6,6 +6,12 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.44 - 2026-09-25
+
+- Remove the IMAP planning chain superseded by `imap-mailbox-message-fetch` (18 commands, 33 aliases, 7 MCP previews); historical receipts stay readable.
+- Revive `notion-recover` (Notion parent-location recovery) on the adopted credential: GET-only parent links in a spawned child after one exact approval; the old token options are gone.
+- Session permission grants last until released (`set-permission-mode manual`, `recover`, or session end); `grant_hours` stays optional.
+
 ## v0.4.43 - 2026-09-25
 
 - A bare `--reviewed-by` id (for example `alex`) is read as `person:<id>`; before, the services accepted it but the approval context refused it, so a reviewed project update stopped before the approval window and `--resume` rebuilt the same failure (letter 20260925-173).

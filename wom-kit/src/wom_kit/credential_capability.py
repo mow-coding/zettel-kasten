@@ -44,6 +44,9 @@ CREDENTIAL_CAPABILITY_REQUIRED_REGISTERED_CAPABILITIES = (
 # profile above is unchanged; the trash profile may read a page and send the
 # single in_trash PATCH, nothing else.
 CREDENTIAL_CAPABILITY_TRASH_OPERATION = "notion_page_trash_write"
+# v0.4.44: notion-recover reads only the parent link of pages, blocks,
+# databases and data sources (GET), never content.
+CREDENTIAL_CAPABILITY_ANCESTOR_OPERATION = "notion_ancestor_recovery_read"
 CREDENTIAL_CAPABILITY_PROFILES: dict[str, dict[str, Any]] = {
     CREDENTIAL_CAPABILITY_OPERATION: {
         "consumer": CREDENTIAL_CAPABILITY_CONSUMER,
@@ -55,6 +58,12 @@ CREDENTIAL_CAPABILITY_PROFILES: dict[str, dict[str, Any]] = {
         "consumer": "wom:workflow:notion-page-trash",
         "allowed_methods": ("GET", "PATCH"),
         "endpoint_classes": ("retrieve_page", "move_page_to_trash"),
+        "required_registered_capabilities": ("read_content", "retrieve_page"),
+    },
+    CREDENTIAL_CAPABILITY_ANCESTOR_OPERATION: {
+        "consumer": "wom:workflow:notion-ancestor-recovery",
+        "allowed_methods": ("GET",),
+        "endpoint_classes": ("retrieve_parent",),
         "required_registered_capabilities": ("read_content", "retrieve_page"),
     },
 }
@@ -664,6 +673,7 @@ __all__ = [
     "CREDENTIAL_CAPABILITY_PROVIDER",
     "CREDENTIAL_CAPABILITY_REQUIRED_REGISTERED_CAPABILITIES",
     "CREDENTIAL_CAPABILITY_TRASH_OPERATION",
+    "CREDENTIAL_CAPABILITY_ANCESTOR_OPERATION",
     "CREDENTIAL_CAPABILITY_SCHEMA",
     "CredentialCapabilityError",
     "CredentialCapabilityScope",

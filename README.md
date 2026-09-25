@@ -34,10 +34,10 @@ not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.4.43
+v0.4.44
 ```
 
-Previous public baseline: v0.4.42.
+Previous public baseline: v0.4.43.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -58,13 +58,13 @@ not proof that the asset is available.
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0443-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0444-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.43/wom_kit-0.4.43-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.44/wom_kit-0.4.44-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
@@ -115,6 +115,7 @@ approval-gated write, or docs-only), see the
 - v0.4.16 preserves an authenticated project-update result before cleanup and reports cleanup, owned-resource close, Git-runner close, durable output handoff, and attention truth independently. Its immutable journal and `active` -> `display-pending` -> `consumed` handoff reuse the exact bound output for identical at-least-once display without rerunning the writer; consumed state is history, and acknowledgement does not prove a person or model saw stdout. A complete legacy cleanup tombstone is recoverable only after exact validation, proof-only state attributes no past success, and partial or malformed residue stays fail-closed. Canonical `python -m wom_kit.archive_cli` runtime binding verifies all three core modules against receipt bytes with content-free diagnostics. The narrow create-only feedback lane also covers runtime mismatch, product vocabulary no longer trips value-shaped secret checks by wording alone, and caller-input/body safety reads are reported truthfully. Publishing or installing the release changes no client archive; the client separately chooses a reviewed project update. See the [v0.4.16 release notes](wom-kit/docs/releases/v0.4.16.md),
 - v0.4.17 gives fresh project-update preview and approval the same read-only terminal-cleanup preflight. Exact WOM-produced preapproval-abort history routes to identifier-free `--resume`, which compacts only plan-bound private control evidence into canonical proof history without running the project-domain writer, changing source/runtime/pin/archive content, or asking a person to count artifacts. Known cleanup gates return fixed privacy-safe reason codes and useful next actions; partial, changed, ambiguous, mixed, or unsafe residue remains fail-closed and must not be edited manually. Publishing or installing the release changes no client archive; the client separately chooses recovery and one reviewed project update. See the [v0.4.17 release notes](wom-kit/docs/releases/v0.4.17.md),
 - v0.4.18 finishes one completed project-update original that outlived its own cleanup after the project moved to another version. Dry-run, approval, and identifier-free `--resume` classify that directory the same way; resume re-authenticates the original approval claim from the archive, cleans only that private control directory into one canonical proof, attributes no past success, and grants no fresh approval authority. When the live pin still matches, the v0.4.16 replay contract stays in force with the same cleanup as fallback. The redacted failure artifact may now carry one fixed inner reason code, and `marker.json` is documented as an identity anchor rather than a lifecycle record. Publishing or installing the release changes no client archive. See the [v0.4.18 release notes](wom-kit/docs/releases/v0.4.18.md),
+- v0.4.44 removes the superseded IMAP planning chain, revives Notion parent-location recovery (`notion-recover`) and keeps session grants until released; see the [release notes](wom-kit/docs/releases/v0.4.44.md).
 - v0.4.43 fixes project updates that stopped before the approval window when the reviewer was a bare name, and releases the update lock instead of blocking new work sessions; see the [release notes](wom-kit/docs/releases/v0.4.43.md).
 - v0.4.42 keeps whole IMAP mail messages with their attachments under one approval; see the [release notes](wom-kit/docs/releases/v0.4.42.md).
 - v0.4.41 lets a new user create an archive again, makes Notion recovery work with an adopted credential, adds Notion trash cleanup, and reopens relation accept, external import and credential lifecycle; see the [release notes](wom-kit/docs/releases/v0.4.41.md).
@@ -409,23 +410,6 @@ For the full design philosophy, including the human data primitive model, AX rat
 - [Object Storage Upload Evidence](wom-kit/docs/object-storage-upload-evidence.md)
 - [Object Storage Upload Evidence Audit](wom-kit/docs/object-storage-upload-evidence-audit.md)
 - [IMAP Mailbox Source](wom-kit/docs/imap-mailbox-source.md)
-- [IMAP Mailbox Operation Request Plan](wom-kit/docs/imap-mailbox-operation-request-plan.md)
-- [IMAP Mailbox Adapter Manifest Plan](wom-kit/docs/imap-mailbox-adapter-manifest-plan.md)
-- [IMAP Mailbox Adapter Manifest Write](wom-kit/docs/imap-mailbox-adapter-manifest-write.md)
-- [IMAP Mailbox Adapter Readiness Plan](wom-kit/docs/imap-mailbox-adapter-readiness-plan.md)
-- [IMAP Mailbox Selection Plan](wom-kit/docs/imap-mailbox-selection-plan.md)
-- [IMAP Mailbox Adapter Audit Plan](wom-kit/docs/imap-mailbox-adapter-audit-plan.md)
-- [IMAP Mailbox Adapter Audit Write](wom-kit/docs/imap-mailbox-adapter-audit-write.md)
-- [IMAP Mailbox Adapter Preflight Plan](wom-kit/docs/imap-mailbox-adapter-preflight-plan.md)
-- [IMAP Mailbox Adapter Execution Contract](wom-kit/docs/imap-mailbox-adapter-execution-contract.md)
-- [IMAP Mailbox Header Metadata Scan](wom-kit/docs/imap-mailbox-header-metadata-scan.md)
-- [IMAP Mailbox Header Scan Receipt Audit](wom-kit/docs/imap-mailbox-header-scan-receipt-audit.md)
-- [IMAP Mailbox Material Selection Plan](wom-kit/docs/imap-mailbox-material-selection-plan.md)
-- [IMAP Mailbox Material Selection Record](wom-kit/docs/imap-mailbox-material-selection-record.md)
-- [IMAP Mailbox Material Capture Request Plan](wom-kit/docs/imap-mailbox-material-capture-request-plan.md)
-- [IMAP Mailbox Material Capture Execution Contract](wom-kit/docs/imap-mailbox-material-capture-execution-contract.md)
-- [IMAP Mailbox Material Capture Approval Plan](wom-kit/docs/imap-mailbox-material-capture-approval-plan.md)
-- [IMAP Mailbox Material Capture Approval Audit](wom-kit/docs/imap-mailbox-material-capture-approval-audit.md)
 - [Notion Page Snapshot Model](wom-kit/docs/notion-page-snapshot-model.md)
 - [Objet Ref Resolution](wom-kit/docs/objet-ref-resolution.md)
 - [Presigned URL Plan](wom-kit/docs/presigned-url-plan.md)
@@ -562,7 +546,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
-v0.4.43 (current checkpoint)
+v0.4.44 (current checkpoint)
 ```
 
 Public releases from `v0.2.5` onward are tagged as compatibility checkpoints.

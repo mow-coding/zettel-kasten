@@ -621,3 +621,43 @@ reach the result. An undefined name on one legacy resume path found by static
 analysis is fixed. Recovery for a stuck project: the new bootstrap's
 `--resume` authenticates zero claims and closes the attempt without project
 changes, then the update runs again.
+
+## Implemented: v0.4.44 superseded IMAP chain removed, notion-recover revived, grants until released
+
+Owner decisions 2026-09-25 (recorded by Claude, Opus 5.5):
+
+1. "A feature replaced by a better one is removed, not kept closed" - only
+   features that are already replaced. The v0.3.19-v0.3.72 IMAP planning
+   chain (18 commands, 33 aliases, 7 MCP previews: source plan, operation
+   request, readiness, selection, manifest, audit, preflight, execution
+   contract, header scan, material selection and capture approval) prepared a
+   future adapter whose end goal `imap-mailbox-message-fetch` plus
+   `source-intake-batch` now deliver; the live header scan was closed since
+   v0.4.0 and the capture step was never built. The commands are removed;
+   services, receipt schemas and historical receipts stay readable; the chain
+   docs become tombstones pointing to `imap-mailbox-source.md`.
+2. "What should be revived must not be killed." `notion-recover` restores
+   missing parent locations of nested Notion pages; nothing current does that
+   (the page recovery fetches bodies of listed pages only), so it is revived:
+   a new `notion_ancestor_recovery` engine walks parent links with the
+   one-attempt adapter's GET-only `retrieve_parent` (projection keeps kind, id,
+   block type, parent link and trash flags), the adopted credential
+   (`credential-lifecycle` default or `--credential-id`) is resolved by the
+   receipt-backed broker only in a spawned child, a new capability profile
+   `notion_ancestor_recovery_read` allows only that endpoint within the
+   planned depth budget, and one exact approval (operation
+   `notion_ancestor_recovery`) binds the plan digest. The output and scope are
+   the same as the 2026-06-22 command (sanitized ancestor fixture plus
+   receipt; the merge stays the separate `notion-ancestor-merge-plan`
+   preview). The legacy env/file/hidden-prompt token paths are removed.
+   Deviation: the old `--source`, `--credential-ref`, `--platform`,
+   `--notion-version`, `--timeout-seconds` and `--yes` flags are gone because
+   the credential and API version now come from the adopted credential path.
+3. A session grant (skip approval dialogs) has no hour limit: it lasts until
+   released with `set-permission-mode manual` or `recover`, or until the
+   session is paused, handed off or completed. `grant_hours` stays optional.
+   Kept guards (deviation to confirm): the presenter binding (the grant works
+   only in the conversation that received the approve result) and the
+   session-lifecycle clearing, because they are what ties the grant to "that
+   session".
+

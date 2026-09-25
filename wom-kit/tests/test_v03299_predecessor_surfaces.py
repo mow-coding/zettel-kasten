@@ -163,20 +163,80 @@ CLI_REMOVALS = {
         "object-storage-wom-location-reconcile", "object-storage-upload-location-reconcile",
         "object-storage-manifest-reconcile", "objet-storage-wom-location-reconcile", "scan-source",
         "tiro-lossless-recovery-capture", "tiro-recovery-capture",
+        # v0.4.44: the IMAP chain superseded by imap-mailbox-message-fetch.
+        "imap-header-metadata-scan",
+        "imap-header-scan-receipt-audit",
+        "imap-mailbox-adapter-audit",
+        "imap-mailbox-adapter-audit-plan",
+        "imap-mailbox-adapter-audit-write",
+        "imap-mailbox-adapter-execution-contract",
+        "imap-mailbox-adapter-execution-plan",
+        "imap-mailbox-adapter-execution-preflight",
+        "imap-mailbox-adapter-manifest",
+        "imap-mailbox-adapter-manifest-plan",
+        "imap-mailbox-adapter-manifest-write",
+        "imap-mailbox-adapter-plan",
+        "imap-mailbox-adapter-preflight-plan",
+        "imap-mailbox-adapter-readiness-plan",
+        "imap-mailbox-header-metadata-scan",
+        "imap-mailbox-header-scan-receipt-audit",
+        "imap-mailbox-material-capture-approval",
+        "imap-mailbox-material-capture-approval-audit",
+        "imap-mailbox-material-capture-approval-plan",
+        "imap-mailbox-material-capture-execution-contract",
+        "imap-mailbox-material-capture-request-plan",
+        "imap-mailbox-material-selection-plan",
+        "imap-mailbox-material-selection-record",
+        "imap-mailbox-message-selection-plan",
+        "imap-mailbox-operation-request-plan",
+        "imap-mailbox-plan",
+        "imap-mailbox-request-plan",
+        "imap-mailbox-selection-plan",
+        "imap-material-capture-approval-audit",
+        "imap-material-capture-approval-plan",
+        "imap-material-capture-execution-contract",
+        "imap-material-capture-request-plan",
+        "imap-material-selection-plan",
+        "imap-material-selection-record",
+        "mailbox-adapter-audit-plan",
+        "mailbox-adapter-audit-write",
+        "mailbox-adapter-execution-contract",
+        "mailbox-adapter-manifest-plan",
+        "mailbox-adapter-manifest-write",
+        "mailbox-adapter-preflight",
+        "mailbox-adapter-readiness",
+        "mailbox-header-metadata-scan",
+        "mailbox-header-scan-audit",
+        "mailbox-material-capture-approval-audit",
+        "mailbox-material-capture-approval-plan",
+        "mailbox-material-capture-execution-contract",
+        "mailbox-material-capture-request-plan",
+        "mailbox-material-selection-plan",
+        "mailbox-material-selection-record",
+        "mailbox-operation-request-plan",
+        "mailbox-selection-plan",
     )
 }
 # 2026-09-25: the five ZET sharing/ownership commands and their MCP previews
 # were restored (owner design for v0.5); only source_scan_plan stays removed.
 MCP_REMOVALS = {
     "source_scan_plan",
+    # v0.4.44: IMAP planning previews superseded by imap-mailbox-message-fetch.
+    "imap_mailbox_plan",
+    "imap_mailbox_operation_request_plan",
+    "imap_mailbox_adapter_readiness_plan",
+    "imap_mailbox_selection_plan",
+    "imap_mailbox_adapter_audit_plan",
+    "imap_mailbox_adapter_manifest_plan",
+    "imap_mailbox_adapter_preflight_plan",
 }
-CURRENT_CLI_COUNT = 568  # v0.4.42: imap-mailbox-message-fetch
+CURRENT_CLI_COUNT = 517  # v0.4.44: superseded IMAP chain (51 paths) removed
 CURRENT_CLI_CANONICAL_SHA256 = (
-    "e9f3cc8afb528d8461a9b630c2271641203768ecd7e1c7be04c49f20390fd85a"
+    "82da4bf190f10675b6cbd9593222ad24fa5d9a1591ac5aae7d113685eb5595a9"
 )
-CURRENT_MCP_COUNT = 136
+CURRENT_MCP_COUNT = 129  # v0.4.44: seven IMAP planning previews removed
 CURRENT_MCP_CANONICAL_SHA256 = (
-    "39e09bca67b57398b9f8314a7e9241e911f581ff3f473225ea53d3069a779f26"  # v0.4.40: source_scan_plan removed; five sharing previews restored 2026-09-25
+    "b550e3bd82ee6c4e6443d196e0ddaf9127ae6799988929a77236ebe08ecff8fc"  # v0.4.44: seven IMAP planning previews removed
 )
 MCP_ADDITIONS = {
     "zet_title_remap_write",
@@ -201,7 +261,7 @@ CURRENT_DATABASE_CANONICAL_SHA256 = (
     "d9a42f08ee12a6d42e40214cfb12441e4077bf50c38c25b2692ec1344328294a"
 )
 RESOURCE_ADDITIONS = {
-    "release-notes/v0.4.43.md",
+    "release-notes/v0.4.44.md",
     "schemas/activity-cleanup-request-v1.schema.json",
     "templates/ai-runtime/wom-archive/references/storage-scope.md",
     # v0.4.45: the helper-AI skill gained four focused references.
@@ -275,7 +335,7 @@ RESOURCE_ADDITIONS = {
 RESOURCE_REMOVALS = {"release-notes/v0.3.297.md"}
 CURRENT_RESOURCE_COUNT = 179  # v0.4.45: four helper-AI references
 CURRENT_RESOURCE_CANONICAL_SHA256 = (
-    "25e95708a67e7aea60d8e9d60f2d10fc6b5c4104b0d6d6bcaec6d90b7ce0e789"  # v0.4.45 resources (four helper-AI references)
+    "6e4d1cecbe4e4755e1d50335b904dd6819bec49221c2f4ef05b5321cc050c519"  # v0.4.45 resources (four helper-AI references)
 )
 
 
@@ -633,10 +693,10 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             actual,
             expected,
             "Current package-resource paths must be the full v0.3.297 set plus "
-            "the exact cumulative v0.3.298 through v0.4.43 delta. "
+            "the exact cumulative v0.3.298 through v0.4.44 delta. "
             f"missing={compact(missing)}; extra={compact(extra)}",
         )
-        self.assertEqual(manifest["version"], "0.4.43")
+        self.assertEqual(manifest["version"], "0.4.44")
         self.assertEqual(len(actual), CURRENT_RESOURCE_COUNT)
         self.assertEqual(
             canonical_sha256(actual),
@@ -656,13 +716,13 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         self.assertNotIn("C:\\Users\\", predecessor_text)
 
     def test_v0419_release_note_is_current_and_older_notes_remain_historical(self) -> None:
-        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.4.43.md"
+        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.4.44.md"
         current_packaged_release = (
             SRC_ROOT
             / "wom_kit"
             / "_resources"
             / "release-notes"
-            / "v0.4.43.md"
+            / "v0.4.44.md"
         )
         self.assertEqual(
             current_source_release.read_bytes(),
@@ -671,10 +731,10 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         current_text = current_source_release.read_text(encoding="utf-8")
         current_flat = " ".join(current_text.split())
         for token in (
-            "v0.4.43",
+            "v0.4.44",
             "project-version-update",
             "Installing the tool alone does not change a customer archive",
-            "wom_kit-0.4.43-py3-none-any.whl",
+            "wom_kit-0.4.44-py3-none-any.whl",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, current_flat)

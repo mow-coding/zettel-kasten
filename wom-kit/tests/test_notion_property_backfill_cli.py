@@ -324,7 +324,7 @@ class NotionPropertyBackfillCliTests(unittest.TestCase):
         # the Notion recovery chain and trash, and seven more writers.
         self.assertEqual(
             inventory["counts"]["approval_available_command_count"],
-            107,  # v0.4.42: imap-mailbox-message-fetch
+            103,  # v0.4.42: imap-mailbox-message-fetch
         )
         self.assertEqual(
             by_path["operator-feedback-archive"]["approval_status"],
@@ -332,7 +332,7 @@ class NotionPropertyBackfillCliTests(unittest.TestCase):
         )
         self.assertEqual(
             inventory["counts"]["approval_fixed_closed_command_count"],
-            8,  # v0.4.41: five ZET commands, IMAP header scan, notion-recover, operation-control
+            6,  # v0.4.41: five ZET commands, IMAP header scan, notion-recover, operation-control
         )
         # Unsupported cancellation is a separate fixed-close reason, not a
         # change to the sole approved Notion migration target above.

@@ -58,23 +58,12 @@ provenance
 
 It does not read file bodies, summarize content with AI, call live provider APIs, or calculate full file hashes.
 
-For email, v0.3.19 recognizes `imap_mailbox` as a registered source type, but
-live mailbox scans are still closed. Use `imap-mailbox-plan` to review safe
-provider, account, mailbox, and credential refs before any future IMAP work:
-
-```powershell
-$env:PYTHONPATH='src'; python -m wom_kit.archive_cli imap-mailbox-plan .\my-archive `
-  --source-id imap:naver-personal `
-  --provider naver `
-  --account-ref imap:account:naver-personal `
-  --username-ref env:NAVER_IMAP_USERNAME `
-  --app-password-ref keyring:naver-app-password `
-  --dry-run `
-  --format json
-```
-
-This command does not connect, login, read headers, read bodies, read
-attachments, send mail, delete mail, change flags, store secrets, or write files.
+For email, register the mailbox as an `imap_mailbox` source with `add-source`,
+then keep whole messages with `imap-mailbox-message-fetch` (v0.4.42): the dry-run
+reads no credential and opens no connection, and one exact approval fetches the
+selected messages read-only as `.eml` files with a ready intake request. See
+[IMAP Mailbox Source](imap-mailbox-source.md). The earlier `imap-mailbox-plan`
+planning chain was removed in v0.4.44.
 
 ## Source Intake Planner
 
@@ -154,9 +143,7 @@ MCP exposes:
 
 ```text
 list_sources
-source_scan_plan
 source_intake_plan
-imap_mailbox_plan
 ```
 
 Neither MCP nor CLI exposes a live source scan or source-registration apply path

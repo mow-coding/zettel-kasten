@@ -476,6 +476,45 @@ class _NotionHttpAdapter:
             if owned:
                 secret.close()
 
+    def retrieve_parent(
+        self,
+        kind: str,
+        object_id: str,
+        credential: object,
+        *,
+        api_version: str,
+    ) -> ProviderResponse:
+        """v0.4.44: GET one page, block, database or data source and keep only
+        its kind, id, block type, parent link and trash/archive flags."""
+
+        endpoints = {"page": "pages", "block": "blocks", "database": "databases", "data_source": "data_sources"}
+        normalized = _normalize_uuid(object_id)
+        if kind not in endpoints or normalized is None:
+            return _safe_provider_error(400, "notion_parent_target_invalid")
+        if api_version != NOTION_API_VERSION:
+            return _safe_provider_error(400, "notion_api_version_invalid")
+        owned = not isinstance(credential, _NotionBearerSecret)
+        secret = _coerce_secret(credential)
+        if secret is None:
+            return _safe_provider_error(401, "notion_secret_invalid")
+        try:
+            result = self._get_json(f"/v1/{endpoints[kind]}/{normalized}", secret)
+            if result.status != 200:
+                return ProviderResponse(
+                    status=result.status,
+                    payload={"reason_code": result.reason_code or _status_reason(result.status)},
+                    headers=result.headers,
+                )
+            payload = _parent_projection(result.payload, expected_id=normalized)
+            if payload is None:
+                return ProviderResponse(
+                    status=502, payload={"reason_code": "notion_response_malformed"}, headers=result.headers,
+                )
+            return ProviderResponse(status=result.status, payload=payload, headers=result.headers)
+        finally:
+            if owned:
+                secret.close()
+
     def retrieve_page_as_markdown(
         self,
         page_or_block_id: str,
@@ -953,6 +992,40 @@ def _page_projection(
         "last_edited_time": last_edited_time,
         "in_trash": in_trash,
     }
+
+
+_PARENT_TYPES = ("page_id", "database_id", "data_source_id", "block_id", "workspace")
+
+
+def _parent_projection(payload: Mapping[str, Any] | None, *, expected_id: str) -> dict[str, Any] | None:
+    """v0.4.44: object kind, id, block type, parent link and flags only."""
+
+    if not isinstance(payload, Mapping):
+        return None
+    object_kind = payload.get("object")
+    object_id = _normalize_uuid(payload.get("id"))
+    parent = payload.get("parent")
+    if object_kind not in {"page", "block", "database", "data_source"} or object_id != expected_id:
+        return None
+    if not isinstance(parent, Mapping) or parent.get("type") not in _PARENT_TYPES:
+        return None
+    parent_type = parent["type"]
+    projected_parent: dict[str, Any] = {"type": parent_type}
+    if parent_type == "workspace":
+        projected_parent["workspace"] = True
+    else:
+        parent_id = _normalize_uuid(parent.get(parent_type))
+        if parent_id is None:
+            return None
+        projected_parent[parent_type] = parent_id
+    projected: dict[str, Any] = {"object": object_kind, "id": object_id, "parent": projected_parent}
+    if object_kind == "block":
+        block_type = payload.get("type")
+        projected["type"] = block_type if isinstance(block_type, str) and len(block_type) <= 64 else ""
+    for flag in ("in_trash", "archived"):
+        if isinstance(payload.get(flag), bool):
+            projected[flag] = payload[flag]
+    return projected
 
 
 def _valid_notion_timestamp(value: Any) -> bool:

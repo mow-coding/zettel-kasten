@@ -16,9 +16,9 @@ class WriterSessionCoverageGateTests(unittest.TestCase):
     def test_manifest_matches_parser_and_denominator_stays_honest(self):
         problems, counts = subject.check()
         self.assertEqual(problems, [])
-        self.assertEqual(sum(counts.values()), 107)  # v0.4.42 imap-mailbox-message-fetch
+        self.assertEqual(sum(counts.values()), 103)  # v0.4.44: notion-recover revived
         self.assertGreaterEqual(counts["session_integrated"], 5)
-        self.assertEqual(counts["routed"], 51)  # v0.4.42 imap-mailbox-message-fetch
+        self.assertEqual(counts["routed"], 51)  # v0.4.44: notion-recover revived
         self.assertGreater(counts["pending"], 0)  # all-writer scope is not complete yet
         self.assertEqual(subject.main(["--format", "text"]), 0)
 
