@@ -334,7 +334,8 @@ _PRESENTER_NEXT_STEP = (
     "next to the three refs); never write it into memory files, notes or another conversation. "
     "The draft and intake privacy gates refuse a pasted WOM_WORK_SESSION_PRESENTER line. Another "
     "conversation continues this task through work-session handoff/accept (one human decision); "
-    "the grant expires at expires_at."
+    "the grant lasts until set-permission-mode manual (or recover), or until the session is paused, "
+    "handed off or completed; a grant_hours request instead expires at expires_at."
 )
 
 
@@ -419,6 +420,7 @@ def preview_permission_mode(root, *, client_app_ref, task_route_ref, work_sessio
             "dialog_only_actions": list(permission_mode_module.DIALOG_ONLY_ACTIONS),
             "dialog_only_reason": permission_mode_module.DIALOG_ONLY_REASON,
             "grant_hours_default": permission_mode_module.GRANT_HOURS_DEFAULT,
+            "grant_default": permission_mode_module.GRANT_UNTIL_RELEASED,
             "grant_hours_max": permission_mode_module.GRANT_HOURS_MAX,
             "presenter_bound": True,
             "private_values_echoed": False,
@@ -442,7 +444,8 @@ def preview_permission_mode(root, *, client_app_ref, task_route_ref, work_sessio
             # v0.4.34: the time box and the presenter binding the approve would mint.
             "would_box": (
                 None if grant is None
-                else {"grant_hours": hours, "expires_at_relative": True, "presenter_token_returned_once": True}
+                else {"grant_hours": hours, "until_released": hours is None,
+                      "expires_at_relative": hours is not None, "presenter_token_returned_once": True}
             ),
             "next_safe_actions": [
                 "Re-run with --approve and the same --request-stdin (plus reviewer_claim) "

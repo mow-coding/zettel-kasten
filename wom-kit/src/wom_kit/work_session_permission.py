@@ -13,6 +13,11 @@ Since v0.4.36 (the 2026-09-17 decision restored) every operation kind is
 grantable; only set-permission-mode itself always asks. Credential secret
 entry keeps its own Windows window where a person types the secret.
 
+v0.4.44 (owner decision 2026-09-25): a grant has no time limit unless the
+request names ``grant_hours``; it stays until the operator releases it
+(set-permission-mode manual, or recover) or the session is paused, handed off
+or completed. ``expires_at`` is then null.
+
 v0.4.34 (beta letter 165 [A]): a grant is presenter-bound and time-boxed.
 ``set-permission-mode --approve`` mints a random presenter secret whose
 sha256 is written into the immutable ``permission`` row together with
@@ -54,7 +59,9 @@ CONTEXT_ENV = ("WOM_CLIENT_APP_REF", "WOM_TASK_ROUTE_REF", "WOM_WORK_SESSION_REF
 PRESENTER_ENV = "WOM_WORK_SESSION_PRESENTER"
 PERMISSION_SCHEMA_V1 = "wom-kit/work-session-permission/v1"
 PERMISSION_SCHEMA_V2 = "wom-kit/work-session-permission/v2"
-GRANT_HOURS_DEFAULT = 8
+# v0.4.44: no default time box; a grant lasts until it is released.
+GRANT_HOURS_DEFAULT = None
+GRANT_UNTIL_RELEASED = "until_released"
 GRANT_HOURS_MAX = 24
 PRESENTER_TOKEN_BYTES = 32
 PERMISSION_V1_KEYS = frozenset({"mode", "operations"})
@@ -114,11 +121,11 @@ def _fail(code: str = "work_session_permission_invalid") -> WorkSessionPermissio
     return WorkSessionPermissionError(code)
 
 
-def normalize_grant_hours(value: Any) -> int:
-    """1..24 whole hours; absent means the default. Never echoes the value."""
+def normalize_grant_hours(value: Any) -> int | None:
+    """1..24 whole hours, or None (absent) for a grant that lasts until released."""
 
     if value is None:
-        return GRANT_HOURS_DEFAULT
+        return None
     if type(value) is not int or isinstance(value, bool) or not 1 <= value <= GRANT_HOURS_MAX:
         raise _fail("work_session_permission_grant_hours_invalid")
     return value
@@ -148,7 +155,7 @@ def presenter_sha256(token: str) -> str:
     return "sha256:" + hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def bind_grant(grant: dict[str, Any] | None, *, presenter_sha256: str, grant_hours: int,
+def bind_grant(grant: dict[str, Any] | None, *, presenter_sha256: str, grant_hours: int | None,
                now: datetime | None = None) -> dict[str, Any] | None:
     """Freeze the v2 row: the normalized mode plus presenter hash and the time box."""
 
@@ -163,7 +170,7 @@ def bind_grant(grant: dict[str, Any] | None, *, presenter_sha256: str, grant_hou
         "operations": list(grant["operations"]),
         "presenter_sha256": presenter_sha256,
         "granted_at": _timestamp(started),
-        "expires_at": _timestamp(started + timedelta(hours=hours)),
+        "expires_at": None if hours is None else _timestamp(started + timedelta(hours=hours)),
     }
 
 
@@ -185,6 +192,8 @@ def permission_expired(permission: Any, *, now: datetime | None = None) -> bool 
 
     if permission_shape(permission) != "v2":
         return None
+    if permission.get("expires_at") is None:
+        return False  # v0.4.44: lasts until released
     expires = _parse_timestamp(permission.get("expires_at"))
     if expires is None:
         return None
@@ -311,11 +320,13 @@ def preview_items(*, archive_identity_sha256: str, permission: dict[str, Any] | 
         # to the conversation that receives the approve result.
         granted, expires = _parse_timestamp(permission["granted_at"]), _parse_timestamp(permission["expires_at"])
         hours = int((expires - granted).total_seconds() // 3600) if granted and expires else 0
+        box = (f"유효 시간 {hours}시간" if permission["expires_at"] is not None
+               else "해제할 때까지 유지")  # v0.4.44
         items.append(TargetCollectionItem(
             identity_sha256=registry._digest({"archive": archive_identity_sha256, "kind": "grant_box",
                                               "presenter_sha256": permission["presenter_sha256"],
                                               "expires_at": permission["expires_at"]}),
-            kind="grant_box", title=f"유효 시간 {hours}시간 · 이 대화(제시 토큰)에만 적용",
+            kind="grant_box", title=f"{box} · 이 대화(제시 토큰)에만 적용",
         ))
     return items
 

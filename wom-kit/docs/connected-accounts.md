@@ -102,7 +102,7 @@ Use these commands after reading the map:
 ```text
 credential-ref-inventory
 provider-status
-imap-mailbox-plan
+imap-mailbox-message-fetch --dry-run
 credential-vault-onboarding-plan
 beginner-setup-manual
 ```
@@ -113,6 +113,6 @@ The safe workflow is:
 beginner-setup-manual
 -> credential-ref-inventory
 -> connected-accounts
--> provider-status or imap-mailbox-plan
--> human-reviewed future adapter work
+-> provider-status, or for email add-source then imap-mailbox-message-fetch
+-> human-reviewed approval of the exact plan
 ```

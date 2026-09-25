@@ -286,6 +286,8 @@ class ExactHumanApprovalOperation(Enum):
     relation_candidate_accept = "relation_candidate_accept"
     # v0.4.41: move verified-recovered Notion pages to the Notion trash.
     notion_page_trash = "notion_page_trash"
+    # v0.4.44: notion-recover revived on the adopted credential (parent links only).
+    notion_ancestor_recovery = "notion_ancestor_recovery"
     # v0.4.41 (letter 141): import a reviewed external export as inbox drafts.
     import_external = "import_external"
     # v0.4.41 (letter 119): record the default adopted credential.
@@ -633,6 +635,7 @@ _OPERATION_LABELS = {
     ExactHumanApprovalOperation.runtime_skill_uninstall: "에이전트 스킬 제거",
     ExactHumanApprovalOperation.relation_candidate_accept: "관계 후보 수락",
     ExactHumanApprovalOperation.notion_page_trash: "Notion 휴지통 정리",
+    ExactHumanApprovalOperation.notion_ancestor_recovery: "Notion 상위 위치 복원",
     ExactHumanApprovalOperation.import_external: "외부 내보내기 가져오기",
     ExactHumanApprovalOperation.credential_lifecycle: "자격증명 기본값 지정",
     ExactHumanApprovalOperation.prehashed_objet_ledger: "해시 목록으로 오브제 등록",
@@ -842,6 +845,9 @@ _OPERATION_QUESTIONS = {
     ),
     ExactHumanApprovalOperation.notion_page_trash: (
         "회수가 검증된 Notion 페이지를 Notion 휴지통으로 옮길까요?"
+    ),
+    ExactHumanApprovalOperation.notion_ancestor_recovery: (
+        "주소를 잃은 Notion 페이지의 상위 위치를 되찾을까요?"
     ),
     ExactHumanApprovalOperation.import_external: (
         "검토한 내보내기 항목을 그대로 초안(inbox)으로 가져올까요?"
@@ -1138,6 +1144,9 @@ _OPERATION_SUMMARIES = {
     ExactHumanApprovalOperation.notion_page_trash: (
         "아카이브에 회수·검증된 페이지 가운데 회수 뒤 바뀌지 않은 것만 Notion 휴지통으로 옮깁니다. 완전 삭제는 하지 않으며 Notion에서 되살릴 수 있습니다."
     ),
+    ExactHumanApprovalOperation.notion_ancestor_recovery: (
+        "채택한 Notion 자격증명으로 검토한 목록의 상위 페이지·블록·데이터베이스에 대해 부모 연결만 읽어(제목·본문 없음) 정리된 상위 위치 파일과 영수증을 새로 씁니다."
+    ),
     ExactHumanApprovalOperation.import_external: (
         "검토한 목록의 항목만 inbox 초안으로 새로 만들고 가져오기 영수증을 남깁니다. 기존 zet는 바꾸지 않으며, 내보내기가 바뀌었으면 아무것도 쓰지 않습니다."
     ),
@@ -1244,6 +1253,7 @@ _OPERATION_APPROVE_BUTTONS = {
     ExactHumanApprovalOperation.runtime_skill_uninstall: "스킬 제거",
     ExactHumanApprovalOperation.relation_candidate_accept: "연결 수락",
     ExactHumanApprovalOperation.notion_page_trash: "휴지통으로 이동",
+    ExactHumanApprovalOperation.notion_ancestor_recovery: "위치 복원",
     ExactHumanApprovalOperation.import_external: "초안으로 가져오기",
     ExactHumanApprovalOperation.credential_lifecycle: "기본값 기록",
     ExactHumanApprovalOperation.prehashed_objet_ledger: "해시로 등록",

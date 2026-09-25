@@ -71,10 +71,13 @@ def _validate_permission(value: Any) -> None:
     if type(value) is dict and set(value) == _PERMISSION_V2_KEYS:
         if (not _DIGEST.fullmatch(str(value["presenter_sha256"])) if type(value["presenter_sha256"]) is str else True):
             raise _fail("work_session_registry_invalid")
+        # v0.4.44: expires_at is null for a grant that lasts until released.
         for name in ("granted_at", "expires_at"):
+            if name == "expires_at" and value[name] is None:
+                continue
             if type(value[name]) is not str or _PERMISSION_TIMESTAMP.fullmatch(value[name]) is None:
                 raise _fail("work_session_registry_invalid")
-        if value["expires_at"] <= value["granted_at"]:
+        if value["expires_at"] is not None and value["expires_at"] <= value["granted_at"]:
             raise _fail("work_session_registry_invalid")
         value = {"mode": value["mode"], "operations": value["operations"]}
     if (type(value) is not dict or set(value) != {"mode", "operations"}

@@ -210,15 +210,15 @@
       "route": "environment",
       "evidence": ["test_cli"]
     },
-    "imap-mailbox-adapter-manifest-write": {
-      "status": "session_integrated",
-      "route": "environment",
-      "evidence": ["test_cli"]
-    },
     "imap-mailbox-message-fetch": {
       "status": "session_integrated",
       "route": "environment",
       "evidence": ["test_imap_mailbox_message_fetch"]
+    },
+    "notion-recover": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_notion_recover_revival"]
     },
     "notion-page-recovery": {
       "status": "session_integrated",
@@ -469,22 +469,6 @@
     "activity-group-membership-removal-plan": {
       "status": "legacy_exception",
       "reason": "saved local plan; no archive domain write"
-    },
-    "imap-mailbox-adapter-audit-write": {
-      "status": "legacy_exception",
-      "reason": "local IMAP evidence; the unavailable IMAP provider writers stay closed"
-    },
-    "imap-mailbox-header-scan-receipt-audit": {
-      "status": "legacy_exception",
-      "reason": "local IMAP evidence; the unavailable IMAP provider writers stay closed"
-    },
-    "imap-mailbox-material-capture-approval-plan": {
-      "status": "legacy_exception",
-      "reason": "local IMAP plan; the unavailable IMAP provider writers stay closed"
-    },
-    "imap-mailbox-material-selection-record": {
-      "status": "legacy_exception",
-      "reason": "local IMAP evidence; the unavailable IMAP provider writers stay closed"
     },
     "object-storage-restore": {
       "status": "session_integrated",
