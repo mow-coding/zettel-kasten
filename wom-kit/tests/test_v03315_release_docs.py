@@ -25,6 +25,11 @@ L128_DECISION = (
 SKILL = KIT / "templates" / "ai-runtime" / "wom-archive" / "SKILL.md"
 
 
+import sys as _sys  # noqa: E402
+
+_sys.path.insert(0, str(Path(__file__).resolve().parent))
+from runtime_skill_package import package_text  # noqa: E402
+
 class V03315ReleaseDocsTests(unittest.TestCase):
     def test_historical_release_stays_source_only(self) -> None:
         self.assertTrue(RELEASE.is_file())
@@ -115,6 +120,7 @@ class V03315ReleaseDocsTests(unittest.TestCase):
         text = SKILL.read_text(encoding="utf-8")
         self.assertLessEqual(len(text.splitlines()), 200)
         self.assertLessEqual(len(text.split()), 1400)
+        text = package_text(SKILL.parent)  # v0.4.45: tokens may live in references
         for token in (
             "project-version-update-collision",
             "fresh updater preview and separate approval",

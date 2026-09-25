@@ -86,6 +86,11 @@ RESOURCE_ADDITIONS = frozenset(
         "release-notes/v0.4.43.md",
     "schemas/activity-cleanup-request-v1.schema.json",
     "templates/ai-runtime/wom-archive/references/storage-scope.md",
+    # v0.4.45: the helper-AI skill gained four focused references.
+    "templates/ai-runtime/wom-archive/references/credentials-and-sessions.md",
+    "templates/ai-runtime/wom-archive/references/developer-letters.md",
+    "templates/ai-runtime/wom-archive/references/long-operations-and-updates.md",
+    "templates/ai-runtime/wom-archive/references/models-and-reasoning.md",
         "schemas/agent-instruction-policy-v0.1.schema.json",
         "schemas/approval-handoff-v0.1.schema.json",
         "schemas/approval-integrity-audit-result-v0.1.schema.json",

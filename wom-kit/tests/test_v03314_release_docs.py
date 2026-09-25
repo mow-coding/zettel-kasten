@@ -12,6 +12,11 @@ PACKAGED_RELEASE = (
 SKILL = KIT / "templates" / "ai-runtime" / "wom-archive" / "SKILL.md"
 
 
+import sys as _sys  # noqa: E402
+
+_sys.path.insert(0, str(Path(__file__).resolve().parent))
+from runtime_skill_package import package_text  # noqa: E402
+
 class V03314ReleaseDocsTests(unittest.TestCase):
     def test_historical_release_stays_source_only(self) -> None:
         self.assertTrue(RELEASE.is_file())
@@ -42,6 +47,7 @@ class V03314ReleaseDocsTests(unittest.TestCase):
     def test_runtime_skill_is_bounded_and_routes_timeout_recovery(self) -> None:
         text = SKILL.read_text(encoding="utf-8")
         self.assertLessEqual(len(text.split()), 1400)
+        text = package_text(SKILL.parent)  # v0.4.45: tokens may live in references
         for token in (
             "operation_ref",
             "operation-control --action status --dry-run",

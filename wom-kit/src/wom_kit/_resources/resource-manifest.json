@@ -2,7 +2,7 @@
   "schema": "wom-kit/package-resource-manifest/v0.1",
   "version": "0.4.43",
   "source_of_truth": "wom-kit source resource directories",
-  "file_count": 175,
+  "file_count": 179,
   "files": [
     {
       "source": "schemas/activity-cleanup-request-v1.schema.json",
@@ -751,14 +751,26 @@
     {
       "source": "templates/ai-runtime/wom-archive/SKILL.md",
       "packaged": "templates/ai-runtime/wom-archive/SKILL.md",
-      "bytes": 11529,
-      "sha256": "2dfdd37648051bbd71c43aec973ceb5cfd144ac1d649d9f5ecb8ff4445684555"
+      "bytes": 9790,
+      "sha256": "d7bba48538a5e76eb783ff948c8c6bdd6dc8d97dcf2cbec1a91ccd679ce4262b"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
       "packaged": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
-      "bytes": 9531,
-      "sha256": "60689700fff8f22ab0bf4299b849305be21a067449d20294013b530613508836"
+      "bytes": 9827,
+      "sha256": "9a4df4d2caefa843d4dcd69fb6100c066c045686099435d6fae1e990bdfbd085"
+    },
+    {
+      "source": "templates/ai-runtime/wom-archive/references/credentials-and-sessions.md",
+      "packaged": "templates/ai-runtime/wom-archive/references/credentials-and-sessions.md",
+      "bytes": 3872,
+      "sha256": "3ea7ab3a910264913124177cebe96028c2b5a337c131c02dcb94ebd9945d6508"
+    },
+    {
+      "source": "templates/ai-runtime/wom-archive/references/developer-letters.md",
+      "packaged": "templates/ai-runtime/wom-archive/references/developer-letters.md",
+      "bytes": 1045,
+      "sha256": "d76efc7f10a1914c0d578c13eec636a54fdab5e582227f959881977e84e34c9a"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/foreign-sharing-and-trust.md",
@@ -767,10 +779,22 @@
       "sha256": "27c8e78c72cd905aaac54ddaf1c91b8517b22534d53ca37f0267ed7fd631aff1"
     },
     {
+      "source": "templates/ai-runtime/wom-archive/references/long-operations-and-updates.md",
+      "packaged": "templates/ai-runtime/wom-archive/references/long-operations-and-updates.md",
+      "bytes": 2675,
+      "sha256": "6918656e504b6f0edab5e512eded28deb88314e99220adee015d96bfb7591747"
+    },
+    {
+      "source": "templates/ai-runtime/wom-archive/references/models-and-reasoning.md",
+      "packaged": "templates/ai-runtime/wom-archive/references/models-and-reasoning.md",
+      "bytes": 2085,
+      "sha256": "d75f33f9391e22b572cf6dd6c38bf51e9b6772907bdde1d13b0e8bd974639ea8"
+    },
+    {
       "source": "templates/ai-runtime/wom-archive/references/operator-contract.md",
       "packaged": "templates/ai-runtime/wom-archive/references/operator-contract.md",
-      "bytes": 77014,
-      "sha256": "39a67c0ccb04b6c97ebc43c541b69bdbdf6b0e657464450f5ac8320e7587444f"
+      "bytes": 78389,
+      "sha256": "9dd560133ad40b00b91d92efcec4a1697d60c7eb4b23576738bf2aecf59454b9"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/reading-memory-and-revision.md",

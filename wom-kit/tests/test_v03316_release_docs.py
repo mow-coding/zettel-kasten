@@ -30,6 +30,11 @@ PACKAGED_SKILL_ROOT = (
 )
 
 
+import sys as _sys  # noqa: E402
+
+_sys.path.insert(0, str(Path(__file__).resolve().parent))
+from runtime_skill_package import package_text  # noqa: E402
+
 class V03316ReleaseDocsTests(unittest.TestCase):
     def test_historical_release_stays_source_only(self) -> None:
         self.assertTrue(RELEASE.is_file())
@@ -121,6 +126,7 @@ class V03316ReleaseDocsTests(unittest.TestCase):
         skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
         self.assertLessEqual(len(skill.splitlines()), 200)
         self.assertLessEqual(len(skill.split()), 1400)
+        skill = package_text(SKILL_ROOT)  # v0.4.45: tokens may live in references
         for token in (
             "--action inspect-all",
             "exact all-supported cache set",

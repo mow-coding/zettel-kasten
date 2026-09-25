@@ -204,6 +204,11 @@ RESOURCE_ADDITIONS = {
     "release-notes/v0.4.43.md",
     "schemas/activity-cleanup-request-v1.schema.json",
     "templates/ai-runtime/wom-archive/references/storage-scope.md",
+    # v0.4.45: the helper-AI skill gained four focused references.
+    "templates/ai-runtime/wom-archive/references/credentials-and-sessions.md",
+    "templates/ai-runtime/wom-archive/references/developer-letters.md",
+    "templates/ai-runtime/wom-archive/references/long-operations-and-updates.md",
+    "templates/ai-runtime/wom-archive/references/models-and-reasoning.md",
     "schemas/agent-instruction-policy-v0.1.schema.json",
     "schemas/approval-handoff-v0.1.schema.json",
     "schemas/approval-integrity-audit-result-v0.1.schema.json",
@@ -268,9 +273,9 @@ RESOURCE_ADDITIONS = {
     "schemas/zettel-objet-link-revert-receipt.schema.json",
 }
 RESOURCE_REMOVALS = {"release-notes/v0.3.297.md"}
-CURRENT_RESOURCE_COUNT = 175
+CURRENT_RESOURCE_COUNT = 179  # v0.4.45: four helper-AI references
 CURRENT_RESOURCE_CANONICAL_SHA256 = (
-    "5fad9495054d7d538f29c8f4fcaa63ed9865693856a94d675958fd1751f29935"  # v0.4.43 resources
+    "25e95708a67e7aea60d8e9d60f2d10fc6b5c4104b0d6d6bcaec6d90b7ce0e789"  # v0.4.45 resources (four helper-AI references)
 )
 
 

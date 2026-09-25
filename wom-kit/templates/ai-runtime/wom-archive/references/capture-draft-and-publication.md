@@ -119,8 +119,9 @@ Never write Markdown directly into `inbox/`; a location policy is not a write
 route. Draft approval writes only to `inbox/` through `archive create-draft`;
 it does not approve minting.
 
-An unminted draft is a working document: revise it in place, including when its
-title changes. Do not delete and recreate it. If the human reviews and decides
+An unminted draft is a working document: revise it with `draft-revision-write`
+(a reviewed replacement proposal, `--dry-run` then `--approve`), including when
+its title changes. Never edit the file by hand, and do not delete and recreate it. If the human reviews and decides
 that it should not survive, use `discard-draft --dry-run`, then its exact
 plan-hash-bound `--approve --reviewed-by` replay. Restore only through the
 receipt-bound `discard-draft-restore` workflow. These commands never apply to

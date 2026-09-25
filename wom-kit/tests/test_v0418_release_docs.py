@@ -86,6 +86,11 @@ PROJECT_RECORDS = (
 )
 
 
+import sys as _sys  # noqa: E402
+
+_sys.path.insert(0, str(Path(__file__).resolve().parent))
+from runtime_skill_package import package_text  # noqa: E402
+
 class V0418ReleaseDocsTests(unittest.TestCase):
     def test_current_version_surfaces_are_exact(self) -> None:
         self.assertEqual(__version__, "0.4.43")
@@ -236,9 +241,8 @@ class V0418ReleaseDocsTests(unittest.TestCase):
         for source, packaged in MIRRORED_RUNTIME_DOCUMENTS:
             with self.subTest(source=source, packaged=packaged):
                 self.assertEqual(source.read_bytes(), packaged.read_bytes())
-        skill = (
-            KIT / "templates" / "ai-runtime" / "wom-archive" / "SKILL.md"
-        ).read_text(encoding="utf-8")
+        # v0.4.45: the long-operations detail moved into a focused reference.
+        skill = package_text(KIT / "templates" / "ai-runtime" / "wom-archive")
         self.assertIn("terminal_transaction_cleanup_completed", skill)
 
     def test_project_records_capture_decision_and_release_boundary(self) -> None:
