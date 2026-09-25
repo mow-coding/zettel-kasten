@@ -1757,7 +1757,7 @@ class McpServerTests(unittest.TestCase):
             self.assertIn("notion_ancestor_merge_plan", tool_names)
             self.assertIn("notion_client_issue_verification_plan", tool_names)
             self.assertIn("notion_client_fixture_request_plan", tool_names)
-            # v0.4.43: the superseded IMAP planning previews were removed.
+            # v0.4.44: the superseded IMAP planning previews were removed.
             self.assertFalse({name for name in tool_names if name.startswith("imap_mailbox_")})
             self.assertIn("credential_ref_plan", tool_names)
             self.assertIn("credential_ref_inventory", tool_names)

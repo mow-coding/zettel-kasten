@@ -71,7 +71,7 @@ def _validate_permission(value: Any) -> None:
     if type(value) is dict and set(value) == _PERMISSION_V2_KEYS:
         if (not _DIGEST.fullmatch(str(value["presenter_sha256"])) if type(value["presenter_sha256"]) is str else True):
             raise _fail("work_session_registry_invalid")
-        # v0.4.43: expires_at is null for a grant that lasts until released.
+        # v0.4.44: expires_at is null for a grant that lasts until released.
         for name in ("granted_at", "expires_at"):
             if name == "expires_at" and value[name] is None:
                 continue

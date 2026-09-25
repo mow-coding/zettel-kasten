@@ -44,9 +44,9 @@ class V0419CapabilityAvailabilityTests(unittest.TestCase):
     def test_fixed_closed_command_preserves_parser_json_default(self) -> None:
         output, errors = io.StringIO(), io.StringIO()
         # principal-register reopened in v0.4.40; credential-lifecycle and the
-        # IMAP manifest writer in v0.4.41; the IMAP chain was removed in v0.4.43;
+        # IMAP manifest writer in v0.4.41; the IMAP chain was removed in v0.4.44;
         # the ZET sharing commands stay closed until the v0.5 design.
-        # v0.4.43: the fixed-closed command whose parser default is JSON is
+        # v0.4.44: the fixed-closed command whose parser default is JSON is
         # operation-control (cancel is not supported).
         argv = ["operation-control", "synthetic-root-must-not-be-read",
                 "--operation-ref", "op:sha256:" + "a" * 64, "--action", "cancel", "--approve"]

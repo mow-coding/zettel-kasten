@@ -13,7 +13,7 @@ Since v0.4.36 (the 2026-09-17 decision restored) every operation kind is
 grantable; only set-permission-mode itself always asks. Credential secret
 entry keeps its own Windows window where a person types the secret.
 
-v0.4.43 (owner decision 2026-09-25): a grant has no time limit unless the
+v0.4.44 (owner decision 2026-09-25): a grant has no time limit unless the
 request names ``grant_hours``; it stays until the operator releases it
 (set-permission-mode manual, or recover) or the session is paused, handed off
 or completed. ``expires_at`` is then null.
@@ -59,7 +59,7 @@ CONTEXT_ENV = ("WOM_CLIENT_APP_REF", "WOM_TASK_ROUTE_REF", "WOM_WORK_SESSION_REF
 PRESENTER_ENV = "WOM_WORK_SESSION_PRESENTER"
 PERMISSION_SCHEMA_V1 = "wom-kit/work-session-permission/v1"
 PERMISSION_SCHEMA_V2 = "wom-kit/work-session-permission/v2"
-# v0.4.43: no default time box; a grant lasts until it is released.
+# v0.4.44: no default time box; a grant lasts until it is released.
 GRANT_HOURS_DEFAULT = None
 GRANT_UNTIL_RELEASED = "until_released"
 GRANT_HOURS_MAX = 24
@@ -193,7 +193,7 @@ def permission_expired(permission: Any, *, now: datetime | None = None) -> bool 
     if permission_shape(permission) != "v2":
         return None
     if permission.get("expires_at") is None:
-        return False  # v0.4.43: lasts until released
+        return False  # v0.4.44: lasts until released
     expires = _parse_timestamp(permission.get("expires_at"))
     if expires is None:
         return None
@@ -321,7 +321,7 @@ def preview_items(*, archive_identity_sha256: str, permission: dict[str, Any] | 
         granted, expires = _parse_timestamp(permission["granted_at"]), _parse_timestamp(permission["expires_at"])
         hours = int((expires - granted).total_seconds() // 3600) if granted and expires else 0
         box = (f"유효 시간 {hours}시간" if permission["expires_at"] is not None
-               else "해제할 때까지 유지")  # v0.4.43
+               else "해제할 때까지 유지")  # v0.4.44
         items.append(TargetCollectionItem(
             identity_sha256=registry._digest({"archive": archive_identity_sha256, "kind": "grant_box",
                                               "presenter_sha256": permission["presenter_sha256"],

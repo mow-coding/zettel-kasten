@@ -261,7 +261,7 @@ class Letter137AdditionalPublicCliBoundaryTests(_CliAssertions):
             ),
         )
         for service_name, lifecycle, argv in cases:
-            if argv[0] in REMOVED_COMMANDS:  # deleted in v0.4.40 or v0.4.43
+            if argv[0] in REMOVED_COMMANDS:  # deleted in v0.4.40 or v0.4.44
                 continue
             with self.subTest(command=argv[0]), mock.patch.object(
                 archive_services,
@@ -303,7 +303,7 @@ class Letter137AdditionalPublicCliBoundaryTests(_CliAssertions):
             ],
             "parcel": ["pack"],
         }
-        alias_groups = {key: value for key, value in alias_groups.items() if key not in REMOVED_COMMANDS}  # deleted in v0.4.40 or v0.4.43
+        alias_groups = {key: value for key, value in alias_groups.items() if key not in REMOVED_COMMANDS}  # deleted in v0.4.40 or v0.4.44
         self.assertEqual(len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS), 5)  # v0.4.44: notion-recover revived
         for exact_batch_command in (
             "source-intake-batch",
@@ -412,7 +412,7 @@ class Letter137AdditionalPublicCliBoundaryTests(_CliAssertions):
             ),
         )
         for argv, service_name, lifecycle in cases:
-            if argv[0] in REMOVED_COMMANDS:  # deleted in v0.4.40 or v0.4.43
+            if argv[0] in REMOVED_COMMANDS:  # deleted in v0.4.40 or v0.4.44
                 continue
             with self.subTest(lifecycle=lifecycle), mock.patch.object(
                 archive_services,
@@ -593,7 +593,7 @@ class Letter137AdditionalPublicCliBoundaryTests(_CliAssertions):
             ),
         )
         for service_name, argv in cases:
-            if argv[0] in REMOVED_COMMANDS:  # deleted in v0.4.40 or v0.4.43
+            if argv[0] in REMOVED_COMMANDS:  # deleted in v0.4.40 or v0.4.44
                 continue
             with self.subTest(command=argv[0]), mock.patch.object(
                 archive_services,
@@ -1139,7 +1139,7 @@ class Letter137ExactJsonProjectionTests(_CliAssertions):
             (["retire-minted-draft", PRIVATE, "--path", PRIVATE, "--approve", "--format", "json"], "retire_minted_draft", "retire_reviewer_required"),
         )
         for argv, lifecycle, reason in cases:
-            if argv[0] in REMOVED_COMMANDS:  # deleted in v0.4.40 or v0.4.43
+            if argv[0] in REMOVED_COMMANDS:  # deleted in v0.4.40 or v0.4.44
                 continue
             with self.subTest(command=argv[0], reason=reason):
                 code, stdout, stderr = self.run_cli(argv)
@@ -1277,7 +1277,7 @@ class Letter137ExactJsonProjectionTests(_CliAssertions):
             ),
         )
         for service_name, binding_name, argv, lifecycle, reason in cases:
-            if argv[0] in REMOVED_COMMANDS:  # deleted in v0.4.40 or v0.4.43
+            if argv[0] in REMOVED_COMMANDS:  # deleted in v0.4.40 or v0.4.44
                 continue
             with self.subTest(command=argv[0]), mock.patch.object(
                 archive_services,
@@ -1379,7 +1379,7 @@ class Letter137ExactJsonProjectionTests(_CliAssertions):
             ),
         )
         for service_name, argv, lifecycle, reason in cases:
-            if argv[0] in REMOVED_COMMANDS:  # deleted in v0.4.40 or v0.4.43
+            if argv[0] in REMOVED_COMMANDS:  # deleted in v0.4.40 or v0.4.44
                 continue
             with self.subTest(command=argv[0]), mock.patch.object(
                 archive_services,

@@ -63,7 +63,7 @@ then keep whole messages with `imap-mailbox-message-fetch` (v0.4.42): the dry-ru
 reads no credential and opens no connection, and one exact approval fetches the
 selected messages read-only as `.eml` files with a ready intake request. See
 [IMAP Mailbox Source](imap-mailbox-source.md). The earlier `imap-mailbox-plan`
-planning chain was removed in v0.4.43.
+planning chain was removed in v0.4.44.
 
 ## Source Intake Planner
 

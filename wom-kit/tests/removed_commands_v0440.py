@@ -21,9 +21,9 @@ REMOVED_COMMANDS_V0440 = frozenset({
 })
 
 
-# v0.4.43 (owner decision 2026-09-25): the IMAP chain superseded by
+# v0.4.44 (owner decision 2026-09-25): the IMAP chain superseded by
 # imap-mailbox-message-fetch is removed with every alias.
-REMOVED_COMMANDS_V0443 = frozenset({
+REMOVED_COMMANDS_V0444 = frozenset({
     "imap-header-metadata-scan",
     "imap-header-scan-receipt-audit",
     "imap-mailbox-adapter-audit",
@@ -77,4 +77,4 @@ REMOVED_COMMANDS_V0443 = frozenset({
     "mailbox-selection-plan",
 })
 
-REMOVED_COMMANDS = REMOVED_COMMANDS_V0440 | REMOVED_COMMANDS_V0443
+REMOVED_COMMANDS = REMOVED_COMMANDS_V0440 | REMOVED_COMMANDS_V0444

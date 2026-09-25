@@ -9,7 +9,7 @@ from wom_kit import __version__
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = KIT_ROOT.parent
-EXPECTED_CURRENT_VERSION = "0.4.43"
+EXPECTED_CURRENT_VERSION = "0.4.44"
 EXPECTED_CURRENT_TAG = f"v{EXPECTED_CURRENT_VERSION}"
 CURRENT_VERSION = f"v{__version__}"
 CURRENT_RELEASE_NOTE = f"{EXPECTED_CURRENT_TAG}.md"
@@ -19,7 +19,7 @@ CURRENT_WHEEL_URL = (
     f"releases/download/{EXPECTED_CURRENT_TAG}/"
     f"wom_kit-{EXPECTED_CURRENT_VERSION}-py3-none-any.whl"
 )
-CURRENT_RUNTIME_STATUS = f"Status: {CURRENT_VERSION} project update approval hotfix: bare reviewer ids, stranded update locks and fixed approval cause codes"
+CURRENT_RUNTIME_STATUS = f"Status: {CURRENT_VERSION} superseded IMAP chain removed, Notion location recovery revived and session grants until released"
 CURRENT_MATRIX_VERSION = f"Version: {CURRENT_VERSION} implementation and release scope"
 MATRIX_PATH = KIT_ROOT / "docs" / "capability-matrix.md"
 PRODUCT_ROADMAP_PATH = KIT_ROOT / "docs" / "product-roadmap.md"
@@ -3348,13 +3348,13 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, text)
+        # v0.4.44: the matrix row describes the revived command.
         for phrase in (
             "Notion recover",
-            "content-free dry-run only in v0.4.0",
+            "approval-gated read and local write",
             "archive notion-recover",
-            "compound_exact_human_approval_binding_required",
-            "reads no credential/private target",
-            "writes no fixture or receipt",
+            "GET parent links only",
+            "spawned child",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
@@ -3426,7 +3426,6 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "archive notion-connect-plan",
             "archive notion-oauth-connection-preflight",
             "notion_connection_not_shared_or_permission_denied",
-            "content-free dry-run only in v0.4.0",
             "compound_exact_human_approval_binding_required",
         ):
             with self.subTest(phrase=phrase):
@@ -6227,7 +6226,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 )
                 root_line = (
                     '$womBootstrapRoot = Join-Path $env:LOCALAPPDATA '
-                    '"WOM\\bootstrap-v0443-$womBootstrapNonce"'
+                    '"WOM\\bootstrap-v0444-$womBootstrapNonce"'
                 )
                 absent_guard = "if (Test-Path -LiteralPath $womBootstrapRoot)"
                 absent_failure = 'throw "WOM bootstrap path must be new."'
@@ -6262,7 +6261,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn("wom-kit/docs/runtime-skill-install", text)
                 self.assertNotIn(
                     '$womBootstrapRoot = Join-Path $env:LOCALAPPDATA '
-                    '"WOM\\bootstrap-v0443"',
+                    '"WOM\\bootstrap-v0444"',
                     text,
                 )
                 self.assertNotIn(

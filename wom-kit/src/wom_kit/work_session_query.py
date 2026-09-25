@@ -86,7 +86,7 @@ def _with_expiry(row):
     expires = row.get("permission_expires_at")
     expired = None
     if expires is None and row.get("presenter_bound") is True:
-        expired = False  # v0.4.43: lasts until released
+        expired = False  # v0.4.44: lasts until released
     elif type(expires) is str:
         expired = permission_rules.permission_expired({"mode": "limited", "operations": [], "presenter_sha256": "",
                                                        "granted_at": "", "expires_at": expires})

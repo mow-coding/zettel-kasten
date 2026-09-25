@@ -300,10 +300,10 @@ accepts the approve request as is (`reviewer_claim` ignored) and a refused
 shape names `required_keys` / `optional_keys`.
 
 Since v0.4.34 (beta letter 165) a `limited` / `allow_all` grant is
-presenter-bound. Since v0.4.44 (owner decision 2026-09-25) it has no time limit unless
-the request names `grant_hours`: it lasts until `set-permission-mode manual`,
-`recover`, or the session is paused, handed off or completed (`expires_at`
-is then null). Before v0.4.44 it was also time-boxed. The approve mints a random presenter secret
+presenter-bound and time-boxed; since v0.4.44 (owner decision 2026-09-25) the
+time box applies only when the request names `grant_hours`, otherwise the
+grant lasts until `set-permission-mode manual`, `recover`, or the session is
+paused, handed off or completed (`expires_at` is then null). The approve mints a random presenter secret
 before its dialog, so the reviewed plan binds `presenter_sha256`, `granted_at`
 and `expires_at` (`grant_hours` 1..24, default 8; one more dialog line names
 the box); the secret is returned exactly once in that approve result

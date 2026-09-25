@@ -2,6 +2,21 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.4.44 대체된 IMAP 명령 제거, notion-recover 부활
+
+공개된 뒤 정확한 wheel을 사용하세요. IMAP 계획 명령들(`imap-mailbox-plan`, `imap-mailbox-*-plan`, `imap-mailbox-header-metadata-scan`, 자료 선택·가져오기 승인 명령과 별칭)은 없어졌습니다. 메일은 `add-source --type imap_mailbox`, `imap-mailbox-message-fetch`, `source-intake-batch`를 씁니다. `notion-recover`는 채택한 Notion 자격증명으로 다시 동작하며, 스크립트에서 `--credential-ref`, `--yes`, `--platform`, `--notion-version`, `--timeout-seconds`, `--source`를 빼야 합니다. 세션 권한은 해제할 때까지 유지됩니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0444-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.44/wom_kit-0.4.44-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+고객은 여전히 검토된 `project-version-update` 절차를 실행해야 합니다. 부트스트랩 설치만으로 프로젝트에 고정된 런타임은 바뀌지 않습니다.
+
 ## v0.4.43 프로젝트 업데이트 승인 긴급 수정
 
 공개된 뒤 정확한 wheel을 사용하세요. v0.4.42 업데이트가 `project_version_update_failure_family_windows_approval_error`로 멈추고 새 작업 세션이 `project_update_recovery_required`로 거부되면, 이 부트스트랩을 설치한 뒤 `project-version-update <프로젝트 루트> --resume --affirm-external-writers-quiescent`로 멈춘 시도를 변경 없이 닫고 잠금을 푼 뒤, 업데이트를 다시 실행합니다. 없어진 명령은 없습니다.

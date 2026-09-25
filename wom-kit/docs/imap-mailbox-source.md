@@ -1,6 +1,6 @@
 # IMAP Mailbox Source
 
-Status: v0.4.43 current path (register, fetch whole messages, capture)
+Status: v0.4.44 current path (register, fetch whole messages, capture)
 
 Email is often primary evidence: decisions, receipts, attachments and notices
 arrive there before they become zets. WOM keeps whole messages, not summaries:
@@ -58,4 +58,4 @@ v0.3.19 to v0.3.72 built a stepwise plan toward a future adapter (source plan,
 operation request, readiness, selection, manifest, audit, preflight, execution
 contract, header scan, material selection and capture approval). The live
 header scan was fixed closed in v0.4.0 and the capture step was never built.
-v0.4.42 added the whole-message fetch and v0.4.43 removed the superseded chain.
+v0.4.42 added the whole-message fetch and v0.4.44 removed the superseded chain.

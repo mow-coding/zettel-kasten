@@ -140,7 +140,7 @@ class V0401ReleaseDocsTests(unittest.TestCase):
         # exact-approval-claim-finalize writer, and makes revert-edge --approve
         # unconditional (one conditional scope fewer).
         self.assertEqual(counts["canonical_executable_command_count"], 301)  # v0.4.40: two receipt reconcile batch commands
-        self.assertEqual(counts["alias_invocation_path_count"], 215)  # v0.4.43: aliases of the superseded IMAP chain removed
+        self.assertEqual(counts["alias_invocation_path_count"], 215)  # v0.4.44: aliases of the superseded IMAP chain removed
         self.assertEqual(counts["invocation_path_count"], 516)
         # v0.4.33 reopened object-storage-upload (one path moves from fixed-closed to available).
         self.assertEqual(counts["approval_available_command_count"], 103)  # v0.4.44: notion-recover revived

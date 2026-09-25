@@ -1073,7 +1073,7 @@ class Letter137CanonicalAuthorityCliBoundaryTests(
             )
             before = _snapshot(root_path)
             for arguments, module, service_name in calls:
-                if arguments[0] in REMOVED_COMMANDS:  # deleted in v0.4.40 or v0.4.43
+                if arguments[0] in REMOVED_COMMANDS:  # deleted in v0.4.40 or v0.4.44
                     continue
                 with self.subTest(command=arguments[0]), mock.patch.object(
                     module,

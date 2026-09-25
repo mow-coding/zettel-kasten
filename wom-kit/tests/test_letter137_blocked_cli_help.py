@@ -43,7 +43,7 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
     def test_every_fixed_closed_command_has_honest_approval_help(self) -> None:
         expected_additional_public_commands = {
             "github-repo",
-            # v0.4.43: the superseded IMAP header scan was removed.
+            # v0.4.44: the superseded IMAP header scan was removed.
             # v0.4.41: onboard, runtime-skill-install/-uninstall, the IMAP adapter
             # manifest and the Tiro fetch reopened.
         }

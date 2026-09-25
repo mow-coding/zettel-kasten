@@ -24,6 +24,21 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.4.44 Superseded IMAP chain removed, notion-recover revived
+
+Use the exact public wheel after publication. The IMAP planning commands (`imap-mailbox-plan`, `imap-mailbox-*-plan`, `imap-mailbox-header-metadata-scan`, the material selection and capture approval commands and their aliases) are removed; use `add-source --type imap_mailbox`, `imap-mailbox-message-fetch` and `source-intake-batch`. `notion-recover` runs again with the adopted Notion credential; drop `--credential-ref`, `--yes`, `--platform`, `--notion-version`, `--timeout-seconds` and `--source` from scripts. Session grants now last until released.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0444-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.44/wom_kit-0.4.44-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+The customer must still run the reviewed `project-version-update` workflow. Bootstrap installation alone does not update a pinned project runtime.
+
 ## v0.4.43 Project update approval hotfix
 
 Use the exact public wheel after publication. If a v0.4.42 update stopped with `project_version_update_failure_family_windows_approval_error` and new work sessions report `project_update_recovery_required`, install this bootstrap and run `project-version-update <project-root> --resume --affirm-external-writers-quiescent`: it closes the stopped attempt without project changes and releases the lock; then run the update again. No command was removed.

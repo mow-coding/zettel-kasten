@@ -1,6 +1,6 @@
 # IMAP Mailbox Material Capture Approval Audit
 
-Status: removed in v0.4.43 (superseded)
+Status: removed in v0.4.44 (superseded)
 
 `archive imap-mailbox-material-capture-approval-audit` no longer exists. It was one step of the v0.3.19 to v0.3.72
 plan toward a future IMAP adapter that would scan headers, select messages and

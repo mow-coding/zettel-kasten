@@ -478,7 +478,7 @@ class Letter137LegacyAffirmCliBoundaryTests(_BoundaryAssertions):
             ),
         )
         for arguments, service, action in calls:
-            if arguments[0] in REMOVED_COMMANDS:  # deleted in v0.4.40 or v0.4.43
+            if arguments[0] in REMOVED_COMMANDS:  # deleted in v0.4.40 or v0.4.44
                 continue
             with self.subTest(action=action):
                 self._assert_cli_block(
@@ -551,7 +551,7 @@ class Letter137LegacyAffirmCliBoundaryTests(_BoundaryAssertions):
             ),
         )
         for arguments, service, action in calls:
-            if arguments[0] in REMOVED_COMMANDS:  # deleted in v0.4.40 or v0.4.43
+            if arguments[0] in REMOVED_COMMANDS:  # deleted in v0.4.40 or v0.4.44
                 continue
             with self.subTest(action=action):
                 self._assert_cli_block(
@@ -609,7 +609,7 @@ class Letter137LegacyAffirmCliBoundaryTests(_BoundaryAssertions):
             # exact approval in v0.4.40 (test_title_remap_recover_exact).
         )
         for arguments, service, action in calls:
-            if arguments[0] in REMOVED_COMMANDS:  # deleted in v0.4.40 or v0.4.43
+            if arguments[0] in REMOVED_COMMANDS:  # deleted in v0.4.40 or v0.4.44
                 continue
             with self.subTest(action=action):
                 self._assert_cli_block(
@@ -662,7 +662,7 @@ class Letter137LegacyAffirmCliBoundaryTests(_BoundaryAssertions):
         # archive that does not exist the writer is never entered, the error
         # is a fixed code, and no private argument is echoed.
         for arguments, service, action in calls:
-            if arguments[0] in REMOVED_COMMANDS:  # deleted in v0.4.40 or v0.4.43
+            if arguments[0] in REMOVED_COMMANDS:  # deleted in v0.4.40 or v0.4.44
                 continue
             with self.subTest(action=action):
                 args = self.parser.parse_args(arguments)

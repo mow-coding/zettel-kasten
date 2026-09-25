@@ -48716,7 +48716,7 @@ def build_parser() -> argparse.ArgumentParser:
                      "completed; since v0.4.36 every operation kind is grantable and only the grant itself opens a dialog "
                      "(credential secrets are still typed by a person in their own window). Each write still publishes "
                      "its own one-use claim, and that claim records the permission mechanism. "
-                     "v0.4.34: a limited/allow_all grant is presenter-bound; since v0.4.43 it lasts until "
+                     "v0.4.34: a limited/allow_all grant is presenter-bound; since v0.4.44 it lasts until "
                      "released (set-permission-mode manual, recover, or pause/handoff/complete) unless the request "
                      "names grant_hours 1..24: the approve result returns presenter_token exactly once; "
                      "keep it only in this conversation's process (WOM_WORK_SESSION_PRESENTER), never in memory "
