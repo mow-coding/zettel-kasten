@@ -28,7 +28,7 @@ from contextlib import contextmanager
 from ctypes import wintypes
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, Iterator, Protocol
+from typing import Any, Callable, Iterator, Protocol
 
 from .target_collection_preview import TargetCollectionPreview
 
@@ -97,6 +97,20 @@ _CODE_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _REVIEWER_CLAIM_RE = re.compile(
     r"^(?:person|human):[A-Za-z0-9][A-Za-z0-9._-]{0,95}$"
 )
+# v0.4.43 (beta letter 20260925-173): the services accept a bare actor id
+# (``--reviewed-by alex``) while the context required a kind prefix, so a
+# fully reviewed plan failed before the dialog with context_invalid and a
+# resume rebuilt the same failure. A bare id is read as ``person:<id>``; any
+# other prefix (``agent:``) is still refused.
+_BARE_REVIEWER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
+
+
+def normalize_reviewer_claim(value: Any) -> Any:
+    """``person:<id>`` for a bare id; every other value is returned unchanged."""
+
+    if type(value) is str and _BARE_REVIEWER_RE.fullmatch(value) is not None:
+        return "person:" + value
+    return value
 _MAX_WARNING_ITEMS = 256
 _MAX_WARNING_BYTES = 256 * 1024
 _TARGET_PREVIEW_KINDS = frozenset({"draft", "zet", "zet_edge", "zet_objet"})
@@ -1334,6 +1348,7 @@ class ExactHumanApprovalContext:
     target_preview: ExactHumanApprovalTargetPreview | None = None
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "reviewer_claim", normalize_reviewer_claim(self.reviewer_claim))
         if type(self.operation) is not ExactHumanApprovalOperation:
             raise _fail("exact_human_approval_context_invalid")
         for value in (
