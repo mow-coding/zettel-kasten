@@ -6,6 +6,8 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+- Writer-session coverage is complete: the 28 writers still listed as pending already reach the exact approval broker, which applies the session grant, and are now recorded as integrated with a traced-route test; `credential-adopt` stays outside because its window is where the person enters the secret itself.
+
 ## v0.4.45 - 2026-09-25
 
 - The helper-AI skill starts with twelve core rules and an intent-to-command table; rare detail moves into focused references (credentials and sessions, long operations, developer letters, models and reasoning).

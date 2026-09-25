@@ -34,7 +34,7 @@ in their original private custody. The developer does not update their lifecycle
 | LR-03 | v0.4.23 | Identifier-like title proposals and historical title receipts are individually classified; insufficient evidence remains review | existing `zet-title-remap-plan` / `-receipt-audit` / `-recovery-plan` planner revalidated at v0.4.23 (`test_v045_local_locator_title_recovery` and the CLI title-remap group); client writes unconfirmed |
 | LR-04 | v0.4.23 | Locator records, occurrence anchors, and markup have separate validated outcomes; existing correct links survive | existing `external-locator-*` and anchor domain revalidated at v0.4.23 (`test_v045_local_locator_title_recovery`, `test_v0420_work_session_git_anchors` and the CLI locator group); client recovery pending |
 | LR-05 | v0.4.23 | Already captured objects become linked, awaiting a human target, or no existing target without recapture | existing `objet-rediscovery-plan` and `zettel-objet-link` domain revalidated at v0.4.23 (`test_objet_rediscovery`, `test_v045_local_objet_link_recovery`, the letter 140 link service/CLI/binding tests, the letter 137 fail-closed test and the CLI group); client application pending |
-| LR-06 | v0.4.21 | Source properties/title/locator/object links/edges each apply, resume and revert; unrelated later field changes survive | common-writer integration pending |
+| LR-06 | v0.4.21 | Source properties/title/locator/object links/edges each apply, resume and revert; unrelated later field changes survive | grant route verified for every broker writer (2026-09-26 audit); own-run acceptance open |
 | LR-07 | v0.4.23 | Filename/metadata finds the actual object and linked zet; paired original/derived intake preserves original bytes; display projection never edits canonical content | existing paired original/derived intake revalidated at v0.4.23 (`test_v03315_objet_capture_batch_derived_text` and the CLI derived/paired group); client reverification pending |
 | CF-01 | v0.4.27 | Client follow-ups from the v0.4.25 run: `project-version-update` usage refusals carry `cause_code` / `cause_stage: starting`; a bootstrap installed from a local wheel file is told to reinstall from the public URL; `work_session_permission_operation_not_grantable` reports the refused position and the fixed grantable / always-dialog name lists; intake plans and batch requests accept a UTF-8 byte-order mark and name UTF-16/32 marks; discard previews expose `plan_sha256` at the top level | development verified (9 new tests plus the session, intake, discard and permission cohorts); the index-rebuild block after several intakes is asked back with the client's sequence; installed/client acceptance pending |
 | SP-01 | v0.4.24 | A claimed work session carries one human-granted permission mode (manual / limited / allow_all); a permitted write skips the dialog but still publishes its own one-use claim that records the permission mechanism; always-dialog operations (project update, providers, session lifecycle, repairs, overrides) can never be granted; pause, handoff, complete, accept and recover clear the grant; a grant revoked before the claim fails closed | development verified on the synthetic session fixture (8 tests: one dialog per grant, dialogless permitted write with the mechanism in the claim, environment-context grant, stale route and manual still ask, pause clears, revoke fails closed, always-dialog exclusion, modes/MCP/registry); installed/client acceptance pending; **Client verified 2026-09-18** (v0.4.25 success report): register-app → request-init → create → claim → `set-permission-mode limited`, then 11 writes with `approval_mechanism: work_session_permission_mode`, two dialogs in total; letters 160 ⑦ and 161 request 6 reported resolved by the client |
@@ -826,3 +826,25 @@ not establish that a customer upload succeeded or that all session-granted
 operations completed without dialogs. New project/session-close feedback is
 separate follow-up, and no future feature version is promised. The reply file
 is delivered to the user for sending.
+
+### 2026-09-26 writer-session coverage audit (LR-06 grant route)
+
+The 29 paths still listed as `pending` were audited against the code. 28 of
+them already send `--approve` through the exact approval broker, which since
+v0.4.36 resolves the session grant from the environment refs for every
+operation kind. They are now `session_integrated` with `route: environment`.
+`test_writer_session_environment_routes` is the evidence. It traces each
+command function to a broker entry point and proves that nothing on the path
+passes `session_permission=None`. It also pins onboarding as the only forced
+dialog. `test_v0436_letter168` remains the runtime proof that an unset
+permission skips the dialog under a valid grant.
+
+`credential-adopt` is recorded as a `legacy_exception`. Its window is where the
+person enters the provider secret, and no grant can supply a secret. This is
+secret entry, not an approval dialog, so the 2026-09-17 no-exclusion decision
+for approval dialogs is unchanged.
+
+`tools/check_writer_session_coverage.py` now reports 6 integrated, 79 routed,
+0 pending and 18 documented exceptions of 103, and says the all-writer scope is
+complete. The audit covers the grant route only. It does not prove a
+customer's own runs, and it adds no new session-ref options.

@@ -107,7 +107,9 @@ stays `ownership_unverified`. `zettel-edge` preserves the blank separator
 line, `mint-zet` normalizes one dropped by an older rewrite and accepts the
 declared fidelity source as an asset, blocked `create-draft` and `zettel-edge`
 results name their reason, and `tools/check_writer_session_coverage.py` reports
-6 integrated, 1 routed, 29 pending and 20 exempt approval paths of 56.
+6 integrated, 1 routed, 29 pending and 20 exempt approval paths of 56. The
+2026-09-26 coverage audit found 28 of the then-pending writers already on the
+broker's environment grant route; the checker now reports 0 pending of 103.
 
 The v0.4.19 working tree kept canonical command paths stable while one
 `CapabilityAvailability` decision is consumed by help, `capabilities`, Doctor

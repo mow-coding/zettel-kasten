@@ -304,7 +304,7 @@ class Letter137AdditionalPublicCliBoundaryTests(_CliAssertions):
             "parcel": ["pack"],
         }
         alias_groups = {key: value for key, value in alias_groups.items() if key not in REMOVED_COMMANDS}  # deleted in v0.4.40 or v0.4.44
-        self.assertEqual(len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS), 5)  # v0.4.44: notion-recover revived
+        self.assertEqual(len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS), 5)  # 2026-09-26 coverage audit
         for exact_batch_command in (
             "source-intake-batch",
             "objet-capture-batch",

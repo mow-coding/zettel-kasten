@@ -16,10 +16,10 @@ class WriterSessionCoverageGateTests(unittest.TestCase):
     def test_manifest_matches_parser_and_denominator_stays_honest(self):
         problems, counts = subject.check()
         self.assertEqual(problems, [])
-        self.assertEqual(sum(counts.values()), 103)  # v0.4.44: notion-recover revived
+        self.assertEqual(sum(counts.values()), 103)  # 2026-09-26 coverage audit
         self.assertGreaterEqual(counts["session_integrated"], 5)
-        self.assertEqual(counts["routed"], 51)  # v0.4.44: notion-recover revived
-        self.assertGreater(counts["pending"], 0)  # all-writer scope is not complete yet
+        self.assertEqual(counts["routed"], 79)  # 2026-09-26 coverage audit
+        self.assertEqual(counts["pending"], 0)  # 2026-09-26 coverage audit: all-writer scope complete
         self.assertEqual(subject.main(["--format", "text"]), 0)
 
     def test_unclassified_stale_and_misclassified_paths_block(self):
@@ -31,7 +31,7 @@ class WriterSessionCoverageGateTests(unittest.TestCase):
         paths["mint-zet"] = {"status": "session_integrated", "evidence": ["test_missing_module"]}
         # v0.4.23: create-draft exposes session refs itself; route through a
         # pending native writer that still has none.
-        paths["zet-title-remap-revert"]["route"] = "promote"
+        paths["zet-title-remap-revert"]["route"] = "credential-adopt"
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "manifest.json"
             path.write_text(json.dumps(manifest), encoding="utf-8")
@@ -43,8 +43,8 @@ class WriterSessionCoverageGateTests(unittest.TestCase):
         self.assertIn("work-session: marked pending but already exposes session refs", joined)
         self.assertIn("mint-zet: session_integrated but mint-zet exposes no session refs", joined)
         self.assertIn("evidence test module missing: test_missing_module", joined)
-        self.assertIn("zet-title-remap-revert: session_integrated but promote exposes no session refs", joined)
-        self.assertIn("route promote is not itself session_integrated", joined)
+        self.assertIn("zet-title-remap-revert: session_integrated but credential-adopt exposes no session refs", joined)
+        self.assertIn("route credential-adopt is not itself session_integrated", joined)
         self.assertNotEqual(subject.main(["--manifest", str(path.with_name("absent.json")), "--format", "json"]), 0)
 
 
