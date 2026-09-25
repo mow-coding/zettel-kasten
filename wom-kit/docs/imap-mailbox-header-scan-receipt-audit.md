@@ -1,95 +1,22 @@
 # IMAP Mailbox Header Scan Receipt Audit
 
-Status: v0.3.63 approval-gated IMAP header scan receipt audit
-Date: 2026-06-16
+Status: removed in v0.4.43 (superseded)
 
-v0.3.63 adds the checkpoint after the first live IMAP header metadata scan.
+`archive imap-mailbox-header-scan-receipt-audit` no longer exists. It was one step of the v0.3.19 to v0.3.72
+plan toward a future IMAP adapter that would scan headers, select messages and
+then capture bodies and attachments. That end-to-end goal now runs as one
+command, so the whole chain was removed (owner decision 2026-09-25: a feature
+replaced by a better one is removed, not kept closed).
 
-The command reads one existing non-secret execution receipt from
-`receipts/imap/adapter-executions/`, checks that it really is a redacted
-`imap_mailbox_header_metadata_scan` receipt, and can write a separate audit
-receipt under `receipts/imap/adapter-execution-audits/`.
+Use instead:
 
-It does not connect to IMAP again.
+1. `archive add-source <archive-root> ... --type imap_mailbox` to
+   register the mailbox.
+2. `archive imap-mailbox-message-fetch <archive-root> --source-id <id>
+   --batch-id <id> --imap-host <host> --username-ref env:NAME
+   --app-password-ref env:NAME --dry-run`, then `--approve`.
+3. `archive source-intake-batch <archive-root> --manifest <written request>`
+   to capture the fetched `.eml` files as objets.
 
-## Command
-
-```bash
-archive imap-mailbox-header-scan-receipt-audit <archive-root> \
-  --execution-receipt receipts/imap/adapter-executions/example.json \
-  --reviewed-by human:me \
-  --dry-run \
-  --format json
-```
-
-Aliases:
-
-```text
-imap-header-scan-receipt-audit
-mailbox-header-scan-audit
-```
-
-Use `--approve` instead of `--dry-run` only after the dry-run says
-`audit_state: audit_ready`.
-
-## What It Checks
-
-The audit verifies that the execution receipt:
-
-- has `receipt_kind: imap_mailbox_header_metadata_scan`,
-- has `lifecycle_action: imap_mailbox_header_metadata_scan`,
-- reports a valid execution status,
-- stores only counts and opaque `imap-candidate:<sha256>` refs,
-- marks candidate refs as opaque hashes,
-- has all sensitive redaction flags set to `false`.
-
-Sensitive redaction flags include credential values, credential refs,
-environment variable names, IMAP host values, mailbox refs, raw UID values,
-Message-ID values, headers, bodies, attachment names, attachment bytes, and
-local absolute paths.
-
-## What It Writes
-
-Approved mode writes one non-secret audit receipt under:
-
-```text
-receipts/imap/adapter-execution-audits/
-```
-
-The audit receipt records:
-
-- the execution receipt SHA-256,
-- execution status,
-- candidate count,
-- headers fetched count,
-- candidate-ref count,
-- a digest of the opaque candidate-ref list,
-- the redaction-check result.
-
-It does not include the original execution receipt path or the candidate refs
-themselves.
-
-## What It Never Does
-
-The command never:
-
-- opens an IMAP connection,
-- logs into mail,
-- selects or searches a mailbox,
-- reads message headers again,
-- reads message bodies,
-- reads attachments,
-- reads environment variables,
-- opens an OS keyring,
-- opens a password manager,
-- starts OAuth,
-- calls providers,
-- echoes usernames, passwords, email addresses, subjects, senders, recipients,
-  headers, raw UIDs, Message-ID values, local absolute paths, or secret values.
-
-## Why This Exists
-
-The first live IMAP header metadata scan creates the earliest bridge from
-provider mail into WOM-kit records. This audit command makes that bridge
-reviewable before later work, such as body capture or derived-text extraction,
-is allowed to build on it.
+See [IMAP Mailbox Source](imap-mailbox-source.md). Receipts written by the
+removed commands stay readable as plain JSON; nothing reads or rewrites them.

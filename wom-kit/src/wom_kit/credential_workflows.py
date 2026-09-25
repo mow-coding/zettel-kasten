@@ -4203,6 +4203,245 @@ def execute_spawned_authenticated_notion_page_trash(
     return {key: raw[key] for key in _TRASH_PUBLIC_KEYS if key in raw}
 
 
+@dataclass(frozen=True)
+class _NotionAncestorWorkerInvocation:
+    """Pickle-safe, secret-free request sent to an ancestor-recovery child."""
+
+    archive_root: str = field(repr=False)
+    scope: Mapping[str, Any] = field(repr=False)
+    credential_capability: Mapping[str, Any] = field(repr=False)
+    expected_plan_sha256: str
+    reviewed_by: str = field(repr=False)
+    tree_path: str | None = field(repr=False)
+    output_path: str | None = field(repr=False)
+    max_items: int
+    max_depth: int
+
+
+_ANCESTOR_PUBLIC_KEYS = (
+    "ok", "dry_run", "lifecycle_action", "recover_state", "plan_sha256", "request_sha256", "selected_tree_path",
+    "location_request_count", "status", "reason_code", "blockers", "fetched_node_count", "provider_calls",
+    "stop_conditions", "files_written", "receipt_path", "credentials_closed", "next_step",
+)
+
+
+def _ancestor_capability_scopes(scope: Mapping[str, Any]) -> tuple[CredentialCapabilityScope, ...]:
+    return (CredentialCapabilityScope(
+        credential_id=str(scope["credential_id"]),
+        workspace_fingerprint=str(scope["workspace_fingerprint"]),
+        scope_receipt_sha256=str(scope["scope_receipt_sha256"]),
+        revision=str(scope["revision"]),
+    ),)
+
+
+def _execute_authenticated_notion_ancestor_recovery_core(
+    archive_root: Path | str,
+    scope: Mapping[str, Any],
+    *,
+    expected_plan_sha256: str,
+    reviewed_by: str,
+    tree_path: str | None,
+    output_path: str | None,
+    max_items: int,
+    max_depth: int,
+    native: WindowsSecureIntakeNative,
+    credential_capability: Mapping[str, Any] | None,
+    notion_adapter: _NotionHttpAdapter | None = None,
+    key_provider: _StableArchiveFingerprintKeyProvider | None = None,
+    capability_clock: Callable[[], datetime] | None = None,
+) -> dict[str, Any]:
+    """Child side: validate and claim the ancestor capability, resolve the
+    adopted credential through the receipt-backed broker, run the walk."""
+
+    from . import notion_ancestor_recovery
+    from .credential_capability import CREDENTIAL_CAPABILITY_ANCESTOR_OPERATION
+
+    action = "authenticated_notion_ancestor_recovery_execute"
+    preview = notion_ancestor_recovery.plan_recovery(
+        archive_root, scope=scope, tree_path=tree_path, output_path=output_path, max_items=max_items, max_depth=max_depth,
+    )
+    actual = preview.get("plan_sha256")
+    if not (isinstance(actual, str) and hmac.compare_digest(actual, str(expected_plan_sha256))):
+        return _workflow_failure(action, "notion_recover_plan_changed")
+    try:
+        if type(credential_capability) is not dict:
+            raise CredentialCapabilityError("credential_capability_required")
+        capability = _CredentialCapability.from_document(credential_capability)
+        if capability.operation != CREDENTIAL_CAPABILITY_ANCESTOR_OPERATION:
+            raise CredentialCapabilityError("credential_capability_operation_invalid")
+        capability.validate_recovery_binding(
+            request_sha256=str(preview["request_sha256"]),
+            plan_sha256=str(preview["plan_sha256"]),
+            scopes=_ancestor_capability_scopes(scope),
+            reviewed_by=reviewed_by,
+            now_utc=capability_clock() if capability_clock is not None else datetime.now(timezone.utc),
+        )
+    except Exception as exc:
+        return _workflow_failure(action, _credential_capability_blocker(getattr(exc, "code", None)))
+    provider = notion_adapter if notion_adapter is not None else _NotionHttpAdapter()
+    if not (type(provider) is _NotionHttpAdapter and provider.capability_transport_attempts_per_call == 1):
+        return _workflow_failure(action, "credential_capability_invalid")
+    selected = _key_provider(native, key_provider)
+
+    def recover_with_archive_key(key_view: memoryview) -> dict[str, Any]:
+        claimed_use = _claim_credential_capability_use(
+            archive_root, capability, key_view,
+            clock=capability_clock or (lambda: datetime.now(timezone.utc)),
+        )
+        fingerprint_key: bytearray | None = None
+        try:
+            fingerprint_key = derive_windows_fingerprint_key(key_view, current_windows_owner_binding(native))
+            broker = _ReceiptBackedNotionCredentialBroker(
+                archive_root=archive_root, native=native, receipt_authentication_key=key_view,
+                secret_fingerprint_key=fingerprint_key, claimed_use=claimed_use,
+            )
+            result = notion_ancestor_recovery.execute_recovery(
+                archive_root, expected_plan_sha256=expected_plan_sha256, scope=scope, provider=provider,
+                credential_broker=broker, tree_path=tree_path, output_path=output_path, max_items=max_items,
+                max_depth=max_depth,
+            )
+            code = result.get("reason_code")
+            if not (type(code) is str and _FIXED_CODE_RE.fullmatch(code) is not None):
+                code = "notion_recover_result_invalid"
+            if result.get("ok") is True:
+                claimed_use.finalize_succeeded()
+            else:
+                claimed_use.finalize_failed(code)
+            return {key: result[key] for key in _ANCESTOR_PUBLIC_KEYS if key in result}
+        except Exception:
+            if claimed_use.status == "started":
+                try:
+                    claimed_use.finalize_failed("notion_recover_execution_failed")
+                except Exception:
+                    pass
+            raise
+        finally:
+            if fingerprint_key is not None:
+                for index in range(len(fingerprint_key)):
+                    fingerprint_key[index] = 0
+
+    try:
+        result = selected.use_key(archive_root, recover_with_archive_key, create_if_missing=False)
+    except Exception as exc:
+        return _workflow_failure(action, _exception_code(exc, "notion_recover_execution_failed"))
+    return result if isinstance(result, dict) else _workflow_failure(action, "notion_recover_result_invalid")
+
+
+def _spawned_ancestor_entry(send_connection: Any, invocation: _NotionAncestorWorkerInvocation) -> None:
+    """Top-level spawn entry; the live bearer exists only in this process."""
+
+    try:
+        native = _CtypesWindowsNativeFacade(cli_live_approved=True)
+        result = _execute_authenticated_notion_ancestor_recovery_core(
+            invocation.archive_root, invocation.scope,
+            expected_plan_sha256=invocation.expected_plan_sha256, reviewed_by=invocation.reviewed_by,
+            tree_path=invocation.tree_path, output_path=invocation.output_path, max_items=invocation.max_items,
+            max_depth=invocation.max_depth,
+            native=native, credential_capability=invocation.credential_capability,
+            notion_adapter=_NotionHttpAdapter(), key_provider=_StableArchiveFingerprintKeyProvider(native),
+        )
+    except Exception:
+        result = _recovery_worker_transport_marker()
+    try:
+        send_connection.send(result)
+    except Exception:
+        pass
+    finally:
+        try:
+            send_connection.close()
+        except Exception:
+            pass
+
+
+def execute_spawned_authenticated_notion_ancestor_recovery(
+    archive_root: Path | str,
+    scope: Mapping[str, Any],
+    *,
+    expected_plan_sha256: str,
+    reviewed_by: str,
+    tree_path: str | None = None,
+    output_path: str | None = None,
+    max_items: int = 1000,
+    max_depth: int = 16,
+    exact_human_approval_claim: Any = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
+    worker_spawner: Any = None,
+    capability_clock: Callable[[], datetime] | None = None,
+) -> dict[str, Any]:
+    """v0.4.44: notion-recover after one reauthenticated exact approval bound
+    to the plan digest; the capability is issued in-process (no extra
+    dialog) and the live credential exists only in a spawned child."""
+
+    from . import archive_services, notion_ancestor_recovery
+    from .credential_capability import CREDENTIAL_CAPABILITY_ANCESTOR_OPERATION
+    from .exact_human_approval_windows import ExactHumanApprovalOperation
+    from .operation_approval_binding import OperationApprovalBindingError, plan_digest_approval_binding
+
+    action = "authenticated_notion_ancestor_recovery_execute"
+    if exact_human_approval_claim is None:
+        return archive_services._compound_exact_human_approval_blocked(lifecycle_action=action)
+    reviewer = archive_services.safe_project_intake_actor_id(reviewed_by)
+    if reviewer is None:
+        raise archive_services.ArchiveServiceError("notion_recover_reviewer_invalid")
+    root = archive_services.require_existing_archive_root(archive_root)
+    try:
+        archive_services._require_exact_human_operation_approval(
+            root,
+            plan_digest_approval_binding(ExactHumanApprovalOperation.notion_ancestor_recovery, expected_plan_sha256),
+            reviewer_claim=reviewer,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+            claim=exact_human_approval_claim,
+        )
+    except OperationApprovalBindingError as exc:
+        raise archive_services.ArchiveServiceError(exc.code) from None
+    preview = notion_ancestor_recovery.plan_recovery(
+        root, scope=scope, tree_path=tree_path, output_path=output_path, max_items=max_items, max_depth=max_depth,
+    )
+    actual = preview.get("plan_sha256")
+    if preview.get("ok") is not True or not (isinstance(actual, str) and hmac.compare_digest(actual, str(expected_plan_sha256))):
+        return _workflow_failure(action, "notion_recover_plan_changed")
+    if preview["location_request_count"] == 0:
+        return {**notion_ancestor_recovery.public(preview), "dry_run": False, "reason_code": "notion_recover_nothing_missing"}
+    try:
+        issue_kwargs: dict[str, Any] = {}
+        if capability_clock is not None:
+            issue_kwargs["issued_at"] = capability_clock()
+        capability = _CredentialCapability.issue(
+            request_sha256=str(preview["request_sha256"]),
+            plan_sha256=str(preview["plan_sha256"]),
+            scopes=_ancestor_capability_scopes(scope),
+            reviewed_by=reviewer,
+            max_provider_requests=max(1, int(preview["max_provider_requests"])),
+            operation=CREDENTIAL_CAPABILITY_ANCESTOR_OPERATION,
+            **issue_kwargs,
+        )
+        invocation = _NotionAncestorWorkerInvocation(
+            archive_root=str(Path(root).resolve()), scope=dict(scope),
+            credential_capability=capability.canonical_document(),
+            expected_plan_sha256=str(expected_plan_sha256), reviewed_by=reviewer,
+            tree_path=preview["selected_tree_path"], output_path=preview["output_path"], max_items=max_items,
+            max_depth=max_depth,
+        )
+    except Exception:
+        return _workflow_failure(action, "credential_capability_invalid")
+    spawner = worker_spawner or _SpawnNotionRecoveryWorkerSpawner(target=_spawned_ancestor_entry)
+    try:
+        outcome = spawner.run_worker(invocation)
+    except Exception:
+        outcome = _NotionRecoveryWorkerRunOutcome(worker_started=True)
+    if isinstance(outcome, _NotionRecoveryWorkerRunOutcome):
+        if outcome.worker_started is not True:
+            return _workflow_failure(action, "notion_recover_worker_launch_failed")
+        raw = outcome.result
+    else:
+        raw = outcome
+    if not isinstance(raw, Mapping) or "reason_code" not in raw:
+        return _workflow_failure(action, "notion_recover_outcome_unknown")
+    return {key: raw[key] for key in _ANCESTOR_PUBLIC_KEYS if key in raw}
+
+
 __all__ = [
     "WORKFLOW_PLAN_SCHEMA_VERSION",
     "WORKFLOW_RESULT_SCHEMA_VERSION",
@@ -4210,6 +4449,7 @@ __all__ = [
     "decide_authenticated_credential_lifecycle",
     "execute_authenticated_notion_page_recovery",
     "execute_spawned_authenticated_notion_page_recovery",
+    "execute_spawned_authenticated_notion_ancestor_recovery",
     "execute_spawned_authenticated_notion_page_trash",
     "execute_windows_notion_credential_adoption",
     "list_authenticated_secure_credentials",

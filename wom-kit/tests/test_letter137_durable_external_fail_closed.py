@@ -15,6 +15,7 @@ from unittest import mock
 
 import wom_kit
 from wom_kit import command_status  # noqa: E402
+from wom_kit import notion_ancestor_recovery  # noqa: E402
 from wom_kit import (
     archive_cli,
     archive_services,
@@ -25,7 +26,7 @@ from wom_kit import (
 import sys as _removed_sys
 from pathlib import Path as _RemovedPath
 _removed_sys.path.insert(0, str(_RemovedPath(__file__).resolve().parent))
-from removed_commands_v0440 import REMOVED_COMMANDS_V0440  # noqa: E402
+from removed_commands_v0440 import REMOVED_COMMANDS  # noqa: E402
 
 
 COMPOUND_APPROVAL_BLOCKER = (
@@ -392,29 +393,6 @@ class Letter137DurableExternalServiceBoundaryTests(
                         engine,
                     )
 
-    def test_legacy_notion_recover_executor_blocks_before_approval_or_fetch(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = self._root(Path(tmp))
-            args = argparse.Namespace(archive_root=str(root))
-            with mock.patch.object(
-                archive_services,
-                "credential_access_approval_plan",
-                side_effect=AssertionError("credential approval entered"),
-            ) as approval:
-                self._assert_fixed_service_block(
-                    root=root,
-                    lifecycle_action="notion_recover",
-                    invoke=lambda: archive_cli.run_approved_notion_recover(
-                        args,
-                        {"selected_tree_path": PRIVATE_TREE},
-                        "env:PRIVATE-NOTION-CREDENTIAL-SECRET",
-                    ),
-                )
-            approval.assert_not_called()
-
-
 class Letter137DurableExternalCliBoundaryTests(
     _DurableExternalAssertions
 ):
@@ -556,7 +534,7 @@ class Letter137DurableExternalCliBoundaryTests(
             )
             before = _snapshot(root_path)
             for arguments, module, service, action in calls:
-                if arguments[0] in REMOVED_COMMANDS_V0440 or arguments[0] in command_status.EXACT_APPROVAL_REOPENED_WRITERS:  # deleted or reopened in v0.4.40
+                if arguments[0] in REMOVED_COMMANDS or arguments[0] in command_status.EXACT_APPROVAL_REOPENED_WRITERS:  # deleted or reopened in v0.4.40
                     continue
                 with self.subTest(command=arguments[0], action=action):
                     self._assert_cli_block(
@@ -694,7 +672,7 @@ class Letter137DurableExternalCliBoundaryTests(
                 (["object-storage-wom-location-reconcile", root, "--receipt", PRIVATE_RECEIPT, "--dry-run", "--format", "json"], archive_services, "object_storage_wom_location_reconcile_run"),
                 (["object-storage-upload-evidence-audit", root, "--receipt", PRIVATE_RECEIPT, "--dry-run", "--format", "json"], archive_services, "object_storage_upload_evidence_audit"),
                 (["notion-ancestor-fetch-adapter-run", root, "--tree", PRIVATE_TREE, "--source", "notion", "--dry-run", "--format", "json"], archive_services, "notion_ancestor_fetch_adapter_run"),
-                (["notion-recover", root, "--dry-run", "--format", "json"], archive_services, "notion_recover_plan"),
+                (["notion-recover", root, "--dry-run", "--format", "json"], notion_ancestor_recovery, "plan_recovery"),  # v0.4.44 revived
                 (["external-locator-plan", root, "--zettel-id", "zet_private", "--locator-type", "source_url", "--locator-ref", PRIVATE_LOCATOR, "--dry-run", "--format", "json"], completion_workflows, "external_locator_plan"),
                 (["external-locator-deactivate-plan", root, "--zettel-id", "zet_private", "--locator-id", PRIVATE_LOCATOR_ID, "--keep-locator-id", PRIVATE_LOCATOR_ID + "-keep", "--dry-run", "--format", "json"], completion_workflows, "external_locator_deactivate_plan"),
                 (["external-locator-revert", root, "--receipt", PRIVATE_RECEIPT, "--dry-run", "--format", "json"], completion_workflows, "external_locator_revert_plan"),
@@ -704,7 +682,7 @@ class Letter137DurableExternalCliBoundaryTests(
             )
             before = _snapshot(root_path)
             for arguments, module, service_name in calls:
-                if arguments[0] in REMOVED_COMMANDS_V0440:  # deleted in v0.4.40
+                if arguments[0] in REMOVED_COMMANDS:  # deleted in v0.4.40 or v0.4.43
                     continue
                 with self.subTest(command=arguments[0]), mock.patch.object(
                     module,

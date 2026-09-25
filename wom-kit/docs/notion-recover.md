@@ -1,5 +1,41 @@
 # Notion Recover
 
+Status: v0.4.44 revived on the adopted Notion credential (parent links only)
+Date: 2026-09-25
+
+`archive notion-recover` restores the missing parent locations of nested
+Notion pages in the reviewed sanitized tree fixture. For each leaf whose parent
+chain stops before a known generation root, it asks Notion only for the parent
+link of the missing ancestor and walks up until a known root, the workspace,
+the depth limit or a cycle. It never reads titles, bodies, comments or media.
+
+## Command
+
+From a source checkout the same commands run as
+`$env:PYTHONPATH='src'; python -m wom_kit.archive_cli notion-recover ...`.
+
+```powershell
+archive notion-recover <archive-root> --dry-run
+archive notion-recover <archive-root> --approve --reviewed-by person:<you> --expected-plan-sha256 <plan>
+```
+
+- The credential is the adopted Notion credential: the workspace default
+  recorded by `credential-lifecycle --approve`, or `--credential-id <id>`.
+  The token exists only in a spawned child and is never shown.
+- `--dry-run` auto-selects the one fixture that still has missing locations
+  (or `--tree <archive-relative json>`), plans the parent-link reads and prints
+  a `plan_sha256`. It reads no credential value and calls no provider.
+- `--approve` runs after one exact approval bound to that digest (a native
+  dialog, or none under a valid session grant). The capability allows only
+  GET parent reads, at most the planned depth per request.
+- Output: the sanitized ancestor fixture
+  `workbench/notion-ancestor-result.live.json` (never overwritten) and a
+  content-free receipt under `receipts/notion/ancestor-recoveries/`. Then
+  `archive notion-ancestor-merge-plan <archive-root> --tree <fixture> --ancestors <output> --dry-run`
+  previews where the leaves belong.
+
+## History
+
 Status: v0.4.0 content-free recovery preview; live execution is fixed closed
 Date: 2026-06-22
 

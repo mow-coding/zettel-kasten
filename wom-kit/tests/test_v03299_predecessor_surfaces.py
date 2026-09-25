@@ -163,20 +163,80 @@ CLI_REMOVALS = {
         "object-storage-wom-location-reconcile", "object-storage-upload-location-reconcile",
         "object-storage-manifest-reconcile", "objet-storage-wom-location-reconcile", "scan-source",
         "tiro-lossless-recovery-capture", "tiro-recovery-capture",
+        # v0.4.43: the IMAP chain superseded by imap-mailbox-message-fetch.
+        "imap-header-metadata-scan",
+        "imap-header-scan-receipt-audit",
+        "imap-mailbox-adapter-audit",
+        "imap-mailbox-adapter-audit-plan",
+        "imap-mailbox-adapter-audit-write",
+        "imap-mailbox-adapter-execution-contract",
+        "imap-mailbox-adapter-execution-plan",
+        "imap-mailbox-adapter-execution-preflight",
+        "imap-mailbox-adapter-manifest",
+        "imap-mailbox-adapter-manifest-plan",
+        "imap-mailbox-adapter-manifest-write",
+        "imap-mailbox-adapter-plan",
+        "imap-mailbox-adapter-preflight-plan",
+        "imap-mailbox-adapter-readiness-plan",
+        "imap-mailbox-header-metadata-scan",
+        "imap-mailbox-header-scan-receipt-audit",
+        "imap-mailbox-material-capture-approval",
+        "imap-mailbox-material-capture-approval-audit",
+        "imap-mailbox-material-capture-approval-plan",
+        "imap-mailbox-material-capture-execution-contract",
+        "imap-mailbox-material-capture-request-plan",
+        "imap-mailbox-material-selection-plan",
+        "imap-mailbox-material-selection-record",
+        "imap-mailbox-message-selection-plan",
+        "imap-mailbox-operation-request-plan",
+        "imap-mailbox-plan",
+        "imap-mailbox-request-plan",
+        "imap-mailbox-selection-plan",
+        "imap-material-capture-approval-audit",
+        "imap-material-capture-approval-plan",
+        "imap-material-capture-execution-contract",
+        "imap-material-capture-request-plan",
+        "imap-material-selection-plan",
+        "imap-material-selection-record",
+        "mailbox-adapter-audit-plan",
+        "mailbox-adapter-audit-write",
+        "mailbox-adapter-execution-contract",
+        "mailbox-adapter-manifest-plan",
+        "mailbox-adapter-manifest-write",
+        "mailbox-adapter-preflight",
+        "mailbox-adapter-readiness",
+        "mailbox-header-metadata-scan",
+        "mailbox-header-scan-audit",
+        "mailbox-material-capture-approval-audit",
+        "mailbox-material-capture-approval-plan",
+        "mailbox-material-capture-execution-contract",
+        "mailbox-material-capture-request-plan",
+        "mailbox-material-selection-plan",
+        "mailbox-material-selection-record",
+        "mailbox-operation-request-plan",
+        "mailbox-selection-plan",
     )
 }
 # 2026-09-25: the five ZET sharing/ownership commands and their MCP previews
 # were restored (owner design for v0.5); only source_scan_plan stays removed.
 MCP_REMOVALS = {
     "source_scan_plan",
+    # v0.4.43: IMAP planning previews superseded by imap-mailbox-message-fetch.
+    "imap_mailbox_plan",
+    "imap_mailbox_operation_request_plan",
+    "imap_mailbox_adapter_readiness_plan",
+    "imap_mailbox_selection_plan",
+    "imap_mailbox_adapter_audit_plan",
+    "imap_mailbox_adapter_manifest_plan",
+    "imap_mailbox_adapter_preflight_plan",
 }
-CURRENT_CLI_COUNT = 568  # v0.4.42: imap-mailbox-message-fetch
+CURRENT_CLI_COUNT = 517  # v0.4.43: superseded IMAP chain (51 paths) removed
 CURRENT_CLI_CANONICAL_SHA256 = (
-    "e9f3cc8afb528d8461a9b630c2271641203768ecd7e1c7be04c49f20390fd85a"
+    "82da4bf190f10675b6cbd9593222ad24fa5d9a1591ac5aae7d113685eb5595a9"
 )
-CURRENT_MCP_COUNT = 136
+CURRENT_MCP_COUNT = 129  # v0.4.43: seven IMAP planning previews removed
 CURRENT_MCP_CANONICAL_SHA256 = (
-    "39e09bca67b57398b9f8314a7e9241e911f581ff3f473225ea53d3069a779f26"  # v0.4.40: source_scan_plan removed; five sharing previews restored 2026-09-25
+    "b550e3bd82ee6c4e6443d196e0ddaf9127ae6799988929a77236ebe08ecff8fc"  # v0.4.43: seven IMAP planning previews removed
 )
 MCP_ADDITIONS = {
     "zet_title_remap_write",

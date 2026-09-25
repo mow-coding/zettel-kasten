@@ -145,11 +145,11 @@ class V0420ReleaseDocsTests(unittest.TestCase):
         # Current manifest facts move with the train (v0.4.21 reopened two
         # writers and classified them as pending session integration); the
         # v0.4.20 note above keeps its historical 21-pending claim.
-        self.assertEqual(len(statuses), 107)  # v0.4.42 imap-mailbox-message-fetch
+        self.assertEqual(len(statuses), 103)  # v0.4.44: notion-recover revived
         self.assertEqual(statuses.count("session_integrated") - routed, 6)
-        self.assertEqual(routed, 51)  # v0.4.42 imap-mailbox-message-fetch
+        self.assertEqual(routed, 51)  # v0.4.44: notion-recover revived
         self.assertEqual(statuses.count("pending"), 29)  # v0.4.36: five rows integrated through the environment route
-        self.assertEqual(statuses.count("legacy_exception"), 21)  # v0.4.41: onboard and init bootstrap exceptions
+        self.assertEqual(statuses.count("legacy_exception"), 17)  # v0.4.44: notion-recover revived
 
     def test_current_docs_are_private_safe(self) -> None:
         combined = "\n".join(path.read_text(encoding="utf-8") for path in CURRENT_PUBLIC_DOCUMENTS)

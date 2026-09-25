@@ -1,353 +1,61 @@
 # IMAP Mailbox Source
 
-Status: v0.3.19 read-only source planning baseline
-Date: 2026-06-14
+Status: v0.4.43 current path (register, fetch whole messages, capture)
 
-This document defines the first WOM-kit boundary for treating email as a source
-world.
+Email is often primary evidence: decisions, receipts, attachments and notices
+arrive there before they become zets. WOM keeps whole messages, not summaries:
+each selected message is stored byte for byte as `.eml` (attachments stay inside
+it), then captured as an objet through the normal intake chain.
 
-Email is often primary evidence: decisions, receipts, attachments, notices, and
-conversation trails arrive there before they become zets. The goal is not to let
-an AI roam through a mailbox. The goal is to let a human register a mailbox
-source safely, then later approve narrow reads and captures.
+From a source checkout, run the same commands through the module launcher:
+`$env:PYTHONPATH='src'; python -m wom_kit.archive_cli <command> ...`.
 
-## Current Behavior
-
-v0.3.19 adds the source type:
-
-```text
-imap_mailbox
-```
-
-It also adds:
+## 1. Register the mailbox
 
 ```powershell
-$env:PYTHONPATH='src'; python -m wom_kit.archive_cli imap-mailbox-plan .\my-archive `
-  --source-id imap:gmail-personal `
-  --provider gmail `
-  --account-ref imap:account:gmail-personal `
-  --username-ref env:WOM_GMAIL_USERNAME `
-  --auth-mode oauth_token_ref `
-  --oauth-token-ref keyring:gmail-oauth `
-  --dry-run `
-  --format json
+archive add-source <archive-root> --source-id imap:personal --type imap_mailbox --dry-run
+archive add-source <archive-root> --source-id imap:personal --type imap_mailbox --approve --reviewed-by person:me
 ```
 
-and the matching MCP tool:
+Put the account name and an app password (not the account password) in two
+environment variables. WOM stores only the references `env:NAME`, never values.
 
-```text
-imap_mailbox_plan
-```
-
-Both are dry-run only. They write no files, open no network connection, perform
-no login, read no message headers, read no message bodies, read no attachments,
-send no email, delete no email, and change no message flags.
-
-v0.3.46 adds a second dry-run step for the next gate:
+## 2. Fetch whole messages
 
 ```powershell
-$env:PYTHONPATH='src'; python -m wom_kit.archive_cli imap-mailbox-operation-request-plan .\my-archive `
-  --source-id imap:gmail-personal `
-  --provider gmail `
-  --account-ref imap:account:gmail-personal `
-  --username-ref env:WOM_GMAIL_USERNAME `
-  --auth-mode oauth_token_ref `
-  --oauth-token-ref keyring:gmail-oauth `
-  --mailbox-ref imap:mailbox:inbox `
-  --credential-id cred:gmail-mail-access `
-  --operation header_metadata_scan `
-  --approval-decision needs_review `
-  --dry-run `
-  --format json
+archive imap-mailbox-message-fetch <archive-root> --source-id imap:personal --batch-id mail-2026-09 `
+  --imap-host imap.example.com --username-ref env:WOM_MAIL_USER --app-password-ref env:WOM_MAIL_APP_PASSWORD `
+  --selection-rule newest_first --max-messages 50 --dry-run
 ```
 
-and the matching MCP tool:
+The dry-run reads no credential and opens no connection; it prints a
+`plan_sha256`. Run the same command with `--approve --reviewed-by <you>` to fetch
+after one exact approval (a native dialog, or none under a valid session
+grant). The mailbox is opened read-only and bodies are fetched with
+`BODY.PEEK[]`, so no message is marked as read. Output:
 
-```text
-imap_mailbox_operation_request_plan
-```
+- `workbench/imap-fetch/<batch>/mail-NNNN.eml` (new files, never overwritten)
+- `workbench/imap-fetch/<batch>/source-intake-batch-request.json`
+- `receipts/imap-message-fetch/<batch>.json` (digests and sizes only)
 
-This composes the mailbox source plan with `credential-policy-check` for
-`mail_source_read`. It is still read-only: it does not connect, login, read
-headers, read bodies, read attachments, retrieve secrets, start OAuth, or write
-files.
+Selection rules: `newest_first`, `oldest_first`, `unread_first`,
+`since_days_window` with `--since-days`. `--max-messages` is 1 to 1,000 per run.
+Headers, subjects, addresses, bodies, the host and credential values are never
+printed or stored in the receipt.
 
-v0.3.47 adds a read-only adapter readiness step:
+## 3. Capture as objets
 
 ```powershell
-$env:PYTHONPATH='src'; python -m wom_kit.archive_cli imap-mailbox-adapter-readiness-plan .\my-archive `
-  --source-id imap:gmail-personal `
-  --provider gmail `
-  --account-ref imap:account:gmail-personal `
-  --username-ref env:WOM_GMAIL_USERNAME `
-  --auth-mode oauth_token_ref `
-  --oauth-token-ref keyring:gmail-oauth `
-  --mailbox-ref imap:mailbox:inbox `
-  --credential-id cred:gmail-mail-access `
-  --operation header_metadata_scan `
-  --dry-run `
-  --format json
+archive source-intake-batch <archive-root> --manifest workbench/imap-fetch/<batch>/source-intake-batch-request.json --dry-run
 ```
 
-and the matching MCP tool:
+Then approve the same plan. Remove items from the request first if some
+messages should not become objets.
 
-```text
-imap_mailbox_adapter_readiness_plan
-```
+## History
 
-This checks the source plan, operation request package, and local Python module
-readiness for a future adapter. It still opens no IMAP connection and reads no
-mail.
-
-v0.3.49 adds a read-only mailbox selection planning step:
-
-```powershell
-$env:PYTHONPATH='src'; python -m wom_kit.archive_cli imap-mailbox-selection-plan .\my-archive `
-  --source-id imap:gmail-personal `
-  --provider gmail `
-  --account-ref imap:account:gmail-personal `
-  --username-ref env:WOM_GMAIL_USERNAME `
-  --auth-mode oauth_token_ref `
-  --oauth-token-ref keyring:gmail-oauth `
-  --mailbox-ref imap:mailbox:inbox `
-  --credential-id cred:gmail-mail-access `
-  --operation header_metadata_scan `
-  --selection-rule newest_first `
-  --selector-id mail-selection:recent-inbox `
-  --dry-run `
-  --format json
-```
-
-and the matching MCP tool:
-
-```text
-imap_mailbox_selection_plan
-```
-
-This plans how a future adapter may choose candidate messages without listing
-message ids, subjects, senders, headers, bodies, or attachments now.
-
-v0.3.50 adds a read-only adapter audit receipt preview:
-
-```powershell
-$env:PYTHONPATH='src'; python -m wom_kit.archive_cli imap-mailbox-adapter-audit-plan .\my-archive `
-  --adapter-id local-imap `
-  --source-id imap:gmail-personal `
-  --provider gmail `
-  --account-ref imap:account:gmail-personal `
-  --username-ref env:WOM_GMAIL_USERNAME `
-  --auth-mode oauth_token_ref `
-  --oauth-token-ref keyring:gmail-oauth `
-  --mailbox-ref imap:mailbox:inbox `
-  --credential-id cred:gmail-mail-access `
-  --operation header_metadata_scan `
-  --selection-rule newest_first `
-  --selector-id mail-selection:recent-inbox `
-  --result-status not_run `
-  --dry-run `
-  --format json
-```
-
-and the matching MCP tool:
-
-```text
-imap_mailbox_adapter_audit_plan
-```
-
-This previews the non-secret receipt shape a future adapter should write after
-execution. It still does not execute the adapter, write the receipt, list
-messages, read UIDs, read Message-ID values, read headers, read bodies, or read
-attachments.
-
-v0.3.55 keeps the read-only adapter manifest preview, schema validation, and
-adds an approval-gated local manifest write:
-
-```powershell
-$env:PYTHONPATH='src'; python -m wom_kit.archive_cli imap-mailbox-adapter-manifest-plan .\my-archive `
-  --adapter-id local-imap `
-  --provider gmail `
-  --provider naver `
-  --operation header_metadata_scan `
-  --selection-rule newest_first `
-  --dry-run `
-  --format json
-```
-
-and the matching MCP tool:
-
-```text
-imap_mailbox_adapter_manifest_plan
-```
-
-This previews a non-secret declaration of supported providers, operation
-labels, selection rules, and privacy gates. It still does not write a manifest,
-connect, login, select, search, list messages, read headers, read bodies, read
-attachments, or call providers.
-
-The matching v0.4.0 preview command is:
-
-```text
-imap-mailbox-adapter-manifest-write --dry-run
-```
-
-Approval is fixed closed before private input/archive reads and writes no
-`config/imap-adapters/` file or receipt.
-
-v0.3.56 adds an approval-gated local audit receipt write:
-
-```text
-imap-mailbox-adapter-audit-write
-```
-
-It writes one non-secret receipt under `receipts/imap/adapter-audits/` after
-`--approve --reviewed-by <actor>`. It still does not execute the adapter, open
-an IMAP connection, select or search a mailbox, list messages, read headers,
-read bodies, read attachments, retrieve secrets, start OAuth, or call providers.
-These are audit receipt writes only, not live mail access.
-
-## Provider Presets
-
-The planning command is provider-neutral. It currently recognizes:
-
-```text
-gmail
-naver
-generic_imap
-```
-
-`gmail` defaults to:
-
-```text
-imap.gmail.com
-993
-SSL required
-```
-
-`naver` defaults to:
-
-```text
-imap.naver.com
-993
-SSL required
-```
-
-`generic_imap` requires the operator to provide `--imap-host`.
-
-The command records provider policy notes, but it does not verify account
-settings. Provider rules can change, so live setup must still follow current
-provider documentation:
-
-- Gmail IMAP user settings:
-  <https://support.google.com/mail/answer/78892>
-- Gmail IMAP/SMTP developer guidance:
-  <https://developers.google.com/workspace/gmail/imap/imap-smtp>
-- Google Workspace transition guidance away from less-secure app access:
-  <https://knowledge.workspace.google.com/admin/sync/transition-from-less-secure-apps-to-oauth>
-- Naver IMAP/SMTP settings:
-  <https://help.naver.com/service/30029/contents/21344?lang=ko&osType=COMMONOS>
-- Naver application password guidance:
-  <https://help.naver.com/service/5640/contents/8584?lang=ko>
-
-## Credential Refs Only
-
-Do not pass real emails, usernames, app passwords, OAuth tokens, URLs, or local
-paths.
-
-Use references such as:
-
-```text
-env:WOM_GMAIL_USERNAME
-keyring:gmail-oauth
-secret:naver-app-password
-wallet:mail-oauth-token
-```
-
-Account and mailbox labels are also references:
-
-```text
-imap:account:gmail-personal
-imap:mailbox:inbox
-```
-
-These labels are intentionally boring. They let the archive talk about a mailbox
-without publishing the human's actual email address, folder names, provider URL,
-token, or local machine path.
-
-## Registering The Source
-
-The source registration request can be previewed after review:
-
-```powershell
-$env:PYTHONPATH='src'; python -m wom_kit.archive_cli add-source .\my-archive `
-  --source-id imap:gmail-personal `
-  --type imap_mailbox `
-  --root-ref imap:account:gmail-personal `
-  --dry-run
-```
-
-In v0.4.0 `add-source` approval returns
-`compound_exact_human_approval_binding_required` before private target reads or
-mutation and writes no source binding or receipt. It does not connect to IMAP.
-`scan-source` continues to fail closed for `imap_mailbox` and directs the
-operator to `imap-mailbox-plan` first.
-
-## Future Workflow
-
-The intended sequence is:
-
-1. Plan the mailbox source with refs only.
-2. Preview `add-source`; stop because registration approval is fixed-close in
-   v0.4.0.
-3. Preview the future adapter declaration with
-   `imap-mailbox-adapter-manifest-plan` and
-   `imap-mailbox-adapter-manifest-write --dry-run`; stop because approval is
-   fixed closed in v0.4.0.
-4. Prepare an operation request package with
-   `imap-mailbox-operation-request-plan`.
-5. Check adapter readiness with `imap-mailbox-adapter-readiness-plan`.
-6. Plan a future mailbox selection rule with `imap-mailbox-selection-plan`.
-7. Preview the future non-secret audit receipt with
-   `imap-mailbox-adapter-audit-plan`.
-8. Run the final read-only preflight with
-   `imap-mailbox-adapter-preflight-plan`.
-9. Record a reviewed non-secret audit receipt with
-   `imap-mailbox-adapter-audit-write` when there is a denied, not-run, failed,
-   or future adapter outcome to document.
-10. Add a future header-only dry-run scan that selects the mailbox read-only and
-   fetches safe message metadata only.
-11. Add a future approved fetch that preserves each selected RFC822 message as a
-   `.eml` source objet.
-12. Add future MIME attachment capture as separate objets.
-13. Add future derived-text extraction from `text/plain` and reviewed `text/html`
-   parts.
-
-Each later phase needs its own approval and privacy boundary. v0.3.56 can now
-package the approval request, preview and schema-check the future adapter
-manifest, write the reviewed non-secret manifest, summarize adapter readiness,
-plan a mailbox selection rule, preview a non-secret future adapter audit
-receipt, run a final read-only adapter preflight, and write a reviewed non-secret audit receipt,
-but it still does not implement reads, searches, message lists, live adapter execution, or captures.
-
-## Closed Actions
-
-v0.3.19 does not:
-
-- ask the user for secrets in chat,
-- store credentials in Git,
-- start OAuth,
-- connect to IMAP,
-- login to Gmail, Naver, or a generic server,
-- list message headers,
-- read message bodies,
-- read attachments,
-- send email through SMTP,
-- delete email,
-- mark email read or unread,
-- capture `.eml` files,
-- derive text from messages,
-- draft zets from email,
-- mint zets from email.
-
-The mail source is now a safe shape in the archive control plane.
-
-Actual mail reading remains future, approval-gated work.
+v0.3.19 to v0.3.72 built a stepwise plan toward a future adapter (source plan,
+operation request, readiness, selection, manifest, audit, preflight, execution
+contract, header scan, material selection and capture approval). The live
+header scan was fixed closed in v0.4.0 and the capture step was never built.
+v0.4.42 added the whole-message fetch and v0.4.43 removed the superseded chain.

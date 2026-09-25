@@ -197,10 +197,11 @@ class V0400ReleaseDocsTests(unittest.TestCase):
                 "notion-objet-link-convert",  # reopened in v0.4.41 (feature request 34)
                 "tiro-lossless-recovery-fetch-run",  # reopened in v0.4.41 (feature request 13)
                 "add-source",  # reopened in v0.4.41
-                "imap-mailbox-adapter-manifest-write",  # reopened in v0.4.41
+                "imap-mailbox-adapter-manifest-write",  # reopened in v0.4.41, removed in v0.4.43
+                "imap-mailbox-header-metadata-scan",  # removed in v0.4.43 (superseded)
             }
         )
-        self.assertEqual(len(current_blocked), 7)  # v0.4.42 imap-mailbox-message-fetch
+        self.assertEqual(len(current_blocked), 5)  # v0.4.44: notion-recover revived
         self.assertEqual(len(historical_blocked), 79)
         self.assertNotIn("migrate", current_blocked)
         self.assertNotIn("zettel-objet-link", current_blocked)

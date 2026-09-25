@@ -69,13 +69,13 @@ EMPTY_ALLOWLIST_SHA256 = (
 )
 
 # v0.4.36 adds only operator-feedback-archive to the previous pinned CLI paths.
-CLI_COUNT = 568  # v0.4.42: imap-mailbox-message-fetch added
+CLI_COUNT = 517  # v0.4.43: superseded IMAP chain removed
 CLI_CANONICAL_SHA256 = (
-    "e9f3cc8afb528d8461a9b630c2271641203768ecd7e1c7be04c49f20390fd85a"
+    "82da4bf190f10675b6cbd9593222ad24fa5d9a1591ac5aae7d113685eb5595a9"
 )
-MCP_COUNT = 136  # v0.4.40: source_scan_plan removed; five sharing previews restored
+MCP_COUNT = 129  # v0.4.43: seven IMAP planning previews removed
 MCP_CANONICAL_SHA256 = (
-    "39e09bca67b57398b9f8314a7e9241e911f581ff3f473225ea53d3069a779f26"
+    "b550e3bd82ee6c4e6443d196e0ddaf9127ae6799988929a77236ebe08ecff8fc"
 )
 DB_SOURCE_COUNT = 3
 DB_SOURCE_CANONICAL_SHA256 = (

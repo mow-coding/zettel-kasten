@@ -133,8 +133,8 @@
     {
       "source": "schemas/credential-capability-v0.1.schema.json",
       "packaged": "schemas/credential-capability-v0.1.schema.json",
-      "bytes": 4551,
-      "sha256": "a6610117fa3fdffd0784b6b754bda02b6c0a52737000415dd306edb68c3e799a"
+      "bytes": 5201,
+      "sha256": "6cdff54e6d05c1708bd57b1c3bc390773107d0d614fde652c7dc6a92e717eba4"
     },
     {
       "source": "schemas/delegate-receipt.schema.json",
