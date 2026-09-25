@@ -1,6 +1,6 @@
 """WOM-kit package for local-first zet archives."""
 
-__version__ = "0.4.44"
+__version__ = "0.4.45b15"
 
 from ._unicode_runtime import register_unicode_finder as _register_unicode_finder
 
