@@ -10738,6 +10738,10 @@ def _project_version_update_direct_cause_code(
             operation_control.OperationControlError,
             archive_services.project_update_transaction.ProjectUpdateTransactionError,
             archive_services.project_update_git_runner.ProjectUpdateGitRunnerError,
+            # v0.4.43 (letter 20260925-173 (2)): the approval errors carry a
+            # fixed code from a closed set; only the family crossed before.
+            ExactHumanApprovalWindowsError,
+            ExactHumanApprovalError,
         ),
     ):
         token = getattr(error, "code", None)
@@ -11488,7 +11492,7 @@ def _command_project_version_update_core(
                                         .terminal_handoff_sha256
                                     ),
                                     expected_result=consumed_result,
-                                    key_provider=recovery_key_provider,
+                                    key_provider=legacy_recovery_key_provider,
                                     expected_approval_root=approval_root,
                                     expected_archive_id=held_archive_id,
                                 )

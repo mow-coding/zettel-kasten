@@ -136020,6 +136020,15 @@ def _project_update_finish_service_result(
     )
 
 
+def _project_update_failure_precedes_native(failure: BaseException) -> bool:
+    """v0.4.43: True for errors that can only come from building the approval
+    context or binding, i.e. before the dialog and before any claim."""
+
+    from .exact_human_approval_windows import ExactHumanApprovalWindowsError
+
+    return type(failure) is ExactHumanApprovalWindowsError or type(failure) is OperationApprovalBindingError
+
+
 def _project_update_cancel_before_native(
     state: _ProjectVersionUpdateDurableApprovalState,
 ) -> None:
@@ -143841,10 +143850,15 @@ def _wom_kit_project_version_update_legacy_core(
                     close_owned_resources=transaction.close,
                 )
             try:
-                if (
-                    not continuation_used
-                    and getattr(failure, "code", None)
+                if not continuation_used and (
+                    getattr(failure, "code", None)
                     == "exact_human_approval_cancelled"
+                    # v0.4.43 (beta letter 20260925-173): a raw approval-context
+                    # or binding error is raised while the context is built,
+                    # before any dialog or claim (native and key failures are
+                    # wrapped by the broker), so the reserved transaction and
+                    # its lock are released instead of stranding the project.
+                    or _project_update_failure_precedes_native(failure)
                 ):
                     _project_update_cancel_before_native(state)
             finally:

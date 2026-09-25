@@ -597,3 +597,27 @@ approval is not stretched over two different effects.
 fetch. It was part of the v0.3.49-v0.3.62 IMAP design chain, so it is not
 removed without the owner's confirmation; the recommendation is to remove it
 together with its plan-only audit companions.
+
+## Hotfix v0.4.43: project update approval (beta letter 20260925-173)
+
+Implemented by Claude (Opus 5.5). A tester's v0.4.38 -> v0.4.42 project update
+run with a bare `--reviewed-by` id stopped at the native-approval stage with
+only an exception family in its result; `--resume` and
+`--resume --abandon-started-approval` stopped the same way and the update lock
+blocked every new work session (`project_update_recovery_required`).
+
+Cause (fact, from code): the services accept a bare actor id
+(`[A-Za-z0-9][A-Za-z0-9:._-]{0,199}`) while `ExactHumanApprovalContext`
+required `person:`/`human:`. The context raised
+`exact_human_approval_context_invalid` while it was built, before any dialog;
+a resume rebuilt the same context. That raw error was not the human-cancel
+code, so the reserved update and its lock were never released, and the CLI
+only projected the family. The tester's exact value is not in this public log.
+
+Fix: a bare id is read as `person:<id>` wherever a context is built (other
+kinds such as `agent:` stay refused); a raw context or binding error releases
+the reserved update like a human cancel; the fixed approval sub-code and stage
+reach the result. An undefined name on one legacy resume path found by static
+analysis is fixed. Recovery for a stuck project: the new bootstrap's
+`--resume` authenticates zero claims and closes the attempt without project
+changes, then the update runs again.
