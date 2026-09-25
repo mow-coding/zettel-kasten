@@ -114159,6 +114159,9 @@ def wom_kit_project_update_git_command(
     )
 
 
+_RUN_CAPPED_STDERR_BYTES = 8 * 1024
+
+
 def _wom_kit_project_update_run_capped(
     command: list[str],
     *,
@@ -114166,6 +114169,7 @@ def _wom_kit_project_update_run_capped(
     timeout_seconds: float,
     max_output_bytes: int,
     input_bytes: bytes | None = None,
+    stderr_sink: list[bytes] | None = None,
 ) -> tuple[int, bytes] | None:
     """Run one bounded process while draining stdin and stdout concurrently.
 
@@ -114174,6 +114178,10 @@ def _wom_kit_project_update_run_capped(
     before reading stdout can therefore block both processes once the pipe
     buffers fill.  The timeout starts before either worker and covers input,
     output, and the child exit.
+
+    stderr is discarded unless ``stderr_sink`` is given.  Then at most
+    ``_RUN_CAPPED_STDERR_BYTES`` of it is appended to the sink for a caller's
+    fixed classification; the caller must never echo or persist it.
     """
 
     if (
@@ -114188,14 +114196,18 @@ def _wom_kit_project_update_run_capped(
             command,
             stdin=subprocess.PIPE if input_bytes is not None else subprocess.DEVNULL,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE if stderr_sink is not None else subprocess.DEVNULL,
             env=environment,
             creationflags=noninteractive_creationflags(),
         )
     except (OSError, ValueError):
         _wom_kit_git_note_failure("launch_failed")
         return None
-    if process.stdout is None or (input_bytes is not None and process.stdin is None):
+    if (
+        process.stdout is None
+        or (input_bytes is not None and process.stdin is None)
+        or (stderr_sink is not None and process.stderr is None)
+    ):
         try:
             process.kill()
         except OSError:
@@ -114256,9 +114268,34 @@ def _wom_kit_project_update_run_capped(
         if input_bytes is not None
         else None
     )
+    error_box: list[bytes] = []
+
+    def drain_stderr() -> None:
+        assert process.stderr is not None
+        kept: list[bytes] = []
+        total = 0
+        try:
+            while True:
+                chunk = os.read(process.stderr.fileno(), 64 * 1024)
+                if not chunk:
+                    break
+                if total < _RUN_CAPPED_STDERR_BYTES:
+                    kept.append(chunk[: _RUN_CAPPED_STDERR_BYTES - total])
+                    total += len(kept[-1])
+        except (OSError, ValueError):
+            pass
+        error_box.append(b"".join(kept))
+
+    error_reader = (
+        threading.Thread(target=drain_stderr, daemon=True)
+        if stderr_sink is not None
+        else None
+    )
     reader.start()
     if writer is not None:
         writer.start()
+    if error_reader is not None:
+        error_reader.start()
     timed_out = False
     while reader.is_alive() or (writer is not None and writer.is_alive()):
         reader.join(timeout=0.02)
@@ -114327,6 +114364,15 @@ def _wom_kit_project_update_run_capped(
             stream.close()
         except OSError:
             pass
+    if error_reader is not None:
+        assert stderr_sink is not None and process.stderr is not None
+        error_reader.join(timeout=1.0)
+        try:
+            process.stderr.close()
+        except OSError:
+            pass
+        if error_box:
+            stderr_sink.append(error_box[0])
     if (
         timed_out
         or overflow.is_set()
