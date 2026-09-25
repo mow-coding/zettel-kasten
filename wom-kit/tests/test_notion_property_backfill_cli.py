@@ -324,7 +324,7 @@ class NotionPropertyBackfillCliTests(unittest.TestCase):
         # the Notion recovery chain and trash, and seven more writers.
         self.assertEqual(
             inventory["counts"]["approval_available_command_count"],
-            106,
+            107,  # v0.4.42: imap-mailbox-message-fetch
         )
         self.assertEqual(
             by_path["operator-feedback-archive"]["approval_status"],

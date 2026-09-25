@@ -69,9 +69,9 @@ EMPTY_ALLOWLIST_SHA256 = (
 )
 
 # v0.4.36 adds only operator-feedback-archive to the previous pinned CLI paths.
-CLI_COUNT = 567  # v0.4.41: notion-page-trash added
+CLI_COUNT = 568  # v0.4.42: imap-mailbox-message-fetch added
 CLI_CANONICAL_SHA256 = (
-    "ce61971b26b05701929b823e3f6f02867816e9fbd3ba4c71326a2fa9526ce36e"
+    "e9f3cc8afb528d8461a9b630c2271641203768ecd7e1c7be04c49f20390fd85a"
 )
 MCP_COUNT = 136  # v0.4.40: source_scan_plan removed; five sharing previews restored
 MCP_CANONICAL_SHA256 = (
@@ -83,7 +83,7 @@ DB_SOURCE_CANONICAL_SHA256 = (
 )
 RESOURCE_ADDITIONS = frozenset(
     {
-        "release-notes/v0.4.41.md",
+        "release-notes/v0.4.42.md",
     "schemas/activity-cleanup-request-v1.schema.json",
     "templates/ai-runtime/wom-archive/references/storage-scope.md",
         "schemas/agent-instruction-policy-v0.1.schema.json",
@@ -1201,7 +1201,7 @@ class PrivateObjetMetadataIndexPrivacyGateTests(unittest.TestCase):
             manifest["schema"],
             "wom-kit/package-resource-manifest/v0.1",
         )
-        self.assertEqual(manifest["version"], "0.4.41")
+        self.assertEqual(manifest["version"], "0.4.42")
         self.assertEqual(manifest["file_count"], len(manifest["files"]))
         current_paths = {row["packaged"] for row in manifest["files"]}
         self.assertEqual(

@@ -1,6 +1,6 @@
 # Agent Operator Capabilities Manifest
 
-Current release: v0.4.41 new-user entry, working Notion recovery with trash cleanup, and seven more writers reopened; [triage decision](archive-infra-decision-log-2026-09-24-closed-writer-triage.md).
+Current release: v0.4.42 whole IMAP messages with their attachments kept under one approval; [triage decision](archive-infra-decision-log-2026-09-24-closed-writer-triage.md).
 
 Status: v0.4.36 no-dialog grants, letter-168, and writer-session coverage gate
 
@@ -208,14 +208,14 @@ continues to be parser-derived; history does not grant execution authority.
 For the current v0.4.40 working-tree parser, the inventory snapshot is:
 
 ```text
-canonical executable command paths: 318
+canonical executable command paths: 319
 alias invocation paths:              248
-all invocation paths:                566
-approval_available:                   106
+all invocation paths:                567
+approval_available:                   107
 approval_fixed_closed:                8
 approval_not_exposed:                204
 conditional approval paths:            10
-dry_run_exposed:                     273
+dry_run_exposed:                     274
 unmatched fixed-close entries:         0
 ```
 

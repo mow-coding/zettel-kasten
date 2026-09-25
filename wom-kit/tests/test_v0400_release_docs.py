@@ -200,7 +200,7 @@ class V0400ReleaseDocsTests(unittest.TestCase):
                 "imap-mailbox-adapter-manifest-write",  # reopened in v0.4.41
             }
         )
-        self.assertEqual(len(current_blocked), 7)  # v0.4.41: IMAP adapter manifest reopened
+        self.assertEqual(len(current_blocked), 7)  # v0.4.42 imap-mailbox-message-fetch
         self.assertEqual(len(historical_blocked), 79)
         self.assertNotIn("migrate", current_blocked)
         self.assertNotIn("zettel-objet-link", current_blocked)

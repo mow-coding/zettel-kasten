@@ -524,6 +524,13 @@ beginner, by turning it into a read-only guide over the current chain
 done and prints the exact next command. Changing an existing command's
 meaning is left for the owner to confirm.
 
+Correction (2026-09-25, v0.4.42): `notion-recover` restores missing Notion
+parent locations (the ancestor crawl, fetch and merge), not page bodies. A
+guide over the page-recovery chain would change what the command means, so
+the recommendation above is withdrawn. The command stays closed; the owner
+decides between redesigning the parent-location fetch on the current
+credential and adapter, or removing the command.
+
 ## Implemented: Notion Trash Cleanup (v0.4.41)
 
 Implemented by Claude (Opus 5.5) under the owner's delegation, following the
@@ -554,3 +561,39 @@ Deviations from the plan (for the owner to confirm or correct):
   request.
 - Restore moves back only pages whose latest trash-journal outcome is
   `trashed`; pages that were already in the trash stay there.
+
+## Implemented: IMAP Full-Message Fetch (v0.4.42)
+
+Implemented by Claude (Opus 5.5) under the owner's delegation, following the
+IMAP recommendation above:
+- `imap-mailbox-message-fetch <archive> --source-id <imap source> --batch-id
+  <id> --imap-host <host> --username-ref env:NAME --app-password-ref env:NAME
+  [--mailbox] [--selection-rule] [--since-days] [--max-messages] --dry-run |
+  --approve` (operation `imap_mailbox_message_fetch`).
+- The dry-run reads no credential and opens no connection. Its plan digest
+  binds the archive, source, batch, host/port/credential references and
+  mailbox (the host, references and mailbox only as hashes), the selection
+  rule and window, the message cap, the timeout and the output folder.
+- `--approve` runs after one exact approval bound to that digest (a native
+  dialog, or none under a valid session grant); the writer re-plans, refuses
+  any drift, and only then reads the two environment references.
+- The mailbox is opened read-only (EXAMINE) and every body is fetched with
+  `BODY.PEEK[]`, so no server flag such as Seen changes. Each message is
+  written byte for byte as `workbench/imap-fetch/<batch>/mail-NNNN.eml`
+  (attachments stay inside it losslessly) with create-new semantics under an
+  output folder that must not exist.
+- It writes `source-intake-batch-request.json` next to the files (one
+  `message/rfc822` primary-source item per message) so the existing intake
+  chain captures them as objets under its own approval, and a content-free
+  receipt `receipts/imap-message-fetch/<batch>.json` (file digests, sizes,
+  status, stop reason). Headers, subjects, addresses, bodies, the host and the
+  credential values are never printed or stored in the receipt.
+
+Deviation: the fetch writes the intake request but does not capture the
+objets itself; capture stays the intake chain's own approved step, so one
+approval is not stretched over two different effects.
+
+`imap-mailbox-header-metadata-scan` stays closed and is superseded by the
+fetch. It was part of the v0.3.49-v0.3.62 IMAP design chain, so it is not
+removed without the owner's confirmation; the recommendation is to remove it
+together with its plan-only audit companions.

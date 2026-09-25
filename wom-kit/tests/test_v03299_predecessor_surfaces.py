@@ -144,6 +144,8 @@ CLI_ADDITIONS = {
     ("notion-page-recovery-request-build",),
     # v0.4.41: move verified-recovered Notion pages to the Notion trash.
     ("notion-page-trash",),
+    # v0.4.42: fetch whole IMAP messages losslessly under one approval.
+    ("imap-mailbox-message-fetch",),
 }
 # v0.4.40 (owner decision 2026-09-24): retired and replaced writers are
 # deleted outright instead of staying fixed closed. Five sharing/ownership
@@ -168,9 +170,9 @@ CLI_REMOVALS = {
 MCP_REMOVALS = {
     "source_scan_plan",
 }
-CURRENT_CLI_COUNT = 567  # v0.4.41: notion-page-trash
+CURRENT_CLI_COUNT = 568  # v0.4.42: imap-mailbox-message-fetch
 CURRENT_CLI_CANONICAL_SHA256 = (
-    "ce61971b26b05701929b823e3f6f02867816e9fbd3ba4c71326a2fa9526ce36e"
+    "e9f3cc8afb528d8461a9b630c2271641203768ecd7e1c7be04c49f20390fd85a"
 )
 CURRENT_MCP_COUNT = 136
 CURRENT_MCP_CANONICAL_SHA256 = (
@@ -199,7 +201,7 @@ CURRENT_DATABASE_CANONICAL_SHA256 = (
     "d9a42f08ee12a6d42e40214cfb12441e4077bf50c38c25b2692ec1344328294a"
 )
 RESOURCE_ADDITIONS = {
-    "release-notes/v0.4.41.md",
+    "release-notes/v0.4.42.md",
     "schemas/activity-cleanup-request-v1.schema.json",
     "templates/ai-runtime/wom-archive/references/storage-scope.md",
     "schemas/agent-instruction-policy-v0.1.schema.json",
@@ -268,7 +270,7 @@ RESOURCE_ADDITIONS = {
 RESOURCE_REMOVALS = {"release-notes/v0.3.297.md"}
 CURRENT_RESOURCE_COUNT = 175
 CURRENT_RESOURCE_CANONICAL_SHA256 = (
-    "36ed3c6d4373d084c718bb547d025950fa99fbeb2ae590eb9617318f4e43dabe"  # v0.4.41 resources
+    "7cccde5a6822a8f11305b18aec2e64bb03e0626348faf4069cdd6c12cdd7baf7"  # v0.4.42 resources
 )
 
 
@@ -626,10 +628,10 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             actual,
             expected,
             "Current package-resource paths must be the full v0.3.297 set plus "
-            "the exact cumulative v0.3.298 through v0.4.41 delta. "
+            "the exact cumulative v0.3.298 through v0.4.42 delta. "
             f"missing={compact(missing)}; extra={compact(extra)}",
         )
-        self.assertEqual(manifest["version"], "0.4.41")
+        self.assertEqual(manifest["version"], "0.4.42")
         self.assertEqual(len(actual), CURRENT_RESOURCE_COUNT)
         self.assertEqual(
             canonical_sha256(actual),
@@ -649,13 +651,13 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         self.assertNotIn("C:\\Users\\", predecessor_text)
 
     def test_v0419_release_note_is_current_and_older_notes_remain_historical(self) -> None:
-        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.4.41.md"
+        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.4.42.md"
         current_packaged_release = (
             SRC_ROOT
             / "wom_kit"
             / "_resources"
             / "release-notes"
-            / "v0.4.41.md"
+            / "v0.4.42.md"
         )
         self.assertEqual(
             current_source_release.read_bytes(),
@@ -664,10 +666,10 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         current_text = current_source_release.read_text(encoding="utf-8")
         current_flat = " ".join(current_text.split())
         for token in (
-            "v0.4.41",
+            "v0.4.42",
             "project-version-update",
             "Installing the tool alone does not change a customer archive",
-            "wom_kit-0.4.41-py3-none-any.whl",
+            "wom_kit-0.4.42-py3-none-any.whl",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, current_flat)
