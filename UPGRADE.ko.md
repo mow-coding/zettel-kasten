@@ -2,6 +2,21 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.4.45 도우미 AI용 짧은 규칙집
+
+공개된 뒤 정확한 wheel을 사용하세요. 도우미 AI 스킬이 핵심 규칙 12개와 의도별 명령표를 먼저 보여 주고, 세부는 참조 문서로 옮겼습니다. 프로젝트 런타임을 업데이트(또는 `runtime-skill-install`)한 뒤 다음 세션에서 AI에게 스킬을 다시 읽게 하세요. 없어진 명령은 없습니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0445-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.45/wom_kit-0.4.45-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+고객은 여전히 검토된 `project-version-update` 절차를 실행해야 합니다. 부트스트랩 설치만으로 프로젝트에 고정된 런타임은 바뀌지 않습니다.
+
 ## v0.4.44 대체된 IMAP 명령 제거, notion-recover 부활
 
 공개된 뒤 정확한 wheel을 사용하세요. IMAP 계획 명령들(`imap-mailbox-plan`, `imap-mailbox-*-plan`, `imap-mailbox-header-metadata-scan`, 자료 선택·가져오기 승인 명령과 별칭)은 없어졌습니다. 메일은 `add-source --type imap_mailbox`, `imap-mailbox-message-fetch`, `source-intake-batch`를 씁니다. `notion-recover`는 채택한 Notion 자격증명으로 다시 동작하며, 스크립트에서 `--credential-ref`, `--yes`, `--platform`, `--notion-version`, `--timeout-seconds`, `--source`를 빼야 합니다. 세션 권한은 해제할 때까지 유지됩니다.

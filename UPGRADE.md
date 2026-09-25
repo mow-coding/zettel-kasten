@@ -24,6 +24,21 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.4.45 A short rulebook for the helper AI
+
+Use the exact public wheel after publication. The helper-AI skill changes shape: twelve core rules and an intent-to-command table first, detail in focused references. Update the project runtime (or run `runtime-skill-install`) and ask the AI to re-read the skill in its next session. No command was removed.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0445-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.45/wom_kit-0.4.45-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+The customer must still run the reviewed `project-version-update` workflow. Bootstrap installation alone does not update a pinned project runtime.
+
 ## v0.4.44 Superseded IMAP chain removed, notion-recover revived
 
 Use the exact public wheel after publication. The IMAP planning commands (`imap-mailbox-plan`, `imap-mailbox-*-plan`, `imap-mailbox-header-metadata-scan`, the material selection and capture approval commands and their aliases) are removed; use `add-source --type imap_mailbox`, `imap-mailbox-message-fetch` and `source-intake-batch`. `notion-recover` runs again with the adopted Notion credential; drop `--credential-ref`, `--yes`, `--platform`, `--notion-version`, `--timeout-seconds` and `--source` from scripts. Session grants now last until released.

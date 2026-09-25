@@ -6,6 +6,12 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.45 - 2026-09-25
+
+- The helper-AI skill starts with twelve core rules and an intent-to-command table; rare detail moves into focused references (credentials and sessions, long operations, developer letters, models and reasoning).
+- Fix two guidance contradictions: drafts are revised with `draft-revision-write`; session grants and refs are never carried between conversations.
+- `docs/ai-guidance-scenarios.md`: eighteen letter cases as a manual evaluation set.
+
 ## v0.4.44 - 2026-09-25
 
 - Remove the IMAP planning chain superseded by `imap-mailbox-message-fetch` (18 commands, 33 aliases, 7 MCP previews); historical receipts stay readable.
