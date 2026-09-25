@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.4.42 whole IMAP messages with their attachments kept under one approval; [triage decision](archive-infra-decision-log-2026-09-24-closed-writer-triage.md).
+Status: v0.4.43 project update approval hotfix: bare reviewer ids, stranded update locks and fixed approval cause codes; [triage decision](archive-infra-decision-log-2026-09-24-closed-writer-triage.md).
 
 Status: v0.4.36 no-dialog grants, letter-168, and session-owned writes truth
 
@@ -383,17 +383,17 @@ environment:
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0442-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0443-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.42/wom_kit-0.4.42-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.43/wom_kit-0.4.43-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-Require exactly `archive 0.4.42` from a new process. This does not update the
+Require exactly `archive 0.4.43` from a new process. This does not update the
 project-local WOM-kit source mirror or change a project pin. Those effects
 require the separate reviewed `project-version-update` plan and native
 approval, or its authenticated same-context resume after interruption.

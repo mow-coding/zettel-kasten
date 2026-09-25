@@ -2,6 +2,21 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.4.43 프로젝트 업데이트 승인 긴급 수정
+
+공개된 뒤 정확한 wheel을 사용하세요. v0.4.42 업데이트가 `project_version_update_failure_family_windows_approval_error`로 멈추고 새 작업 세션이 `project_update_recovery_required`로 거부되면, 이 부트스트랩을 설치한 뒤 `project-version-update <프로젝트 루트> --resume --affirm-external-writers-quiescent`로 멈춘 시도를 변경 없이 닫고 잠금을 푼 뒤, 업데이트를 다시 실행합니다. 없어진 명령은 없습니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0443-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.43/wom_kit-0.4.43-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+고객은 여전히 검토된 `project-version-update` 절차를 실행해야 합니다. 부트스트랩 설치만으로 프로젝트에 고정된 런타임은 바뀌지 않습니다.
+
 ## v0.4.42 IMAP 메일 원본과 첨부 보존
 
 공개된 뒤 정확한 wheel을 사용하세요. 메일 전체를 보존하려면 `add-source`로 메일함을 등록하고 `imap-mailbox-message-fetch --dry-run` 뒤 `--approve`로 가져옵니다. 가져온 `.eml` 파일은 `source-intake-batch --manifest <요청 파일>`로 오브제에 등록합니다. 없어진 명령은 없습니다.

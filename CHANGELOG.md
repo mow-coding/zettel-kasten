@@ -6,6 +6,13 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.43 - 2026-09-25
+
+- A bare `--reviewed-by` id (for example `alex`) is read as `person:<id>`; before, the services accepted it but the approval context refused it, so a reviewed project update stopped before the approval window and `--resume` rebuilt the same failure (letter 20260925-173).
+- A failure while the approval context is built releases the reserved project update and its lock, instead of leaving `project_update_recovery_required` on every new work session.
+- The update result names the fixed approval sub-code (for example `exact_human_approval_context_invalid`) and its stage, not only the exception family.
+- Fix a crash on one `--resume` path of a cancelled legacy update (undefined key provider).
+
 ## v0.4.42 - 2026-09-25
 
 - New `imap-mailbox-message-fetch` keeps whole mail messages with their attachments: the dry-run reads no credential; after one exact approval the mailbox is opened read-only (no message is marked read) and each message is stored byte for byte as `.eml` with a ready `source-intake-batch` request.

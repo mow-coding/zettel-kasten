@@ -1,6 +1,6 @@
 # Closed Command Tracker
 
-Status: v0.4.42 candidate (2026-09-25)
+Status: v0.4.43 candidate (2026-09-25)
 
 Owner direction (2026-09-24): a closed command that no customer path needs is
 removed outright; a closed command customers need is restored first. Every
@@ -14,6 +14,7 @@ release report states the counts below and what changed since the last one.
 | v0.4.40 | 92 | 20 | 27 writers + 2 new batch commands | 12 |
 | v0.4.41 | 106 | 8 | `legacy-coordination-cleanup --destination` (retire by moving, letters 142/148/156); `notion-page-recovery` (letters 116-118, 142/148/156); `onboard` and `init --approve` (new-user entry, letter 102); `runtime-skill-install` / `-uninstall` with `--archive-root` (letters 100-105); `relation-candidate-decide --decision accept` (letter 108); `import-external` (letter 141); `credential-lifecycle` (letter 119); `prehashed-objet-ledger` (letters 038-039, 164, 168); `notion-objet-link-convert` (feature request 34); `tiro-lossless-recovery-fetch-run` (feature request 13); `add-source`; `imap-mailbox-adapter-manifest-write`; new `notion-page-trash` (owner idea 2026-09-24) | 0 |
 | v0.4.42 | 107 | 8 | new `imap-mailbox-message-fetch` (whole messages with attachments, replacing the header scan's purpose) | 0 |
+| v0.4.43 | 107 | 8 | none (project update approval hotfix, letter 20260925-173) | 0 |
 
 The counts are the `archive capabilities --machine` inventory (approval-available and
 fixed-closed canonical paths). The v0.4.40 decisions and evidence are in the

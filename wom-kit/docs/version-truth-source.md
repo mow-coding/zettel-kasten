@@ -1,8 +1,10 @@
 # WOM-kit Version Truth Source
 
-Current release candidate: v0.4.42 whole IMAP messages with their attachments kept under one approval; [triage decision](archive-infra-decision-log-2026-09-24-closed-writer-triage.md). The public stable baseline remains v0.4.41 until publication.
+Current release candidate: v0.4.43 project update approval hotfix: bare reviewer ids, stranded update locks and fixed approval cause codes; [triage decision](archive-infra-decision-log-2026-09-24-closed-writer-triage.md). The public stable baseline remains v0.4.42 until publication.
 
-Status: v0.4.42 whole IMAP messages with attachments under one approval
+Status: v0.4.43 project update approval hotfix (letter 20260925-173)
+
+Previous checkpoint: Status: v0.4.42 whole IMAP messages with attachments under one approval
 
 Previous checkpoint: Status: v0.4.41 new-user entry, working Notion recovery with trash cleanup, seven more writers reopened
 
@@ -46,7 +48,9 @@ Previous checkpoint: Status: v0.4.22 project-update failure truth, started-claim
 
 Previous checkpoint: Status: v0.4.21 reopened writers, one-approval intake chain, and session-owned writes
 
-Current checkpoint: Status: v0.4.42 IMAP full-message fetch candidate; installed-wheel and public evidence pending
+Current checkpoint: Status: v0.4.43 update approval hotfix candidate; installed-wheel and public evidence pending
+
+Previous checkpoint: Status: v0.4.42 IMAP full-message fetch with installed-wheel hash evidence
 
 Previous checkpoint: Status: v0.4.41 new-user entry and Notion chain with installed-wheel hash evidence
 
@@ -123,22 +127,22 @@ or runtime workflow. This page defines the safe order for checking them.
 
 ## Current Public Tool
 
-The v0.4.42 URL is a conditional release-artifact contract. Use it only after
+The v0.4.43 URL is a conditional release-artifact contract. Use it only after
 the matching public GitHub Release exists and lists the exact wheel:
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0442-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0443-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.42/wom_kit-0.4.42-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.43/wom_kit-0.4.43-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-Require exactly `archive 0.4.42` from a new process. The external CPython 3.12
+Require exactly `archive 0.4.43` from a new process. The external CPython 3.12
 environment and exact real `python.exe -m pip` retain the wheel SHA-256 in the
 installed PEP 610 metadata. A user-scoped tool environment without that archive
 hash is not project-updater supply evidence. A bootstrap install alone changes

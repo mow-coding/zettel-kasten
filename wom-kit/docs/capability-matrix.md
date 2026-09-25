@@ -1,8 +1,8 @@
 ﻿# WOM-kit Capability Matrix
 
-Version: v0.4.42 implementation and release scope
+Version: v0.4.43 implementation and release scope
 
-Status: v0.4.42 whole IMAP messages with their attachments kept under one approval; [triage decision](archive-infra-decision-log-2026-09-24-closed-writer-triage.md).
+Status: v0.4.43 project update approval hotfix: bare reviewer ids, stranded update locks and fixed approval cause codes; [triage decision](archive-infra-decision-log-2026-09-24-closed-writer-triage.md).
 
 Status: v0.4.36 no-dialog grants, letter-168, and session-owned writes truth
 Date: 2026-09-04
