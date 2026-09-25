@@ -46,6 +46,11 @@ PACKAGED_SKILL_ROOT = (
 )
 
 
+import sys as _sys  # noqa: E402
+
+_sys.path.insert(0, str(Path(__file__).resolve().parent))
+from runtime_skill_package import package_text  # noqa: E402
+
 class V03320ReleaseDocsTests(unittest.TestCase):
     def test_v03320_public_bytes_are_immutable_historical_evidence(self) -> None:
         expected = {
@@ -109,7 +114,7 @@ class V03320ReleaseDocsTests(unittest.TestCase):
                 )
 
     def test_v03320_is_source_history_not_the_current_packaged_release(self) -> None:
-        self.assertEqual(__version__, "0.4.44")
+        self.assertEqual(__version__, "0.4.45")
         self.assertTrue(RELEASE.is_file())
         self.assertFalse(PACKAGED_RELEASE.exists())
         self.assertEqual(SCHEMA.read_bytes(), PACKAGED_SCHEMA.read_bytes())
@@ -295,9 +300,10 @@ class V03320ReleaseDocsTests(unittest.TestCase):
 
     def test_runtime_skill_and_operator_contract_are_synchronized(self) -> None:
         skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
-        normalized_skill = " ".join(skill.split())
         self.assertLessEqual(len(skill.splitlines()), 200)
         self.assertLessEqual(len(skill.split()), 1400)
+        skill = package_text(SKILL_ROOT)  # v0.4.45: tokens may live in references
+        normalized_skill = " ".join(skill.split())
         for token in (
             "fresh plan-bound one-use capability",
             "durably claimed before secret read",

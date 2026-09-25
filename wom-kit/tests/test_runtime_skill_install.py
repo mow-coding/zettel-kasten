@@ -85,7 +85,7 @@ class RuntimeSkillInstallTests(unittest.TestCase):
 
         self.assertIn("SKILL.md", names)
         self.assertIn("references/operator-contract.md", names)
-        self.assertEqual(len(names), 8)
+        self.assertEqual(len(names), 12)  # v0.4.45: four focused references added
         self.assertIn("references/storage-scope.md", names)
         self.assertRegex(source.sha256, r"^[0-9a-f]{64}$")
 
@@ -711,7 +711,7 @@ class RuntimeSkillInstallTests(unittest.TestCase):
             )
 
         self.assertEqual(result["source_package"]["package_version"], __version__)
-        self.assertEqual(result["source_package"]["file_count"], 8)
+        self.assertEqual(result["source_package"]["file_count"], 12)  # v0.4.45
 
     def test_installer_module_has_no_network_or_provider_behavior(self) -> None:
         source = Path(runtime_skill_install.__file__).read_text(encoding="utf-8")
