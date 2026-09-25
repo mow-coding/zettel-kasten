@@ -166,9 +166,9 @@ class V0435ReleaseDocsTests(unittest.TestCase):
         routed = sum(1 for row in manifest["paths"].values() if row.get("route"))
         # v0.4.23 integrated create-draft (LR-06a); v0.4.24 through v0.4.27, v0.4.31 and v0.4.34 change no writer;
         # v0.4.28 restore, v0.4.29 offload, v0.4.30 claim finalize, v0.4.33 upload and v0.4.34 compose are pending (target v0.4.36).
-        self.assertEqual(len(statuses), 106)  # v0.4.41: IMAP adapter manifest reopened
+        self.assertEqual(len(statuses), 107)  # v0.4.42 imap-mailbox-message-fetch
         self.assertEqual(statuses.count("session_integrated") - routed, 6)
-        self.assertEqual(routed, 50)  # v0.4.41: IMAP adapter manifest reopened
+        self.assertEqual(routed, 51)  # v0.4.42 imap-mailbox-message-fetch
         self.assertEqual(statuses.count("pending"), 29)  # v0.4.36: five rows integrated through the environment route
         self.assertEqual(statuses.count("legacy_exception"), 21)  # v0.4.41: onboard and init bootstrap exceptions
         self.assertEqual(manifest["paths"]["create-draft"]["status"], "session_integrated")

@@ -1,6 +1,6 @@
 # Closed Command Tracker
 
-Status: v0.4.41 candidate (2026-09-25)
+Status: v0.4.42 candidate (2026-09-25)
 
 Owner direction (2026-09-24): a closed command that no customer path needs is
 removed outright; a closed command customers need is restored first. Every
@@ -13,12 +13,13 @@ release report states the counts below and what changed since the last one.
 | v0.4.39 | 63 | 59 | 0 | 0 |
 | v0.4.40 | 92 | 20 | 27 writers + 2 new batch commands | 12 |
 | v0.4.41 | 106 | 8 | `legacy-coordination-cleanup --destination` (retire by moving, letters 142/148/156); `notion-page-recovery` (letters 116-118, 142/148/156); `onboard` and `init --approve` (new-user entry, letter 102); `runtime-skill-install` / `-uninstall` with `--archive-root` (letters 100-105); `relation-candidate-decide --decision accept` (letter 108); `import-external` (letter 141); `credential-lifecycle` (letter 119); `prehashed-objet-ledger` (letters 038-039, 164, 168); `notion-objet-link-convert` (feature request 34); `tiro-lossless-recovery-fetch-run` (feature request 13); `add-source`; `imap-mailbox-adapter-manifest-write`; new `notion-page-trash` (owner idea 2026-09-24) | 0 |
+| v0.4.42 | 107 | 8 | new `imap-mailbox-message-fetch` (whole messages with attachments, replacing the header scan's purpose) | 0 |
 
 The counts are the `archive capabilities --machine` inventory (approval-available and
 fixed-closed canonical paths). The v0.4.40 decisions and evidence are in the
 [closed-writer triage decision log](archive-infra-decision-log-2026-09-24-closed-writer-triage.md).
 
-## Still closed in v0.4.41
+## Still closed in v0.4.42
 
 Letters are the beta-feedback numbers that asked for or were blocked by the
 command. "Next step" is the design work that has to land before the approval
@@ -31,8 +32,8 @@ path can open; an approval alone would not make these usable.
 | `quarantine-foreign-block` | owner design 2026-05-25 | Receiving checkpoint for foreign blocks | With the ZET sharing design |
 | `record-quarantine-decision` | owner design 2026-05-25 | Receiving checkpoint decision record | With the ZET sharing design |
 | `github-repo` | onboarding spec 2026-06-05 | Planning tool the onboarding spec shows first | Onboarding extension (`onboard` is open since v0.4.41) |
-| `notion-recover` | 156 (dry-run and capability disagreed) | Wraps the page-recovery binding | Reopen with notion-page-recovery |
-| `imap-mailbox-header-metadata-scan` | earlier letters | Needs a legacy approval receipt that no longer exists; headers alone do not meet the request to keep full messages and attachments | Full-message IMAP fetch under exact approval (decision log) |
+| `notion-recover` | 156 (dry-run and capability disagreed) | One-command Notion parent-location recovery (2026-06-22); its fetch adapter was removed in v0.4.40 and its access approval is plan-only, so it cannot run. It restores parent locations, not page bodies | Owner decision: redesign the location fetch or remove (page bodies use `notion-page-recovery`) |
+| `imap-mailbox-header-metadata-scan` | earlier letters | Needs a legacy approval receipt that no longer exists; headers alone do not meet the request to keep full messages and attachments | Superseded by `imap-mailbox-message-fetch` (v0.4.42); removal waits for the owner |
 | `operation-control` | none | Cancelling a running operation is not supported (`operation_cancel_not_supported`); `--action status`, `wait` and `recovery-plan` stay available | Operation cancel design when requested |
 | `migrate` (targets other than `notion-source-properties`) | owner concern 2026-06-06 (safe upgrade) | Conditional scope; one target is open | Per-target design when requested |
 

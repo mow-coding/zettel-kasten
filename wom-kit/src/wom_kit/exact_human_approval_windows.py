@@ -286,6 +286,8 @@ class ExactHumanApprovalOperation(Enum):
     add_source = "add_source"
     # v0.4.41: the IMAP adapter manifest and header scan run after one approval.
     imap_mailbox_adapter_manifest = "imap_mailbox_adapter_manifest"
+    # v0.4.42: fetch whole IMAP messages losslessly under one approval.
+    imap_mailbox_message_fetch = "imap_mailbox_message_fetch"
     # v0.4.41 (letters 116-118, 142/148/156): Notion page recovery.
     notion_page_recovery = "notion_page_recovery"
 
@@ -624,6 +626,7 @@ _OPERATION_LABELS = {
     ExactHumanApprovalOperation.tiro_lossless_recovery_fetch: "Tiro 원본 가져오기",
     ExactHumanApprovalOperation.add_source: "소스 등록",
     ExactHumanApprovalOperation.imap_mailbox_adapter_manifest: "메일 어댑터 정책 기록",
+    ExactHumanApprovalOperation.imap_mailbox_message_fetch: "메일 원본 가져오기",
     ExactHumanApprovalOperation.notion_page_recovery: "Notion 페이지 회수",
 }
 
@@ -846,6 +849,9 @@ _OPERATION_QUESTIONS = {
     ),
     ExactHumanApprovalOperation.imap_mailbox_adapter_manifest: (
         "검토한 IMAP 메일 어댑터 정책을 이 아카이브에 기록할까요?"
+    ),
+    ExactHumanApprovalOperation.imap_mailbox_message_fetch: (
+        "검토한 범위의 메일 원본(.eml, 첨부 포함)을 아카이브로 가져올까요?"
     ),
     ExactHumanApprovalOperation.notion_page_recovery: (
         "검토한 Notion 페이지 목록을 저장된 자격증명으로 읽어 아카이브에 보존할까요?"
@@ -1139,6 +1145,9 @@ _OPERATION_SUMMARIES = {
     ExactHumanApprovalOperation.imap_mailbox_adapter_manifest: (
         "검토한 메일 어댑터 정책(허용 공급자, 작업, 선택 규칙)을 로컬 문서로 씁니다. 메일 서버에 연결하거나 비밀값을 읽지 않습니다."
     ),
+    ExactHumanApprovalOperation.imap_mailbox_message_fetch: (
+        "지정한 계정 참조로 메일함을 읽기 전용으로 열어, 검토한 범위의 메일을 원본 그대로(.eml, 첨부 포함) workbench에 새 파일로 저장하고 오브제 등록 요청과 영수증을 만듭니다. 서버의 읽음 표시는 바뀌지 않습니다."
+    ),
     ExactHumanApprovalOperation.notion_page_recovery: (
         "검토한 요청 목록의 Notion 페이지만 읽기 전용 GET으로 가져와 오브제와 영수증으로 보존합니다. Notion 쪽은 바뀌지 않으며 중단되면 이어서 할 수 있습니다."
     ),
@@ -1228,6 +1237,7 @@ _OPERATION_APPROVE_BUTTONS = {
     ExactHumanApprovalOperation.tiro_lossless_recovery_fetch: "가져오기",
     ExactHumanApprovalOperation.add_source: "소스 등록",
     ExactHumanApprovalOperation.imap_mailbox_adapter_manifest: "정책 기록",
+    ExactHumanApprovalOperation.imap_mailbox_message_fetch: "메일 가져오기",
     ExactHumanApprovalOperation.notion_page_recovery: "회수 실행",
 }
 

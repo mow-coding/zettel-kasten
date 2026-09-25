@@ -36057,6 +36057,68 @@ def command_imap_mailbox_adapter_execution_contract(args: argparse.Namespace) ->
     return 0 if result.get("ok", True) else 1
 
 
+def command_imap_mailbox_message_fetch(args: argparse.Namespace) -> int:
+    """v0.4.42: fetch whole IMAP messages (raw .eml with attachments) into the
+    archive workbench and write a ready source-intake-batch request.
+    --dry-run plans without reading credentials; --approve fetches after one
+    exact approval (a native dialog, or none under a valid session grant)."""
+
+    from . import imap_message_fetch
+
+    arguments = dict(
+        source_id=args.source_id,
+        batch_id=args.batch_id,
+        imap_host=args.imap_host,
+        imap_port=args.imap_port,
+        username_ref=args.username_ref,
+        app_password_ref=args.app_password_ref,
+        mailbox=args.mailbox,
+        selection_rule=args.selection_rule,
+        since_days=args.since_days,
+        max_messages=args.max_messages,
+        timeout_seconds=args.timeout_seconds,
+    )
+
+    def printer(result: dict[str, Any]) -> None:
+        if args.format == "json":
+            print_json(result)
+            return
+        print("IMAP message fetch: " + ("ready." if result.get("ok") else "blocked."))
+        for key in ("message_count", "total_bytes", "output", "intake_request", "plan_sha256"):
+            if result.get(key) is not None:
+                print(f"- {key}: {result[key]}")
+        for blocker in result.get("blockers") or []:
+            print(f"BLOCKED: {blocker}")
+        if result.get("next_step"):
+            print(f"Next: {result['next_step']}")
+        print("Headers, subjects, addresses and bodies shown: no. Server flags changed: no.")
+
+    if args.approve and not args.dry_run:
+        return _plan_digest_exact_route(
+            args,
+            lifecycle_action="imap_mailbox_message_fetch",
+            operation=ExactHumanApprovalOperation.imap_mailbox_message_fetch,
+            plan=lambda: imap_message_fetch.plan_fetch(Path(args.archive_root), **arguments),
+            write=lambda digest, reviewer, binding, claim: imap_message_fetch.execute_fetch_approved(
+                Path(args.archive_root),
+                reviewed_by=reviewer,
+                exact_human_approval_claim=claim,
+                expected_plan_sha256=digest,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+                **arguments,
+            ),
+            printer=printer,
+        )
+    try:
+        result = imap_message_fetch.plan_fetch(Path(args.archive_root), **arguments)
+    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
+        code = str(exc)
+        result = {"ok": False, "blockers": [code if re.fullmatch(r"[a-z0-9_]+", code) else "imap_fetch_plan_failed"]}
+    printer(result)
+    return 0 if result.get("ok") else 1
+
+
 def command_imap_mailbox_header_metadata_scan(args: argparse.Namespace) -> int:
     if args.approve:
         # Stays closed in v0.4.41: its legacy credential-access approval
@@ -50810,6 +50872,38 @@ def build_parser() -> argparse.ArgumentParser:
     imap_mailbox_adapter_execution_contract.add_argument("--dry-run", action="store_true", help="Required. Contract only; never connects, selects, searches, lists, reads mail, or writes files.")
     imap_mailbox_adapter_execution_contract.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     imap_mailbox_adapter_execution_contract.set_defaults(func=command_imap_mailbox_adapter_execution_contract)
+
+    imap_mailbox_message_fetch = subcommands.add_parser(
+        "imap-mailbox-message-fetch",
+        help=(
+            "Fetch whole IMAP messages losslessly (raw .eml with attachments) into the archive workbench "
+            "and write a source-intake-batch request (v0.4.42). --dry-run reads no credential; "
+            "--approve runs after one exact approval; the mailbox is opened read-only."
+        ),
+    )
+    imap_mailbox_message_fetch.add_argument("archive_root", help="Archive root.")
+    imap_mailbox_message_fetch.add_argument("--source-id", required=True, help="Registered imap_mailbox source id (add-source).")
+    imap_mailbox_message_fetch.add_argument("--batch-id", required=True, help="Safe id; the output folder under workbench/imap-fetch/.")
+    imap_mailbox_message_fetch.add_argument("--imap-host", required=True, help="IMAP server host; never echoed.")
+    imap_mailbox_message_fetch.add_argument("--imap-port", type=int, default=993, help="IMAP TLS port. Default: 993.")
+    imap_mailbox_message_fetch.add_argument("--username-ref", required=True, help="env:NAME holding the account user name.")
+    imap_mailbox_message_fetch.add_argument("--app-password-ref", required=True, help="env:NAME holding the app password.")
+    imap_mailbox_message_fetch.add_argument("--mailbox", default="INBOX", help="Mailbox to read. Default: INBOX.")
+    imap_mailbox_message_fetch.add_argument(
+        "--selection-rule", default="newest_first",
+        choices=["newest_first", "oldest_first", "unread_first", "since_days_window"],
+        help="Which messages to take first.",
+    )
+    imap_mailbox_message_fetch.add_argument("--since-days", type=int, help="Window for since_days_window.")
+    imap_mailbox_message_fetch.add_argument("--max-messages", type=int, default=50, help="Messages per run (1-1000).")
+    imap_mailbox_message_fetch.add_argument("--timeout-seconds", type=int, default=30, help="Connection timeout (1-120).")
+    imap_mailbox_message_fetch_mode = imap_mailbox_message_fetch.add_mutually_exclusive_group(required=True)
+    imap_mailbox_message_fetch_mode.add_argument("--dry-run", action="store_true", help="Plan only; no credential read.")
+    imap_mailbox_message_fetch_mode.add_argument("--approve", action="store_true", help="Fetch after one exact approval.")
+    imap_mailbox_message_fetch.add_argument("--reviewed-by", help="Reviewer id for --approve, e.g. person:me.")
+    imap_mailbox_message_fetch.add_argument("--expected-plan-sha256", help="Optional plan digest from the dry-run.")
+    imap_mailbox_message_fetch.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
+    imap_mailbox_message_fetch.set_defaults(func=command_imap_mailbox_message_fetch)
 
     imap_mailbox_header_metadata_scan = subcommands.add_parser(
         "imap-mailbox-header-metadata-scan",

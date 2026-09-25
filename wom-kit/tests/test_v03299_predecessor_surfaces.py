@@ -144,6 +144,8 @@ CLI_ADDITIONS = {
     ("notion-page-recovery-request-build",),
     # v0.4.41: move verified-recovered Notion pages to the Notion trash.
     ("notion-page-trash",),
+    # v0.4.42: fetch whole IMAP messages losslessly under one approval.
+    ("imap-mailbox-message-fetch",),
 }
 # v0.4.40 (owner decision 2026-09-24): retired and replaced writers are
 # deleted outright instead of staying fixed closed. Five sharing/ownership
@@ -168,9 +170,9 @@ CLI_REMOVALS = {
 MCP_REMOVALS = {
     "source_scan_plan",
 }
-CURRENT_CLI_COUNT = 567  # v0.4.41: notion-page-trash
+CURRENT_CLI_COUNT = 568  # v0.4.42: imap-mailbox-message-fetch
 CURRENT_CLI_CANONICAL_SHA256 = (
-    "ce61971b26b05701929b823e3f6f02867816e9fbd3ba4c71326a2fa9526ce36e"
+    "e9f3cc8afb528d8461a9b630c2271641203768ecd7e1c7be04c49f20390fd85a"
 )
 CURRENT_MCP_COUNT = 136
 CURRENT_MCP_CANONICAL_SHA256 = (

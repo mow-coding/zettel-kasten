@@ -769,8 +769,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/operator-contract.md",
       "packaged": "templates/ai-runtime/wom-archive/references/operator-contract.md",
-      "bytes": 76216,
-      "sha256": "aebe4717dc78aba69ebc6f60fb82628658cae9d973b42e234cce4748363adf84"
+      "bytes": 77014,
+      "sha256": "39a67c0ccb04b6c97ebc43c541b69bdbdf6b0e657464450f5ac8320e7587444f"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/reading-memory-and-revision.md",

@@ -208,14 +208,14 @@ continues to be parser-derived; history does not grant execution authority.
 For the current v0.4.40 working-tree parser, the inventory snapshot is:
 
 ```text
-canonical executable command paths: 318
+canonical executable command paths: 319
 alias invocation paths:              248
-all invocation paths:                566
-approval_available:                   106
+all invocation paths:                567
+approval_available:                   107
 approval_fixed_closed:                8
 approval_not_exposed:                204
 conditional approval paths:            10
-dry_run_exposed:                     273
+dry_run_exposed:                     274
 unmatched fixed-close entries:         0
 ```
 

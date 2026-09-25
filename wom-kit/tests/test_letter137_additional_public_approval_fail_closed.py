@@ -304,7 +304,7 @@ class Letter137AdditionalPublicCliBoundaryTests(_CliAssertions):
             "parcel": ["pack"],
         }
         alias_groups = {key: value for key, value in alias_groups.items() if key not in REMOVED_COMMANDS_V0440}  # deleted in v0.4.40
-        self.assertEqual(len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS), 7)  # v0.4.41: IMAP adapter manifest reopened
+        self.assertEqual(len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS), 7)  # v0.4.42 imap-mailbox-message-fetch
         for exact_batch_command in (
             "source-intake-batch",
             "objet-capture-batch",

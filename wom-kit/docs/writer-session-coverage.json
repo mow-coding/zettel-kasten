@@ -215,6 +215,11 @@
       "route": "environment",
       "evidence": ["test_cli"]
     },
+    "imap-mailbox-message-fetch": {
+      "status": "session_integrated",
+      "route": "environment",
+      "evidence": ["test_imap_mailbox_message_fetch"]
+    },
     "notion-page-recovery": {
       "status": "session_integrated",
       "route": "environment",
