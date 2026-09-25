@@ -890,8 +890,8 @@ def project_runtime_policy_document(raw: bytes | None) -> dict[str, Any] | None:
         "runtime_root": ".zettel-kasten/runtimes/vX.Y.Z",
         "active_version_pin": ".zettel-kasten/installed-version.txt",
         "launcher": ".zettel-kasten/bin/archive.cmd",
-        "supply_lock": "wom-kit/project-runtime-supply-lock-v0.4.45.json",
-        "supply_lock_sha256": "sha256:72b12d1439a660382fa02ea31360f3b27e72dcc3838de75118ed4630e884bb99",
+        "supply_lock": "wom-kit/project-runtime-supply-lock-v0.4.46b16.json",
+        "supply_lock_sha256": "sha256:3fe3c4935857bcbe6de1af59439452ce7b02f437a0241d96588bfefbec021d58",
         "global_path_mutation": False,
     }
     if value != expected:
