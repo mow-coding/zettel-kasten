@@ -1,8 +1,8 @@
 ﻿# WOM-kit Capability Matrix
 
-Version: v0.4.41 implementation and release scope
+Version: v0.4.42 implementation and release scope
 
-Status: v0.4.41 new-user entry, working Notion recovery with trash cleanup, and seven more writers reopened; [triage decision](archive-infra-decision-log-2026-09-24-closed-writer-triage.md).
+Status: v0.4.42 whole IMAP messages with their attachments kept under one approval; [triage decision](archive-infra-decision-log-2026-09-24-closed-writer-triage.md).
 
 Status: v0.4.36 no-dialog grants, letter-168, and session-owned writes truth
 Date: 2026-09-04
@@ -119,7 +119,7 @@ revalidated dimension by dimension without exposing compared values, and
 noninteractive Windows child processes use the common no-console policy while
 native approval and credential interaction remain visible.
 
-The current parser inventory has 106 approval-available, 8 fixed-closed, and
+The current parser inventory has 107 approval-available, 8 fixed-closed, and
 204 not-exposed canonical paths, including ten conditional approval scopes.
 v0.4.40 reopened `remint-reconcile` and `retire-draft-reconcile` and added
 their batch commands (2026-09-24 58-writer triage, group 1), reopened

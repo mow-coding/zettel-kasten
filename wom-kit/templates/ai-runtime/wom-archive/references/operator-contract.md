@@ -1162,6 +1162,17 @@ slice; each PATCH is journaled and a rerun resumes. The token needs Notion's
 "Update content" capability; without it the run stops after one refused
 request (`notion_update_capability_missing`). Page ids are never shown.
 
+Since v0.4.42 `imap-mailbox-message-fetch <archive-root> --source-id <imap source> --batch-id <id> --imap-host <host> --username-ref env:NAME --app-password-ref env:NAME --dry-run|--approve`
+keeps whole mail messages with their attachments. The dry-run reads no
+credential and opens no connection. After one exact approval it reads the two
+environment references, opens the mailbox read-only and fetches with
+`BODY.PEEK[]` (no Seen flag changes), and writes each message byte for byte as
+`workbench/imap-fetch/<batch>/mail-NNNN.eml` plus a ready
+`source-intake-batch-request.json`. Next run
+`source-intake-batch <archive-root> --manifest <that request> --dry-run` to
+capture them as objets. Never print headers, subjects, addresses or bodies to
+the operator unless they open the files themselves.
+
 Historically, an approved `notion-page-recovery` invocation minted one fresh secret-free
 `wom-kit/credential-capability/v0.1` document in the parent. It is bound to the
 exact request and plan digests, reviewer, selected authenticated

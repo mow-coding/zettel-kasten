@@ -29,7 +29,7 @@ BUDGET_CONTRACT_DOCUMENTS = (
 
 class V0413ReleaseDocsTests(unittest.TestCase):
     def test_v0413_is_preserved_as_source_history(self) -> None:
-        expected = "0.4.41"
+        expected = "0.4.42"
         package_init = (KIT / "src" / "wom_kit" / "__init__.py").read_text(
             encoding="utf-8"
         )
@@ -45,15 +45,15 @@ class V0413ReleaseDocsTests(unittest.TestCase):
             (ROOT / "CITATION.cff").read_text(encoding="utf-8"),
         )
         versioning = (ROOT / "VERSIONING.md").read_text(encoding="utf-8")
-        self.assertIn("Current public baseline:\n\n```text\nv0.4.41", versioning)
+        self.assertIn("Current public baseline:\n\n```text\nv0.4.42", versioning)
         self.assertIn("current `wom-kit` package metadata is:\n\n```text\n0.4.20", versioning)
 
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         readme_ko = (ROOT / "README.ko.md").read_text(encoding="utf-8")
         for document in (readme, readme_ko):
-            self.assertIn("releases/download/v0.4.41/wom_kit-0.4.41-py3-none-any.whl", document)
-        self.assertIn("Previous public baseline: v0.4.40.", readme)
-        self.assertIn("이전 공개 기준: v0.4.40.", readme_ko)
+            self.assertIn("releases/download/v0.4.42/wom_kit-0.4.42-py3-none-any.whl", document)
+        self.assertIn("Previous public baseline: v0.4.41.", readme)
+        self.assertIn("이전 공개 기준: v0.4.41.", readme_ko)
         self.assertTrue(RELEASE.is_file())
         self.assertFalse(
             (KIT / "src" / "wom_kit" / "_resources" / "release-notes" / "v0.4.13.md").exists()
@@ -74,11 +74,11 @@ class V0413ReleaseDocsTests(unittest.TestCase):
         policy = json.loads((KIT / "project-runtime-policy.json").read_text(encoding="utf-8"))
         self.assertEqual(
             policy["supply_lock"],
-            "wom-kit/project-runtime-supply-lock-v0.4.41.json",
+            "wom-kit/project-runtime-supply-lock-v0.4.42.json",
         )
         self.assertEqual(
             policy["supply_lock_sha256"],
-            "sha256:422e5d5f8098f17108c68af4b2be30ba2f8aa05efcc8e4eb1931b58e5311fb46",
+            "sha256:7636e45f4d7898d6d053511cae4a495b5ac924ebe892a8dbd2df16bd30d021b5",
         )
         source = (KIT / "src" / "wom_kit" / "project_runtime.py").read_text(
             encoding="utf-8"

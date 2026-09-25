@@ -104,7 +104,7 @@ class V0401ReleaseDocsTests(unittest.TestCase):
 
     def test_current_parser_combines_all_released_writers(self) -> None:
         blocked = archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS
-        self.assertEqual(len(blocked), 7)  # v0.4.41: IMAP adapter manifest reopened
+        self.assertEqual(len(blocked), 7)  # v0.4.42 imap-mailbox-message-fetch
         self.assertNotIn("object-storage-upload", blocked)  # v0.4.33
         self.assertNotIn("migrate", blocked)
         self.assertNotIn("discard-draft", blocked)
@@ -139,15 +139,15 @@ class V0401ReleaseDocsTests(unittest.TestCase):
         # read-only exact-approval-claims (one alias) and the always-dialog
         # exact-approval-claim-finalize writer, and makes revert-edge --approve
         # unconditional (one conditional scope fewer).
-        self.assertEqual(counts["canonical_executable_command_count"], 318)  # v0.4.40: two receipt reconcile batch commands
+        self.assertEqual(counts["canonical_executable_command_count"], 319)  # v0.4.40: two receipt reconcile batch commands
         self.assertEqual(counts["alias_invocation_path_count"], 248)  # v0.4.40: aliases of deleted writers removed
-        self.assertEqual(counts["invocation_path_count"], 566)
+        self.assertEqual(counts["invocation_path_count"], 567)
         # v0.4.33 reopened object-storage-upload (one path moves from fixed-closed to available).
-        self.assertEqual(counts["approval_available_command_count"], 106)  # v0.4.41: IMAP adapter manifest reopened
+        self.assertEqual(counts["approval_available_command_count"], 107)  # v0.4.42 imap-mailbox-message-fetch
         self.assertEqual(counts["approval_fixed_closed_command_count"], 8)
         self.assertEqual(counts["approval_not_exposed_command_count"], 204)  # v0.4.41: init --approve opens
         self.assertEqual(counts["conditional_approval_command_count"], 10)  # v0.4.41: legacy retire in, relation accept unconditional
-        self.assertEqual(counts["dry_run_exposed_command_count"], 273)
+        self.assertEqual(counts["dry_run_exposed_command_count"], 274)
         self.assertEqual(counts["unmatched_fixed_closed_command_count"], 0)
         by_path = {
             row["canonical_path"]: row for row in inventory["commands"]
