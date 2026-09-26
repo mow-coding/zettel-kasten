@@ -750,9 +750,10 @@ class GitBackupWriterTests(unittest.TestCase):
         stage = "before_first_group"
         observed_failure: tuple[str, str] | None = None
 
-        # The CI-only failure is not reproduced locally. Preserve a fixed-code
-        # observation across the generic approval wrapper without changing the
-        # real writer's call, result, exception, or retry behavior.
+        # This test failed only on hosted Windows (later_group_commit,
+        # git_backup_exact_add_failed): a scanner briefly held the index the
+        # first commit had just written. The index-lock tests below reproduce
+        # it. Keep the fixed-code observation across the approval wrapper.
         def observe_failure(error: Exception) -> None:
             nonlocal observed_failure
             if observed_failure is not None:
@@ -831,6 +832,138 @@ class GitBackupWriterTests(unittest.TestCase):
             "2",
         )
         self.assert_remote_matches_head()
+
+    def _run_with_real_add_hook(self, hook) -> tuple[dict[str, Any], list[int]]:
+        """Run one backup; ``hook(attempt)`` runs before each real-index add."""
+
+        prepared = self.plan_and_prepare()
+        original_git_raw = writer._GitBackupBackend._git_raw
+        attempts: list[int] = []
+
+        def hooked_git_raw(backend, args, **kwargs):
+            environment = kwargs.get("extra_environment") or {}
+            if "add" in args and "GIT_INDEX_FILE" not in environment:
+                attempts.append(len(attempts) + 1)
+                hook(len(attempts))
+            return original_git_raw(backend, args, **kwargs)
+
+        with (
+            self.patches()[2],
+            self.patches()[3],
+            patch.object(writer._GitBackupBackend, "_git_raw", new=hooked_git_raw),
+        ):
+            result = writer.execute_git_backup(
+                prepared,
+                selection_manifest_path=self.selection_path,
+                reviewer_claim="person:local-operator",
+                native=_Native(),
+                key_provider=_KeyProvider(),
+            )
+        return result, attempts
+
+    def test_index_lock_held_by_another_git_client_is_retried_and_backup_completes(self) -> None:
+        import threading
+
+        lock = self.root / ".git" / "index.lock"
+        timers: list[threading.Timer] = []
+
+        def hold_lock_briefly(attempt: int) -> None:
+            if attempt == 1:
+                lock.write_bytes(b"")
+                timer = threading.Timer(0.4, lambda: lock.unlink(missing_ok=True))
+                timers.append(timer)
+                timer.start()
+
+        try:
+            result, attempts = self._run_with_real_add_hook(hold_lock_briefly)
+        finally:
+            for timer in timers:
+                timer.join()
+        self.assertTrue(result["ok"], result)
+        self.assertGreaterEqual(len(attempts), 2)
+        self.assertFalse(lock.exists())
+        self.assert_remote_matches_head()
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows refuses to replace an open index file")
+    def test_index_file_held_open_by_a_scanner_is_retried_and_backup_completes(self) -> None:
+        import threading
+
+        index = self.root / ".git" / "index"
+        timers: list[threading.Timer] = []
+
+        def hold_index_briefly(attempt: int) -> None:
+            if attempt == 1:
+                handle = index.open("rb")
+                timer = threading.Timer(0.4, handle.close)
+                timers.append(timer)
+                timer.start()
+
+        try:
+            result, attempts = self._run_with_real_add_hook(hold_index_briefly)
+        finally:
+            for timer in timers:
+                timer.join()
+        self.assertTrue(result["ok"], result)
+        self.assertGreaterEqual(len(attempts), 2)
+        self.assert_remote_matches_head()
+
+    def test_other_add_failures_are_not_retried(self) -> None:
+        prepared = self.plan_and_prepare()
+        attempts: list[list[str]] = []
+
+        def failing_isolated_add(backend, args, **kwargs):
+            environment = kwargs.get("extra_environment") or {}
+            if "add" in args and "GIT_INDEX_FILE" in environment:
+                attempts.append(list(args))
+                sink = kwargs.get("stderr_sink")
+                if sink is not None:
+                    sink.append(b"fatal: pathspec did not match any files\n")
+                return 128, b""
+            return original_git_raw(backend, args, **kwargs)
+
+        original_git_raw = writer._GitBackupBackend._git_raw
+        with (
+            self.patches()[2],
+            self.patches()[3],
+            patch.object(writer._GitBackupBackend, "_git_raw", new=failing_isolated_add),
+        ):
+            with self.assertRaises(ExactHumanApprovalWorkflowError):
+                writer.execute_git_backup(
+                    prepared,
+                    selection_manifest_path=self.selection_path,
+                    reviewer_claim="person:local-operator",
+                    native=_Native(),
+                    key_provider=_KeyProvider(),
+                )
+        self.assertEqual(len(attempts), 1)
+        self.assertEqual(self.git(self.root, "rev-parse", "HEAD").stdout.strip(), self.initial_head)
+
+    def test_index_lock_classification_is_fixed_and_the_runner_caps_stderr(self) -> None:
+        from wom_kit import archive_services
+
+        self.assertTrue(writer._git_index_lock_transient(b"fatal: unable to write new index file\n"))
+        self.assertTrue(
+            writer._git_index_lock_transient(
+                b"fatal: Unable to create 'X/.git/index.lock': File exists.\n"
+            )
+        )
+        for other in (b"", b"fatal: pathspec did not match any files", b"fatal: LF would be replaced by CRLF"):
+            self.assertFalse(writer._git_index_lock_transient(other))
+
+        command = [sys.executable, "-c", "import sys; sys.stderr.write('e' * 20000); print('out')"]
+        sink: list[bytes] = []
+        result = archive_services._wom_kit_project_update_run_capped(
+            command, environment=dict(__import__("os").environ), timeout_seconds=30,
+            max_output_bytes=1024, stderr_sink=sink,
+        )
+        self.assertEqual(result[0], 0)
+        self.assertEqual(result[1].strip(), b"out")
+        self.assertEqual(sink, [b"e" * archive_services._RUN_CAPPED_STDERR_BYTES])
+        discarded = archive_services._wom_kit_project_update_run_capped(
+            command, environment=dict(__import__("os").environ), timeout_seconds=30,
+            max_output_bytes=1024,
+        )
+        self.assertEqual(discarded[0], 0)
 
     def test_8192_changes_split_into_bounded_explicit_complete_groups(self) -> None:
         expected_plan = "sha256:" + "1" * 64

@@ -6,6 +6,8 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+- Git backup no longer stops with `git_backup_exact_add_failed` when another program briefly holds the Git index (a Windows virus scanner or an editor's Git client): the exact `git add` is retried up to four times within about four seconds, only for that fixed condition. Any other failure stops at once as before.
+
 ## v0.4.45 - 2026-09-25
 
 - The helper-AI skill starts with twelve core rules and an intent-to-command table; rare detail moves into focused references (credentials and sessions, long operations, developer letters, models and reasoning).
