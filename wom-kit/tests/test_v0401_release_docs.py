@@ -104,7 +104,7 @@ class V0401ReleaseDocsTests(unittest.TestCase):
 
     def test_current_parser_combines_all_released_writers(self) -> None:
         blocked = archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS
-        self.assertEqual(len(blocked), 5)  # v0.4.44: notion-recover revived
+        self.assertEqual(len(blocked), 5)  # 2026-09-26 coverage audit
         self.assertNotIn("object-storage-upload", blocked)  # v0.4.33
         self.assertNotIn("migrate", blocked)
         self.assertNotIn("discard-draft", blocked)
@@ -143,9 +143,9 @@ class V0401ReleaseDocsTests(unittest.TestCase):
         self.assertEqual(counts["alias_invocation_path_count"], 215)  # v0.4.44: aliases of the superseded IMAP chain removed
         self.assertEqual(counts["invocation_path_count"], 516)
         # v0.4.33 reopened object-storage-upload (one path moves from fixed-closed to available).
-        self.assertEqual(counts["approval_available_command_count"], 103)  # v0.4.44: notion-recover revived
+        self.assertEqual(counts["approval_available_command_count"], 103)  # 2026-09-26 coverage audit
         self.assertEqual(counts["approval_fixed_closed_command_count"], 6)
-        self.assertEqual(counts["approval_not_exposed_command_count"], 192)  # v0.4.44: notion-recover revived
+        self.assertEqual(counts["approval_not_exposed_command_count"], 192)  # 2026-09-26 coverage audit
         self.assertEqual(counts["conditional_approval_command_count"], 10)  # v0.4.41: legacy retire in, relation accept unconditional
         self.assertEqual(counts["dry_run_exposed_command_count"], 256)
         self.assertEqual(counts["unmatched_fixed_closed_command_count"], 0)

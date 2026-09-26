@@ -83,7 +83,7 @@ DB_SOURCE_CANONICAL_SHA256 = (
 )
 RESOURCE_ADDITIONS = frozenset(
     {
-        "release-notes/v0.4.45.md",
+        "release-notes/v0.4.46.md",
     "schemas/activity-cleanup-request-v1.schema.json",
     "templates/ai-runtime/wom-archive/references/storage-scope.md",
     # v0.4.45: the helper-AI skill gained four focused references.
@@ -1206,7 +1206,7 @@ class PrivateObjetMetadataIndexPrivacyGateTests(unittest.TestCase):
             manifest["schema"],
             "wom-kit/package-resource-manifest/v0.1",
         )
-        self.assertEqual(manifest["version"], "0.4.45")
+        self.assertEqual(manifest["version"], "0.4.46")
         self.assertEqual(manifest["file_count"], len(manifest["files"]))
         current_paths = {row["packaged"] for row in manifest["files"]}
         self.assertEqual(

@@ -263,14 +263,16 @@
       ]
     },
     "zet-revision-write": {
-      "status": "pending",
-      "target": "v0.4.21",
-      "note": "Reopened through exact approval in v0.4.21 LR-01; session refs follow with LR-06."
+      "status": "session_integrated",
+      "route": "environment",
+      "reason": "2026-09-26 coverage audit: --approve already reaches the exact approval broker, which resolves the session grant from the environment refs (v0.4.36 letter 168); every operation kind is grantable",
+      "evidence": ["test_writer_session_environment_routes", "test_v0436_letter168"]
     },
     "zet-revision-restore-write": {
-      "status": "pending",
-      "target": "v0.4.21",
-      "note": "Reopened through exact approval in v0.4.21 LR-01; session refs follow with LR-06."
+      "status": "session_integrated",
+      "route": "environment",
+      "reason": "2026-09-26 coverage audit: --approve already reaches the exact approval broker, which resolves the session grant from the environment refs (v0.4.36 letter 168); every operation kind is grantable",
+      "evidence": ["test_writer_session_environment_routes", "test_v0436_letter168"]
     },
     "zet-title-remap-revert": {
       "status": "session_integrated",
@@ -281,25 +283,34 @@
       "note": "Session-scoped compensation runs through zet-title-remap-write --revert-recovery; this command keeps the legacy receipt-bound route."
     },
     "zettel-objet-link": {
-      "status": "pending",
-      "target": "v0.4.20"
+      "status": "session_integrated",
+      "route": "environment",
+      "reason": "2026-09-26 coverage audit: --approve already reaches the exact approval broker, which resolves the session grant from the environment refs (v0.4.36 letter 168); every operation kind is grantable",
+      "evidence": ["test_writer_session_environment_routes", "test_v0436_letter168"]
     },
     "objet-capture-selection": {
-      "status": "pending",
-      "target": "v0.4.20"
+      "status": "session_integrated",
+      "route": "environment",
+      "reason": "2026-09-26 coverage audit: --approve already reaches the exact approval broker, which resolves the session grant from the environment refs (v0.4.36 letter 168); every operation kind is grantable",
+      "evidence": ["test_writer_session_environment_routes", "test_v0436_letter168"]
     },
     "objet-capture": {
-      "status": "pending",
-      "target": "v0.4.20"
+      "status": "session_integrated",
+      "route": "environment",
+      "reason": "2026-09-26 coverage audit: --approve already reaches the exact approval broker, which resolves the session grant from the environment refs (v0.4.36 letter 168); every operation kind is grantable",
+      "evidence": ["test_writer_session_environment_routes", "test_v0436_letter168"]
     },
     "objet-capture-batch": {
-      "status": "pending",
-      "target": "v0.4.21"
+      "status": "session_integrated",
+      "route": "environment",
+      "reason": "2026-09-26 coverage audit: --approve already reaches the exact approval broker, which resolves the session grant from the environment refs (v0.4.36 letter 168); every operation kind is grantable",
+      "evidence": ["test_writer_session_environment_routes", "test_v0436_letter168"]
     },
     "source-intake-chain": {
-      "status": "pending",
-      "target": "v0.4.21",
-      "note": "New in v0.4.21 LR-01e: record, selection and capture under one exact approval; session refs follow with LR-06."
+      "status": "session_integrated",
+      "route": "environment",
+      "reason": "2026-09-26 coverage audit: --approve already reaches the exact approval broker, which resolves the session grant from the environment refs (v0.4.36 letter 168); every operation kind is grantable",
+      "evidence": ["test_writer_session_environment_routes", "test_v0436_letter168"]
     },
     "create-draft": {
       "status": "session_integrated",
@@ -308,98 +319,134 @@
       ]
     },
     "discard-draft": {
-      "status": "pending",
-      "target": "v0.4.21",
-      "note": "Reopened through exact approval in v0.4.21 LR-01; session refs follow with LR-06."
+      "status": "session_integrated",
+      "route": "environment",
+      "reason": "2026-09-26 coverage audit: --approve already reaches the exact approval broker, which resolves the session grant from the environment refs (v0.4.36 letter 168); every operation kind is grantable",
+      "evidence": ["test_writer_session_environment_routes", "test_v0436_letter168"]
     },
     "discard-draft-restore": {
-      "status": "pending",
-      "target": "v0.4.21",
-      "note": "Reopened through exact approval in v0.4.21 LR-01; session refs follow with LR-06."
+      "status": "session_integrated",
+      "route": "environment",
+      "reason": "2026-09-26 coverage audit: --approve already reaches the exact approval broker, which resolves the session grant from the environment refs (v0.4.36 letter 168); every operation kind is grantable",
+      "evidence": ["test_writer_session_environment_routes", "test_v0436_letter168"]
     },
     "mint-zet": {
-      "status": "pending",
-      "target": "v0.4.21"
+      "status": "session_integrated",
+      "route": "environment",
+      "reason": "2026-09-26 coverage audit: --approve already reaches the exact approval broker, which resolves the session grant from the environment refs (v0.4.36 letter 168); every operation kind is grantable",
+      "evidence": ["test_writer_session_environment_routes", "test_v0436_letter168"]
     },
     "mint-zet-batch": {
-      "status": "pending",
-      "target": "v0.4.21",
-      "note": "Reopened under one exact approval per batch in v0.4.21 LR-01; session refs follow with LR-06."
+      "status": "session_integrated",
+      "route": "environment",
+      "reason": "2026-09-26 coverage audit: --approve already reaches the exact approval broker, which resolves the session grant from the environment refs (v0.4.36 letter 168); every operation kind is grantable",
+      "evidence": ["test_writer_session_environment_routes", "test_v0436_letter168"]
     },
     "promote": {
-      "status": "pending",
-      "target": "v0.4.21"
+      "status": "session_integrated",
+      "route": "environment",
+      "reason": "2026-09-26 coverage audit: --approve already reaches the exact approval broker, which resolves the session grant from the environment refs (v0.4.36 letter 168); every operation kind is grantable",
+      "evidence": ["test_writer_session_environment_routes", "test_v0436_letter168"]
     },
     "retire-draft": {
-      "status": "pending",
-      "target": "v0.4.21"
+      "status": "session_integrated",
+      "route": "environment",
+      "reason": "2026-09-26 coverage audit: --approve already reaches the exact approval broker, which resolves the session grant from the environment refs (v0.4.36 letter 168); every operation kind is grantable",
+      "evidence": ["test_writer_session_environment_routes", "test_v0436_letter168"]
     },
     "retire-draft-batch": {
-      "status": "pending",
-      "target": "v0.4.21",
-      "note": "Reopened under one exact approval per batch in v0.4.21 LR-01; session refs follow with LR-06."
+      "status": "session_integrated",
+      "route": "environment",
+      "reason": "2026-09-26 coverage audit: --approve already reaches the exact approval broker, which resolves the session grant from the environment refs (v0.4.36 letter 168); every operation kind is grantable",
+      "evidence": ["test_writer_session_environment_routes", "test_v0436_letter168"]
     },
     "zettel-edge": {
-      "status": "pending",
-      "target": "v0.4.21"
+      "status": "session_integrated",
+      "route": "environment",
+      "reason": "2026-09-26 coverage audit: --approve already reaches the exact approval broker, which resolves the session grant from the environment refs (v0.4.36 letter 168); every operation kind is grantable",
+      "evidence": ["test_writer_session_environment_routes", "test_v0436_letter168"]
     },
     "zettel-edge-batch": {
-      "status": "pending",
-      "target": "v0.4.21",
-      "note": "Reopened under one exact approval per batch in v0.4.21 LR-01; session refs follow with LR-06."
+      "status": "session_integrated",
+      "route": "environment",
+      "reason": "2026-09-26 coverage audit: --approve already reaches the exact approval broker, which resolves the session grant from the environment refs (v0.4.36 letter 168); every operation kind is grantable",
+      "evidence": ["test_writer_session_environment_routes", "test_v0436_letter168"]
     },
     "revert-batch": {
-      "status": "pending",
-      "target": "v0.4.21",
-      "note": "Reopened under one exact approval per batch in v0.4.21 LR-01; session refs follow with LR-06."
+      "status": "session_integrated",
+      "route": "environment",
+      "reason": "2026-09-26 coverage audit: --approve already reaches the exact approval broker, which resolves the session grant from the environment refs (v0.4.36 letter 168); every operation kind is grantable",
+      "evidence": ["test_writer_session_environment_routes", "test_v0436_letter168"]
     },
     "revert-edge": {
-      "status": "pending",
-      "target": "v0.4.21"
+      "status": "session_integrated",
+      "route": "environment",
+      "reason": "2026-09-26 coverage audit: --approve already reaches the exact approval broker, which resolves the session grant from the environment refs (v0.4.36 letter 168); every operation kind is grantable",
+      "evidence": ["test_writer_session_environment_routes", "test_v0436_letter168"]
     },
     "source-fidelity-session-evidence": {
-      "status": "pending",
-      "target": "v0.4.21"
+      "status": "session_integrated",
+      "route": "environment",
+      "reason": "2026-09-26 coverage audit: --approve already reaches the exact approval broker, which resolves the session grant from the environment refs (v0.4.36 letter 168); every operation kind is grantable",
+      "evidence": ["test_writer_session_environment_routes", "test_v0436_letter168"]
     },
     "external-locator-record": {
-      "status": "pending",
-      "target": "v0.4.21"
+      "status": "session_integrated",
+      "route": "environment",
+      "reason": "2026-09-26 coverage audit: --approve already reaches the exact approval broker, which resolves the session grant from the environment refs (v0.4.36 letter 168); every operation kind is grantable",
+      "evidence": ["test_writer_session_environment_routes", "test_v0436_letter168"]
     },
     "duplicate-object-reconcile": {
-      "status": "pending",
-      "target": "v0.4.21"
+      "status": "session_integrated",
+      "route": "environment",
+      "reason": "2026-09-26 coverage audit: --approve already reaches the exact approval broker, which resolves the session grant from the environment refs (v0.4.36 letter 168); every operation kind is grantable",
+      "evidence": ["test_writer_session_environment_routes", "test_v0436_letter168"]
     },
     "human-artifact-register-root": {
-      "status": "pending",
-      "target": "v0.4.24"
+      "status": "session_integrated",
+      "route": "environment",
+      "reason": "2026-09-26 coverage audit: --approve already reaches the exact approval broker, which resolves the session grant from the environment refs (v0.4.36 letter 168); every operation kind is grantable",
+      "evidence": ["test_writer_session_environment_routes", "test_v0436_letter168"]
     },
     "human-artifact-transition": {
-      "status": "pending",
-      "target": "v0.4.24"
+      "status": "session_integrated",
+      "route": "environment",
+      "reason": "2026-09-26 coverage audit: --approve already reaches the exact approval broker, which resolves the session grant from the environment refs (v0.4.36 letter 168); every operation kind is grantable",
+      "evidence": ["test_writer_session_environment_routes", "test_v0436_letter168"]
     },
     "approval-integrity-overlay": {
-      "status": "pending",
-      "target": "v0.4.24"
+      "status": "session_integrated",
+      "route": "environment",
+      "reason": "2026-09-26 coverage audit: --approve already reaches the exact approval broker, which resolves the session grant from the environment refs (v0.4.36 letter 168); every operation kind is grantable",
+      "evidence": ["test_writer_session_environment_routes", "test_v0436_letter168"]
     },
     "migrate": {
-      "status": "pending",
-      "target": "v0.4.24"
+      "status": "session_integrated",
+      "route": "environment",
+      "reason": "2026-09-26 coverage audit: --approve already reaches the exact approval broker, which resolves the session grant from the environment refs (v0.4.36 letter 168); every operation kind is grantable",
+      "evidence": ["test_writer_session_environment_routes", "test_v0436_letter168"]
     },
     "credential-adopt": {
-      "status": "pending",
-      "target": "v0.4.22"
+      "status": "legacy_exception",
+      "reason": "the secure window is where the person enters the provider secret itself; no grant can supply a secret, so it always opens (2026-09-26 coverage audit). It is secret entry, not an approval dialog."
     },
     "object-storage": {
-      "status": "pending",
-      "target": "v0.4.23"
+      "status": "session_integrated",
+      "route": "environment",
+      "reason": "2026-09-26 coverage audit: --approve already reaches the exact approval broker, which resolves the session grant from the environment refs (v0.4.36 letter 168); every operation kind is grantable",
+      "evidence": ["test_writer_session_environment_routes", "test_v0436_letter168"]
     },
     "object-storage-adopt-existing": {
-      "status": "pending",
-      "target": "v0.4.23"
+      "status": "session_integrated",
+      "route": "environment",
+      "reason": "2026-09-26 coverage audit: --approve already reaches the exact approval broker, which resolves the session grant from the environment refs (v0.4.36 letter 168); every operation kind is grantable",
+      "evidence": ["test_writer_session_environment_routes", "test_v0436_letter168"]
     },
     "relation-candidate-decide": {
-      "status": "pending",
-      "target": "v0.4.24"
+      "status": "session_integrated",
+      "route": "environment",
+      "reason": "2026-09-26 coverage audit: --approve already reaches the exact approval broker, which resolves the session grant from the environment refs (v0.4.36 letter 168); every operation kind is grantable",
+      "evidence": ["test_writer_session_environment_routes", "test_v0436_letter168"]
     },
     "project-version-update": {
       "status": "legacy_exception",

@@ -202,7 +202,7 @@ class V0400ReleaseDocsTests(unittest.TestCase):
                 "notion-recover",  # revived in v0.4.44
             }
         )
-        self.assertEqual(len(current_blocked), 5)  # v0.4.44: notion-recover revived
+        self.assertEqual(len(current_blocked), 5)  # 2026-09-26 coverage audit
         self.assertEqual(len(historical_blocked), 79)
         self.assertNotIn("migrate", current_blocked)
         self.assertNotIn("zettel-objet-link", current_blocked)

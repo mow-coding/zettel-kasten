@@ -197,7 +197,7 @@ class CreateDraftSessionTests(unittest.TestCase):
         manifest = json.loads((KIT_ROOT / "docs" / "writer-session-coverage.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["paths"]["create-draft"]["status"], "session_integrated")
         self.assertIn("test_v0423_create_draft_session", manifest["paths"]["create-draft"]["evidence"])
-        self.assertEqual(counts["pending"], 29)  # v0.4.36: restore, offload, claim finalize, upload and compose route through the environment grant
+        self.assertEqual(counts["pending"], 0)  # 2026-09-26 coverage audit: the remaining 28 already route through the environment grant
 
 
 if __name__ == "__main__":
