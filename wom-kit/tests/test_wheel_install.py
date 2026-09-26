@@ -106,7 +106,7 @@ def patch_zip_member_name_bytes(wheel: Path, old_name: str, new_name: str) -> No
 
 
 class InstalledEntrypointTests(unittest.TestCase):
-    PACKAGE_VERSION = "0.4.45"
+    PACKAGE_VERSION = "0.4.46"
     SERVER_NAME = "zettel-kasten-archive-mcp"
 
     def setUp(self) -> None:
@@ -205,7 +205,7 @@ class InstalledEntrypointTests(unittest.TestCase):
 
     def test_installed_wheel_direct_url_retains_exact_pip_hash(self) -> None:
         python = self.scripts / "python.exe"
-        wheel = self.temp_root / "wom_kit-0.4.45-py3-none-any.whl"
+        wheel = self.temp_root / "wom_kit-0.4.46-py3-none-any.whl"
         wheel.write_bytes(b"synthetic exact wheel bytes")
         expected_sha256 = hashlib.sha256(wheel.read_bytes()).hexdigest()
         with mock.patch.object(
@@ -226,7 +226,7 @@ class InstalledEntrypointTests(unittest.TestCase):
 
     def test_installed_wheel_direct_url_missing_hash_fails_closed(self) -> None:
         python = self.scripts / "python.exe"
-        wheel = self.temp_root / "wom_kit-0.4.45-py3-none-any.whl"
+        wheel = self.temp_root / "wom_kit-0.4.46-py3-none-any.whl"
         wheel.write_bytes(b"synthetic exact wheel bytes")
         with mock.patch.object(
             check_wheel_install,
@@ -2762,7 +2762,7 @@ class InstalledRuntimeJourneyHookTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(prefix="wheel-runtime-hook-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
-        self.wheel = self.root / "wom_kit-0.4.45-py3-none-any.whl"
+        self.wheel = self.root / "wom_kit-0.4.46-py3-none-any.whl"
         self.wheel.write_bytes(b"synthetic-hook-wheel")
         self.evidence = {
             "ok": True, "schema": check_wheel_install.INSTALLED_V0419_RUNTIME_SCHEMA,
@@ -2847,11 +2847,11 @@ class InstalledRuntimeJourneyHookTests(unittest.TestCase):
                 self.invoke(evidence)
 
     def test_partial_runtime_evidence_accepts_canonical_beta_but_keeps_proof_checks(self):
-        evidence = {**self.evidence, "package_version": "0.4.45b1"}
+        evidence = {**self.evidence, "package_version": "0.4.46b1"}
         holder = check_wheel_install.WheelPartialEvidence()
         holder.record_runtime(evidence)
         self.assertEqual(holder.public_payload()["installed_v0419_runtime_journey"], evidence)
-        for version in ("0.4.45b0", "0.4.45b01", "0.4.45-beta.1", "0.4.45b1/private", "0.4.45b" + "1" * 65):
+        for version in ("0.4.46b0", "0.4.46b01", "0.4.46-beta.1", "0.4.46b1/private", "0.4.46b" + "1" * 65):
             with self.subTest(version=version), self.assertRaises(check_wheel_install.WheelCheckError):
                 holder.record_runtime({**evidence, "package_version": version})
         with self.assertRaises(check_wheel_install.WheelCheckError):

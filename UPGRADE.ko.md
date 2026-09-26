@@ -2,6 +2,21 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.4.46 Git 색인이 잠깐 잡혀 있어도 멈추지 않는 Git 백업
+
+공개된 뒤 정확한 wheel을 사용하세요. 백신이나 다른 Git 프로그램이 색인을 잠깐 잡고 있으면 Git 백업이 정확한 `git add`를 짧게 다시 시도합니다. 다른 실패는 전처럼 바로 멈춥니다. 세션 권한 연결 목록에서 공통 승인 경로를 쓰는 28개를 연결됨으로 정리했습니다. 추가·삭제된 명령은 없습니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0446-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.46/wom_kit-0.4.46-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+고객은 여전히 검토된 `project-version-update` 절차를 실행해야 합니다. 부트스트랩 설치만으로 프로젝트에 고정된 런타임은 바뀌지 않습니다.
+
 ## v0.4.45 도우미 AI용 짧은 규칙집
 
 공개된 뒤 정확한 wheel을 사용하세요. 도우미 AI 스킬이 핵심 규칙 12개와 의도별 명령표를 먼저 보여 주고, 세부는 참조 문서로 옮겼습니다. 프로젝트 런타임을 업데이트(또는 `runtime-skill-install`)한 뒤 다음 세션에서 AI에게 스킬을 다시 읽게 하세요. 없어진 명령은 없습니다.

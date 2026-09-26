@@ -24,6 +24,21 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.4.46 Git backup survives a briefly held index
+
+Use the exact public wheel after publication. Git backup retries its exact `git add` briefly when a scanner or another Git client holds the index; every other failure stops as before. The writer-session coverage list now records the 28 broker writers as integrated. No command was added or removed.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0446-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.46/wom_kit-0.4.46-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+The customer must still run the reviewed `project-version-update` workflow. Bootstrap installation alone does not update a pinned project runtime.
+
 ## v0.4.45 A short rulebook for the helper AI
 
 Use the exact public wheel after publication. The helper-AI skill changes shape: twelve core rules and an intent-to-command table first, detail in focused references. Update the project runtime (or run `runtime-skill-install`) and ask the AI to re-read the skill in its next session. No command was removed.

@@ -1,6 +1,6 @@
 # Agent Operator Capabilities Manifest
 
-Current release: v0.4.45 a twelve-rule core card and intent table for the helper AI, with model and reasoning guidance; [triage decision](archive-infra-decision-log-2026-09-24-closed-writer-triage.md).
+Current release: v0.4.46 Git backup retries only a briefly held index, and writer-session coverage is complete; [triage decision](archive-infra-decision-log-2026-09-24-closed-writer-triage.md).
 
 Status: v0.4.36 no-dialog grants, letter-168, and writer-session coverage gate
 
