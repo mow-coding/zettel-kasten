@@ -6,6 +6,7 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+- Git backup no longer stops with `git_backup_exact_add_failed` when another program briefly holds the Git index (a Windows virus scanner or an editor's Git client): the exact `git add` is retried up to four times within about four seconds, only for that fixed condition. Any other failure stops at once as before.
 - Writer-session coverage is complete: the 28 writers still listed as pending already reach the exact approval broker, which applies the session grant, and are now recorded as integrated with a traced-route test; `credential-adopt` stays outside because its window is where the person enters the secret itself.
 
 ## v0.4.45 - 2026-09-25
