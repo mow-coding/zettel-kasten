@@ -1603,6 +1603,20 @@ def _pinned_git_runtime(prepared: PreparedGitBackup):
             raise _fail("git_backup_git_executable_drifted")
 
 
+_GIT_INDEX_LOCK_RETRY_DELAYS = (0.25, 0.5, 1.0, 2.0)
+_GIT_INDEX_LOCK_TRANSIENT_MARKERS = (
+    b"unable to write new index file",
+    b"index.lock': File exists",
+)
+
+
+def _git_index_lock_transient(stderr: bytes) -> bool:
+    """Return whether Git failed only because the index file was held."""
+
+    lowered = stderr.lower()
+    return any(marker.lower() in lowered for marker in _GIT_INDEX_LOCK_TRANSIENT_MARKERS)
+
+
 class _GitBackupBackend:
     def __init__(self, prepared: PreparedGitBackup, *, resume: bool = False) -> None:
         self.prepared = prepared
@@ -1627,6 +1641,7 @@ class _GitBackupBackend:
         timeout_seconds: int = planning.GIT_BACKUP_LOCAL_TIMEOUT_SECONDS,
         input_bytes: bytes | None = None,
         extra_environment: Mapping[str, str] | None = None,
+        stderr_sink: list[bytes] | None = None,
     ) -> tuple[int, bytes] | None:
         environment = planning._local_git_environment()
         if extra_environment:
@@ -1637,7 +1652,58 @@ class _GitBackupBackend:
             timeout_seconds=timeout_seconds,
             max_output_bytes=max_output_bytes,
             input_bytes=input_bytes,
+            **({'stderr_sink': stderr_sink} if stderr_sink is not None else {}),
         )
+
+    def _git_index_add(
+        self,
+        paths: Sequence[str],
+        *,
+        extra_environment: Mapping[str, str] | None = None,
+    ) -> tuple[int, bytes] | None:
+        """Run one exact `git add`, retrying only a transient index-file lock.
+
+        On Windows a scanner or another Git client that briefly holds
+        `.git/index` open makes Git fail at once with "unable to write new
+        index file"; a concurrent Git holding `index.lock` fails the same way.
+        Git rolls back its lock in both cases and adding the same exact paths
+        again is idempotent, so a bounded retry is safe.  Any other failure is
+        returned unchanged on the first attempt.  stderr is classified here and
+        never echoed or kept.
+        """
+
+        # Untranslated messages keep the fixed classification locale-neutral.
+        environment = {
+            **(extra_environment or {}),
+            "LC_ALL": "C",
+            "LANGUAGE": "C",
+        }
+        result: tuple[int, bytes] | None = None
+        for delay in (*_GIT_INDEX_LOCK_RETRY_DELAYS, None):
+            errors: list[bytes] = []
+            result = self._git_raw(
+                [
+                    "-c",
+                    "core.autocrlf=false",
+                    "-c",
+                    "core.safecrlf=true",
+                    "add",
+                    "--",
+                    *paths,
+                ],
+                max_output_bytes=64 * 1024,
+                extra_environment=environment,
+                stderr_sink=errors,
+            )
+            if (
+                result is None
+                or result[0] == 0
+                or delay is None
+                or not _git_index_lock_transient(b"".join(errors))
+            ):
+                return result
+            time.sleep(delay)
+        return result
 
     def _git_text(
         self,
@@ -2253,19 +2319,7 @@ class _GitBackupBackend:
             if initialized is None or initialized[0] != 0:
                 raise _fail("git_backup_exact_add_failed")
             for batch in self._path_batches(group.paths):
-                result = self._git_raw(
-                    [
-                        "-c",
-                        "core.autocrlf=false",
-                        "-c",
-                        "core.safecrlf=true",
-                        "add",
-                        "--",
-                        *batch,
-                    ],
-                    max_output_bytes=64 * 1024,
-                    extra_environment=environment,
-                )
+                result = self._git_index_add(batch, extra_environment=environment)
                 if result is None or result[0] != 0:
                     raise _fail("git_backup_exact_add_failed")
             written = self._git_text_with_environment(
@@ -2354,18 +2408,7 @@ class _GitBackupBackend:
         # porcelain commit then receives the same bounded literal path list;
         # `--only` preserves any pre-existing staging outside this group.
         self._exact_add(group)
-        exact_add = self._git_raw(
-            [
-                "-c",
-                "core.autocrlf=false",
-                "-c",
-                "core.safecrlf=true",
-                "add",
-                "--",
-                *group.paths,
-            ],
-            max_output_bytes=64 * 1024,
-        )
+        exact_add = self._git_index_add(group.paths)
         self.invalidate()
         head_after_add = self._head()
         if (
