@@ -1,3 +1,6 @@
+# Sanitized v0.4.47 public installation result
+
+```json
 {
   "schema": "wom-kit/public-release-check/v1",
   "release": "v0.4.47",
@@ -50,3 +53,4 @@
   ],
   "customer": "not_verified"
 }
+```

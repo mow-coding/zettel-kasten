@@ -56,7 +56,7 @@ After publication, anonymous download matched the same size/hash. Two separate
 fresh Windows environments installed from the downloaded file and public URL.
 Both new processes returned `archive 0.4.47`, passed `pip check`, retained the
 expected PEP 610 hash and verified all **180** package resources with zero
-mismatches. See the [sanitized machine result](2026-09-28-v0447-public-install.json).
+mismatches. See the [sanitized machine result](2026-09-28-v0447-public-install.md).
 
 ## Automatic beta
 
