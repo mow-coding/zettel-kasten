@@ -9,8 +9,8 @@ authors:
     email: "mow.coding@gmail.com"
 repository-code: "https://github.com/mow-coding/zettel-kasten"
 license: "MIT"
-version: "0.4.46"
-date-released: "2026-09-26"
+version: "0.4.47"
+date-released: "2026-09-27"
 keywords:
   - "zettelkasten"
   - "local-first"

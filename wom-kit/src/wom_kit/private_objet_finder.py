@@ -51,7 +51,7 @@ REQUEST_SCHEMA_ID = "wom-kit/private-objet-finder-request/v0.1"
 RESULT_SCHEMA_ID = "wom-kit/private-objet-finder-result/v0.1"
 SEARCH_METHOD = "exact_indexed_alias_key_v1"
 AUDIENCE = "private_archive"
-DEFAULT_LIMIT = 20
+DEFAULT_LIMIT = 100
 MAX_LIMIT = 100
 MAX_RAW_QUERY_SCALARS = 6144
 MAX_RAW_QUERY_BYTES = 6144
@@ -142,6 +142,7 @@ KNOWN_OPTIONS = frozenset(
         "--query-stdin",
         "--limit",
         "--format",
+        "--cursor",
     }
 )
 VALUE_OPTIONS = KNOWN_OPTIONS - {"--query-stdin"}
@@ -163,6 +164,7 @@ REQUEST_BLOCKER_CODES = (
     "find_objet_query_transport_duplicate",
     "find_objet_limit_duplicate",
     "find_objet_limit_invalid",
+    "find_objet_cursor_invalid",
     "find_objet_format_duplicate",
     "find_objet_format_unsupported",
     "find_objet_request_schema_unsupported",
@@ -218,7 +220,8 @@ HELP_TEXT = (
     "  --query <value>\n"
     "  --query-stdin\n"
     "  --limit <1..100>\n"
-    "  --format json|text"
+    "  --format json|text\n"
+    "  --cursor <next_cursor> (same query and limit; historical read-only generation)"
 )
 TEXT_HEADERS = {
     "blocked": "BLOCKED",
@@ -437,6 +440,9 @@ def _scan_invocation(argv: Sequence[str]) -> _ParsedInvocation:
 
 
 def _scan_phase_six(parsed: _ParsedInvocation) -> None:
+    cursors = parsed.values["--cursor"]
+    if len(cursors) > 1 or any(not 0 < len(value) <= 2048 for value in cursors):
+        parsed.add_failure(6, "find_objet_cursor_invalid")
     audience_values = parsed.values["--audience"]
     if not audience_values:
         parsed.add_failure(6, "find_objet_audience_missing")
@@ -851,8 +857,17 @@ def _lookup(
     limit: int,
     *,
     before_projection: Any,
+    offset: int = 0,
+    exact_count: bool = False,
 ) -> _LookupOutcome:
     key_select, key_parameters = _query_values_select(query_plan.values)
+    total = None
+    if exact_count:
+        total = api.scalar("SELECT COUNT(DISTINCT a.object_id) FROM objet_name_aliases AS a "
+            f"JOIN ({key_select}) AS q ON a.alias_search_key COLLATE BINARY = q.alias_search_key COLLATE BINARY "
+            "WHERE a.normalization_profile_id = ? COLLATE BINARY", (*key_parameters, NORMALIZATION_PROFILE_ID))
+        if type(total) is not int or not 0 <= total <= 100000 or offset and offset >= total:
+            raise PrivateObjetIndexSessionError("private_objet_metadata_projection_invalid")
     rows = api.fetch_all(
         "SELECT DISTINCT a.object_id "
         "FROM objet_name_aliases AS a "
@@ -860,8 +875,8 @@ def _lookup(
         "ON a.alias_search_key COLLATE BINARY = "
         "q.alias_search_key COLLATE BINARY "
         "WHERE a.normalization_profile_id = ? COLLATE BINARY "
-        "ORDER BY a.object_id COLLATE BINARY LIMIT ?",
-        (*key_parameters, NORMALIZATION_PROFILE_ID, limit + 1),
+        "ORDER BY a.object_id COLLATE BINARY LIMIT ? OFFSET ?",
+        (*key_parameters, NORMALIZATION_PROFILE_ID, limit + 1, offset),
     )
     object_ids: list[str] = []
     for row in rows:
@@ -903,6 +918,9 @@ def _lookup(
                 "evidence": projection["evidence"],
             }
         )
+    if exact_count:
+        return _LookupOutcome(distinct_object_count=total, count_exact=True,
+            count_lower_bound=total, has_more=offset + len(results) < total, results=tuple(results))
     if truncated:
         return _LookupOutcome(
             distinct_object_count=None,
@@ -1242,7 +1260,7 @@ def _expected_incomplete_layers(
     return ()
 
 
-def _validate_result(value: object) -> bool:
+def _validate_result(value: object, *, offset: int = 0) -> bool:
     if type(value) is not dict or tuple(value) != ROOT_KEYS:
         return False
     if (
@@ -1337,8 +1355,8 @@ def _validate_result(value: object) -> bool:
             and distinct >= 2
             and lower == distinct
             and type(lower) is int
-            and returned == min(distinct, value["limit"])
-            and value["has_more"] is (distinct > returned)
+            and returned == min(max(distinct - offset, 0), value["limit"])
+            and value["has_more"] is (distinct > offset + returned)
         )
     else:
         arithmetic = (
@@ -1431,6 +1449,25 @@ def validate_private_objet_finder_result(value: object) -> bool:
     """Pure total validation for the complete finder application contract."""
 
     try:
+        if type(value) is dict and tuple(value) == (*ROOT_KEYS, "pagination"):
+            from . import search_snapshots as snapshots
+            page = value["pagination"]
+            if (value["schema"] != "wom-kit/private-objet-finder-result/v0.2"
+                    or type(page) is not dict or set(page) != {"snapshot", "as_of", "offset", "remaining", "next_cursor",
+                        "historical_read_only", "current_archive_absence_proven", "remote_backup_proven"}
+                    or type(page["snapshot"]) is not str or not snapshots.DIGEST.fullmatch(page["snapshot"])
+                    or type(page["as_of"]) is not str or type(page["offset"]) is not int or page["offset"] < 0
+                    or type(page["remaining"]) is not int or type(value["distinct_object_count"]) is not int
+                    or page["remaining"] != value["distinct_object_count"] - page["offset"] - value["returned"]
+                    or page["remaining"] < 0 or value["has_more"] is not (page["remaining"] > 0)
+                    or (page["next_cursor"] is not None and (type(page["next_cursor"]) is not str or len(page["next_cursor"]) > 2048))
+                    or (page["next_cursor"] is not None) is not value["has_more"]
+                    or page["historical_read_only"] is not True or page["current_archive_absence_proven"] is not False
+                    or page["remote_backup_proven"] is not False):
+                return False
+            base = {key: value[key] for key in ROOT_KEYS}
+            base["schema"] = RESULT_SCHEMA_ID
+            return _validate_result(base, offset=page["offset"])
         return _validate_result(value) is True
     except (KeyboardInterrupt, SystemExit):
         raise
@@ -1440,7 +1477,9 @@ def validate_private_objet_finder_result(value: object) -> bool:
 
 def _render_text(result: Mapping[str, object]) -> str:
     lines = [
-        TEXT_HEADERS[result["status"]],  # type: ignore[index]
+        ("NOT FOUND IN THIS VERIFIED HISTORICAL GENERATION"
+         if "pagination" in result and result["status"] == "not_found_in_index"
+         else TEXT_HEADERS[result["status"]]),  # type: ignore[index]
         f"status={result['status']}",
         f"distinct_object_count={json.dumps(result['distinct_object_count'])}",
         f"count_exact={str(result['count_exact']).lower()}",
@@ -1522,6 +1561,10 @@ def _deliver_result(result: object, output_format: str) -> int:
             )
         else:
             rendered = _render_text(result)  # type: ignore[arg-type]
+            if "pagination" in result:
+                page = result["pagination"]
+                rendered += "\nas_of=" + page["as_of"] + "\nremaining=" + str(page["remaining"])
+                rendered += "\nhistorical_read_only=true\nnext_cursor=" + (page["next_cursor"] or "")
         rendered = rendered.encode("utf-8", errors="strict").decode(
             "utf-8",
             errors="strict",
@@ -1545,6 +1588,39 @@ def _query_present_for_early_failure(parsed: _ParsedInvocation) -> bool:
         and parsed.stdin_count == 0
         and parsed.query_value_missing is False
     )
+
+
+def _execute_page(root, archive_id, query_plan, parsed, *, cursor=None):
+    from . import private_objet_finder_snapshots as snapshots, search_snapshots as common
+    binding = common._sha(["find-objet", common._archive_binding(root), query_plan.values, parsed.selected_limit])
+    try:
+        if cursor:
+            snapshot, offset = common.cursor_decode(cursor, binding)
+        else:
+            refreshed = snapshots.publish(root, archive_id)
+            snapshot, offset = (refreshed.get("snapshot") or snapshots.latest(root)), 0
+            if not snapshot:
+                decision = refreshed["decision"]
+                result = _semantic_result(decision, None, consumer_phase="before_consumer", consumer_completed=False,
+                    observed_case=None, limit=parsed.selected_limit, argv_exposure_possible=parsed.argv_exposure_possible)
+                return _deliver_result(result, parsed.selected_format)
+        with snapshots.open_generation(root, snapshot) as (api, decision, metadata):
+            found = _lookup(api, query_plan, parsed.selected_limit, before_projection=lambda: None,
+                            offset=offset, exact_count=True)
+            result = _semantic_result(decision, found, consumer_phase="private_label_projection", consumer_completed=True,
+                observed_case=decision.case_id, limit=parsed.selected_limit, argv_exposure_possible=parsed.argv_exposure_possible)
+            result["schema"] = "wom-kit/private-objet-finder-result/v0.2"
+            next_offset = offset + len(found.results)
+            result["pagination"] = {"snapshot": snapshot, "as_of": metadata["captured_at"], "offset": offset,
+                "remaining": found.distinct_object_count - next_offset,
+                "next_cursor": common.cursor_encode(snapshot, binding, next_offset) if found.has_more else None,
+                "historical_read_only": True, "current_archive_absence_proven": False, "remote_backup_proven": False}
+        return _deliver_result(result, parsed.selected_format)
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception:
+        return _deliver_result(_request_blocked_result("find_objet_cursor_invalid", query_present=True,
+            limit=parsed.selected_limit, argv_exposure_possible=parsed.argv_exposure_possible), parsed.selected_format)
 
 
 def _execute(
@@ -1641,6 +1717,9 @@ def _execute(
             parsed.selected_format,
         )
 
+    if parsed.values["--cursor"]:
+        return _execute_page(root, archive_id, query_plan, parsed, cursor=parsed.values["--cursor"][0])
+
     lookup: _LookupOutcome | None = None
     observed_case: str | None = None
     consumer_phase = "before_consumer"
@@ -1681,6 +1760,12 @@ def _execute(
         limit=parsed.selected_limit,
         argv_exposure_possible=parsed.argv_exposure_possible,
     )
+    if semantic.get("has_more") is True:
+        return _execute_page(root, archive_id, query_plan, parsed)
+    if semantic.get("private_health_case") == "C9":
+        from .private_objet_finder_snapshots import latest
+        if latest(root) is not None:
+            return _execute_page(root, archive_id, query_plan, parsed)
     return _deliver_result(semantic, parsed.selected_format)
 
 

@@ -60,6 +60,61 @@ class ActivityCleanupTests(unittest.TestCase):
         self.request.write_text(json.dumps(self.document))
         self.assertIn("activity_cleanup_unknown_classification", self.plan()["public"]["blockers"])
 
+    def test_status_reuses_completed_evidence_without_hashing_absent_files(self):
+        import copy
+        candidate = self.plan()
+        material = candidate["material"]
+        prototype = material["items"][0]
+        material["items"] = []
+        for number in range(1070):
+            item = copy.deepcopy(prototype)
+            item["number"] = number
+            if number < 1017:
+                item["path"] = str(self.external / f"done-{number}.txt")
+            material["items"].append(item)
+        def read(name):
+            if name.endswith("-deleted") and int(name.split("-")[1]) < 1017:
+                return {"number": int(name.split("-")[1]), "state": "absent_after_bound_delete_intent"}
+            return None
+        candidate["journal"] = Mock()
+        candidate["journal"].read.side_effect = read
+        with patch.object(cleanup, "file_state", wraps=cleanup.file_state) as probe:
+            result = cleanup.status(candidate)
+        self.assertEqual(result["counts"]["completed"], 1017)
+        self.assertEqual(result["counts"]["pending"], 53)
+        self.assertEqual(probe.call_count, 53)
+        self.assertFalse(result["writes_performed"])
+        self.assertFalse(result["remote_bytes_verified_now"])
+        self.assertNotIn("PRIVATE_SYNTHETIC", json.dumps(result))
+        candidate["journal"].write.assert_not_called()
+
+    def test_status_missing_without_receipt_is_not_completed(self):
+        candidate = self.plan()
+        candidate["journal"].write("intent", candidate["material"])
+        self.source.unlink()
+        result = cleanup.status(self.plan(resume=True))
+        self.assertEqual(result["counts"]["missing_without_evidence"], 1)
+        self.assertEqual(result["counts"]["completed"], 0)
+        self.assertEqual(result["state"], "partial")
+        self.assertFalse(result["writes_performed"])
+
+    def test_conflicting_legacy_journal_is_not_silently_ignored(self):
+        candidate = self.plan()
+        journal = candidate["journal"]
+        journal.write("intent", candidate["material"])
+        original = self.root / journal.relative("intent")
+        legacy = self.root / journal.relative("intent", base=cleanup.LEGACY_ROOT)
+        legacy.parent.mkdir(parents=True)
+        legacy.write_bytes(original.read_bytes())
+        self.assertEqual(journal.read("intent"), candidate["material"])
+        altered = {**candidate["material"], "archive_id": "archive:synthetic:other"}
+        legacy.write_bytes(cleanup.encoded({"document": altered, "mac": journal._mac(altered)}))
+        with self.assertRaisesRegex(cleanup.ActivityCleanupError, "journal_locations_conflict"):
+            journal.read("intent")
+        legacy.write_bytes(b"{}")
+        with self.assertRaisesRegex(cleanup.ActivityCleanupError, "journal_invalid"):
+            journal.read("intent")
+
     def test_directory_only_metadata_churn_keeps_plan_while_content_changes_do_not(self):
         # Letter 173 A: preview and approve differed only in folder size rows
         # (0 <-> 4096 on Windows). Folder size and mtime carry no content that the
@@ -403,6 +458,15 @@ class ActivityCleanupTests(unittest.TestCase):
                     return {"present": False, "presence_state": "unavailable", "verification_state": "unavailable"}
                 return super().head_object(**kwargs)
         transport = InterruptedAfterPut() if getattr(self, "interrupt_after_put", False) else _MemoryTransport()
+        if getattr(self, "during_first_put", None) is not None:
+            original_put = transport.put_object
+            first_put = [True]
+            def during_put(**kwargs):
+                if first_put[0]:
+                    first_put[0] = False
+                    self.during_first_put()
+                return original_put(**kwargs)
+            transport.put_object = during_put
         get_count = [0]
         original_head = transport.head_object
         def count_whole_gets(**kwargs):
@@ -414,6 +478,19 @@ class ActivityCleanupTests(unittest.TestCase):
         native = _Native()
         output = io.StringIO()
         with ExitStack() as stack:
+            if getattr(self, "interrupt_before_upload_checkpoint", False):
+                original_apply = upload._apply_core
+                failed_before_checkpoint = [False]
+                def before_checkpoint(*args, **kwargs):
+                    if not failed_before_checkpoint[0]:
+                        failed_before_checkpoint[0] = True
+                        if getattr(self, "remove_original_upload_control", False):
+                            from wom_kit.exact_operation_manifest import exact_operation_writer_lock
+                            with exact_operation_writer_lock(self.root):
+                                upload._persist_control(args[0])
+                        raise OSError("synthetic interruption before first upload checkpoint")
+                    return original_apply(*args, **kwargs)
+                stack.enter_context(patch.object(upload, "_apply_core", side_effect=before_checkpoint))
             if getattr(self, "interrupt_intake", False):
                 from wom_kit import objet_capture_selection_exact as selection
                 original_selection = selection.execute_existing_intake_capture_selection_in_chain
@@ -437,16 +514,24 @@ class ActivityCleanupTests(unittest.TestCase):
                 stack.enter_context(patch.object(services, "objet_capture_apply", side_effect=interrupt_capture))
             stack.enter_context(patch.object(upload, "plan_object_storage_upload", side_effect=remember))
             stack.enter_context(patch.object(broker, "_production_key_provider", return_value=self.key))
-            stack.enter_context(patch.object(windows, "_CtypesTaskDialogNative", return_value=native))
+            native_factory = getattr(self, "actual_native_factory", None)
+            stack.enter_context(patch.object(windows, "_CtypesTaskDialogNative",
+                **({"side_effect": native_factory} if native_factory else {"return_value": native})))
             stack.enter_context(patch.object(archive_cli, "_object_storage_live_transport_factory", return_value=lambda: transport))
             with redirect_stdout(output), redirect_stderr(io.StringIO()):
                 code = archive_cli.main(["activity-cleanup", str(self.root), "--request", str(self.request),
                     "--approve", "--reviewed-by", "person:synthetic"])
-            if any(getattr(self, flag, False) for flag in ("interrupt_after_put", "interrupt_intake", "interrupt_capture", "interrupt_after_capture")):
+            if any(getattr(self, flag, False) for flag in ("interrupt_after_put", "interrupt_intake", "interrupt_capture", "interrupt_after_capture", "interrupt_before_upload_checkpoint")):
                 partial = json.loads(output.getvalue())
                 self.assertEqual(code, 1, partial)
                 self.assertTrue(self.source.exists())
                 self.assertEqual(transport.put_calls, 1 if getattr(self, "interrupt_after_put", False) else 0)
+                if getattr(self, "remove_original_upload_control", False):
+                    original_journal = cleanup.Journal(self.root, "synthetic-activity", self.key)
+                    pointer = original_journal.read("item-0-upload-control")
+                    control_path = self.root / upload._control_relative(pointer["manifest_sha256"])
+                    self.assertTrue(control_path.is_file())
+                    control_path.unlink()  # Exact synthetic failure injection.
                 output = io.StringIO()
                 with redirect_stdout(output), redirect_stderr(io.StringIO()):
                     code = archive_cli.main(["activity-cleanup", str(self.root), "--request", str(self.request),
@@ -458,14 +543,70 @@ class ActivityCleanupTests(unittest.TestCase):
         self.assertEqual(code, 0, (result, plans))
         self.assertTrue(result["ok"], result)
         self.assertFalse(self.source.exists())
-        self.assertEqual(transport.put_calls, 1)
+        expected_objects = 2 if getattr(self, "preserve_ads", False) else 1
+        self.assertEqual(transport.put_calls, expected_objects)
         if not getattr(self, "interrupt_after_put", False):
-            self.assertEqual(get_count[0], 1, "composed upload and cleanup must share whole-byte proof")
+            self.assertEqual(get_count[0], expected_objects, "composed upload and cleanup must share whole-byte proof")
         self.assertIn(b"synthetic source", transport.objects.values())
         self.assertFalse(any(p.is_file() for p in (self.root / "staging/incoming/activity-synthetic-activity").glob("*")))
         oid = "sha256:" + __import__("hashlib").sha256(b"synthetic source").hexdigest()
         self.assertFalse((self.root / "objects/sha256" / oid[7:9] / oid[7:]).exists())
         self.assertNotIn("PRIVATE_SYNTHETIC", output.getvalue())
+        if getattr(self, "preserve_ads", False):
+            from wom_kit import activity_cleanup_streams as streams
+            journal = cleanup.Journal(self.root, "synthetic-activity", self.key)
+            original = journal.read("intent")["items"][0]
+            association = journal.read("item-0-streams")
+            self.assertEqual(association["streams"], original["alternate_streams"])
+            # Use the actual public restore command after both local objects
+            # and the external original have been removed.
+            def get_object(*, key, sink_path, expected_size, expected_sha256):
+                import hashlib
+                raw = transport.objects[key]
+                Path(sink_path).write_bytes(raw)
+                return {"status_class": "ok", "sink_written": True,
+                    "size_match": len(raw) == expected_size, "checksum_match": hashlib.sha256(raw).hexdigest() == expected_sha256}
+            transport.get_object = get_object
+            restored = self.base / "restored-with-streams.txt"
+            with ExitStack() as restore_stack:
+                restore_stack.enter_context(patch.object(broker, "_production_key_provider", return_value=self.key))
+                restore_stack.enter_context(patch.object(windows, "_CtypesTaskDialogNative", return_value=native))
+                restore_stack.enter_context(patch.object(archive_cli, "_object_storage_live_transport_factory", return_value=lambda: transport))
+                restore_args = ["activity-cleanup", str(self.root), "--request", str(self.request),
+                    "--restore-item", "0", "--destination", str(restored)]
+                preview_out = io.StringIO()
+                with redirect_stdout(preview_out), redirect_stderr(io.StringIO()):
+                    preview_code = archive_cli.main([*restore_args, "--dry-run"])
+                preview = json.loads(preview_out.getvalue())
+                self.assertEqual(preview_code, 0, preview)
+                self.assertFalse(restored.exists())
+                restored_out = io.StringIO()
+                original_journal_write = cleanup.Journal.write
+                def journal_write(journal, name, value):
+                    if getattr(self, "interrupt_restore_publication", False) and name == "restore-" + preview["plan_sha256"][7:]:
+                        raise OSError("synthetic cut after native restore publication")
+                    return original_journal_write(journal, name, value)
+                with redirect_stdout(restored_out), redirect_stderr(io.StringIO()), patch.object(cleanup.Journal, "write", new=journal_write):
+                    restore_code = archive_cli.main([*restore_args, "--approve", "--reviewed-by", "person:synthetic",
+                        "--expected-plan-sha256", preview["plan_sha256"]])
+                restored_result = json.loads(restored_out.getvalue())
+                if getattr(self, "interrupt_restore_publication", False):
+                    self.assertNotEqual(restore_code, 0)
+                    self.assertTrue(restored.exists())
+                    dialogs = native.calls
+                    for _ in range(2):
+                        resumed_out = io.StringIO()
+                        with redirect_stdout(resumed_out), redirect_stderr(io.StringIO()), patch.object(
+                                cleanup.OfficialPreservationBackend, "restore_object", side_effect=AssertionError("already restored objects downloaded again")):
+                            restore_code = archive_cli.main([*restore_args, "--resume", "--reviewed-by", "person:synthetic"])
+                        restored_result = json.loads(resumed_out.getvalue())
+                        self.assertEqual(restore_code, 0, restored_result)
+                    self.assertEqual(native.calls, dialogs)
+                self.assertEqual(restore_code, 0, restored_result)
+                self.assertTrue(restored_result["ok"], restored_result)
+            self.assertEqual(restored.read_bytes(), b"synthetic source")
+            self.assertEqual(Path(str(restored) + ":Zone.Identifier:$DATA").read_bytes(), b"synthetic zone data")
+            self.assertFalse(Path(association["item"]["path"]).exists())
         if getattr(self, "check_remote_only_staging", False):
             from wom_kit.remote_preservation_proof import PreservationVerifier, ProofStore
             duplicate = self.root / "staging/incoming/remote-only-duplicate"

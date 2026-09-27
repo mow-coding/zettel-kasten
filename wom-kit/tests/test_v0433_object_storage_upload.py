@@ -64,6 +64,9 @@ def _external_row(raw: bytes) -> dict:
 
 
 def _run(plan, transport, *, resume=False):
+    if plan.target_preimages is not None:
+        return upload._apply_concurrent(plan, restore_fixture._authority(), reviewed_by=REVIEWER,
+            transport_factory=lambda: transport, resume=resume, progress_hook=None)
     with exact_operation_writer_lock(plan.archive_root) as lock:
         upload._persist_control(plan)
         checkpoints = FileExactOperationCheckpointStore(plan.archive_root, writer_lock=lock)

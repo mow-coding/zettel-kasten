@@ -15,6 +15,7 @@ import re
 import stat
 import uuid
 import subprocess
+import time
 from contextlib import contextmanager
 
 from . import archive_services as services
@@ -194,7 +195,7 @@ def write_private_plan(candidate, destination):
     if path.resolve().is_relative_to(candidate["root"].resolve()):
         raise ActivityCleanupError("activity_cleanup_private_plan_outside_archive_required")
     with path.open("xb") as stream:
-        stream.write(encoded(candidate["material"]))
+        stream.write(encoded(candidate.get("restore", candidate["material"])))
         stream.flush()
         os.fsync(stream.fileno())
 
@@ -271,16 +272,20 @@ def plan(root, request_path, *, resume=False, key_provider=None, progress=None):
         reason = item.get("reason")
         if not isinstance(reason, str) or not reason.strip() or len(reason) > 4096:
             raise ActivityCleanupError("activity_cleanup_classification_reason_required")
-        if role == "unknown":
+        if role == "unknown" and disposition != "retain":
             blockers.append("activity_cleanup_unknown_classification")
-        if disposition not in {"preserve", "discard"}:
+        if disposition not in {"preserve", "discard", "retain"}:
             raise ActivityCleanupError("activity_cleanup_disposition_invalid")
+        if role == "temporary" and disposition == "preserve":
+            blockers.append("activity_cleanup_temporary_upload_requires_reclassification")
         if disposition == "discard" and (role != "temporary" or item.get("discard_intent") is not True):
             blockers.append("activity_cleanup_explicit_temporary_discard_required")
         state = file_state(path)
+        from .activity_cleanup_streams import inventory as stream_inventory
+        streams = stream_inventory(path, state)
         selected.append({"number": number, "path": str(path), "root": matching[0]["path"],
             "role": role, "reason": reason, "disposition": disposition, "state": state,
-            "object_id": "sha256:" + state["sha256"]})
+            "object_id": "sha256:" + state["sha256"], "alternate_streams": streams})
         _notify(progress, "activity-cleanup-hash", "file", len(selected), len(items))
     _notify(progress, "activity-cleanup-hash", "done", len(selected), len(items))
     in_archive = [item for item in selected if _in_archive_ai_scratch(root, Path(item["path"]))]
@@ -311,7 +316,7 @@ def plan(root, request_path, *, resume=False, key_provider=None, progress=None):
     allowed_storage = {"provider_kind", "store_ref", "endpoint_host", "bucket", "region", "access_key_id_ref", "secret_access_key_ref"}
     if not isinstance(storage, dict) or set(storage) - allowed_storage or any(not isinstance(v, str) for v in storage.values()):
         raise ActivityCleanupError("activity_cleanup_storage_arguments_invalid")
-    material = {"schema": "wom-kit/activity-cleanup-intent/v1", "activity_id": activity,
+    material = {"schema": "wom-kit/activity-cleanup-intent/v2", "activity_id": activity,
         "archive_id": services.read_archive_id(root), "request_sha256": request_sha,
         "roots": scopes, "items": selected, "directories": directories, "storage": storage,
         "blockers": sorted(set(blockers))}
@@ -325,6 +330,15 @@ def public_plan(material):
     return {"schema": "wom-kit/activity-cleanup-result/v1", "ok": not material["blockers"],
         "dry_run": True, "plan_sha256": digest(material), "item_count": len(material["items"]),
         "selected_bytes": sum(i["state"]["size"] for i in material["items"]),
+        "alternate_stream_count": sum(len(i.get("alternate_streams", [])) for i in material["items"]),
+        "alternate_stream_bytes": sum(s["size"] for i in material["items"] for s in i.get("alternate_streams", [])),
+        "classification": {"preserve_count": sum(i["disposition"] == "preserve" for i in material["items"]),
+            "discard_without_upload_count": sum(i["disposition"] == "discard" for i in material["items"]),
+            "retain_without_upload_count": sum(i["disposition"] == "retain" for i in material["items"]),
+            "preserve_file_bytes": sum(i["state"]["size"] for i in material["items"] if i["disposition"] == "preserve"),
+            "discard_file_bytes": sum(i["state"]["size"] for i in material["items"] if i["disposition"] == "discard"),
+            "retain_file_bytes": sum(i["state"]["size"] for i in material["items"] if i["disposition"] == "retain"),
+            "file_bytes_are_not_deduplicated_remote_or_reclaimed_disk_bytes": True},
         "items": [{"number": i["number"], "role": i["role"], "disposition": i["disposition"],
                    "size_bytes": i["state"]["size"]} for i in material["items"]],
         "git": [s["git"] for s in material["roots"]], "blockers": material["blockers"],
@@ -385,11 +399,18 @@ class Journal:
             raise ActivityCleanupError("activity_cleanup_private_journal_not_ignored") from None
     def read(self, name):
         path = services.archive_internal_path(self.root, self.relative(name))
-        if not path.exists():
-            legacy = services.archive_internal_path(self.root, self.relative(name, base=LEGACY_ROOT))
-            if not legacy.exists():
-                return None
-            path = legacy
+        legacy = services.archive_internal_path(self.root, self.relative(name, base=LEGACY_ROOT))
+        documents = []
+        for candidate in (path, legacy):
+            if os.path.lexists(candidate):
+                documents.append(self._read_signed(candidate))
+        if not documents:
+            return None
+        if any(encoded(value) != encoded(documents[0]) for value in documents[1:]):
+            raise ActivityCleanupError("activity_cleanup_journal_locations_conflict")
+        return documents[0]
+
+    def _read_signed(self, path):
         try:
             _safe_path(path)
             if path.stat().st_size > MAX_CONTROL_BYTES:
@@ -408,11 +429,295 @@ class Journal:
             failure_code="object_storage_offload_receipt_conflict", max_bytes=MAX_CONTROL_BYTES)
 
 
+class ReconciliationJournal:
+    """Append new approval/intent without changing original item evidence."""
+    def __init__(self, original, identity):
+        self.original, self.identity = original, identity
+        self.root, self.activity, self.key_provider = original.root, original.activity, original.key_provider
+
+    def writer_lock(self):
+        return self.original.writer_lock()
+
+    def _name(self, name):
+        if name in {"intent", "approval", "completed"} or name.startswith("attempt-"):
+            return "reconcile-" + self.identity + "-" + name
+        return name
+
+    def read(self, name):
+        return self.original.read(self._name(name))
+
+    def write(self, name, document):
+        return self.original.write(self._name(name), document)
+
+
+def reconcile_plan(candidate):
+    """Reconcile authenticated old intent with live unfinished files only.
+
+    Never reinterpret a missing item as unexecuted. Completed files are neither
+    opened nor imported, including when a new file now occupies the old name.
+    A new parent approval explicitly includes newly observed ADS preservation.
+    Original per-item and child-operation evidence remains the resume authority.
+    """
+    from .activity_cleanup_streams import inventory as stream_inventory
+    import copy
+    original, journal = candidate["material"], candidate["journal"]
+    if journal.read("intent") != original:
+        raise ActivityCleanupError("activity_cleanup_reconcile_original_invalid")
+    material = copy.deepcopy(original)
+    observations, held = [], []
+    for item in material["items"]:
+        name, path = "item-" + str(item["number"]), Path(item["path"])
+        deleted = journal.read(name + "-deleted")
+        if deleted:
+            if deleted != {"number": item["number"], "state": "absent_after_bound_delete_intent"}:
+                raise ActivityCleanupError("activity_cleanup_deleted_record_invalid")
+            observations.append({"number": item["number"], "state": "completed_no_reprocessing"})
+            continue
+        pending = journal.read(name + "-delete-intent")
+        if not os.path.lexists(path):
+            state = "completion_record_pending" if (pending and pending.get("number") == item["number"]
+                and pending.get("state") == item["state"]) else "missing_without_evidence"
+            if state == "missing_without_evidence":
+                held.append(item["number"])
+            observations.append({"number": item["number"], "state": state})
+            continue
+        try:
+            if file_state(path) != item["state"]:
+                raise ActivityCleanupError("activity_cleanup_file_changed")
+            current_streams = stream_inventory(path, item["state"])
+            if "alternate_streams" in item and item["alternate_streams"] != current_streams:
+                raise ActivityCleanupError("activity_cleanup_streams_changed")
+            item["alternate_streams"] = current_streams
+            observations.append({"number": item["number"], "state": "pending_recovery"})
+        except (ActivityCleanupError, OSError):
+            held.append(item["number"])
+            observations.append({"number": item["number"], "state": "changed_or_unavailable_retained"})
+    material.update(schema="wom-kit/activity-cleanup-intent/v2",
+        reconciliation={"original_intent_sha256": digest(original), "observations": observations,
+                        "retained_item_numbers": held, "original_item_receipts_reused": True})
+    identity = digest(material)[7:]
+    public = public_plan(material)
+    public["reconciliation"] = material["reconciliation"]
+    public["pending_recovery_count"] = sum(row["state"] in {"pending_recovery", "completion_record_pending"} for row in observations)
+    public["completed_items_not_reprocessed"] = sum(row["state"] == "completed_no_reprocessing" for row in observations)
+    return {**candidate, "material": material, "journal": ReconciliationJournal(journal, identity), "public": public}
+
+
+def _restore_request_label(number, destination):
+    return "restore-request-" + digest([number, str(Path(destination))])[7:]
+
+
+def restore_plan(candidate, *, number, destination, resume=False):
+    if type(number) is not int or number < 0 or not isinstance(destination, str) or not Path(destination).is_absolute():
+        raise ActivityCleanupError("activity_cleanup_restore_arguments_invalid")
+    selected = [item for item in candidate["material"]["items"] if item["number"] == number]
+    if len(selected) != 1:
+        raise ActivityCleanupError("activity_cleanup_restore_item_unknown")
+    item = selected[0]
+    preserved = candidate["journal"].read("item-" + str(number) + "-preserved")
+    if not preserved or preserved.get("object_id") != item["object_id"] or preserved.get("size") != item["state"]["size"]:
+        raise ActivityCleanupError("activity_cleanup_restore_preservation_missing")
+    streams = candidate["journal"].read("item-" + str(number) + "-streams")
+    recorded_inventory = candidate["journal"].read("item-" + str(number) + "-stream-inventory")
+    if "alternate_streams" not in item and streams is None and recorded_inventory is None:
+        raise ActivityCleanupError("activity_cleanup_restore_stream_inventory_unknown")
+    if streams is not None and streams.get("parent_object_id") != item["object_id"]:
+        raise ActivityCleanupError("activity_cleanup_stream_evidence_changed")
+    if item.get("alternate_streams") and (streams is None or streams.get("streams") != item["alternate_streams"]):
+        raise ActivityCleanupError("activity_cleanup_stream_preservation_missing")
+    target = Path(destination)
+    if not target.name or ":" in target.name:
+        raise ActivityCleanupError("activity_cleanup_restore_arguments_invalid")
+    _safe_path(target.parent)
+    if target.resolve().is_relative_to(candidate["root"].resolve()):
+        raise ActivityCleanupError("activity_cleanup_restore_external_destination_required")
+    if os.path.lexists(target) and not resume:
+        raise ActivityCleanupError("activity_cleanup_restore_destination_exists")
+    material = {"schema": "wom-kit/activity-cleanup-restore-intent/v1",
+        "activity_id": candidate["material"]["activity_id"], "number": number,
+        "destination": str(target), "parent_state": _directory_state(target.parent),
+        "body_object_id": item["object_id"], "body_state": item["state"],
+        "streams": streams["streams"] if streams else [], "stream_item": streams["item"] if streams else None}
+    saved = None
+    if resume:
+        saved = candidate["journal"].read(_restore_request_label(number, destination))
+        if not saved or saved.get("intent") != material:
+            raise ActivityCleanupError("activity_cleanup_restore_original_missing_or_changed")
+    return {**candidate, "restore": material,
+        "restore_approval": saved,
+        "restore_public": {"ok": True, "dry_run": True, "plan_sha256": digest(material), "item_number": number,
+            "body_bytes": item["state"]["size"], "alternate_stream_count": len(material["streams"]),
+            "new_file_only": True, "writes_performed": False, "private_values_echoed": False}}
+
+
+def restore_binding(candidate):
+    material = candidate["restore"]
+    return ExactOperationApprovalBinding(operation=ExactHumanApprovalOperation.activity_cleanup,
+        plan_sha256=digest(material), target_binding_sha256=digest(material), warning_codes=(),
+        review_binding_codes=("activity_cleanup_restore_new_file",))
+
+
+def restore_item(candidate, *, reviewer, claim, backend):
+    from .operation_target_leases import TargetLeases
+    with TargetLeases(candidate["root"], [("file", candidate["restore"]["destination"])]):
+        return _restore_item_held(candidate, reviewer=reviewer, claim=claim, backend=backend)
+
+
+def _restored_state_matches(candidate, path, approved):
+    from . import activity_cleanup_streams as streams
+    material = candidate["restore"]
+    actual = file_state(path)
+    if actual != approved or streams.inventory(path, actual) != material["streams"]:
+        raise ActivityCleanupError("activity_cleanup_restore_destination_changed")
+
+
+def verify_restore_completion(candidate):
+    material, journal = candidate["restore"], candidate["journal"]
+    final = journal.read("restore-" + digest(material)[7:])
+    staged = journal.read("restore-publish-" + digest(material)[7:])
+    if not final or final.get("intent") != material or not staged:
+        raise ActivityCleanupError("activity_cleanup_restore_completion_missing")
+    _restored_state_matches(candidate, Path(material["destination"]), staged["state"])
+    return {**candidate["restore_public"], **final["result"], "dry_run": False,
+        "writes_performed": False, "replayed_completed_record": True}
+
+
+def _restore_item_held(candidate, *, reviewer, claim, backend):
+    from . import activity_cleanup_streams as streams
+    material = candidate["restore"]
+    binding = restore_binding(candidate)
+    context = binding.context(archive_id=services.read_archive_id(candidate["root"]), reviewer_claim=reviewer)
+    services._require_exact_human_operation_approval(candidate["root"], binding, reviewer_claim=reviewer,
+        expected_plan_sha256=binding.plan_sha256, expected_target_binding_sha256=binding.target_binding_sha256, claim=claim)
+    claim.assert_ready_for_context(context)
+    target = Path(material["destination"])
+    journal = candidate["journal"]
+    identity = digest(material)[7:]
+    approval = {"intent": material, "approval_id": claim.public_summary()["approval_id"]}
+    journal.write(_restore_request_label(material["number"], str(target)), approval)
+    if _directory_state(target.parent) != material["parent_state"]:
+        raise ActivityCleanupError("activity_cleanup_restore_destination_changed")
+    staged = journal.read("restore-publish-" + identity)
+    if staged:
+        if staged.get("intent_sha256") != digest(material) or staged.get("approval_id") != approval["approval_id"]:
+            raise ActivityCleanupError("activity_cleanup_restore_evidence_changed")
+        pending = Path(staged["temporary"])
+        if pending.parent != target.parent or not re.fullmatch(r"\.wom-restore-[0-9a-f]{32}\.partial", pending.name):
+            raise ActivityCleanupError("activity_cleanup_restore_evidence_changed")
+        if os.path.lexists(target):
+            _restored_state_matches(candidate, target, staged["state"])
+        else:
+            _restored_state_matches(candidate, pending, staged["state"])
+            claim.assert_ready_for_context(context)
+            from .object_storage_restore import _atomic_move_file_no_replace
+            with services._activity_group_bound_directory_chain(Path(target.anchor), target.parent):
+                _atomic_move_file_no_replace(pending, target)
+            _restored_state_matches(candidate, target, staged["state"])
+        result = {"ok": True, "body_verified": True, "alternate_streams_verified": len(material["streams"]),
+            "new_file_created": True, "recovered_original_publication": True}
+        with streams.hold(target, staged["state"], expected=material["streams"]) as (_rows, _handles, verify):
+            claim.assert_ready_for_context(context)
+            verify()
+            journal.write("restore-" + identity, {"intent": material, "result": result,
+                "approval_id": approval["approval_id"]})
+            verify()
+        return {**candidate["restore_public"], **result, "dry_run": False, "writes_performed": True}
+    if os.path.lexists(target):
+        raise ActivityCleanupError("activity_cleanup_restore_destination_changed")
+    item = next(item for item in candidate["material"]["items"] if item["number"] == material["number"])
+    body = backend.restore_object(item)
+    if material["stream_item"] is not None:
+        bundle = backend.restore_object(material["stream_item"])
+    else:
+        # Empty ADS inventory is still verified by the same restore path.
+        bundle = services.archive_internal_path(candidate["root"], ROOT + "/" + candidate["material"]["activity_id"]
+            + "/restore-empty-" + material["body_object_id"][7:] + ".zip")
+        streams.build_bundle(body, file_state(body), [], bundle)
+    claim.assert_ready_for_context(context)
+    if _directory_state(target.parent) != material["parent_state"]:
+        raise ActivityCleanupError("activity_cleanup_restore_destination_changed")
+    def before_publish(temporary, state):
+        claim.assert_ready_for_context(context)
+        journal.write("restore-publish-" + identity, {"intent_sha256": digest(material),
+            "temporary": str(temporary), "state": state, "approval_id": approval["approval_id"]})
+    result = streams.restore_new(body, bundle, target, material["body_state"], material["streams"],
+        before_publish=before_publish)
+    staged = journal.read("restore-publish-" + identity)
+    with streams.hold(target, staged["state"], expected=material["streams"]) as (_rows, _handles, verify):
+        claim.assert_ready_for_context(context)
+        verify()
+        journal.write("restore-" + identity, {"intent": material, "result": result,
+            "approval_id": claim.public_summary()["approval_id"]})
+        verify()
+    return {**candidate["restore_public"], **result, "dry_run": False, "writes_performed": True}
+
+
+def status(candidate):
+    """Read authenticated intent and item evidence without entering any writer.
+
+    Preserved receipts describe a past verification, never a fresh remote check.
+    Missing files without bound deletion evidence remain unresolved effects.
+    """
+    material, journal = candidate["material"], candidate["journal"]
+    approval = journal.read("approval")
+    expected = approval_binding(candidate)
+    approval_matches = bool(approval and approval.get("plan_sha256") == expected.plan_sha256
+                            and approval.get("target_binding_sha256") == expected.target_binding_sha256)
+    counts = {"completed": 0, "pending": 0, "held": 0, "missing_without_evidence": 0,
+              "replacement_retained": 0, "preserved_receipt": 0}
+    results = []
+    for item in material["items"]:
+        label = "item-" + str(item["number"])
+        deleted = journal.read(label + "-deleted")
+        pending = journal.read(label + "-delete-intent")
+        preserved = journal.read(label + "-preserved")
+        has_path = os.path.lexists(item["path"])
+        row = {"number": item["number"], "state": "pending", "code": None,
+               "preserved_receipt_present": bool(preserved),
+               "remote_bytes_verified_now": False}
+        counts["preserved_receipt"] += bool(preserved)
+        if deleted:
+            if deleted.get("number") != item["number"] or deleted.get("state") != "absent_after_bound_delete_intent":
+                row.update(state="held", code="activity_cleanup_deleted_record_invalid")
+            else:
+                row["state"] = "replacement_retained" if has_path else "completed"
+        elif not has_path:
+            if pending and pending.get("number") == item["number"] and pending.get("state") == item["state"]:
+                row.update(state="held", code="activity_cleanup_delete_completion_requires_reconcile")
+            else:
+                row.update(state="missing_without_evidence", code="activity_cleanup_missing_without_delete_intent")
+        else:
+            try:
+                if file_state(item["path"]) != item["state"]:
+                    row.update(state="held", code="activity_cleanup_file_changed")
+            except (ActivityCleanupError, OSError):
+                row.update(state="held", code="activity_cleanup_file_state_unavailable")
+        controls = {}
+        for operation in ("chain", "upload", "offload"):
+            control = journal.read(label + "-" + operation + "-control")
+            controls[operation] = "recorded_effects_not_reconciled" if control else "not_recorded_effects_unknown"
+        row["child_evidence"] = controls
+        counts[row["state"]] += 1
+        results.append(row)
+    complete = counts["completed"] == len(material["items"])
+    return {"schema": "wom-kit/activity-cleanup-status/v1", "ok": True, "dry_run": True,
+            "state": "selected_files_completed" if complete else "partial",
+            "plan_sha256": digest(material), "approval_evidence_matches": approval_matches,
+            "counts": counts, "items": results, "remaining": remaining_inventory(material),
+            "whole_folder_cleanup_complete": False, "remote_bytes_verified_now": False,
+            "writes_performed": False, "private_values_echoed": False,
+            "next_action": "review_remaining_scope" if complete else "reconcile_authenticated_item_evidence"}
+
+
 def execute(candidate, *, reviewer, claim, backend):
     if os.name != "nt":
         raise ActivityCleanupError("activity_cleanup_native_delete_not_supported")
-    with candidate["journal"].writer_lock():
-        return _execute_locked(candidate, reviewer=reviewer, claim=claim, backend=backend)
+    from .operation_target_leases import TargetLeases
+    _notify(candidate.get("progress"), "activity-cleanup-items", "waiting-for-activity-writer")
+    with TargetLeases(candidate["root"], [("activity", candidate["material"]["activity_id"])]) as leases:
+        candidate["activity_writer_wait_seconds"] = leases.wait_seconds
+        with candidate["journal"].writer_lock():
+            return _execute_locked(candidate, reviewer=reviewer, claim=claim, backend=backend)
 
 
 def _execute_locked(candidate, *, reviewer, claim, backend):
@@ -421,6 +726,7 @@ def _execute_locked(candidate, *, reviewer, claim, backend):
     if os.name != "nt":
         raise ActivityCleanupError("activity_cleanup_native_delete_not_supported")
     material, root, journal = candidate["material"], candidate["root"], candidate["journal"]
+    execution_started = time.monotonic()
     if material["blockers"]:
         raise ActivityCleanupError("activity_cleanup_plan_blocked")
     binding = approval_binding(candidate)
@@ -454,7 +760,14 @@ def _execute_locked(candidate, *, reviewer, claim, backend):
         if deleted:
             results.append({"number": number, "state": "already_deleted" if not os.path.lexists(path) else "replacement_retained"})
             continue
+        if number in material.get("reconciliation", {}).get("retained_item_numbers", []):
+            results.append({"number": number, "state": "retained", "code": "activity_cleanup_reconcile_item_requires_review"})
+            continue
+        if item["disposition"] == "retain":
+            results.append({"number": number, "state": "retained", "code": "activity_cleanup_classification_retained_no_upload"})
+            continue
         try:
+            item_started = time.monotonic()
             authorize()
             pending = journal.read(name + "-delete-intent")
             if not os.path.lexists(path):
@@ -465,20 +778,31 @@ def _execute_locked(candidate, *, reviewer, claim, backend):
                 continue
             if file_state(path) != item["state"]:
                 raise ActivityCleanupError("activity_cleanup_file_changed")
+            if "alternate_streams" in item:
+                from .activity_cleanup_streams import inventory as stream_inventory
+                if stream_inventory(path, item["state"]) != item["alternate_streams"]:
+                    raise ActivityCleanupError("activity_cleanup_streams_changed")
+                journal.write(name + "-stream-inventory", {"object_id": item["object_id"],
+                    "streams": item["alternate_streams"]})
             _assert_no_new_git_worktree_dependency(item)
             if item["disposition"] == "preserve":
+                _notify(progress, "activity-cleanup-items", "preserving", number + 1, len(material["items"]))
                 backend.preserve(item, journal)
                 authorize()
+                _notify(progress, "activity-cleanup-items", "verifying-remote", number + 1, len(material["items"]))
                 # Even a resumed preserved item must check current remote bytes.
                 if not backend.verify(item):
                     raise ActivityCleanupError("activity_cleanup_remote_preservation_unverified")
             if item["disposition"] == "preserve":
                 authorize()
+                _notify(progress, "activity-cleanup-items", "offloading-verified-copy", number + 1, len(material["items"]))
                 backend.finish_local_preservation(item)
             authorize()
+            _notify(progress, "activity-cleanup-items", "deleting-bound-original", number + 1, len(material["items"]))
             journal.write(name + "-delete-intent", {"number": number, "state": item["state"],
                 "preservation": "remote_verified" if item["disposition"] == "preserve" else "explicit_discard"})
-            _delete_exact_approved_file(item["root"], path, item["state"], allow_readonly=True)
+            _delete_exact_approved_file(item["root"], path, item["state"], allow_readonly=True,
+                                        expected_streams=item.get("alternate_streams"))
             journal.write(name + "-deleted", {"number": number, "state": "absent_after_bound_delete_intent"})
             results.append({"number": number, "state": "deleted"})
         except Exception as error:
@@ -487,6 +811,9 @@ def _execute_locked(candidate, *, reviewer, claim, backend):
             if not isinstance(code, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,127}", code):
                 code = "activity_cleanup_item_failed"
             results.append({"number": number, "state": "retained", "code": code})
+        finally:
+            if results and results[-1]["number"] == number:
+                results[-1]["processing_seconds"] = round(time.monotonic() - item_started, 6)
     _notify(progress, "activity-cleanup-items", "done", len(results), len(material["items"]))
     _notify(progress, "activity-cleanup-directories", "start", 0, len(material["directories"]))
     directory_results = []
@@ -510,6 +837,27 @@ def _execute_locked(candidate, *, reviewer, claim, backend):
         "state": "completed" if success else "partial", "writes_performed": True,
         "items": results, "directories": directory_results, "whole_folder_preservation_claimed": False,
         "remaining": remaining_inventory(material)}
+    deleted_now = {row["number"] for row in results if row["state"] == "deleted"}
+    unique_preserved = {item["object_id"]: item["state"]["size"] for item in material["items"]
+                        if item["disposition"] == "preserve"}
+    result["measurements"] = {
+        "activity_writer_wait_seconds": round(candidate.get("activity_writer_wait_seconds", 0), 6),
+        "approval_resolution_seconds": candidate.get("approval_resolution_seconds"),
+        "processing_seconds_including_child_waits": round(time.monotonic() - execution_started, 6),
+        "newly_deleted_file_payload_bytes": sum(item["state"]["size"] + sum(s["size"] for s in item.get("alternate_streams", []))
+            for item in material["items"] if item["number"] in deleted_now),
+        "unique_body_bytes_selected_for_preservation": sum(unique_preserved.values()),
+        "unique_body_bytes_excludes_ads_bundle_overhead": True,
+        "actual_physical_disk_reclaimed_bytes": None,
+        "physical_disk_measurement_state": "not_attributable_from_file_payload_sizes",
+        "completed_item_count": sum(row["state"] in {"deleted", "already_deleted", "already_absent_after_intent"} for row in results),
+        "retained_item_count": sum(row["state"] in {"retained", "replacement_retained"} for row in results),
+        "unprocessed_item_count": len(material["items"]) - len(results),
+    }
+    if isinstance(backend, OfficialPreservationBackend):
+        observe = getattr(backend.transport, "transfer_observation", None)
+        result["measurements"]["remote_transfer"] = observe() if callable(observe) else {"state": "transport_measurement_unavailable"}
+        result["measurements"]["manifest_lookup"] = backend.manifest_lookup.observations()
     journal.write("attempt-" + uuid.uuid4().hex, result)
     if success and journal.read("completed") is None:
         journal.write("completed", result)
@@ -526,6 +874,7 @@ class OfficialPreservationBackend:
         from .remote_preservation_proof import PreservationVerifier, ProofStore, ExecutionTransport
         self.root, self.material = candidate["root"], candidate["material"]
         self.journal = candidate["journal"]
+        self.progress = candidate.get("progress")
         self.reviewer, self.transport_factory = reviewer, transport_factory
         storage = self.material["storage"]
         self.provider_kind = storage.get("provider_kind", "cloudflare-r2")
@@ -533,6 +882,8 @@ class OfficialPreservationBackend:
         self.transport = ExecutionTransport(transport_factory())
         self.verifier = PreservationVerifier(self.transport, store_ref=self.store_ref,
             execution_sha256=digest(self.material), proof_store=ProofStore(self.root))
+        from .manifest_lookup import ManifestLookup
+        self.manifest_lookup = ManifestLookup(self.root)
 
     def _staged(self, item):
         suffix = Path(item["path"]).suffix.lower()
@@ -584,7 +935,7 @@ class OfficialPreservationBackend:
 
     def _remote(self, item):
         from .object_storage_restore import _remote_location
-        rows = [row for row in services.load_manifest_records(self.root) if row.get("object_id") == item["object_id"]]
+        rows = self.manifest_lookup.rows(item["object_id"])
         keys = {location["remote_key"] for row in rows
             if (location := _remote_location(row, provider_kind=self.provider_kind, store_ref=self.store_ref))}
         if len(keys) != 1:
@@ -593,17 +944,37 @@ class OfficialPreservationBackend:
 
     def _storage_step(self, item, operation, fresh_plan):
         """Resume the original authenticated child execution, not a new claim."""
-        from . import exact_approval_claims as claims, object_storage_upload_exact as upload, object_storage_offload as offload
+        from . import exact_approval_claims as claims, object_storage_upload_exact as upload, object_storage_offload as offload, object_storage_restore as restore
         from .exact_human_approval import exact_human_approval_context_sha256, _authenticated_claim_reference_core
         from .exact_operation_manifest import ExactOperationApprovalAuthority, exact_operation_execution_sha256
         from .exact_human_approval_workflow import _production_key_provider
-        module = upload if operation == "upload" else offload
+        module = {"upload": upload, "offload": offload, "restore": restore}[operation]
         label = "item-" + str(item["number"]) + "-" + operation + "-control"
         saved = self.journal.read(label)
         load = getattr(module, "load_object_storage_" + operation + "_plan")
-        plan = load(self.root, manifest_sha256=saved["manifest_sha256"]) if saved else fresh_plan()
+        if saved:
+            try:
+                plan = load(self.root, manifest_sha256=saved["manifest_sha256"])
+            except Exception:
+                control_path = services.archive_internal_path(self.root, module._control_relative(saved["manifest_sha256"]))
+                if os.path.lexists(control_path):
+                    raise ActivityCleanupError("activity_cleanup_child_control_present_but_invalid") from None
+                # A missing control is not evidence of no prior effects. Only
+                # reconstruct the exact original plan, then authenticate its
+                # claim/checkpoint below; never substitute a different scope.
+                plan = fresh_plan()
+                if (plan.manifest is None or plan.manifest.manifest_sha256 != saved["manifest_sha256"]
+                        or exact_human_approval_context_sha256(getattr(module, "object_storage_" + operation + "_context")(
+                            plan, reviewer_claim=self.reviewer)) != saved["context_sha256"]):
+                    raise ActivityCleanupError("activity_cleanup_child_control_missing_original_not_reconstructable") from None
+                from .exact_operation_manifest import exact_operation_writer_lock
+                with exact_operation_writer_lock(self.root, timeout_seconds=30):
+                    module._persist_control(plan)
+                plan = load(self.root, manifest_sha256=saved["manifest_sha256"])
+        else:
+            plan = fresh_plan()
         if not plan.approveable:
-            if plan.blockers:
+            if getattr(plan, "blockers", ()):
                 raise ActivityCleanupError("activity_cleanup_" + operation + "_plan_blocked")
             return {"ok": True, "no_new_effects": True}
         context = getattr(module, "object_storage_" + operation + "_context")(plan, reviewer_claim=self.reviewer)
@@ -620,9 +991,9 @@ class OfficialPreservationBackend:
             row = prior[0]
             if row["status"] == "succeeded":
                 if operation == "upload":
-                    valid = self.verify(item)
+                    valid = self._verify_body(item)
                 else:
-                    valid = module.verify_object_storage_offload(plan).get("ok") is True
+                    valid = getattr(module, "verify_object_storage_" + operation)(plan).get("ok") is True
                 if not valid:
                     raise ActivityCleanupError("activity_cleanup_child_completion_changed")
                 return {"ok": True, "prior_completed_child": True}
@@ -630,8 +1001,33 @@ class OfficialPreservationBackend:
                 lambda key: _authenticated_claim_reference_core(self.root, row["approval_id"], key)[0], create_if_missing=False)
             execution = exact_operation_execution_sha256(plan.manifest,
                 approval_authority=ExactOperationApprovalAuthority.from_reference(reference))
-            result = getattr(module, "resume_object_storage_" + operation)(plan, reviewer_claim=self.reviewer,
-                approval_id=row["approval_id"], execution_sha256=execution, transport_factory=lambda: self.transport)
+            from .exact_operation_manifest import validate_exact_operation_resume_checkpoint_read_only, verify_exact_operation
+            checkpoint = validate_exact_operation_resume_checkpoint_read_only(self.root, plan.manifest,
+                execution_sha256=execution, approval_authority=ExactOperationApprovalAuthority.from_reference(reference))
+            if checkpoint:
+                result = getattr(module, "resume_object_storage_" + operation)(plan, reviewer_claim=self.reviewer,
+                    approval_id=row["approval_id"], execution_sha256=execution, transport_factory=lambda: self.transport)
+            else:
+                from .exact_human_approval_workflow import _resume_exact_human_approved_write_core
+                def original_preimage(claim):
+                    claim.assert_ready_for_context(context)
+                    if operation == "upload":
+                        from . import object_storage_preservation as preservation
+                        verifier = module._Verifier(plan,
+                            preservation.ObjectStorageRemoteQueryAdapter(self.transport),
+                            preservation._ManifestBoundPreservationLedger(plan))
+                    else:
+                        verifier = module._Verifier(plan)
+                    return (self.journal.read(label) == {"manifest_sha256": plan.manifest.manifest_sha256, "context_sha256": context_sha}
+                        and verify_exact_operation(plan.manifest, verifier=verifier, state="pre")["all_match"] is True)
+                def continue_original(claim):
+                    if not original_preimage(claim):
+                        raise ActivityCleanupError("activity_cleanup_child_effects_require_reconcile")
+                    options = {"reviewed_by": self.reviewer} if operation == "upload" else {}
+                    return module._apply_core(plan, claim, context=context, transport_factory=lambda: self.transport,
+                                              resume=False, **options)
+                result = _resume_exact_human_approved_write_core(self.root, context, row["approval_id"],
+                    original_preimage, continue_original)
         else:
             result = getattr(module, "execute_object_storage_" + operation)(plan, reviewer_claim=self.reviewer,
                 transport_factory=lambda: self.transport)
@@ -677,12 +1073,13 @@ class OfficialPreservationBackend:
             lambda claim: journal.read(label) == control,
             lambda claim: chain._execute_core(plan, claim, reviewer_claim=self.reviewer, _resume=True))
 
-    def preserve(self, item, journal):
+    def _preserve_body(self, item, journal):
         from . import source_intake_chain_exact as chain, object_storage_upload_exact as upload
         from .object_storage_scope import ObjectScope
         from .object_storage_offload import _create_or_match_document
         name = "item-" + str(item["number"])
         if journal.read(name + "-intake") is None:
+            _notify(self.progress, "activity-cleanup-items", "staging-source", item["number"], len(self.material["items"]))
             staged = self._stage(item)
             relative = ROOT + "/" + self.material["activity_id"] + "/" + name + "-source-plan.json"
             saved_plan = journal.read(name + "-intake-plan")
@@ -701,20 +1098,21 @@ class OfficialPreservationBackend:
         # Reuse existing object bytes across identical sources; each item still
         # retains its own intake and original source association in the journal.
         if self._remote(item) is None or journal.read(name + "-upload-control"):
+            _notify(self.progress, "activity-cleanup-items", "uploading-or-resuming", item["number"], len(self.material["items"]))
             self._storage_step(item, "upload", lambda: upload.plan_object_storage_upload(self.root,
                 provider_kind=self.provider_kind, store_ref=self.store_ref,
                 scope=ObjectScope("object_list", (item["object_id"],))))
-        if not self.verify(item):
+        if not self._verify_body(item):
             raise ActivityCleanupError("activity_cleanup_remote_preservation_unverified")
         journal.write(name + "-preserved", {"object_id": item["object_id"], "size": item["state"]["size"],
             "state": "remote_verified", "source_link_preserved": True})
 
-    def verify(self, item):
+    def _verify_body(self, item):
         key = self._remote(item)
         return key is not None and self.verifier.verify(key=key, object_id=item["object_id"],
             size=item["state"]["size"]).get("state") == "verified_match"
 
-    def finish_local_preservation(self, item):
+    def _finish_body(self, item):
         from . import object_storage_offload as offload
         from .object_storage_scope import ObjectScope
         from .legacy_cleanup_bound_delete import _delete_exact_approved_file
@@ -726,6 +1124,68 @@ class OfficialPreservationBackend:
             state = file_state(staged)
             if state["sha256"] != item["state"]["sha256"] or state["size"] != item["state"]["size"]:
                 raise ActivityCleanupError("activity_cleanup_staging_conflict")
-            if not self.verify(item):
+            if not self._verify_body(item):
                 raise ActivityCleanupError("activity_cleanup_remote_preservation_unverified")
             _delete_exact_approved_file(self.root, staged, state)
+
+    def _stream_item(self, item, *, create=False):
+        from .activity_cleanup_streams import build_bundle
+        rows = item.get("alternate_streams", [])
+        if not rows:
+            return None
+        label = "item-" + str(item["number"]) + "-streams"
+        saved = self.journal.read(label)
+        if saved is not None:
+            if saved.get("parent_object_id") != item["object_id"] or saved.get("streams") != rows:
+                raise ActivityCleanupError("activity_cleanup_stream_evidence_changed")
+            return saved["item"]
+        if not create:
+            raise ActivityCleanupError("activity_cleanup_stream_preservation_missing")
+        path = services.archive_internal_path(self.root, ROOT + "/" + self.material["activity_id"] + "/" + label + ".zip")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _safe_path(path.parent)
+        build_bundle(Path(item["path"]), item["state"], rows, path)
+        state = file_state(path)
+        child = {"number": str(item["number"]) + "-streams", "path": str(path), "root": str(path.parent),
+                 "role": "evidence", "disposition": "preserve", "state": state, "object_id": "sha256:" + state["sha256"]}
+        self.journal.write(label, {"parent_object_id": item["object_id"], "streams": rows, "item": child})
+        return child
+
+    def preserve(self, item, journal):
+        self._preserve_body(item, journal)
+        child = self._stream_item(item, create=True)
+        if child is not None:
+            self._preserve_body(child, journal)
+        if not self.verify(item):
+            raise ActivityCleanupError("activity_cleanup_remote_preservation_unverified")
+
+    def verify(self, item):
+        if not self._verify_body(item):
+            return False
+        child = self._stream_item(item)
+        return child is None or self._verify_body(child)
+
+    def finish_local_preservation(self, item):
+        self._finish_body(item)
+        child = self._stream_item(item)
+        if child is not None:
+            self._finish_body(child)
+            path = Path(child["path"])
+            if os.path.lexists(path):
+                if not self._verify_body(child) or file_state(path) != child["state"]:
+                    raise ActivityCleanupError("activity_cleanup_stream_preservation_changed")
+                from .legacy_cleanup_bound_delete import _delete_exact_approved_file
+                _delete_exact_approved_file(self.root, path, child["state"])
+
+    def restore_object(self, item):
+        from . import object_storage_restore as restore
+        from .object_storage_scope import ObjectScope
+        path = self.root / "objects/sha256" / item["object_id"][7:9] / item["object_id"][7:]
+        if not os.path.lexists(path):
+            self._storage_step(item, "restore", lambda: restore.plan_object_storage_restore(self.root,
+                provider_kind=self.provider_kind, store_ref=self.store_ref,
+                scope=ObjectScope("object_list", (item["object_id"],))))
+        state = file_state(path)
+        if state["sha256"] != item["state"]["sha256"] or state["size"] != item["state"]["size"]:
+            raise ActivityCleanupError("activity_cleanup_restore_body_changed")
+        return path

@@ -289,7 +289,7 @@ class PresenterBoundGrantTests(_permission_fixture.SessionPermissionModeTests):
                 self.root, context, decision, key, session_presenter=good), create_if_missing=True)
         del archive_id
 
-    def test_grant_never_covers_a_flagged_legacy_identifier(self) -> None:
+    def test_full_access_keeps_warning_validation_without_an_extra_dialog(self) -> None:
         self.assertEqual(permission.grant_blocking_warnings(("legacy_identifier_in_new_record", "other")),
                          ("legacy_identifier_in_new_record",))
         self.assertEqual(permission.grant_blocking_warnings(("warning_set_sha256:abc",)), ())
@@ -321,9 +321,9 @@ class PresenterBoundGrantTests(_permission_fixture.SessionPermissionModeTests):
         self.assertEqual(self.native.calls, dialogs)
         with patch.dict(os.environ, self.env(task)):
             written = self.draft_call(*flags, *self.approve_flags(preview), "--allow-warnings")
-        self.assertEqual(self.native.calls, dialogs + 1)  # the grant did not cover it
-        self.assertTrue(written["exact_human_approval"]["live_dialog_shown"])
-        self.assertEqual(written["session_permission_refused"]["reason_code"], "work_session_grant_warning_review_required")
+        self.assertEqual(self.native.calls, dialogs)
+        self.assertFalse(written["exact_human_approval"]["live_dialog_shown"])
+        self.assertNotIn("session_permission_refused", written)
         self.assertEqual(written["quality_check"]["warning_explanations"][0]["code"], "legacy_identifier_in_new_record")
         claim = self.claim_document(written["exact_human_approval"]["approval_id"])
         self.assertIn("legacy_identifier_in_new_record", claim["context"]["warning_codes"])

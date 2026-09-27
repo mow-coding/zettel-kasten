@@ -1377,6 +1377,11 @@ class FileExactOperationCheckpointStore:
             or writer_lock.archive_root != self.archive_root
         ):
             raise _fail("exact_operation_writer_lock_required")
+        self._initialize(self.archive_root, writer_lock)
+
+    def _initialize(self, archive_root, writer_lock) -> None:
+        """Internal storage mechanics; concrete constructors validate authority."""
+        self.archive_root = _exact_operation_archive_root(archive_root)
         writer_lock.verify_held()
         self.writer_lock = writer_lock
         self.private_root = _ensure_private_directory(

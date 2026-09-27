@@ -8,6 +8,7 @@ state; a timeout, stale PID or label can never revoke the operating-system lock.
 
 from contextlib import contextmanager
 import os
+import math
 from pathlib import Path
 import time
 from typing import Callable, Iterator
@@ -19,7 +20,7 @@ from . import project_update_transaction as durable
 class WorkSessionWaitError(RuntimeError):
     def __init__(self, code):
         super().__init__(code if code in {
-            "work_session_wait_cancelled", "work_session_wait_root_changed",
+            "work_session_wait_cancelled", "work_session_wait_root_changed", "work_session_wait_timeout", "work_session_wait_invalid",
         } else "work_session_wait_root_changed")
 
 
@@ -37,6 +38,7 @@ def wait_for_archive_writer(
     archive_root: Path, *,
     cancel_requested: Callable[[], bool],
     progress: Callable[[dict], None],
+    timeout_seconds: float = 30,
 ) -> Iterator[exact.ExactOperationWriterLock]:
     """Wait without stealing; cancellation is observed before every attempt.
 
@@ -44,6 +46,8 @@ def wait_for_archive_writer(
     cancellation latency; progress is emitted immediately and every five seconds.
     No approval or domain callback occurs before a real held lock is yielded.
     """
+    if type(timeout_seconds) not in {int, float} or not math.isfinite(timeout_seconds) or not 0 <= timeout_seconds <= 60:
+        raise WorkSessionWaitError("work_session_wait_invalid")
     started = time.monotonic()
     if cancel_requested():
         raise WorkSessionWaitError("work_session_wait_cancelled")
@@ -63,6 +67,10 @@ def wait_for_archive_writer(
             if error.code != "exact_operation_writer_busy":
                 raise
             now = time.monotonic()
+            if now - started >= timeout_seconds:
+                progress({"stage": "writer_wait_timed_out", "elapsed_seconds": round(now - started, 3),
+                          "holder_unchanged": True, "next_action": "resume_original_operation_after_writer_finishes"})
+                raise WorkSessionWaitError("work_session_wait_timeout")
             if now - last_progress >= 5:
                 progress({"stage": "waiting_for_writer", "elapsed_seconds": round(now - started, 3)})
                 last_progress = now

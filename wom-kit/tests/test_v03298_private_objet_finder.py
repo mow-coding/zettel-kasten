@@ -116,7 +116,7 @@ def _install_private_authority(root: Path) -> None:
     receipt_path = root.joinpath(
         *PurePosixPath(dry_run["plan"]["receipt_relative_path"]).parts
     )
-    receipt_path.parent.mkdir(parents=True)
+    receipt_path.parent.mkdir(parents=True, exist_ok=True)
     receipt_path.write_bytes(contract.stored_json_bytes(receipt))
 
 

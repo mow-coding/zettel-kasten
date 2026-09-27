@@ -23,6 +23,19 @@ class WorkSessionWaitTests(unittest.TestCase):
         self.root = Path(self.temp.name) / "archive"
         self.root.mkdir()
 
+    def test_bounded_wait_returns_without_releasing_holder(self):
+        events = []
+        with exact.ExactOperationWriterLock(self.root) as owner:
+            started = time.monotonic()
+            with self.assertRaisesRegex(waiting.WorkSessionWaitError, "work_session_wait_timeout"):
+                with waiting.wait_for_archive_writer(self.root, cancel_requested=lambda: False,
+                        progress=events.append, timeout_seconds=0.15):
+                    self.fail("contender entered")
+            self.assertLess(time.monotonic() - started, 1.5)
+            owner.verify_held()
+            self.assertEqual(events[-1]["stage"], "writer_wait_timed_out")
+            self.assertTrue(events[-1]["holder_unchanged"])
+
     def test_pre_cancel_does_not_create_control_files(self):
         with self.assertRaisesRegex(waiting.WorkSessionWaitError, "work_session_wait_cancelled"):
             with waiting.wait_for_archive_writer(self.root, cancel_requested=lambda: True, progress=lambda row: None):

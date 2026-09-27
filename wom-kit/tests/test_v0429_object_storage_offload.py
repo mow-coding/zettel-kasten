@@ -219,6 +219,9 @@ def _aged_row(raw: bytes, *, captured_at: str = OLD, source: str = "b4_local_obj
 
 
 def _run_offload(plan, transport, *, resume=False):
+    if plan.concurrent:
+        return offload._apply_concurrent(plan, restore_tests._authority(), transport_factory=lambda: transport,
+                                         resume=resume, progress_hook=None)
     with exact_operation_writer_lock(plan.archive_root) as lock:
         offload._persist_control(plan)
         checkpoints = FileExactOperationCheckpointStore(plan.archive_root, writer_lock=lock)
@@ -552,7 +555,7 @@ class OffloadExecutionTests(unittest.TestCase):
                 torn = root / offload._marker_relative(plan, plan.specs[0], execution_sha256=execution)
                 torn.parent.mkdir(parents=True, exist_ok=True)
                 torn.write_bytes(b'{"schema_version": "wom-kit/object-storage-offload-proof-marker/v0.1", "obj')
-                result = offload._apply_with_store(plan, authority, transport, checkpoints, resume=False, progress_hook=None)
+            result = _run_offload(plan, transport)
             self.assertTrue(result["ok"], result)
             self.assertEqual(transport.head_calls, 1)
             self.assertFalse(restore_tests._dest(root, raw).exists())

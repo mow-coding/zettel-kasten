@@ -154,7 +154,7 @@ class ObjetRediscoveryPlanTests(unittest.TestCase):
                 "unchecked",
                 "not_implemented",
                 "unchecked",
-                "not_implemented",
+                "unchecked",
             ],
         )
         self.assertEqual(
@@ -168,9 +168,9 @@ class ObjetRediscoveryPlanTests(unittest.TestCase):
         )
         self.assertEqual(
             private_metadata_layer["evidence_scope"],
-            "The v0.3.296 approved private metadata writer exists, but this release "
-            "implements no receipt-bound private metadata index or private "
-            "rediscovery query and proves no private index freshness.",
+            "Use archive find-objet <archive-root> <query> for private receipt-bound "
+            "metadata lookup and continue with its cursor. This summary does not "
+            "execute that lookup or prove current private-source freshness.",
         )
         self.assertEqual(
             private_metadata_layer["reason_codes"],

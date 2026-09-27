@@ -615,6 +615,7 @@ class ObjectStorageFormalAdoptionPlanTests(unittest.TestCase):
                 parent,
                 [{"sha256": row["sha256"], "remote_key": f"custom/{row['sha256']}"}],
             )
+            before = {p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob("*") if p.is_file()}
             stdout, stderr = io.StringIO(), io.StringIO()
             with redirect_stdout(stdout), redirect_stderr(stderr):
                 status = cli_main(
@@ -642,7 +643,7 @@ class ObjectStorageFormalAdoptionPlanTests(unittest.TestCase):
             self.assertNotIn(row["sha256"], serialized)
             self.assertNotIn("custom/", serialized)
             self.assertEqual(stderr.getvalue(), "")
-            self.assertFalse((root / "profiles" / "local" / "exact-operations").exists())
+            self.assertEqual({p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob("*") if p.is_file()}, before)
 
 
 if __name__ == "__main__":

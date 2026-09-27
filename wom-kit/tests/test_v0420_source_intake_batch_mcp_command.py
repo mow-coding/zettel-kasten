@@ -16,6 +16,7 @@ from wom_kit import exact_operation_manifest as exact
 from wom_kit import mcp_server as mcp
 from wom_kit import _mcp_session_transport as transport
 from wom_kit import source_intake_session_command as command
+from wom_kit import work_session_intake_concurrent as concurrent
 from wom_kit import work_session_source_intake_workflow as workflow
 
 
@@ -273,24 +274,21 @@ class BatchMcpHeldRoutingTests(unittest.TestCase):
             values["reviewed_by"] = "person:synthetic-reviewer"
         return values
 
-    def test_all_modes_reuse_real_runtime_and_held_lock_with_unchanged_closed_projection(self):
-        roots, helds = [], []
+    def test_all_modes_check_runtime_without_archive_lock_and_keep_closed_projection(self):
+        roots = []
         original_guard = command.sessions._runtime_guard
         def guard(root):
             roots.append(root)
             return original_guard(root)
-        for mode, name in (("preview", "_preview_session_source_intake_batch_held"),
-                           ("apply", "_execute_session_source_intake_batch_held"),
-                           ("resume", "_resume_session_source_intake_batch_held")):
-            def run(root, *inputs, held, **kwargs):
-                self.assertIs(type(held), exact.ExactOperationWriterLock)
-                held.verify_held()
-                helds.append(held)
+        for mode in ("preview", "apply", "resume"):
+            def run(root, *inputs, **kwargs):
+                self.assertNotIn("held", kwargs)
                 self.assertEqual(root, self.root)
                 self.assertEqual(inputs, () if mode == "resume" else (self.root / "private-input.json",))
                 return {**raw_result(mode), "private": PrivateObject(), "operation_evidence": {"path": PRIVATE}}
-            with patch.object(workflow, name, side_effect=run) as domain, \
-                 patch.object(command.sessions, "_runtime_guard", side_effect=guard):
+            with patch.object(concurrent, "resume" if mode == "resume" else "fresh", side_effect=run) as domain, \
+                 patch.object(command.sessions, "_runtime_guard", side_effect=guard), \
+                 patch.object(command.sessions, "_write", side_effect=AssertionError("global lane at entry")):
                 response = mcp.tool_source_intake_batch(self.arguments(mode))
             domain.assert_called_once()
             self.assertFalse(response["isError"])
@@ -299,12 +297,9 @@ class BatchMcpHeldRoutingTests(unittest.TestCase):
             self.assertNotIn(PRIVATE, json.dumps(response))
             self.assertNotIn(str(self.root), json.dumps(response))
         self.assertEqual(roots, [self.root] * 3)
-        for held in helds:
-            with self.assertRaises(exact.ExactOperationManifestError):
-                held.verify_held()
 
     def test_runtime_and_observed_wait_cancel_refuse_before_domain(self):
-        with patch.object(workflow, "_resume_session_source_intake_batch_held") as domain:
+        with patch.object(concurrent, "resume") as domain:
             with patch.object(command.sessions, "_runtime_guard", side_effect=command.sessions.WorkSessionServiceError("project_runtime_mismatch")):
                 response = mcp.tool_source_intake_batch(self.arguments("resume"))
             self.assertEqual(response["structuredContent"]["reason_code"], "project_runtime_mismatch")

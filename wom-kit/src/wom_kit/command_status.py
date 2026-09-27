@@ -1408,7 +1408,7 @@ def _selected_canonical_parser_path(
 # and its public schema.  An added option/changed handler invalidates coverage
 # until its effects have been reviewed; aliases share the canonical parser.
 _AUDITED_INVOCATION_OPTIONS = {
-    "work-session": ("--action --kind --ref --client-app-ref --workstream-ref --page-size --cursor "
+    "work-session": ("--caller-status --action --kind --ref --client-app-ref --workstream-ref --page-size --cursor "
                      "--dry-run --approve --apply --resume --review-original --task-route-ref "
                      "--work-session-ref --target-app-ref --request-stdin --progress --no-progress --format"),
     "index": "--format --output --progress",

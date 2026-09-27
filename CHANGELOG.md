@@ -4,7 +4,15 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
-## Unreleased
+## v0.4.47 - 2026-09-27
+
+- Split large Git attribute inspections into bounded UTF-8 batches and report fixed failure causes without exposing paths. Session backup keeps the specific cause and preserves checks for other activities.
+- Add read-only `activity-cleanup --status` to distinguish completed, pending, replaced and unexplained missing files. Conflicting authenticated legacy and private journals now block instead of silently preferring one.
+- A valid full-access grant no longer opens an additional approval dialog for legacy-identifier warnings. Warning evidence and explicit domain validation remain in place.
+
+- Recover selected activity items with body/ADS preservation and official interrupted restore; classify disposable temporary files before upload.
+- Use target leases for transfers/intake/zet work, exact external staging, consistent search cursors and caller capability diagnostics.
+- Bind cleanup evidence to scoped handoff and report measured transfer/progress separately from unmeasured physical disk recovery.
 
 ## v0.4.46 - 2026-09-26
 

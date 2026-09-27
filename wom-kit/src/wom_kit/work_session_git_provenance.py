@@ -165,6 +165,10 @@ def _observe(store, held, options):
             or plan.get("change_summary", {}).get("count") != len(capture.get("private_changes", []))):
         blockers = plan.get("blockers") if isinstance(plan.get("blockers"), list) else []
         cause = next((code for code in blockers if type(code) is str and SAFE_CAUSE_CODE_RE.fullmatch(code)), None)
+        if cause == "changed_path_attribute_state_unavailable":
+            cause = next((code for code in blockers if type(code) is str
+                          and code.startswith("changed_path_attribute_")
+                          and code != cause and SAFE_CAUSE_CODE_RE.fullmatch(code)), cause)
         raise WorkSessionGitProvenanceError("work_session_git_snapshot_unavailable",
                                             cause_code=cause or ("git_backup_plan_inspection_incomplete"
                                                                  if plan.get("inspection_complete") is not True else None))

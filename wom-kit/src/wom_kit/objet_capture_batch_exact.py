@@ -399,7 +399,7 @@ def _load_intake_completion(
         or not isinstance(authentication.get("approval_reference"), dict)
         or not isinstance(authentication.get("terminal_mac"), str)
         or not isinstance(evidence, dict)
-        or evidence.get("schema") != source_intake_batch_exact.EVIDENCE_SCHEMA
+        or evidence.get("schema") not in {source_intake_batch_exact.EVIDENCE_SCHEMA, "wom-kit/source-intake-batch-exact/v3"}
         or not isinstance(request_sha, str)
         or _SHA256_RE.fullmatch(request_sha) is None
     ):
@@ -456,7 +456,7 @@ def _validated_intake_chain(
         or result.get("mode") != "apply"
         or not isinstance(result.get("approval_binding_sha256"), str)
         or not isinstance(evidence, dict)
-        or evidence.get("schema") != source_intake_batch_exact.EVIDENCE_SCHEMA
+        or evidence.get("schema") not in {source_intake_batch_exact.EVIDENCE_SCHEMA, "wom-kit/source-intake-batch-exact/v3"}
         or not isinstance(counts, dict)
         or not isinstance(digests, dict)
         or not isinstance(request, dict)
@@ -542,11 +542,15 @@ def _validated_intake_chain(
         item_bindings=item_bindings,
     )
     expected_item_count = len(item_bindings)
+    copy_count = counts.get("external_copy_count", 0)
+    if (type(copy_count) is not int or not 0 <= copy_count <= expected_item_count
+            or (evidence.get("schema") == "wom-kit/source-intake-batch-exact/v3") != (copy_count > 0)):
+        raise _fail("objet_capture_batch_intake_chain_invalid")
     if (
         counts.get("source_item_count") != expected_item_count
         or counts.get("prepared_capture_request_count") != 1
-        or result.get("item_count") != expected_item_count + 1
-        or result.get("field_count") != expected_item_count + 1
+        or result.get("item_count") != expected_item_count + 1 + copy_count
+        or result.get("field_count") != expected_item_count + 1 + copy_count
         or digests.get("prepared_capture_request_sha256")
         != current_request_sha256
         or digests.get("intake_capture_chain_sha256") != chain_binding

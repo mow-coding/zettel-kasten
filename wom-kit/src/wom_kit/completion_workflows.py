@@ -5905,6 +5905,9 @@ def zettel_objet_link_apply(
 
     parent_stack = ExitStack()
     try:
+        from .operation_target_leases import TargetLeases
+        parent_stack.enter_context(TargetLeases(root, [
+            ("zet", private["safe_zettel_id"]), ("object", private["object_id"])]))
         control_parent_binding = parent_stack.enter_context(
             archive_services._activity_group_bound_directory_chain(
                 root,

@@ -1,14 +1,14 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.4.46",
+  "version": "0.4.47",
   "source_of_truth": "wom-kit source resource directories",
-  "file_count": 179,
+  "file_count": 180,
   "files": [
     {
       "source": "schemas/activity-cleanup-request-v1.schema.json",
       "packaged": "schemas/activity-cleanup-request-v1.schema.json",
-      "bytes": 2366,
-      "sha256": "c3170b13645ed68ea9a75395a7944886a38a9dbc716d64959059ff51e93e075e"
+      "bytes": 2747,
+      "sha256": "57e8438ee6a4d7af21a7c1c5b84f1579caa8d1dc3077b1b3d1e0d49ee9b3a08f"
     },
     {
       "source": "schemas/activity-group-membership-receipt.schema.json",
@@ -421,8 +421,14 @@
     {
       "source": "schemas/private-objet-finder-result-v0.1.schema.json",
       "packaged": "schemas/private-objet-finder-result-v0.1.schema.json",
-      "bytes": 33458,
-      "sha256": "59888a98cdf39977521f29887b25a624f26ba2309b8fda72d12309321c995937"
+      "bytes": 33532,
+      "sha256": "335c9bb789b2ed677989860de382c57041ef2d1579652c7c01038b957ea1711a"
+    },
+    {
+      "source": "schemas/private-objet-finder-result-v0.2.schema.json",
+      "packaged": "schemas/private-objet-finder-result-v0.2.schema.json",
+      "bytes": 34774,
+      "sha256": "5ed09895ce9c7a8ef00b018fa292cb94c0fb87613967cc5b5339f08f967f6d16"
     },
     {
       "source": "schemas/private-objet-generated-schema-manifest-v0.1.json",
@@ -751,8 +757,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/SKILL.md",
       "packaged": "templates/ai-runtime/wom-archive/SKILL.md",
-      "bytes": 9790,
-      "sha256": "d7bba48538a5e76eb783ff948c8c6bdd6dc8d97dcf2cbec1a91ccd679ce4262b"
+      "bytes": 11087,
+      "sha256": "bf74253c28d60723dcb8b8a68bd2d2f177dc709adbe63b1be76b6f37c1aaa8fa"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
@@ -817,8 +823,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/storage-scope.md",
       "packaged": "templates/ai-runtime/wom-archive/references/storage-scope.md",
-      "bytes": 967,
-      "sha256": "0ad1138d62fe09f34a298fa6db846e19c54ad2028a12120c0f29fe037edb488e"
+      "bytes": 2291,
+      "sha256": "e2a5b37c22640268e8ced30490f1f950ff80d38bb882ae68e3ad8c8500a4fc65"
     },
     {
       "source": "templates/company/AGENTS.md",
@@ -1073,10 +1079,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.4.46.md",
-      "packaged": "release-notes/v0.4.46.md",
-      "bytes": 2621,
-      "sha256": "f92fc7c4a55ab301b90e590793839a0cc8cbcda640e089e8a6a6f10d7c20fe43"
+      "source": "docs/releases/v0.4.47.md",
+      "packaged": "release-notes/v0.4.47.md",
+      "bytes": 4173,
+      "sha256": "532df8f9b1c8b55960a82523d7110c5aeb2c0f1f289192f10116fb306382c71a"
     }
   ]
 }

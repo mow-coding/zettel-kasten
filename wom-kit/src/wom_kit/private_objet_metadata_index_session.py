@@ -722,6 +722,26 @@ class _PrivateObjetIndexReadAPI:
             raise PrivateObjetIndexSessionError(_PROJECTION_INVALID)
         return row[0]
 
+    def _copy_pinned_generation(self, destination: Path) -> None:
+        """Copy only this pinned read transaction; never expose the connection.
+
+        The caller must publish the disposable copy only after the enclosing
+        authority/final-check lifecycle succeeds. It is not write authority.
+        """
+        self._require_active()
+        if not self.snapshot_active:
+            raise PrivateObjetIndexSessionError(_PROJECTION_INVALID)
+        import time
+        started = time.monotonic()
+        def progress(_status, _remaining, _total):
+            if time.monotonic() - started > 5:
+                raise PrivateObjetIndexSessionError(_PROJECTION_UNAVAILABLE)
+        target = sqlite3.connect(destination)
+        try:
+            self.__connection.backup(target, pages=256, progress=progress, sleep=0.01)
+        finally:
+            target.close()
+
 
 def _comparison_token(authority_snapshot: object) -> object:
     try:

@@ -1,11 +1,9 @@
 ---
 name: wom-archive
-description: Safely inspect and update a local WOM archive. Use for context recovery, zet reading, source capture, drafting, publication, shared review, or Doctor.
+description: Inspect/update WOM archives for context recovery, zet reading, capture, drafts, publication, shared review, Doctor.
 ---
 
 # WOM Archive
-
-Archives preserve memory.
 
 ## Core Rules (read first, every session)
 
@@ -87,6 +85,18 @@ Startup, update and recovery details:
 
 Do not preload every reference.
 
+## Classify Before Backing Up an Activity
+
+The helper AI classifies delegated cleanup before upload; do not make the user
+label every file. Preserve originals, useful results and recovery evidence.
+Discard proven disposable temporary files without intake/upload. Retain unknown
+or still-used files without upload/deletion. Names, age and ignore rules alone
+are insufficient. Record reasons in the private request; preserve other
+activities' dependencies. Full access covers child operations without extra
+approval windows. Read [storage-scope.md](references/storage-scope.md) for the
+required classification fields and evidence. Local cleanup never deletes
+already-uploaded remote temporary objects.
+
 ## Universal Contract
 
 - Keep canonical zet text and objet bytes local. Remote systems are backup or
@@ -98,6 +108,16 @@ Do not preload every reference.
 - Prefer read-only inspection and `--dry-run`; preview is not write approval.
 - Official search is `archive search <archive-root> <query> --count-total
   --format json`. Raw grep/SQL are diagnostic, not authoritative WOM results.
+- Read `next_cursor`, exact totals, remaining rows and snapshot time. Continue
+  `search` or `find-objet` with the same query/filter/limit and `--cursor` until
+  done; the 100-row page size is not a total-result cap. A historical snapshot
+  stays readable while another session works; do not call it current source or
+  remote-preservation evidence. `objet-rediscovery-plan` is a summary, not the
+  implemented private finder itself.
+- Use `work-session --action inspect --caller-status` to distinguish recorded
+  permission, this caller's usable grant, observed running target operations,
+  and installed runtime alignment. `not_observed` does not prove idle. Host
+  `Unknown process id` is not evidence that WOM failed or revoked permission.
 - `archive_index_rebuild_required` is a hard stop. Run explicit `archive index`
   then `index-health`; never trust stale rows or silently scan all bodies.
   Legacy WAL or sidecar-bearing generated indexes require one ordinary rebuild.
@@ -162,11 +182,8 @@ Do not preload every reference.
 
 ## Finish
 
-Finish the goal and report verified state. Separate engineering
-completion, human review, and real-use validation. Record substantial decisions
-and corrections. Before reset/handoff, use the receipt-backed close procedure in
+Report verified progress; distinguish engineering, human review, and real-use validation. Record decisions/corrections. Before reset/handoff, follow
 [reading-memory-and-revision.md](references/reading-memory-and-revision.md).
 
-Use plain language first: “published note,” “source file,” “change
-record,” “health check,” and “preview.” Use `zettel` for the general zettel-kasten concept,
+Use plain language: “published note,” “source file,” “change record,” “health check,” “preview.” Use `zettel` for the general zettel-kasten concept,
 `zet` for one WOM document, and `ZET` for the shareable protocol layer.

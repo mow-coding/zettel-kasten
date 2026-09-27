@@ -47,6 +47,7 @@ GIT_BACKUP_PLAN_MAX_GIT_EXECUTABLE_BYTES = 128 * 1024 * 1024
 GIT_BACKUP_PLAN_MAX_BLOB_BATCH_BYTES = 64 * 1024 * 1024
 GIT_BACKUP_REMOTE_TIMEOUT_SECONDS = 30
 GIT_BACKUP_LOCAL_TIMEOUT_SECONDS = 60
+GIT_ATTRIBUTE_BATCH_MAX_BYTES = 1024 * 1024
 GIT_BACKUP_REMOTE_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 GIT_BACKUP_SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}")
 GIT_BACKUP_OPERATION_MARKERS = (
@@ -1101,6 +1102,8 @@ def _parse_flags(raw: bytes) -> dict[str, str] | None:
 def _changed_path_attributes_are_inert(
     root: Path,
     relative_paths: Iterable[str],
+    *,
+    diagnostics: dict[str, Any] | None = None,
 ) -> bool | None:
     """Return whether changed paths avoid executable/encoding attributes.
 
@@ -1109,19 +1112,58 @@ def _changed_path_attributes_are_inert(
     files, fsmonitor, hooks, and optional locks.
     """
 
+    started = time.monotonic()
     paths = sorted(set(relative_paths))
-    if not paths:
-        return True
-    encoded_paths: list[bytes] = []
+    detail: dict[str, Any] = {
+        "stage": "changed_path_attributes", "reason": None,
+        "path_count": len(paths), "input_bytes": 0, "batch_count": 0,
+        "completed_batches": 0, "exit_code": None,
+    }
+
+    def finish(value: bool | None, reason: str | None = None) -> bool | None:
+        detail["reason"] = reason
+        detail["elapsed_seconds"] = round(time.monotonic() - started, 3)
+        if diagnostics is not None:
+            diagnostics.update(detail)
+        return value
+
+    batches: list[tuple[list[str], bytes]] = []
+    batch_paths: list[str] = []
+    batch = bytearray()
     for relative_path in paths:
         try:
             encoded = relative_path.encode("utf-8", errors="strict")
         except UnicodeError:
-            return None
-        encoded_paths.append(encoded)
-    request = b"\x00".join(encoded_paths) + b"\x00"
-    if len(request) > 1024 * 1024:
-        return None
+            return finish(None, "path_encoding_invalid")
+        if not encoded or b"\x00" in encoded:
+            return finish(None, "path_record_invalid")
+        if len(encoded) + 1 > GIT_ATTRIBUTE_BATCH_MAX_BYTES:
+            return finish(None, "single_path_input_limit_exceeded")
+        if len(batch) + len(encoded) + 1 > GIT_ATTRIBUTE_BATCH_MAX_BYTES:
+            batches.append((batch_paths, bytes(batch)))
+            batch_paths, batch = [], bytearray()
+        batch_paths.append(relative_path)
+        batch.extend(encoded + b"\x00")
+        detail["input_bytes"] += len(encoded) + 1
+    if batch:
+        batches.append((batch_paths, bytes(batch)))
+    detail["batch_count"] = len(batches)
+    inert = True
+    for batch_paths, request in batches:
+        # Discard an unrelated earlier probe's diagnostic on this thread.
+        archive_services._wom_kit_git_take_failure()
+        state, reason, return_code = _changed_path_attribute_batch(root, batch_paths, request)
+        detail["exit_code"] = return_code
+        if state is None:
+            return finish(None, reason)
+        detail["completed_batches"] += 1
+        inert = inert and state
+    return finish(inert)
+
+
+def _changed_path_attribute_batch(
+    root: Path, paths: list[str], request: bytes,
+) -> tuple[bool | None, str | None, int | None]:
     completed = archive_services._wom_kit_project_update_run_capped(
         _git_command(
             root,
@@ -1137,33 +1179,39 @@ def _changed_path_attributes_are_inert(
         timeout_seconds=GIT_BACKUP_LOCAL_TIMEOUT_SECONDS,
         max_output_bytes=min(
             GIT_BACKUP_PLAN_MAX_GIT_OUTPUT_BYTES,
-            len(request) * 8 + 1024,
+            # Both attributes repeat the path and add name/value fields.
+            # Short path inventories need a per-record allowance too.
+            len(request) * 2 + len(paths) * 256 + 1024,
         ),
         input_bytes=request,
     )
-    if completed is None or completed[0] != 0:
-        return None
+    if completed is None:
+        reason = archive_services._wom_kit_git_take_failure() or "execution_unavailable"
+        return None, reason, None
+    if completed[0] != 0:
+        return None, "exit_nonzero", completed[0]
     raw = completed[1]
     if not raw.endswith(b"\x00"):
-        return None
+        return None, "response_unterminated", 0
     fields = raw[:-1].split(b"\x00")
     if len(fields) != len(paths) * 6:
-        return None
+        return None, "response_record_count_invalid", 0
     observed: dict[tuple[str, str], str] = {}
+    path_set = set(paths)
     for offset in range(0, len(fields), 3):
         try:
             path = fields[offset].decode("utf-8", errors="strict")
             attribute = fields[offset + 1].decode("ascii", errors="strict")
             value = fields[offset + 2].decode("utf-8", errors="strict")
         except UnicodeError:
-            return None
+            return None, "response_encoding_invalid", 0
         key = (path, attribute)
         if (
-            path not in paths
+            path not in path_set
             or attribute not in {"filter", "working-tree-encoding"}
             or key in observed
         ):
-            return None
+            return None, "response_key_invalid", 0
         observed[key] = value
     expected_keys = {
         (path, attribute)
@@ -1171,8 +1219,8 @@ def _changed_path_attributes_are_inert(
         for attribute in ("filter", "working-tree-encoding")
     }
     if set(observed) != expected_keys:
-        return None
-    return all(value in {"unspecified", "unset"} for value in observed.values())
+        return None, "response_keys_incomplete", 0
+    return all(value in {"unspecified", "unset"} for value in observed.values()), None, 0
 
 
 def _config_value_state(root: Path, key: str, *, boolean: bool = False) -> str:
@@ -1704,9 +1752,13 @@ def _structural_snapshot(
         for path in (record.path, record.original_path)
         if path is not None
     }
-    inert_attributes = _changed_path_attributes_are_inert(root, candidate_paths)
+    attribute_diagnostics: dict[str, Any] = {}
+    inert_attributes = _changed_path_attributes_are_inert(
+        root, candidate_paths, diagnostics=attribute_diagnostics,
+    )
     if inert_attributes is None:
         blockers.append("changed_path_attribute_state_unavailable")
+        blockers.append("changed_path_attribute_" + (attribute_diagnostics.get("reason") or "execution_unavailable"))
     elif not inert_attributes:
         blockers.append("changed_path_filter_or_encoding_attribute_not_supported")
     if candidate_paths and not archive_services.wom_kit_project_update_safe_worktree_paths(
@@ -1775,6 +1827,7 @@ def _structural_snapshot(
         "target_ref": target_ref,
         "target_ref_source": target_ref_source,
         "local_head": local_head,
+        "attribute_diagnostics": attribute_diagnostics,
         "object_format": object_format,
         "status": status,
         "ignored_status": ignored_items,
@@ -3025,6 +3078,10 @@ def _git_backup_plan_with_pinned_git(
         "lifecycle_action": "git_backup_plan",
         "status": "plan_ready" if not blockers else "blocked",
         "inspection_complete": True,
+        "attribute_inspection": {
+            "before": snapshot_before.get("attribute_diagnostics"),
+            "after": snapshot_after.get("attribute_diagnostics") if snapshot_after else None,
+        },
         "git_executable": {
             "sha256": pinned_git.sha256,
             "stability_verified": False,

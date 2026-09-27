@@ -113,7 +113,7 @@ def _current(prepared, store, routing, selected, held):
 
 
 def _fresh(root, request_path, *, held, client_app_ref, task_route_ref, work_session_ref,
-           key_provider, progress_hook):
+           key_provider, progress_hook, stage_external=False, planned=None, concurrent=False):
     store, routing = lifecycle._routing(root, held=held, client_app_ref=client_app_ref,
                                         task_route_ref=task_route_ref)
     selected = routing._read(current=False)
@@ -133,7 +133,10 @@ def _fresh(root, request_path, *, held, client_app_ref, task_route_ref, work_ses
     def heartbeat():
         _progress(progress_hook, "intake_preflight")
         held.verify_held()
-    plan = intake.plan_source_intake_batch(root, request_path, heartbeat=heartbeat)
+    plan = (intake.plan_source_intake_batch(root, request_path, heartbeat=heartbeat, stage_external=stage_external)
+            if planned is None else planned)
+    if planned is not None and (not os.path.samefile(plan.archive_root, root) or plan.request_path != intake.Path(request_path).resolve()):
+        raise WorkSessionIntakeWorkflowError("work_session_intake_changed")
     if not plan.approveable:
         raise WorkSessionIntakeWorkflowError("work_session_intake_plan_blocked")
     raw = intake._stable_request_bytes(plan.request_path)
@@ -144,7 +147,7 @@ def _fresh(root, request_path, *, held, client_app_ref, task_route_ref, work_ses
         registry_preimage_sha256=generation, claim_ref=selected.document()["claim_ref"],
         original_establishment=origin, establishment_execution_sha256=established["execution_sha256"],
         establishment_receipt_sha256=established["receipt_sha256"])
-    prepared = bundle._prepare_session_source_intake_batch(plan, request_bytes=raw, scope=scope)
+    prepared = bundle._prepare_session_source_intake_batch(plan, request_bytes=raw, scope=scope, concurrent=concurrent)
     _current(prepared, store, routing, selected, held)
     return prepared, store, routing, selected
 
@@ -161,10 +164,10 @@ def _preview_result(prepared):
 
 
 def _preview_session_source_intake_batch_held(root, request_path, *, held, client_app_ref, task_route_ref,
-                                            work_session_ref, key_provider=None, progress_hook=None):
+                                            work_session_ref, key_provider=None, progress_hook=None, stage_external=False):
     return _safe_call(lambda: _preview_result(_fresh(root, request_path, held=held,
         client_app_ref=client_app_ref, task_route_ref=task_route_ref, work_session_ref=work_session_ref,
-        key_provider=key_provider, progress_hook=progress_hook)[0]))
+        key_provider=key_provider, progress_hook=progress_hook, stage_external=stage_external)[0]))
 
 
 def _selected_scope(prepared, context, held, *, completed=False):
@@ -290,10 +293,11 @@ def _finish(prepared, context, claim, held, *, completed):
 
 def _execute_session_source_intake_batch_held(root, request_path, *, held, client_app_ref, task_route_ref,
                                             work_session_ref, reviewer_claim, native=None, key_provider=None,
-                                            progress_hook=None):
+                                            progress_hook=None, stage_external=False):
     def execute():
         args = dict(held=held, client_app_ref=client_app_ref, task_route_ref=task_route_ref,
-            work_session_ref=work_session_ref, key_provider=key_provider, progress_hook=progress_hook)
+            work_session_ref=work_session_ref, key_provider=key_provider, progress_hook=progress_hook,
+            stage_external=stage_external)
         prepared, store, routing, selected = _fresh(root, request_path, **args)
         context = intake.approval_context(prepared.plan, reviewer_claim=reviewer_claim)
         results, failures = {}, []

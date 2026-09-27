@@ -20518,6 +20518,10 @@ def zet_revision_receipt_from_lock(
     return receipt
 
 
+from .zet_concurrency import canonical_writer as _canonical_target_writer
+
+
+@_canonical_target_writer
 def zet_revision_write(
     archive_root: Path | str,
     *,
@@ -24171,6 +24175,7 @@ def verify_zet_revision_restore_receipt(
     }
 
 
+@_canonical_target_writer
 def zet_revision_restore_write(
     archive_root: Path | str,
     *,
@@ -112559,6 +112564,7 @@ def session_handoff_checkpoint(
     confirm_chat_reviewed: bool = False,
     expected_state_digest: str | None = None,
     activity_roots: list[str] | None = None,
+    cleanup_requests: list[str] | None = None,
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
@@ -112631,6 +112637,13 @@ def session_handoff_checkpoint(
     if unreviewed_count:
         durable_gaps.append(f"{unreviewed_count} AI artifact candidate(s) still need a reviewed fate.")
 
+    closeout = None
+    if cleanup_requests:
+        from .activity_closeout import evidence as closeout_evidence
+        closeout = closeout_evidence(root, cleanup_requests)
+        if closeout["state"] != "complete":
+            durable_gaps.append("Explicit activity cleanup/backup evidence is " + closeout["state"] + ".")
+
     state_evidence = {
         "operational_context_sha256": context_evidence.get("record_sha256"),
         "operational_context_receipt_ref": context_evidence.get("matching_receipt_ref"),
@@ -112641,6 +112654,8 @@ def session_handoff_checkpoint(
     }
     if activity_scope is not None:
         state_evidence["activity_roots"] = inventory_snapshot["activity_roots"]
+    if closeout is not None:
+        state_evidence["activity_closeout_evidence_sha256"] = closeout["evidence_sha256"]
     state_digest = sha256_json_value(state_evidence)
     proposed_receipt_path = session_handoff_checkpoint_receipt_relative_path(state_digest)
     checkpoint_root = archive_internal_path(root, SESSION_HANDOFF_CHECKPOINT_RECEIPTS_DIR)
@@ -112820,6 +112835,10 @@ def session_handoff_checkpoint(
             "next_safe_action": "Review the full-generation summary separately; never substitute diagnostic_state_digest for the legacy expected_state_digest.",
         },
         "ready_for_context_reset": ready_for_context_reset,
+        **({"activity_closeout": {**closeout,
+            "handoff_state": "complete" if ready_for_context_reset else (
+                "development_wait" if closeout["state"] == "development_wait" else "partial")}}
+            if closeout is not None else {}),
         "activity_scope": (
             {**activity_scope["snapshot"], "blockers": activity_scope["blockers"]}
             if activity_scope is not None else None
@@ -114170,6 +114189,7 @@ def _wom_kit_project_update_run_capped(
     max_output_bytes: int,
     input_bytes: bytes | None = None,
     stderr_sink: list[bytes] | None = None,
+    max_input_bytes: int = 1024 * 1024,
 ) -> tuple[int, bytes] | None:
     """Run one bounded process while draining stdin and stdout concurrently.
 
@@ -114187,7 +114207,9 @@ def _wom_kit_project_update_run_capped(
     if (
         max_output_bytes < 0
         or timeout_seconds <= 0
-        or (input_bytes is not None and len(input_bytes) > 1024 * 1024)
+        or type(max_input_bytes) is not int
+        or not 0 <= max_input_bytes <= 16 * 1024 * 1024
+        or (input_bytes is not None and len(input_bytes) > max_input_bytes)
     ):
         _wom_kit_git_note_failure("argument_invalid")
         return None
@@ -147555,6 +147577,11 @@ class _S3CompatibleTransport:
         self._region = str(region)
         self._send = send
         self._service = service
+        from .transfer_observation import TransferObservation
+        self._transfer_observation = TransferObservation()
+
+    def transfer_observation(self) -> dict[str, Any]:
+        return self._transfer_observation.snapshot()
 
     # -- signing / dispatch ------------------------------------------------
 
@@ -147625,7 +147652,7 @@ class _S3CompatibleTransport:
         if sink_path is not None:
             # Restore GET only: the two sink keywords are omitted everywhere
             # else so the five-keyword injected-sender contract is unchanged.
-            response = self._send(
+            response = self._transfer_observation.call(method, lambda: self._send(
                 method=method,
                 url=url,
                 headers=headers,
@@ -147633,11 +147660,12 @@ class _S3CompatibleTransport:
                 data_bytes=data_bytes,
                 sink_path=sink_path,
                 sink_max_bytes=sink_max_bytes,
-            )
+            ))
         else:
-            response = self._send(
+            response = self._transfer_observation.call(method, lambda: self._send(
                 method=method, url=url, headers=headers, data_path=data_path, data_bytes=data_bytes
-            )
+            ), payload_bytes=(len(data_bytes) if isinstance(data_bytes, bytes) else
+                int(headers.get("content-length") or 0) if data_path is not None else 0))
         return response if isinstance(response, dict) else {"status": 0, "headers": {}, "body": b""}
 
     # -- transport methods -------------------------------------------------
@@ -154042,13 +154070,19 @@ def index_archive(
     except OSError:
         raise ArchiveServiceError("archive_index_mutation_in_progress") from None
     try:
-        return _index_archive_locked(
+        result = _index_archive_locked(
             root,
             progress_callback=progress_callback,
             initial_progress_emitted=True,
         )
     finally:
         rebuild_lock.__exit__(None, None, None)
+    if result.get("ok"):
+        # Retain a searchable historical generation after releasing the
+        # mutation lease. Cache failure does not invalidate the live index.
+        from .search_snapshots import publish
+        result["search_snapshot"] = publish(root)
+    return result
 
 
 def _mark_archive_index_dirty_while_rebuild_locked(
@@ -158136,9 +158170,9 @@ def objet_rediscovery_plan(
                 check_state="unchecked",
                 match_state="unknown",
                 evidence_scope=(
-                    "The v0.3.296 approved private metadata writer exists, but this "
-                    "release implements no receipt-bound private metadata index or "
-                    "private rediscovery query and proves no private index freshness."
+                    "Use archive find-objet <archive-root> <query> for private receipt-bound "
+                    "metadata lookup and continue with its cursor. This summary does not "
+                    "execute that lookup or prove current private-source freshness."
                 ),
                 freshness_proven=False,
                 negative_claim_contribution=False,
@@ -158172,15 +158206,16 @@ def objet_rediscovery_plan(
             objet_rediscovery_layer(
                 "unrecovered_source_references",
                 applicability="unknown",
-                check_state="not_implemented",
+                check_state="unchecked",
                 match_state="unknown",
                 evidence_scope=(
-                    "Archive-wide unrecovered source-reference coverage is reserved "
-                    "for the v0.3.299 contract."
+                    "Use archive source-reference-coverage-audit <archive-root> --dry-run "
+                    "for its observed source-reference population. This summary does not "
+                    "run that audit or verify remote bytes."
                 ),
                 freshness_proven=False,
                 negative_claim_contribution=False,
-                reason_codes=["source_reference_coverage_not_implemented"],
+                reason_codes=["source_reference_coverage_not_checked"],
             ),
         ]
     )
@@ -158218,6 +158253,8 @@ def objet_rediscovery_plan(
     next_safe_commands.extend(
         [
             "archive search <archive-root> <query> --count-total --format json",
+            "archive find-objet <archive-root> <query> --format json",
+            "archive source-reference-coverage-audit <archive-root> --dry-run --format json",
             (
                 "archive zettel-objet-links <archive-root> "
                 "--zettel-id <reviewed-zettel-id> --dry-run --format json"
@@ -164256,7 +164293,9 @@ def _objet_capture_sha256_and_head_fd(fd: int) -> tuple[str, bytes]:
 
 
 class _ObjetCaptureManifestLock:
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, *, timeout_seconds: float = 30, heartbeat=None) -> None:
+        self._timeout = max(0.0, min(30.0, float(timeout_seconds)))
+        self._heartbeat = heartbeat or (lambda: None)
         resolved_root = Path(root).resolve()
         if os.name == "nt":
             # Keep child lookup lexical until the resolved root is retained by
@@ -164282,6 +164321,7 @@ class _ObjetCaptureManifestLock:
         self._win32_lock: Any = None
 
     def __enter__(self) -> "_ObjetCaptureManifestLock":
+        deadline = time.monotonic() + self._timeout
         if os.name == "nt":
             from . import private_metadata_win32 as win32
 
@@ -164291,8 +164331,19 @@ class _ObjetCaptureManifestLock:
                 self._win32_lock = win32._PersistentCoordinationLock(
                     self._guard,
                     win32.CoordinationLockKind.OBJECT_MANIFEST,
+                    fail_immediately=True,
                 )
-                self._win32_lock.acquire()
+                while True:
+                    self._heartbeat()
+                    try:
+                        self._win32_lock.acquire()
+                        break
+                    except win32.Win32SafetyError as error:
+                        if error.winerror != 33:
+                            raise
+                        if time.monotonic() >= deadline:
+                            raise ArchiveServiceError("objet_capture_writer_busy_timeout") from None
+                        time.sleep(min(0.05, max(0, deadline - time.monotonic())))
             except BaseException:
                 try:
                     if self._win32_lock is not None:
@@ -164306,7 +164357,20 @@ class _ObjetCaptureManifestLock:
             import fcntl
 
             self._handle = open(self._path, "a+b")
-            fcntl.flock(self._handle.fileno(), fcntl.LOCK_EX)
+            try:
+                while True:
+                    self._heartbeat()
+                    try:
+                        fcntl.flock(self._handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except BlockingIOError:
+                        if time.monotonic() >= deadline:
+                            raise ArchiveServiceError("objet_capture_writer_busy_timeout") from None
+                        time.sleep(min(0.05, max(0, deadline - time.monotonic())))
+            except BaseException:
+                self._handle.close()
+                self._handle = None
+                raise
         return self
 
     def __exit__(self, *exc_info: Any) -> bool:
@@ -165608,7 +165672,12 @@ def _objet_capture_run(
         manifest_index_rebuild_required = False
         manifest_index_resumed = False
         manifest_index_started_this_run = False
-        with _ObjetCaptureManifestLock(root):
+        from .operation_target_leases import TargetLeases
+        from .exact_operation_manifest import exact_operation_writer_lock
+        capture_targets = [("execution", "capture:" + selection_sha256)]
+        capture_targets.extend(("object", item["object_id"]) for item in preflight_items
+            if isinstance(item.get("object_id"), str) and OBJECT_ID_RE.fullmatch(item["object_id"]))
+        with TargetLeases(root, capture_targets), ExitStack() as publication:
             canonical_ids = objet_capture_canonical_record_ids(load_manifest_records(root))
             pending_manifest_records: list[dict[str, Any]] = []
             publication_outcome_unverified = False
@@ -165645,6 +165714,15 @@ def _objet_capture_run(
                     if "derived_text" in item:
                         item_result["derived_text"] = _objet_capture_derived_text_initial_subresult()
                     item_results.append(item_result)
+
+                # Source bytes are already durable under only their object leases.
+                # Rebase the short shared manifest/index publication on the latest
+                # state; unrelated capture and remote transfer can finish first.
+                publication.enter_context(exact_operation_writer_lock(root, timeout_seconds=30))
+                publication.enter_context(_ObjetCaptureManifestLock(root))
+                current_ids = objet_capture_canonical_record_ids(load_manifest_records(root))
+                pending_manifest_records = [record for record in pending_manifest_records
+                    if record.get("object_id") not in current_ids]
 
                 # Phase boundary — ordering is load-bearing: original bytes durable ->
                 # original manifest line durable (flush+fsync+close) -> derived
@@ -165839,10 +165917,11 @@ def _objet_capture_run(
                             if INDEX_REBUILD_REQUIRED not in derived_blockers:
                                 derived_blockers.append(INDEX_REBUILD_REQUIRED)
 
-                # Phase 2 — derived halves, same sorted order, inside the still-held
-                # _ObjetCaptureManifestLock. _DerivedTextManifestLock nests inside it:
-                # lock order is ObjetCapture -> DerivedText, never the reverse; no
-                # reverse ordering exists anywhere in this file — keep it that way.
+                # Original object publication is complete. Retain object leases,
+                # but release the shared writer before derived reads/copies. The
+                # derived writer has its own publication lock, just as standalone
+                # derive-text does; it must not block unrelated original captures.
+                publication.close()
                 for item, item_result in zip(items_sorted, item_results):
                     if manifest_index_rebuild_required:
                         break

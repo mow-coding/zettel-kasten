@@ -77,6 +77,8 @@ class Letter140ApprovalBoundaryPrivacyTests(unittest.TestCase):
         shutil.copytree(FIXTURE, root)
         indexed = archive_services.index_archive(root)
         self.assertTrue(indexed["ok"], indexed)
+        self.profile_baseline = {p.relative_to(root).as_posix(): p.read_bytes()
+            for p in (root / "profiles").rglob("*") if p.is_file()}
         return root
 
     @staticmethod
@@ -208,7 +210,8 @@ class Letter140ApprovalBoundaryPrivacyTests(unittest.TestCase):
                 self.assertTrue(blocked)
                 self.assertFalse(hidden.exists())
                 self.assertEqual(json.loads(stdout)["effects_state"], "none")
-                self.assertFalse((root / "profiles").exists())
+                self.assertEqual({p.relative_to(root).as_posix(): p.read_bytes()
+                    for p in (root / "profiles").rglob("*") if p.is_file()}, self.profile_baseline)
             finally:
                 if root.exists() and root.is_symlink():
                     os.rmdir(root)
@@ -244,7 +247,8 @@ class Letter140ApprovalBoundaryPrivacyTests(unittest.TestCase):
                     )
             self.assertEqual(error.exception.code, "exact_human_approval_cancelled")
             self.assertEqual(boundary_calls, 0)
-            self.assertFalse((root / "profiles").exists())
+            self.assertEqual({p.relative_to(root).as_posix(): p.read_bytes()
+                for p in (root / "profiles").rglob("*") if p.is_file()}, self.profile_baseline)
 
     @unittest.skipUnless(os.name == "nt", "Windows junction contract")
     def test_native_review_root_swap_is_blocked_until_claim_writer_finishes(
@@ -635,7 +639,8 @@ class Letter140ApprovalBoundaryPrivacyTests(unittest.TestCase):
                 ["zettel_objet_link_workflow_precondition_failed"],
             )
             self.assertFalse(payload["private_values_echoed"])
-            self.assertFalse((root / "profiles").exists())
+            self.assertEqual({p.relative_to(root).as_posix(): p.read_bytes()
+                for p in (root / "profiles").rglob("*") if p.is_file()}, self.profile_baseline)
 
 
 if __name__ == "__main__":

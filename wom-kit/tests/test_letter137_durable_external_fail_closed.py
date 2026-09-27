@@ -598,6 +598,7 @@ class Letter137DurableExternalCliBoundaryTests(
             exact_plan.assert_called_once_with(
                 Path(root),
                 Path(PRIVATE_MANIFEST),
+                stage_external=False,
             )
             legacy_plan.assert_not_called()
 
@@ -637,6 +638,7 @@ class Letter137DurableExternalCliBoundaryTests(
             exact_plan.assert_called_once_with(
                 Path(root),
                 Path(PRIVATE_MANIFEST),
+                stage_external=False,
             )
             exact_execute.assert_called_once_with(
                 plan,

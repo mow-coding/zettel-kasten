@@ -1,4 +1,4 @@
-"""Argument/real-held-runtime routing tests; private domain runners are mocked.
+"""Argument/runtime and concurrent routing tests; private domain runners are mocked.
 
 These prove no intake execution, native UI, installed wheel or client journey.
 """
@@ -19,6 +19,7 @@ from wom_kit import archive_cli as cli
 from wom_kit import cli_entry, command_status
 from wom_kit import exact_operation_manifest as exact
 from wom_kit import source_intake_session_command as command
+from wom_kit import work_session_intake_concurrent as concurrent
 
 
 APP = "client_app_" + "a" * 32
@@ -224,7 +225,7 @@ class SourceIntakeSessionBoundaryTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         (self.root / "archive.yml").write_text("archive_id: archive:personal:synthetic-intake-command\n", encoding="utf-8")
-        self.calls, self.held_locks = [], []
+        self.calls = []
         fake = ModuleType("wom_kit.work_session_source_intake_workflow")
         fake._ERRORS = frozenset({"work_session_intake_ownership_unavailable"})
         class WorkflowError(RuntimeError):
@@ -234,14 +235,22 @@ class SourceIntakeSessionBoundaryTests(unittest.TestCase):
         for mode, name in (("preview", "_preview_session_source_intake_batch_held"),
                            ("apply", "_execute_session_source_intake_batch_held"),
                            ("resume", "_resume_session_source_intake_batch_held")):
-            def run(root, *request, held, _mode=mode, **values):
-                self.assertIs(type(held), exact.ExactOperationWriterLock)
-                held.verify_held()
-                self.held_locks.append(held)
-                self.calls.append((_mode, request, values))
+            def run(root, *request, _mode=mode, **values):
+                self.assertNotIn("held", values)
                 return result(_mode)
             setattr(fake, name, run)
+        fake._safe_call = lambda call: call()
         self.fake = fake
+        def fresh(root, *request, mode, **values):
+            self.calls.append((mode, request, values))
+            return getattr(self.fake, "_preview_session_source_intake_batch_held" if mode == "preview" else "_execute_session_source_intake_batch_held")(root, *request, **values)
+        def resume(root, **values):
+            self.calls.append(("resume", (), values))
+            return self.fake._resume_session_source_intake_batch_held(root, **values)
+        for name, callback in (("fresh", fresh), ("resume", resume)):
+            item = patch.object(concurrent, name, side_effect=callback)
+            item.start()
+            self.addCleanup(item.stop)
         for item in (patch.dict(sys.modules, {fake.__name__: fake}),
                      patch.object(wom_kit, "work_session_source_intake_workflow", fake, create=True)):
             item.start()
@@ -256,7 +265,7 @@ class SourceIntakeSessionBoundaryTests(unittest.TestCase):
         values.update(options)
         return command.dispatch_session_source_intake(self.root, mode=mode, **values)
 
-    def test_all_modes_reuse_real_held_lock_and_runtime_guard_then_release(self):
+    def test_all_modes_check_runtime_without_holding_archive_lock_during_domain(self):
         original = command.sessions._runtime_guard
         original_enter = exact.ExactOperationWriterLock.__enter__
         guards, entries = [], []
@@ -271,12 +280,9 @@ class SourceIntakeSessionBoundaryTests(unittest.TestCase):
             for mode in ("preview", "apply", "resume"):
                 self.assertTrue(self.call(mode)["ok"])
         self.assertEqual(len(guards), 3)
-        self.assertEqual(entries, self.held_locks)
+        self.assertEqual(entries, [])
         self.assertEqual([row[0] for row in self.calls], ["preview", "apply", "resume"])
         self.assertEqual(self.calls[-1][1], ())
-        for held in self.held_locks:
-            with self.assertRaises(exact.ExactOperationManifestError):
-                held.verify_held()
         for name in ("native", "key_provider", "approval_id", "execution_sha256", "expected_plan_sha256"):
             self.assertNotIn(name, inspect.signature(command.dispatch_session_source_intake).parameters)
 

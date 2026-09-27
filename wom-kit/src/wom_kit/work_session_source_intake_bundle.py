@@ -29,6 +29,7 @@ from .work_session_establishment import EstablishmentSelector
 
 SCOPE_SCHEMA = "wom-kit/source-intake-batch-session-scope/v1"
 EVIDENCE_SCHEMA = "wom-kit/source-intake-batch-session-evidence/v1"
+CONCURRENT_EVIDENCE_SCHEMA = "wom-kit/source-intake-batch-session-evidence/v2"
 PREPARED_SCHEMA = "wom-kit/source-intake-batch-retained-prepared/v1"
 CONTEXT_SCHEMA = "wom-kit/source-intake-batch-original-context/v1"
 PRIVATE_ROOT = ("profiles", "local", "exact-operations", "source-intake-contexts")
@@ -163,6 +164,10 @@ def _input_document(plan, request_bytes):
 
 
 def _decode_item(root, value, raw_item, ordinal, archive_id, request_sha):
+    # Pre-v3 retained inputs did not contain this field; their original
+    # manifest and approval bytes stay unchanged and still mean no copy.
+    if type(value) is dict and set(value) == _ITEM_KEYS - {"external_copy"}:
+        value = {**value, "external_copy": False}
     if type(value) is not dict or set(value) != _ITEM_KEYS:
         raise WorkSessionIntakeBundleError()
     values = dict(value)
@@ -184,6 +189,8 @@ def _decode_item(root, value, raw_item, ordinal, archive_id, request_sha):
         raise WorkSessionIntakeBundleError()
     values["warnings"] = tuple(warnings)
     staged = _relative(values["capture_staged_path"])
+    if type(values["external_copy"]) is not bool:
+        raise WorkSessionIntakeBundleError()
     source = Path(raw_item["local_path"])
     # Absolute caller paths can have a different original OS spelling (for
     # example Windows short names). Their exact raw spelling AND the planner's
@@ -192,9 +199,14 @@ def _decode_item(root, value, raw_item, ordinal, archive_id, request_sha):
         relative = intake.normalize_archive_relative_path(raw_item["local_path"])
         if values["source_path"] != root.joinpath(*relative.split("/")):
             raise WorkSessionIntakeBundleError()
-    if (values["source_path"] != root.joinpath(*staged.split("/"))
-            or values["source_path_binding_sha256"] != intake._sha_bytes(
-                os.path.normcase(str(values["source_path"].absolute())).encode("utf-8"))):
+    from . import source_intake_external as external
+    if values["external_copy"]:
+        if staged != external.relative_path(request_sha, ordinal, values["source_bytes_sha256"]):
+            raise WorkSessionIntakeBundleError()
+    elif values["source_path"] != root.joinpath(*staged.split("/")):
+        raise WorkSessionIntakeBundleError()
+    if values["source_path_binding_sha256"] != intake._sha_bytes(
+                os.path.normcase(str(values["source_path"].absolute())).encode("utf-8")):
         raise WorkSessionIntakeBundleError()
     document, receipt_plan_sha = intake.source_intake_record_exact._validated_plan_document(
         values["receipt_bytes"], archive_id=archive_id)
@@ -268,7 +280,7 @@ def _decode_input(root, document):
     manifest = exact.ExactOperationManifest.from_document(document["unbound_manifest"])
     if (manifest.operation != intake.OPERATION or manifest.work_session_binding is not None
             or manifest.archive_identity_sha256 != approval.exact_human_approval_archive_identity_sha256(document["archive_id"])
-            or len(manifest.items) != len(items) + 1
+            or len(manifest.items) != len(items) + 1 + sum(item.external_copy for item in items)
             or len({item.source_physical_identity_sha256 for item in items}) != len(items)):
         raise WorkSessionIntakeBundleError()
     plan = intake.SourceIntakeBatchExactPlan(root, document["archive_id"], _absolute_path(document["request_path"]),
@@ -286,6 +298,10 @@ def _decode_input(root, document):
         if operation.target_identity_sha256 != intake._sha_document({"schema": target_schema,
                 "archive_identity_sha256": manifest.archive_identity_sha256, "target_ref": operation.target_ref}):
             raise WorkSessionIntakeBundleError()
+    from . import source_intake_external as external
+    expected_copies = external.operation_items(root, document["archive_id"], items, offset=len(items) + 1)
+    if tuple(manifest.items[len(items) + 1:]) != expected_copies:
+        raise WorkSessionIntakeBundleError()
     exact._validate_payloads(tuple((item, item.fields) for item in manifest.items), intake._Payloads(plan), heartbeat=lambda: None)
     expected_evidence = intake._source_intake_batch_operation_evidence(items=items,
         request_bytes_sha256=plan.request_bytes_sha256, request_document_sha256=plan.request_document_sha256,
@@ -360,7 +376,10 @@ def _decode_prepared(root, raw):
             or binding.archive_identity_sha256 != plan.manifest.archive_identity_sha256):
         raise WorkSessionIntakeBundleError()
     evidence = plan.manifest.operation_evidence.document()
-    evidence["schema"] = EVIDENCE_SCHEMA
+    schema = document["manifest"].get("operation_evidence", {}).get("schema")
+    if schema not in {EVIDENCE_SCHEMA, CONCURRENT_EVIDENCE_SCHEMA}:
+        raise WorkSessionIntakeBundleError()
+    evidence["schema"] = schema
     evidence["digests"]["session_scope_sha256"] = value["scope_sha256"]
     manifest = exact.ExactOperationManifest.build(operation=plan.manifest.operation,
         archive_identity_sha256=plan.manifest.archive_identity_sha256, items=plan.manifest.items,
@@ -394,13 +413,13 @@ class PreparedSessionSourceIntakeBatch:
         return _safe_call(lambda: _decode_prepared(self._root, self._raw)[2])
 
 
-def _prepare_session_source_intake_batch(plan, *, request_bytes, scope):
+def _prepare_session_source_intake_batch(plan, *, request_bytes, scope, concurrent=False):
     def prepare():
         if type(scope) is not _SourceIntakeBatchSessionScope:
             raise WorkSessionIntakeBundleError()
         data, owner = _input_document(plan, request_bytes), scope.document()
         evidence = plan.manifest.operation_evidence.document()
-        evidence["schema"] = EVIDENCE_SCHEMA
+        evidence["schema"] = CONCURRENT_EVIDENCE_SCHEMA if concurrent or any(item.external_copy for item in plan.items) else EVIDENCE_SCHEMA
         evidence["digests"]["session_scope_sha256"] = owner["scope_sha256"]
         manifest = exact.ExactOperationManifest.build(operation=plan.manifest.operation,
             archive_identity_sha256=plan.manifest.archive_identity_sha256, items=plan.manifest.items,

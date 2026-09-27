@@ -1,11 +1,11 @@
 # Checked-Layer Objet Rediscovery Plan
 
-Status: read-only CLI and MCP contract implemented in v0.3.294; private
-metadata layer status updated in v0.3.296
+Status: read-only CLI and MCP summary contract implemented in v0.3.294;
+current finder and source-reference audit guidance updated for concurrent lookup.
 
 ## Why This Exists
 
-`archive search` searches the current generated SQLite index. Its
+`archive search` searches a validated snapshot of the generated SQLite index. Its
 `complete: true` value means only that the result set inside that index was not
 truncated by the requested limit. It does not prove that:
 
@@ -78,10 +78,10 @@ order:
 | `indexed_views` | Generated-index snapshot only; view freshness is not proven. |
 | `indexed_source_records` | Generated-index snapshot only; source-map freshness is not proven. |
 | `zettel_objet_edges` | `unchecked` until a reviewed zettel is selected for exact traversal. |
-| `private_original_name_metadata` | `unchecked`; v0.3.296 provides an approved private metadata writer, but no receipt-bound private metadata index or private rediscovery query, and no private index freshness is proven. |
+| `private_original_name_metadata` | `unchecked` by this summary; use `find-objet` for the implemented receipt-bound private finder and its snapshot pages. |
 | `approved_external_local_store` | `not_implemented`; no registration or scan lifecycle exists here. |
 | `external_store_evidence` | `unchecked`; the existing local `backup-evidence` status is not run because it does not consume the submitted private query. |
-| `unrecovered_source_references` | `not_implemented`; reserved for the v0.3.299 coverage contract. |
+| `unrecovered_source_references` | `unchecked` by this summary; the implemented `source-reference-coverage-audit` inspects its explicit observed population separately. |
 
 Each index channel receives its own bounded `limit + 1` probe even when an
 earlier channel already fills the global result limit. An untruncated channel
@@ -92,6 +92,23 @@ bounded lower bound summed across those channel probes; its companion
 `--count-total` can make the index-internal total exact, but it does not change
 `truncated`, does not prove source freshness, and does not complete the other
 layers.
+
+## Continue an actual lookup
+
+`archive search <archive-root> <query> --format json` returns up to 100 rows
+per page. Optional repeated `--type` filters accept `zettel`, `object`,
+`derived_text`, `view`, and `source_map`. Repeat the identical query, filters
+and limit with `--cursor <next_cursor>` until `next_cursor` is null. A cursor
+keeps the original snapshot even if another session updates the live index.
+
+`archive find-objet <archive-root> <query> --format json` searches the private
+finder projection. Its cursor similarly preserves the original generation.
+Read counts, remaining rows and snapshot time; one full page is not a claim
+that only 100 results exist. A missing historical match does not prove current
+absence. Neither command's successful lookup proves remote object availability.
+
+`objet-rediscovery-plan` remains a privacy-safe investigation summary. It does
+not return private matches or silently run every suggested lookup.
 
 ## Privacy Boundary
 

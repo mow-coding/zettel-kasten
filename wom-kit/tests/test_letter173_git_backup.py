@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import Mock, patch
 from pathlib import Path
 
 from wom_kit import git_backup_plan as planner
@@ -81,6 +82,17 @@ class IgnoredAttributeTests(unittest.TestCase):
 
 
 class SessionRouteCauseTests(unittest.TestCase):
+    def test_specific_attribute_failure_survives_canonical_plan_projection(self):
+        plan = {"ok": False, "inspection_complete": True, "blockers": [
+            "changed_path_attribute_state_unavailable", "changed_path_attribute_timeout"]}
+        with patch.object(planner, "git_backup_plan", return_value=plan):
+            with self.assertRaises(provenance.WorkSessionGitProvenanceError) as caught:
+                provenance._observe(Mock(), object(), {})
+        self.assertEqual(caught.exception.cause_code, "changed_path_attribute_timeout")
+        result = command._failure("work_session_git_unavailable", mode="preview",
+                                  cause_code=caught.exception.cause_code)
+        self.assertIn("timed out", result["next_safe_actions"][0])
+
     def test_plan_blocker_code_survives_both_layers_with_a_next_action(self):
         def blocked():
             raise provenance.WorkSessionGitProvenanceError(

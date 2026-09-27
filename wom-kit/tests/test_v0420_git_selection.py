@@ -305,7 +305,8 @@ class GitSelectionV2RealTests(unittest.TestCase):
         def stage_excluded_after_selected_add(backend, args, **kwargs):
             nonlocal changed
             result = original(backend, args, **kwargs)
-            if not changed and "add" in args and "--" in args:
+            if not changed and "add" in args and "--pathspec-from-file=-" in args:
+                self.assertIn("--pathspec-file-nul", args)
                 changed = True
                 self.git(self.root, "add", "--", "new-private.txt")
             return result
