@@ -102,7 +102,7 @@ def _public_result(result, *, mode):
 def _dispatch_session_source_intake(
     root, *, mode, client_app_ref, task_route_ref, work_session_ref=None,
     request_path=None, reviewer_claim=None, cancel_requested=lambda: False, progress=lambda _event: None,
-    family,
+    family, stage_external=False,
 ):
     """One held archive lane; resume receives only the retained caller route."""
     workflow, started, original_verified = None, False, False
@@ -153,6 +153,7 @@ def _dispatch_session_source_intake(
         safe_cancel = lambda: safe_callback(cancel_requested)
         common = dict(client_app_ref=client_app_ref, task_route_ref=task_route_ref,
                       work_session_ref=work_session_ref, progress_hook=safe_progress)
+        fresh_options = {"stage_external": stage_external} if family == "batch" else {}
 
         def run(held):
             nonlocal started
@@ -164,9 +165,9 @@ def _dispatch_session_source_intake(
             if mode == "resume":
                 return resume(resolved, held=held, **common)
             if mode == "preview":
-                return preview(resolved, request_path, held=held, **common)
+                return preview(resolved, request_path, held=held, **common, **fresh_options)
             return apply(
-                resolved, request_path, held=held, reviewer_claim=reviewer_claim, **common)
+                resolved, request_path, held=held, reviewer_claim=reviewer_claim, **common, **fresh_options)
 
         result = sessions._write(resolved, cancel_requested=safe_cancel, progress=safe_progress, run=run)
         return _public_result(result, mode=mode)
@@ -191,11 +192,13 @@ def _dispatch_session_source_intake(
 def dispatch_session_source_intake(
     root, *, mode, client_app_ref, task_route_ref, work_session_ref=None,
     request_path=None, reviewer_claim=None, cancel_requested=lambda: False, progress=lambda _event: None,
+    stage_external=False,
 ):
     """Existing batch route; keeps its public call grammar unchanged."""
     return _dispatch_session_source_intake(root, mode=mode, client_app_ref=client_app_ref,
         task_route_ref=task_route_ref, work_session_ref=work_session_ref, request_path=request_path,
-        reviewer_claim=reviewer_claim, cancel_requested=cancel_requested, progress=progress, family="batch")
+        reviewer_claim=reviewer_claim, cancel_requested=cancel_requested, progress=progress, family="batch",
+        stage_external=stage_external)
 
 
 def dispatch_session_source_intake_record(

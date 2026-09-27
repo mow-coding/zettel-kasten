@@ -154042,13 +154042,19 @@ def index_archive(
     except OSError:
         raise ArchiveServiceError("archive_index_mutation_in_progress") from None
     try:
-        return _index_archive_locked(
+        result = _index_archive_locked(
             root,
             progress_callback=progress_callback,
             initial_progress_emitted=True,
         )
     finally:
         rebuild_lock.__exit__(None, None, None)
+    if result.get("ok"):
+        # Retain a searchable historical generation after releasing the
+        # mutation lease. Cache failure does not invalidate the live index.
+        from .search_snapshots import publish
+        result["search_snapshot"] = publish(root)
+    return result
 
 
 def _mark_archive_index_dirty_while_rebuild_locked(

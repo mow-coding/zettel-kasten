@@ -21781,7 +21781,8 @@ def _command_session_source_intake(args: argparse.Namespace, *, record: bool) ->
 
             entered = True
             dispatch = dispatch_session_source_intake_record if record else dispatch_session_source_intake
-            input_path = {"plan_path": path} if record else {"request_path": path}
+            input_path = {"plan_path": path} if record else {"request_path": path,
+                "stage_external": bool(getattr(args, "stage_external", False))}
             result = dispatch(Path(args.archive_root), mode=mode,
                 client_app_ref=getattr(args, "client_app_ref", None),
                 task_route_ref=getattr(args, "task_route_ref", None),
@@ -21884,6 +21885,7 @@ def command_source_intake_batch(args: argparse.Namespace) -> int:
         plan = source_intake_batch_exact.plan_source_intake_batch(
             Path(args.archive_root),
             Path(args.manifest),
+            stage_external=bool(getattr(args, "stage_external", False)),
         )
         reporter.progress("source-intake-batch-plan", "done", None, None)
         if args.dry_run:
@@ -23751,8 +23753,21 @@ def command_activity_cleanup(args: argparse.Namespace) -> int:
             stage_order=("activity-cleanup-inventory", "activity-cleanup-hash", "activity-cleanup-items", "activity-cleanup-directories"),
             progress_log_path=getattr(args, "progress_log", None))
         inspect_status = bool(getattr(args, "status", False))
+        reconcile = bool(getattr(args, "reconcile", False))
+        restore_number = getattr(args, "restore_item", None)
+        if restore_number is not None and (args.resume or inspect_status or reconcile):
+            raise activity_cleanup.ActivityCleanupError("activity_cleanup_restore_requires_preview_or_approve")
+        if (restore_number is None) != (getattr(args, "destination", None) is None):
+            raise activity_cleanup.ActivityCleanupError("activity_cleanup_restore_arguments_invalid")
+        if reconcile and (args.resume or inspect_status):
+            raise activity_cleanup.ActivityCleanupError("activity_cleanup_reconcile_requires_preview_or_approve")
         candidate = activity_cleanup.plan(Path(args.archive_root), args.request,
-            resume=args.resume or inspect_status, progress=reporter.progress)
+            resume=args.resume or inspect_status or reconcile or restore_number is not None, progress=reporter.progress)
+        if restore_number is not None:
+            candidate = activity_cleanup.restore_plan(candidate, number=restore_number, destination=args.destination)
+            candidate["public"] = candidate["restore_public"]
+        if reconcile:
+            candidate = activity_cleanup.reconcile_plan(candidate)
         if inspect_status:
             result = activity_cleanup.status(candidate)
             print_json(result)
@@ -23770,7 +23785,8 @@ def command_activity_cleanup(args: argparse.Namespace) -> int:
         reviewer = archive_services.safe_foreign_quarantine_actor_id(args.reviewed_by)
         if reviewer is None:
             raise activity_cleanup.ActivityCleanupError("activity_cleanup_reviewer_required")
-        binding = activity_cleanup.approval_binding(candidate)
+        binding = (activity_cleanup.restore_binding(candidate) if restore_number is not None
+                   else activity_cleanup.approval_binding(candidate))
         context = binding.context(archive_id=archive_services.read_archive_id(candidate["root"]), reviewer_claim=reviewer)
         def run(claim):
             storage = candidate["material"]["storage"]
@@ -23780,6 +23796,8 @@ def command_activity_cleanup(args: argparse.Namespace) -> int:
                     invalid=lambda: activity_cleanup.ActivityCleanupError("activity_cleanup_storage_arguments_invalid"),
                     unavailable=lambda: activity_cleanup.ActivityCleanupError("activity_cleanup_remote_unavailable"))
                 backend = activity_cleanup.OfficialPreservationBackend(candidate, reviewer=reviewer, transport_factory=factory)
+            if restore_number is not None:
+                return activity_cleanup.restore_item(candidate, reviewer=reviewer, claim=claim, backend=backend)
             return activity_cleanup.execute(candidate, reviewer=reviewer, claim=claim, backend=backend)
         if args.resume:
             from .exact_human_approval_workflow import _resume_exact_human_approved_write_core
@@ -32542,11 +32560,13 @@ def command_related_zets(args: argparse.Namespace) -> int:
 
 def command_search(args: argparse.Namespace) -> int:
     try:
-        result = archive_services.search_archive(
+        from .search_snapshots import search
+        result = search(
             Path(args.archive_root),
             args.query,
             limit=args.limit,
-            count_total=bool(getattr(args, "count_total", False)),
+            types=getattr(args, "type", None),
+            cursor=getattr(args, "cursor", None),
         )
     except archive_services.ArchiveServiceError as exc:
         print(str(exc), file=sys.stderr)
@@ -32565,7 +32585,9 @@ def command_search(args: argparse.Namespace) -> int:
         # Text is the default format, so this line is what most callers read.
         # Reporting only the returned row count is what lets a capped page be
         # mistaken for the complete answer.
-        if not result["truncated"]:
+        if result.get("offset", 0):
+            print(f"Returned {result['returned']} of {result['total_matches']} match(es); {result['remaining']} remain.")
+        elif not result["truncated"]:
             print(f"Found {result['total_matches']} result(s); this is the complete match set.")
         elif result["total_matches_known"]:
             print(
@@ -32577,6 +32599,10 @@ def command_search(args: argparse.Namespace) -> int:
                 f"Returned {result['returned']} match(es); more matches exist beyond "
                 f"--limit {result['limit_applied']}. Add --count-total for the exact number."
             )
+        if result.get("snapshot"):
+            print(f"Search snapshot: {result['snapshot']['indexed_at']} (historical indexed view).")
+        if result.get("next_cursor"):
+            print(f"Next page: repeat the query and filters with --cursor {result['next_cursor']}")
         for item in result["results"]:
             print(
                 "\t".join(
@@ -41272,6 +41298,9 @@ def build_parser() -> argparse.ArgumentParser:
     activity_cleanup_modes.add_argument("--approve", action="store_true")
     activity_cleanup_modes.add_argument("--resume", action="store_true")
     activity_cleanup_modes.add_argument("--status", action="store_true", help="Read saved intent and item evidence without repeating writes or asserting fresh remote verification.")
+    activity_cleanup_parser.add_argument("--reconcile", action="store_true", help="Preview or approve recovery of unfinished items from authenticated original evidence.")
+    activity_cleanup_parser.add_argument("--restore-item", type=int, help="Restore this saved item number, including its preserved Windows streams, into a new external file.")
+    activity_cleanup_parser.add_argument("--destination", help="Absolute new-file destination for --restore-item; existing files are never replaced.")
     activity_cleanup_parser.add_argument("--expected-plan-sha256")
     activity_cleanup_parser.add_argument("--reviewed-by")
     activity_cleanup_progress = activity_cleanup_parser.add_mutually_exclusive_group()
@@ -42590,6 +42619,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Plan or record many metadata-only local source intakes with one review gate.",
     )
     source_intake_batch.add_argument("archive_root", help="Archive root to inspect or update.")
+    source_intake_batch.add_argument("--stage-external", action="store_true", help="Include create-only verified copies of external originals in the reviewed intake; originals remain unchanged.")
     source_intake_batch.add_argument(
         "--manifest",
         help="JSON batch request; relative paths resolve from the archive root. Required except session original --resume or --approve --review-original.",
@@ -46568,11 +46598,14 @@ def build_parser() -> argparse.ArgumentParser:
     search = subcommands.add_parser("search", help="Search the generated local SQLite search index.")
     search.add_argument("archive_root", help="Archive root to search.")
     search.add_argument("query", help="Search query.")
-    search.add_argument("--limit", type=int, default=20, help="Maximum number of results to return.")
+    search.add_argument("--limit", type=int, default=100, help="Results per page (maximum 100).")
+    search.add_argument("--type", action="append", choices=["zettel", "object", "derived_text", "view", "source_map"],
+                        help="Limit search to these material types (repeatable).")
+    search.add_argument("--cursor", help="Continue the same query, filters, and page size from its original snapshot.")
     search.add_argument(
         "--count-total",
         action="store_true",
-        help="Also count every match beyond the limit. Costs a full scan of each searched table.",
+        help="Compatibility option; paginated search always reports exact counts within its snapshot.",
     )
     search.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     search.set_defaults(func=command_search)

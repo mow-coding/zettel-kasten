@@ -61,12 +61,15 @@
           "disposition": {
             "enum": [
               "preserve",
-              "discard"
+              "discard",
+              "retain"
             ],
-            "default": "preserve"
+            "default": "preserve",
+            "description": "Classify before upload: preserve useful sources/results/evidence, discard proven disposable temporary files without upload, retain uncertain files without upload or deletion."
           },
           "discard_intent": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "The classifier records disposal intent within delegated cleanup authority; not an additional approval-window requirement."
           }
         }
       }

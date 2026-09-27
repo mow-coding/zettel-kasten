@@ -24,6 +24,7 @@ import hashlib
 import os
 import re
 import stat
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -597,6 +598,7 @@ def _cancel_windows_file_disposition(
     approved: _ApprovedFile,
     *,
     readonly_disposition: bool = False,
+    stream_verifier=None,
 ) -> None:
     api = _windows_api()
     try:
@@ -605,7 +607,10 @@ def _cancel_windows_file_disposition(
         else:
             api.set_disposition(handle, False)
         _windows_digest_handle(handle, approved, expected_link_count=1)
-        _reject_windows_alternate_streams(handle, directory=False)
+        if stream_verifier is None:
+            _reject_windows_alternate_streams(handle, directory=False)
+        else:
+            stream_verifier()
         _validate_windows_named_file(path, approved)
     except BaseException as exc:
         if isinstance(exc, LegacyCleanupBoundDeleteError) and exc.code == (
@@ -621,6 +626,7 @@ def _delete_windows_file(
     approved: _ApprovedFile,
     *,
     allow_readonly: bool = False,
+    expected_streams=None,
 ) -> None:
     with _activity_group_bound_directory_chain(
         workspace_root,
@@ -631,9 +637,18 @@ def _delete_windows_file(
         delete_marked = False
         committed = False
         readonly_disposition = False
+        stream_stack = ExitStack()
+        stream_verifier = None
         try:
             _validate_windows_named_file(path, approved)
-            _reject_windows_alternate_streams(handle, directory=False)
+            if expected_streams is None:
+                _reject_windows_alternate_streams(handle, directory=False)
+            else:
+                from .activity_cleanup_streams import hold
+                state = {"type": "file", "identity": {"device": approved.device, "inode": approved.inode},
+                         "size": approved.size, "mtime_ns": approved.mtime_ns, "sha256": approved.sha256}
+                _rows, _handles, stream_verifier = stream_stack.enter_context(
+                    hold(path, state, base_handle=handle, expected=expected_streams))
             _windows_digest_handle(handle, approved, expected_link_count=1)
             readonly_disposition = bool(allow_readonly and
                 _windows_api().query(handle).attributes & _windows_api().FILE_ATTRIBUTE_READONLY)
@@ -643,18 +658,25 @@ def _delete_windows_file(
                 _windows_api().set_disposition(handle, True)
             delete_marked = True
             _windows_digest_handle(handle, approved, expected_link_count=0)
-            _reject_windows_alternate_streams(handle, directory=False)
+            if stream_verifier is None:
+                _reject_windows_alternate_streams(handle, directory=False)
+            else:
+                stream_verifier(after_delete=True)
             committed = True
         except BaseException as exc:
             failure = exc
             if delete_marked and not committed:
                 try:
                     _cancel_windows_file_disposition(handle, path, approved,
-                        readonly_disposition=readonly_disposition)
+                        readonly_disposition=readonly_disposition, stream_verifier=stream_verifier)
                     delete_marked = False
                 except BaseException as cancel_exc:
                     failure = cancel_exc
 
+        try:
+            stream_stack.close()
+        except BaseException as close_exc:
+            failure = close_exc
         try:
             _windows_close(handle)
         except LegacyCleanupBoundDeleteError as close_exc:
@@ -808,6 +830,7 @@ def _delete_exact_approved_file(
     expected: Mapping[str, Any],
     *,
     allow_readonly: bool = False,
+    expected_streams=None,
 ) -> None:
     """Delete one exact approved regular file or raise content-free failure."""
 
@@ -815,7 +838,8 @@ def _delete_exact_approved_file(
     root, candidate = _validated_paths(workspace_root, path)
     try:
         if os.name == "nt":
-            _delete_windows_file(root, candidate, approved, allow_readonly=allow_readonly)
+            _delete_windows_file(root, candidate, approved, allow_readonly=allow_readonly,
+                                 expected_streams=expected_streams)
         else:
             _delete_posix_file(root, candidate, approved)
     except LegacyCleanupBoundDeleteError:

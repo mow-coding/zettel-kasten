@@ -514,6 +514,7 @@ class SourceIntakeBatchExactItem:
     source_basis_bytes: bytes = field(repr=False)
     warnings: tuple[str, ...]
     target_state: str
+    external_copy: bool = False
 
     def public_document(self) -> dict[str, Any]:
         return {
@@ -526,6 +527,8 @@ class SourceIntakeBatchExactItem:
             "receipt_bytes_sha256": _sha_bytes(self.receipt_bytes),
             "warning_count": len(self.warnings),
             "path_echoed": False,
+            "external_copy_planned": self.external_copy,
+            "copy_target_ref": self.capture_staged_path if self.external_copy else None,
         }
 
 
@@ -801,6 +804,7 @@ def _build_item(
     request_bytes_sha256: str,
     raw_item: Mapping[str, Any],
     heartbeat: Callable[[], None] | None = None,
+    stage_external: bool = False,
 ) -> SourceIntakeBatchExactItem:
     source_path = _resolve_input_path(
         root,
@@ -822,6 +826,10 @@ def _build_item(
         expected_before=before_plan,
         heartbeat=heartbeat,
     )
+    external_copy = bool(stage_external and capture_staged_path is None)
+    if external_copy:
+        from .source_intake_external import relative_path
+        capture_staged_path = relative_path(request_bytes_sha256, ordinal, source_sha)
     if source_plan.get("ok") is not True:
         raise _fail("source_intake_batch_item_invalid")
     receipt_raw = _receipt_bytes(source_plan)
@@ -918,6 +926,7 @@ def _build_item(
         source_basis_bytes=source_basis,
         warnings=warnings,
         target_state=_target_state(root, receipt_relative, receipt_raw),
+        external_copy=external_copy,
     )
 
 
@@ -926,6 +935,7 @@ def plan_source_intake_batch(
     request_path: Path | str,
     *,
     heartbeat: Callable[[], None] | None = None,
+    stage_external: bool = False,
 ) -> SourceIntakeBatchExactPlan:
     """Build one exact manifest for 1-1000 legacy-v0.1 local requests."""
 
@@ -953,6 +963,7 @@ def plan_source_intake_batch(
                 request_bytes_sha256=request_bytes_sha256,
                 raw_item=raw_item,
                 heartbeat=heartbeat,
+                stage_external=stage_external,
             )
             for index, raw_item in enumerate(raw_items)
         )
@@ -1043,7 +1054,9 @@ def plan_source_intake_batch(
                     ),
                 ),
             )
-        operation_items = receipt_operation_items + support_operation_items
+        from . import source_intake_external as external
+        copies = external.operation_items(root, archive_id, items, offset=len(items) + len(support_operation_items))
+        operation_items = receipt_operation_items + support_operation_items + copies
         manifest = ExactOperationManifest.build(
             operation=OPERATION,
             archive_identity_sha256=archive_identity,
@@ -1074,6 +1087,7 @@ def plan_source_intake_batch(
         )
 
     states = {item.target_state for item in items}
+    states.update(external.state(root, item) for item in items if item.external_copy)
     if prepared_capture_request is not None:
         states.add(prepared_capture_request.target_state)
     if "target_collision" in states:
@@ -1107,9 +1121,12 @@ def _source_intake_batch_operation_evidence(
     *, items, request_bytes_sha256, request_document_sha256, prepared_capture_request,
 ) -> dict[str, Any]:
     """Reconstruct original v2 evidence identically for planning and retention."""
+    from . import source_intake_external as external
+    copy_count = sum(item.external_copy for item in items)
     return {
-        "schema": EVIDENCE_SCHEMA,
+        "schema": external.SCHEMA if copy_count else EVIDENCE_SCHEMA,
         "counts": {
+            **({"external_copy_count": copy_count} if copy_count else {}),
             "source_item_count": len(items),
             "receipt_byte_count": sum(len(item.receipt_bytes) for item in items),
             "source_byte_count": sum(item.source_size_bytes for item in items),
@@ -1290,6 +1307,7 @@ def _revalidate_item(
         request_bytes_sha256=plan.request_bytes_sha256,
         raw_item=raw_item,
         heartbeat=heartbeat,
+        stage_external=expected.external_copy,
     )
     stable_fields = (
         "request_item_id",
@@ -1305,6 +1323,8 @@ def _revalidate_item(
         "receipt_bytes",
         "source_basis_bytes",
         "warnings",
+        "capture_staged_path",
+        "external_copy",
     )
     if any(getattr(current, name) != getattr(expected, name) for name in stable_fields):
         raise _fail("source_intake_batch_source_drifted")
@@ -1323,6 +1343,13 @@ class _Payloads:
         heartbeat: Callable[[], None],
     ) -> bytes | None:
         heartbeat()
+        if field_ref == "verified_copy_token":
+            from . import source_intake_external as external
+            item = next((row for row in self.plan.items if row.external_copy
+                         and item_id == "item:external-copy:" + str(row.ordinal)), None)
+            if item is None or state not in {"pre", "post", "source"}:
+                raise _fail("source_intake_batch_write_failed")
+            return None if state == "pre" else external.token(item) if state == "post" else item.source_basis_bytes
         artifact = _prepared_by_operation_id(self.plan, item_id)
         if artifact is not None:
             if field_ref != CAPTURE_REQUEST_FIELD_REF:
@@ -1360,6 +1387,8 @@ class _Verifier:
         heartbeat()
         if self.plan.manifest is None:
             raise _fail("source_intake_batch_write_failed")
+        if target_kind == "source_intake_external_copy":
+            return _external_operation(self.plan, target_ref).target_identity_sha256
         artifact = _prepared_by_target(self.plan, target_ref)
         if artifact is not None:
             if target_kind != CAPTURE_REQUEST_TARGET_KIND:
@@ -1379,6 +1408,16 @@ class _Verifier:
         heartbeat: Callable[[], None],
     ) -> bytes | None:
         heartbeat()
+        if target_kind == "source_intake_external_copy":
+            from . import source_intake_external as external
+            operation = _external_operation(self.plan, target_ref)
+            if field_ref != external.FIELD_REF:
+                raise _fail("source_intake_batch_write_failed")
+            item = next(row for row in self.plan.items if row.capture_staged_path == operation.target_ref)
+            observed = external.state(self.plan.archive_root, item, heartbeat)
+            if observed == "target_collision":
+                raise _fail("source_intake_batch_target_collision")
+            return external.token(item) if observed == "exact_target_present" else None
         artifact = _prepared_by_target(self.plan, target_ref)
         if artifact is not None:
             if (
@@ -1457,6 +1496,15 @@ class _Writer:
     ) -> None:
         if value is None:
             raise _fail("source_intake_batch_write_failed")
+        if target_kind == "source_intake_external_copy":
+            from . import source_intake_external as external
+            operation = _external_operation(self.plan, target_ref)
+            item = next(row for row in self.plan.items if row.capture_staged_path == operation.target_ref)
+            if field_ref != external.FIELD_REF or value != external.token(item):
+                raise _fail("source_intake_batch_write_failed")
+            _revalidate_item(self.plan, item, request_items=self.request_items, heartbeat=heartbeat)
+            external.copy_approved(self.plan, item, heartbeat=heartbeat)
+            return
         artifact = _prepared_by_target(self.plan, target_ref)
         if artifact is not None:
             if (
@@ -1575,7 +1623,8 @@ def _success_document(
         "replay_reconciliation_available": True,
         "writes_performed": bool(core.get("written_field_count", 0)),
         "source_bytes_hashed": True,
-        "source_bytes_retained": False,
+        "source_bytes_retained": any(item.external_copy for item in plan.items),
+        "external_copy_count": sum(item.external_copy for item in plan.items),
         "provider_calls_performed": False,
         "credential_material_used_for_local_authentication": True,
         "credential_values_echoed": False,
@@ -1586,17 +1635,27 @@ def _success_document(
     }
 
 
+def _external_operation(plan, target_ref):
+    if plan.manifest is not None:
+        for item in plan.manifest.items:
+            if item.target_kind == "source_intake_external_copy" and item.target_ref == target_ref:
+                return item
+    raise _fail("source_intake_batch_write_failed")
+
+
 def _require_legacy_unbound_plan(plan: SourceIntakeBatchExactPlan) -> None:
     """This extraction does not admit an unattached session execution scope."""
     if type(plan) is not SourceIntakeBatchExactPlan or type(plan.manifest) is not ExactOperationManifest:
         raise _fail("source_intake_batch_plan_blocked")
     evidence = plan.manifest.operation_evidence
+    from .source_intake_external import SCHEMA
+    copy_count = sum(item.external_copy for item in plan.items)
     if (plan.manifest.work_session_binding is not None or getattr(plan, "session_scope", None) is not None
-            or evidence is None or evidence.schema != EVIDENCE_SCHEMA
+            or evidence is None or evidence.schema != (SCHEMA if copy_count else EVIDENCE_SCHEMA)
             or {name for name, _value in evidence.counts} != {
                 "source_item_count", "receipt_byte_count", "source_byte_count", "warning_count",
                 "prepared_capture_request_count",
-            }
+            } | ({"external_copy_count"} if copy_count else set())
             or {name for name, _value in evidence.digests} != {
                 "item_receipt_set_sha256", "item_source_set_sha256", "request_bytes_sha256",
                 "request_document_sha256", "prepared_capture_request_sha256",
@@ -1769,11 +1828,25 @@ def _execute_core(
     # Preserve legacy refusal before lockfile creation, then reauthenticate
     # under the caller's held lock in the shared runner.
     _authority(plan, claim, context, allow_resume=False)
+    if any(item.external_copy for item in plan.items):
+        return _run_external_operation(plan, context, claim, resume=False, progress_hook=progress_hook)
     with exact_operation_writer_lock(plan.archive_root) as writer_lock:
         return _run_source_intake_batch_exact_operation(
             plan, context=context, claim=claim, writer_lock=writer_lock,
             resume=False, progress_hook=progress_hook,
         )
+
+
+def _run_external_operation(plan, context, claim, *, resume, progress_hook):
+    from .operation_target_leases import TargetLeases, ExecutionCheckpointStore
+    authority = _authority(plan, claim, context, allow_resume=resume)
+    execution = exact_operation_execution_sha256(plan.manifest, approval_authority=authority)
+    targets = [("execution", execution), *(("file", item.target_ref) for item in plan.manifest.items)]
+    with TargetLeases(plan.archive_root, targets) as held:
+        store = ExecutionCheckpointStore(plan.archive_root, execution_sha256=execution,
+                                        lease=held.leases[("execution", execution)])
+        return _apply_with_store(plan, authority, store, request_items=_request_items(plan), resume=resume,
+            progress_hook=progress_hook, completion_authenticator=_completion_authenticator(claim))
 
 
 def execute_source_intake_batch(
@@ -1977,6 +2050,16 @@ def resume_source_intake_batch(
         reviewer_claim=reviewer_claim,
         allow_resume=True,
     )
+    if any(item.external_copy for item in plan.items):
+        def guard(claim):
+            if claim.approval_id != approval_id:
+                raise _fail("source_intake_batch_resume_invalid")
+            authority = _authority(plan, claim, context, allow_resume=True)
+            return validate_exact_operation_resume_checkpoint_read_only(plan.archive_root, plan.manifest,
+                execution_sha256=execution_sha256, approval_authority=authority)
+        return _resume_exact_human_approved_write_core(plan.archive_root, context, approval_id, guard,
+            lambda claim: _run_external_operation(plan, context, claim, resume=True, progress_hook=progress_hook),
+            key_provider=key_provider, resume_boundary=lambda: _claim_resume_boundary(plan))
     with exact_operation_writer_lock(plan.archive_root) as writer_lock:
         request_items = _request_items(plan)
         store = FileExactOperationCheckpointStore(

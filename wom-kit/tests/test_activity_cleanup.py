@@ -469,6 +469,15 @@ class ActivityCleanupTests(unittest.TestCase):
         native = _Native()
         output = io.StringIO()
         with ExitStack() as stack:
+            if getattr(self, "interrupt_before_upload_checkpoint", False):
+                original_apply = upload._apply_core
+                failed_before_checkpoint = [False]
+                def before_checkpoint(*args, **kwargs):
+                    if not failed_before_checkpoint[0]:
+                        failed_before_checkpoint[0] = True
+                        raise OSError("synthetic interruption before first upload checkpoint")
+                    return original_apply(*args, **kwargs)
+                stack.enter_context(patch.object(upload, "_apply_core", side_effect=before_checkpoint))
             if getattr(self, "interrupt_intake", False):
                 from wom_kit import objet_capture_selection_exact as selection
                 original_selection = selection.execute_existing_intake_capture_selection_in_chain
@@ -497,7 +506,7 @@ class ActivityCleanupTests(unittest.TestCase):
             with redirect_stdout(output), redirect_stderr(io.StringIO()):
                 code = archive_cli.main(["activity-cleanup", str(self.root), "--request", str(self.request),
                     "--approve", "--reviewed-by", "person:synthetic"])
-            if any(getattr(self, flag, False) for flag in ("interrupt_after_put", "interrupt_intake", "interrupt_capture", "interrupt_after_capture")):
+            if any(getattr(self, flag, False) for flag in ("interrupt_after_put", "interrupt_intake", "interrupt_capture", "interrupt_after_capture", "interrupt_before_upload_checkpoint")):
                 partial = json.loads(output.getvalue())
                 self.assertEqual(code, 1, partial)
                 self.assertTrue(self.source.exists())
@@ -513,14 +522,53 @@ class ActivityCleanupTests(unittest.TestCase):
         self.assertEqual(code, 0, (result, plans))
         self.assertTrue(result["ok"], result)
         self.assertFalse(self.source.exists())
-        self.assertEqual(transport.put_calls, 1)
+        expected_objects = 2 if getattr(self, "preserve_ads", False) else 1
+        self.assertEqual(transport.put_calls, expected_objects)
         if not getattr(self, "interrupt_after_put", False):
-            self.assertEqual(get_count[0], 1, "composed upload and cleanup must share whole-byte proof")
+            self.assertEqual(get_count[0], expected_objects, "composed upload and cleanup must share whole-byte proof")
         self.assertIn(b"synthetic source", transport.objects.values())
         self.assertFalse(any(p.is_file() for p in (self.root / "staging/incoming/activity-synthetic-activity").glob("*")))
         oid = "sha256:" + __import__("hashlib").sha256(b"synthetic source").hexdigest()
         self.assertFalse((self.root / "objects/sha256" / oid[7:9] / oid[7:]).exists())
         self.assertNotIn("PRIVATE_SYNTHETIC", output.getvalue())
+        if getattr(self, "preserve_ads", False):
+            from wom_kit import activity_cleanup_streams as streams
+            journal = cleanup.Journal(self.root, "synthetic-activity", self.key)
+            original = journal.read("intent")["items"][0]
+            association = journal.read("item-0-streams")
+            self.assertEqual(association["streams"], original["alternate_streams"])
+            # Use the actual public restore command after both local objects
+            # and the external original have been removed.
+            def get_object(*, key, sink_path, expected_size, expected_sha256):
+                import hashlib
+                raw = transport.objects[key]
+                Path(sink_path).write_bytes(raw)
+                return {"status_class": "ok", "sink_written": True,
+                    "size_match": len(raw) == expected_size, "checksum_match": hashlib.sha256(raw).hexdigest() == expected_sha256}
+            transport.get_object = get_object
+            restored = self.base / "restored-with-streams.txt"
+            with ExitStack() as restore_stack:
+                restore_stack.enter_context(patch.object(broker, "_production_key_provider", return_value=self.key))
+                restore_stack.enter_context(patch.object(windows, "_CtypesTaskDialogNative", return_value=native))
+                restore_stack.enter_context(patch.object(archive_cli, "_object_storage_live_transport_factory", return_value=lambda: transport))
+                restore_args = ["activity-cleanup", str(self.root), "--request", str(self.request),
+                    "--restore-item", "0", "--destination", str(restored)]
+                preview_out = io.StringIO()
+                with redirect_stdout(preview_out), redirect_stderr(io.StringIO()):
+                    preview_code = archive_cli.main([*restore_args, "--dry-run"])
+                preview = json.loads(preview_out.getvalue())
+                self.assertEqual(preview_code, 0, preview)
+                self.assertFalse(restored.exists())
+                restored_out = io.StringIO()
+                with redirect_stdout(restored_out), redirect_stderr(io.StringIO()):
+                    restore_code = archive_cli.main([*restore_args, "--approve", "--reviewed-by", "person:synthetic",
+                        "--expected-plan-sha256", preview["plan_sha256"]])
+                restored_result = json.loads(restored_out.getvalue())
+                self.assertEqual(restore_code, 0, restored_result)
+                self.assertTrue(restored_result["ok"], restored_result)
+            self.assertEqual(restored.read_bytes(), b"synthetic source")
+            self.assertEqual(Path(str(restored) + ":Zone.Identifier:$DATA").read_bytes(), b"synthetic zone data")
+            self.assertFalse(Path(association["item"]["path"]).exists())
         if getattr(self, "check_remote_only_staging", False):
             from wom_kit.remote_preservation_proof import PreservationVerifier, ProofStore
             duplicate = self.root / "staging/incoming/remote-only-duplicate"
