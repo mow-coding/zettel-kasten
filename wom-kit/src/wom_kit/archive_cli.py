@@ -33602,7 +33602,7 @@ def command_work_session(args: argparse.Namespace) -> int:
         return 1
     if resolved["mode"] != "read_only_query":
         if (args.ref is not None or args.workstream_ref is not None or args.cursor is not None
-                or args.kind != "session" or args.page_size != 20):
+                or args.kind != "session" or args.page_size != 20 or getattr(args, "caller_status", False)):
             print_json(management_failure("work_session_request_invalid"))
             return 1
         try:
@@ -33630,6 +33630,7 @@ def command_work_session(args: argparse.Namespace) -> int:
             args.archive_root, action=args.action, kind=args.kind, reference=args.ref,
             client_app_ref=args.client_app_ref, workstream_ref=args.workstream_ref,
             page_size=args.page_size, cursor=args.cursor,
+            caller_status=getattr(args, "caller_status", False),
         )
     except WorkSessionQueryError as error:
         result = {"ok": False, "schema": "wom-kit/work-session-query/v1",
@@ -48738,6 +48739,7 @@ def build_parser() -> argparse.ArgumentParser:
     work_session.add_argument("--action", choices=["list", "inspect", "register-app", "request-init", "create", "claim", "pause", "resume", "complete", "handoff", "accept", "recover", "set-permission-mode"], default="list")
     work_session.add_argument("--kind", choices=["app", "workstream", "session"], default="session")
     work_session.add_argument("--ref", help="Opaque reference to inspect.")
+    work_session.add_argument("--caller-status", action="store_true", help="With inspect: compare this process's session grant and runtime without granting authority; omit --ref to inspect the current caller.")
     work_session.add_argument("--client-app-ref", help="Explicit registered app for management, or query filter.")
     work_session.add_argument("--workstream-ref", help="Filter listed sessions by their workstream reference.")
     work_session.add_argument("--page-size", type=int, default=20, help="Rows per page, from 1 through 2000.")

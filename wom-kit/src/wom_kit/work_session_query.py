@@ -164,8 +164,9 @@ def _inspect(snapshot, *, kind, reference):
 
 
 def query_work_sessions(root, *, action="list", kind="session", reference=None,
-                        client_app_ref=None, workstream_ref=None, page_size=20, cursor=None):
-    """Public read service: no native prompt, claim/key lookup, writes or provider.
+                        client_app_ref=None, workstream_ref=None, page_size=20, cursor=None,
+                        caller_status=False):
+    """Public read service: no native prompt, writes or provider calls.
 
 Opaque filters and cursor are routing data only. Unknown refs are not silently
 treated as an empty project, and all exceptions leave only fixed public codes.
@@ -174,14 +175,34 @@ treated as an empty project, and all exceptions leave only fixed public codes.
     try:
         if type(action) is not str or action not in {"list", "inspect"}:
             raise WorkSessionQueryError()
+        if type(caller_status) is not bool or (caller_status and (action != "inspect" or kind != "session")):
+            raise WorkSessionQueryError()
         if (action == "list" and reference is not None) or (action == "inspect" and (
                 client_app_ref is not None or workstream_ref is not None or cursor is not None)):
             raise WorkSessionQueryError()
+        if caller_status and reference is None:
+            from .work_session_permission import _current_context
+            context = _current_context()
+            if context is None:
+                return {"schema": QUERY_SCHEMA, "ok": False, "read_only": True,
+                        "reason_code": "work_session_caller_context_missing",
+                        "next_action": "bind_this_conversations_official_session_route",
+                        "query_is_write_authority": False}
+            reference = context["work_session_ref"]
         snapshot = _capture(root)
         if action == "list":
             return _list(snapshot, kind=kind, client_app_ref=client_app_ref,
                          workstream_ref=workstream_ref, page_size=page_size, cursor=cursor)
-        return _inspect(snapshot, kind=kind, reference=reference)
+        result = _inspect(snapshot, kind=kind, reference=reference)
+        if caller_status:
+            from .work_session_caller_status import inspect_caller
+            result["caller_status"] = inspect_caller(
+                root, session_ref=reference, session_row=snapshot._document["sessions"][reference])
+            # A concurrent revoke must not combine an old registry row with a
+            # newer permission result. The command remains an observation only.
+            if _capture(root).sha256 != snapshot.sha256:
+                raise WorkSessionQueryError("work_session_query_changed")
+        return result
     except (WorkSessionQueryError, SnapshotPaginationError) as error:
         code = error.code
     except Exception:

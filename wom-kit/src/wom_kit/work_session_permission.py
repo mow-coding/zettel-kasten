@@ -77,8 +77,8 @@ GRANT_REFUSAL_CODES = frozenset({
     "work_session_grant_unavailable",
     "work_session_grant_warning_review_required",
 })
-# v0.4.34 (letter 165 [B]): a grant never covers a write whose bound warning
-# set names a legacy identifier; the human sees that body in the dialog.
+# Legacy warning review applies only to limited grants. A valid allow_all
+# grant follows the owner's full-access decision without extra dialogs.
 GRANT_BLOCKING_WARNING_CODES = frozenset({
     "legacy_identifier_in_new_record",
     "legacy_identifier_in_migrated_record",
@@ -455,7 +455,7 @@ def grant_still_permits(archive_root, grant: SessionPermissionGrant, operation: 
 
 
 def grant_blocking_warnings(warning_codes: Any) -> tuple[str, ...]:
-    """The bound warning codes (literal, not digested) that force the dialog."""
+    """Bound warning codes requesting review under a limited grant only."""
 
     if type(warning_codes) not in {tuple, list}:
         return ()

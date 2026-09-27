@@ -86,6 +86,7 @@ PLAN_SCHEMA = "wom-kit/object-storage-upload-plan/v0.1"
 RESULT_SCHEMA = "wom-kit/object-storage-upload-result/v0.1"
 VERIFY_SCHEMA = "wom-kit/object-storage-upload-verification/v0.1"
 CONTROL_SCHEMA = "wom-kit/object-storage-upload-control/v0.1"
+CONCURRENT_CONTROL_SCHEMA = "wom-kit/object-storage-upload-control/v0.2"
 OPERATION = ExactHumanApprovalOperation.object_storage_bytes_upload.value
 RECEIPT_ROOT = archive_services.OBJECT_STORAGE_EXECUTIONS_DIR
 CONTROL_ROOT = preservation.CONTROL_ROOT
@@ -311,7 +312,8 @@ def _item_id_for(spec: UploadSpec) -> str:
     return "item:" + hashlib.sha256((spec.object_id + "\x00" + spec.receipt_relative).encode("ascii")).hexdigest()
 
 
-def _manifest_for_specs(*, archive_id: str, specs: Sequence[UploadSpec], scope: ObjectScope | None = None) -> ExactOperationManifest | None:
+def _manifest_for_specs(*, archive_id: str, specs: Sequence[UploadSpec], scope: ObjectScope | None = None,
+                        target_preimages: dict[str, str] | None = None) -> ExactOperationManifest | None:
     items: list[ExactOperationItem] = []
     for ordinal, spec in enumerate(specs):
         items.append(
@@ -350,11 +352,16 @@ def _manifest_for_specs(*, archive_id: str, specs: Sequence[UploadSpec], scope: 
             ),
         )
     )
+    evidence = scope.evidence(len(specs)) if scope is not None else None
+    if target_preimages is not None:
+        evidence = dict(evidence or {"counts": {}, "digests": {}, "private_values_echoed": False})
+        evidence["schema"] = "wom-kit/object-storage-upload-target-delta/v1"
+        evidence["digests"] = {**evidence["digests"], "target_preimages_sha256": _sha(target_preimages)}
     return ExactOperationManifest.build(
         operation=OPERATION,
         archive_identity_sha256=exact_human_approval_archive_identity_sha256(archive_id),
         items=items,
-        operation_evidence=scope.evidence(len(specs)) if scope is not None else None,
+        operation_evidence=evidence,
     )
 
 
@@ -397,6 +404,7 @@ class ObjectStorageUploadPlan:
     max_objects: int | None
     scope: ObjectScope | None = None
     loaded_from_control: bool = False
+    target_preimages: dict[str, str] | None = None
 
     @property
     def approveable(self) -> bool:
@@ -799,7 +807,9 @@ def _plan_core(
     inventory = dict(inventory)
     inventory["capacity"] = storage_cost.capacity(root, groups, provider_kind=normalized_provider,
         store_ref=normalized_store, planned_uploads=[(spec.object_id, spec.size_bytes) for spec in specs])
-    manifest = None if blockers else _manifest_for_specs(archive_id=archive_id, specs=specs, scope=scope)
+    target_preimages = {spec.object_id: _sha(unique_rows[spec.object_id]) for spec in specs}
+    manifest = None if blockers else _manifest_for_specs(archive_id=archive_id, specs=specs, scope=scope,
+                                                       target_preimages=target_preimages)
     return ObjectStorageUploadPlan(
         archive_root=root,
         archive_id=archive_id,
@@ -818,6 +828,7 @@ def _plan_core(
         selected_only=_object_id(only) if only else None,
         max_objects=max_objects,
         scope=scope,
+        target_preimages=target_preimages,
     )
 
 
@@ -876,7 +887,8 @@ def _control_document(plan: ObjectStorageUploadPlan) -> dict[str, Any]:
     if plan.manifest is None:
         raise _fail("object_storage_upload_no_writes")
     basis = {
-        "schema_version": CONTROL_SCHEMA,
+        "schema_version": CONCURRENT_CONTROL_SCHEMA if plan.target_preimages is not None else CONTROL_SCHEMA,
+        **({"target_preimages": plan.target_preimages} if plan.target_preimages is not None else {}),
         "archive_id": plan.archive_id,
         "provider_kind": plan.provider_kind,
         "store_ref": plan.store_ref,
@@ -965,9 +977,11 @@ def load_object_storage_upload_plan(archive_root: Path | str, *, manifest_sha256
     except Exception:
         raise _fail("object_storage_upload_control_invalid") from None
     supplied_control_sha = document.pop("control_sha256", None)
+    extra_fields = {"target_preimages"} if document.get("schema_version") == CONCURRENT_CONTROL_SCHEMA else set()
+    allowed_fields = (_CONTROL_FIELDS | extra_fields, _CONTROL_FIELDS | extra_fields | {"scope"})
     if (
-        document.get("schema_version") != CONTROL_SCHEMA
-        or set(document) not in (_CONTROL_FIELDS, _CONTROL_FIELDS | {"scope"})
+        document.get("schema_version") not in {CONTROL_SCHEMA, CONCURRENT_CONTROL_SCHEMA}
+        or set(document) not in allowed_fields
         or document.get("private_control_document") is not True
         or type(supplied_control_sha) is not str
         or not hmac.compare_digest(supplied_control_sha, _sha(document))
@@ -1082,7 +1096,13 @@ def load_object_storage_upload_plan(archive_root: Path | str, *, manifest_sha256
     ):
         raise _fail("object_storage_upload_control_invalid")
     loaded_scope = ObjectScope.from_document(document["scope"]) if document.get("scope") is not None else None
-    rebuilt = _manifest_for_specs(archive_id=current_archive_id, specs=specs, scope=loaded_scope)
+    target_preimages = document.get("target_preimages")
+    if target_preimages is not None and (
+            type(target_preimages) is not dict or set(target_preimages) != {spec.object_id for spec in specs}
+            or any(type(value) is not str or _SHA256_RE.fullmatch(value) is None for value in target_preimages.values())):
+        raise _fail("object_storage_upload_control_invalid")
+    rebuilt = _manifest_for_specs(archive_id=current_archive_id, specs=specs, scope=loaded_scope,
+                                 target_preimages=target_preimages)
     if rebuilt is None or rebuilt.document() != manifest.document():
         raise _fail("object_storage_upload_control_invalid")
     return ObjectStorageUploadPlan(
@@ -1104,6 +1124,7 @@ def load_object_storage_upload_plan(archive_root: Path | str, *, manifest_sha256
         max_objects=document.get("max_objects"),
         scope=ObjectScope.from_document(document["scope"]) if document.get("scope") is not None else None,
         loaded_from_control=True,
+        target_preimages=target_preimages,
     )
 
 
@@ -1308,6 +1329,29 @@ def _location_present(row: Mapping[str, Any], spec: UploadSpec, plan: ObjectStor
     )
 
 
+def _assert_target_preimage(plan, spec, row):
+    if plan.target_preimages is None or _sha(row) == plan.target_preimages[spec.object_id]:
+        return
+    # A crash may have published our own exact delta before its marker. Strip
+    # only that receipt-bound location; other edits still require a new plan.
+    original = dict(row)
+    locations = row.get("locations") or []
+    ours = [location for location in locations if location.get("execution_receipt_ref") == spec.receipt_relative]
+    original["locations"] = [location for location in locations if location not in ours]
+    if (len(ours) != 1 or not _location_present(row, spec, plan)
+            or _sha(original) != plan.target_preimages[spec.object_id]):
+        raise _fail("object_storage_upload_plan_changed")
+
+
+def _assert_target_preimages(plan):
+    _rows, groups = preservation._read_manifest_groups(plan.archive_root, progress=None)
+    for spec in plan.specs:
+        rows = groups.get(spec.object_id, [])
+        if len(rows) != 1:
+            raise _fail("object_storage_upload_plan_changed")
+        _assert_target_preimage(plan, spec, rows[0])
+
+
 def _batch_state(
     plan: ObjectStorageUploadPlan, ledger: preservation._ManifestBoundPreservationLedger
 ) -> bytes | None:
@@ -1417,6 +1461,7 @@ def _project_locations(
             if spec is None:
                 rewritten.append(raw_line)
                 continue
+            _assert_target_preimage(plan, spec, row)
             if _location_present(row, spec, plan):
                 rewritten.append(raw_line)
                 continue
@@ -1642,6 +1687,9 @@ class _Verifier:
                 self._verified.add(target_ref)
             return spec.receipt_token
         if target_kind == BATCH_TARGET_KIND and target_ref == MANIFEST_TARGET_REF and field_ref == "remote_locations":
+            if self.plan.target_preimages is not None:
+                with exact_operation_writer_lock(self.plan.archive_root, timeout_seconds=30, heartbeat=heartbeat):
+                    return _batch_state(self.plan, self.ledger)
             return _batch_state(self.plan, self.ledger)
         raise ValueError("read boundary")
 
@@ -1790,9 +1838,13 @@ class _Writer:
         if target_kind == BATCH_TARGET_KIND and target_ref == MANIFEST_TARGET_REF and field_ref == "remote_locations":
             if value != _manifest_batch_token(self.plan.specs):
                 raise ValueError("write boundary")
-            changed, receipts = _apply_manifest_batch(
-                self.plan, self.ledger, lifecycle=self.manifest_index_lifecycle, reviewed_by=self.reviewed_by
-            )
+            from contextlib import nullcontext
+            commit = (exact_operation_writer_lock(self.plan.archive_root, timeout_seconds=30, heartbeat=heartbeat)
+                      if self.plan.target_preimages is not None else nullcontext())
+            with commit:
+                changed, receipts = _apply_manifest_batch(
+                    self.plan, self.ledger, lifecycle=self.manifest_index_lifecycle, reviewed_by=self.reviewed_by
+                )
             self.manifest_update_count += changed
             self.receipts_created_count += receipts
             return
@@ -1857,6 +1909,18 @@ def _fresh_revalidated(
         return plan
     if plan.manifest is None:
         raise _fail("object_storage_upload_no_writes")
+    if plan.target_preimages is not None:
+        # Only approved objects are relevant to this plan. New objects from
+        # another session neither join the selection nor invalidate consent.
+        _rows, groups = preservation._read_manifest_groups(plan.archive_root, progress=None)
+        for spec in plan.specs:
+            rows = groups.get(spec.object_id, [])
+            if len(rows) != 1 or _sha(rows[0]) != plan.target_preimages[spec.object_id]:
+                raise _fail("object_storage_upload_plan_changed")
+            digest, size = preservation._hash_plain_file(spec.local_path, heartbeat=lambda: None)
+            if "sha256:" + digest != spec.object_id or size != spec.size_bytes:
+                raise _fail("object_storage_upload_source_drifted")
+        return plan
     total_items = len(plan.manifest.items)
     total_fields = sum(len(item.fields) for item in plan.manifest.items)
     last_emitted = time.monotonic()
@@ -1950,7 +2014,11 @@ def _apply_with_store(
 ) -> dict[str, Any]:
     if plan.manifest is None:
         raise _fail("object_storage_upload_no_writes")
-    _require_manifest_index_authority(plan)
+    if plan.target_preimages is not None:
+        with exact_operation_writer_lock(plan.archive_root, timeout_seconds=30):
+            _require_manifest_index_authority(plan)
+    else:
+        _require_manifest_index_authority(plan)
     writer = _Writer(plan, transport, reviewed_by=reviewed_by)
     verifier = _Verifier(plan, writer.query, writer.ledger)
     if _runner_entered is not None:
@@ -2044,6 +2112,10 @@ def _apply_core(
     try:
         current = _fresh_revalidated(plan, progress_hook=progress_hook)
         authority = _assert_approved(current, claim, context)
+        if current.target_preimages is not None:
+            return _apply_concurrent(current, authority, reviewed_by=reviewed_by,
+                transport_factory=transport_factory, resume=resume, progress_hook=progress_hook,
+                runner_entered=runner_entered)
         with exact_operation_writer_lock(current.archive_root) as writer_lock:
             _persist_control(current)
             checkpoints = FileExactOperationCheckpointStore(current.archive_root, writer_lock=writer_lock)
@@ -2070,6 +2142,40 @@ def _apply_core(
             except Exception:
                 pass
         raise
+
+
+def _apply_concurrent(plan, authority, *, reviewed_by, transport_factory, resume, progress_hook,
+                      runner_entered=None):
+    from .operation_target_leases import TargetLeases, ExecutionCheckpointStore
+    execution = exact_operation_execution_sha256(plan.manifest, approval_authority=authority)
+    targets = [("execution", execution), *(("object", spec.object_id) for spec in plan.specs)]
+    last_wait_report = [0.0]
+    def heartbeat():
+        now = time.monotonic()
+        if progress_hook is not None and now - last_wait_report[0] >= 1:
+            last_wait_report[0] = now
+            progress_hook(ExactOperationProgress(plan.manifest.manifest_sha256, execution, "apply",
+                "waiting_for_target", 0, len(plan.manifest.items), 0, len(plan.manifest.items)))
+    with TargetLeases(plan.archive_root, targets, heartbeat=heartbeat) as held:
+        # Publish immutable controls briefly, then release the archive lock
+        # before constructing a provider, reading bytes or making requests.
+        with exact_operation_writer_lock(plan.archive_root, timeout_seconds=30, heartbeat=heartbeat):
+            _assert_target_preimages(plan)
+            _persist_control(plan)
+            _require_manifest_index_authority(plan)
+        checkpoints = ExecutionCheckpointStore(plan.archive_root, execution_sha256=execution,
+                                               lease=held.leases[("execution", execution)])
+        try:
+            transport = transport_factory()
+        except Exception:
+            raise _fail("object_storage_upload_remote_unavailable") from None
+        if transport is None:
+            raise _fail("object_storage_upload_remote_unavailable")
+        result = _apply_with_store(plan, authority, transport, checkpoints, reviewed_by=reviewed_by,
+            resume=resume, progress_hook=progress_hook, _runner_entered=runner_entered)
+        result["concurrency"] = {"schema": "wom-kit/target-leases/v1", "wait_seconds": held.wait_seconds,
+                                 "remote_transfer_holds_archive_writer": False}
+        return result
 
 
 def execute_object_storage_upload(
@@ -2116,6 +2222,22 @@ def resume_object_storage_upload(
         raise _fail("object_storage_upload_resume_invalid")
     context = object_storage_upload_context(plan, reviewer_claim=reviewer_claim)
     reviewer = str(reviewer_claim).strip()
+    if plan.target_preimages is not None:
+        from .exact_operation_manifest import validate_exact_operation_resume_checkpoint_read_only
+
+        def resume_writer(claim):
+            current = _fresh_revalidated(plan, progress_hook=progress_hook)
+            authority = _assert_approved(current, claim, context)
+            if exact_operation_execution_sha256(current.manifest, approval_authority=authority) != execution_sha256:
+                raise _fail("object_storage_upload_resume_invalid")
+            return _apply_concurrent(current, authority, reviewed_by=reviewer,
+                transport_factory=transport_factory, resume=True, progress_hook=progress_hook)
+
+        return _resume_exact_human_approved_write_core(plan.archive_root, context, approval_id,
+            lambda original_claim: validate_exact_operation_resume_checkpoint_read_only(
+                plan.archive_root, plan.manifest, execution_sha256=execution_sha256,
+                approval_authority=_assert_approved(plan, original_claim, context)),
+            resume_writer, key_provider=key_provider)
     with exact_operation_writer_lock(plan.archive_root) as writer_lock:
         checkpoints = FileExactOperationCheckpointStore(plan.archive_root, writer_lock=writer_lock)
 
