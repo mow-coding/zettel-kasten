@@ -484,6 +484,10 @@ class ActivityCleanupTests(unittest.TestCase):
                 def before_checkpoint(*args, **kwargs):
                     if not failed_before_checkpoint[0]:
                         failed_before_checkpoint[0] = True
+                        if getattr(self, "remove_original_upload_control", False):
+                            from wom_kit.exact_operation_manifest import exact_operation_writer_lock
+                            with exact_operation_writer_lock(self.root):
+                                upload._persist_control(args[0])
                         raise OSError("synthetic interruption before first upload checkpoint")
                     return original_apply(*args, **kwargs)
                 stack.enter_context(patch.object(upload, "_apply_core", side_effect=before_checkpoint))
@@ -520,6 +524,12 @@ class ActivityCleanupTests(unittest.TestCase):
                 self.assertEqual(code, 1, partial)
                 self.assertTrue(self.source.exists())
                 self.assertEqual(transport.put_calls, 1 if getattr(self, "interrupt_after_put", False) else 0)
+                if getattr(self, "remove_original_upload_control", False):
+                    original_journal = cleanup.Journal(self.root, "synthetic-activity", self.key)
+                    pointer = original_journal.read("item-0-upload-control")
+                    control_path = self.root / upload._control_relative(pointer["manifest_sha256"])
+                    self.assertTrue(control_path.is_file())
+                    control_path.unlink()  # Exact synthetic failure injection.
                 output = io.StringIO()
                 with redirect_stdout(output), redirect_stderr(io.StringIO()):
                     code = archive_cli.main(["activity-cleanup", str(self.root), "--request", str(self.request),
@@ -569,10 +579,27 @@ class ActivityCleanupTests(unittest.TestCase):
                 self.assertEqual(preview_code, 0, preview)
                 self.assertFalse(restored.exists())
                 restored_out = io.StringIO()
-                with redirect_stdout(restored_out), redirect_stderr(io.StringIO()):
+                original_journal_write = cleanup.Journal.write
+                def journal_write(journal, name, value):
+                    if getattr(self, "interrupt_restore_publication", False) and name == "restore-" + preview["plan_sha256"][7:]:
+                        raise OSError("synthetic cut after native restore publication")
+                    return original_journal_write(journal, name, value)
+                with redirect_stdout(restored_out), redirect_stderr(io.StringIO()), patch.object(cleanup.Journal, "write", new=journal_write):
                     restore_code = archive_cli.main([*restore_args, "--approve", "--reviewed-by", "person:synthetic",
                         "--expected-plan-sha256", preview["plan_sha256"]])
                 restored_result = json.loads(restored_out.getvalue())
+                if getattr(self, "interrupt_restore_publication", False):
+                    self.assertNotEqual(restore_code, 0)
+                    self.assertTrue(restored.exists())
+                    dialogs = native.calls
+                    for _ in range(2):
+                        resumed_out = io.StringIO()
+                        with redirect_stdout(resumed_out), redirect_stderr(io.StringIO()), patch.object(
+                                cleanup.OfficialPreservationBackend, "restore_object", side_effect=AssertionError("already restored objects downloaded again")):
+                            restore_code = archive_cli.main([*restore_args, "--resume", "--reviewed-by", "person:synthetic"])
+                        restored_result = json.loads(resumed_out.getvalue())
+                        self.assertEqual(restore_code, 0, restored_result)
+                    self.assertEqual(native.calls, dialogs)
                 self.assertEqual(restore_code, 0, restored_result)
                 self.assertTrue(restored_result["ok"], restored_result)
             self.assertEqual(restored.read_bytes(), b"synthetic source")

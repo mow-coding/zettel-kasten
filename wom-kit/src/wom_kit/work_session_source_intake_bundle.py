@@ -29,6 +29,7 @@ from .work_session_establishment import EstablishmentSelector
 
 SCOPE_SCHEMA = "wom-kit/source-intake-batch-session-scope/v1"
 EVIDENCE_SCHEMA = "wom-kit/source-intake-batch-session-evidence/v1"
+CONCURRENT_EVIDENCE_SCHEMA = "wom-kit/source-intake-batch-session-evidence/v2"
 PREPARED_SCHEMA = "wom-kit/source-intake-batch-retained-prepared/v1"
 CONTEXT_SCHEMA = "wom-kit/source-intake-batch-original-context/v1"
 PRIVATE_ROOT = ("profiles", "local", "exact-operations", "source-intake-contexts")
@@ -375,7 +376,10 @@ def _decode_prepared(root, raw):
             or binding.archive_identity_sha256 != plan.manifest.archive_identity_sha256):
         raise WorkSessionIntakeBundleError()
     evidence = plan.manifest.operation_evidence.document()
-    evidence["schema"] = EVIDENCE_SCHEMA
+    schema = document["manifest"].get("operation_evidence", {}).get("schema")
+    if schema not in {EVIDENCE_SCHEMA, CONCURRENT_EVIDENCE_SCHEMA}:
+        raise WorkSessionIntakeBundleError()
+    evidence["schema"] = schema
     evidence["digests"]["session_scope_sha256"] = value["scope_sha256"]
     manifest = exact.ExactOperationManifest.build(operation=plan.manifest.operation,
         archive_identity_sha256=plan.manifest.archive_identity_sha256, items=plan.manifest.items,
@@ -409,13 +413,13 @@ class PreparedSessionSourceIntakeBatch:
         return _safe_call(lambda: _decode_prepared(self._root, self._raw)[2])
 
 
-def _prepare_session_source_intake_batch(plan, *, request_bytes, scope):
+def _prepare_session_source_intake_batch(plan, *, request_bytes, scope, concurrent=False):
     def prepare():
         if type(scope) is not _SourceIntakeBatchSessionScope:
             raise WorkSessionIntakeBundleError()
         data, owner = _input_document(plan, request_bytes), scope.document()
         evidence = plan.manifest.operation_evidence.document()
-        evidence["schema"] = EVIDENCE_SCHEMA
+        evidence["schema"] = CONCURRENT_EVIDENCE_SCHEMA if concurrent or any(item.external_copy for item in plan.items) else EVIDENCE_SCHEMA
         evidence["digests"]["session_scope_sha256"] = owner["scope_sha256"]
         manifest = exact.ExactOperationManifest.build(operation=plan.manifest.operation,
             archive_identity_sha256=plan.manifest.archive_identity_sha256, items=plan.manifest.items,

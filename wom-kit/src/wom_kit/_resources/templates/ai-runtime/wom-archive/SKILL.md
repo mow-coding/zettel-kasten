@@ -120,6 +120,16 @@ Do not delete already-uploaded remote temporary objects through local cleanup.
 - Prefer read-only inspection and `--dry-run`; preview is not write approval.
 - Official search is `archive search <archive-root> <query> --count-total
   --format json`. Raw grep/SQL are diagnostic, not authoritative WOM results.
+- Read `next_cursor`, exact totals, remaining rows and snapshot time. Continue
+  `search` or `find-objet` with the same query/filter/limit and `--cursor` until
+  done; the 100-row page size is not a total-result cap. A historical snapshot
+  stays readable while another session works; do not call it current source or
+  remote-preservation evidence. `objet-rediscovery-plan` is a summary, not the
+  implemented private finder itself.
+- Use `work-session --action inspect --caller-status` to distinguish recorded
+  permission, this caller's usable grant, observed running target operations,
+  and installed runtime alignment. `not_observed` does not prove idle. Host
+  `Unknown process id` is not evidence that WOM failed or revoked permission.
 - `archive_index_rebuild_required` is a hard stop. Run explicit `archive index`
   then `index-health`; never trust stale rows or silently scan all bodies.
   Legacy WAL or sidecar-bearing generated indexes require one ordinary rebuild.

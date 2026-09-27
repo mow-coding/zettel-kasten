@@ -77,8 +77,19 @@ class OfficialStreamPipelineTests(unittest.TestCase):
         self.interrupt_before_upload_checkpoint = True
         fixture.ActivityCleanupTests.test_official_intake_upload_offload_external_cleanup_pipeline(self)
 
+    def test_missing_child_control_reconstructs_only_original_authenticated_plan(self):
+        self.interrupt_before_upload_checkpoint = True
+        self.remove_original_upload_control = True
+        fixture.ActivityCleanupTests.test_official_intake_upload_offload_external_cleanup_pipeline(self)
+
     def test_official_intake_upload_offload_delete_and_remote_bytes_restore(self):
         self.preserve_ads = True
+        Path(str(self.source) + ":Zone.Identifier:$DATA").write_bytes(b"synthetic zone data")
+        fixture.ActivityCleanupTests.test_official_intake_upload_offload_external_cleanup_pipeline(self)
+
+    def test_restored_body_and_ads_survive_cut_before_final_receipt_and_resume_without_download(self):
+        self.preserve_ads = True
+        self.interrupt_restore_publication = True
         Path(str(self.source) + ":Zone.Identifier:$DATA").write_bytes(b"synthetic zone data")
         fixture.ActivityCleanupTests.test_official_intake_upload_offload_external_cleanup_pipeline(self)
 

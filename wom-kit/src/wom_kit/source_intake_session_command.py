@@ -29,7 +29,7 @@ _DIGESTS = frozenset({
 })
 _EXACT_STAGES = frozenset({"preflight", "heartbeat", "item_started", "field_verified", "item_verified", "completed"})
 _PHASES = frozenset({"intake_preflight", "intake_revalidation", "waiting_for_writer",
-                     "writer_acquired_revalidation_required"})
+                     "writer_acquired_revalidation_required", "writer_wait_timed_out"})
 
 
 def _project_progress(event):
@@ -61,6 +61,8 @@ def _failure(code, *, mode, effects_started=False, original_completion_verified=
         # Domain effects only: preview enters the common lock/runtime lane but
         # never enters an intake writer. Its control lock is not a domain write.
         "effects_state": "unknown" if effects_started and mode != "preview" else "none",
+        **({"retryable": True, "next_action": "resume_original_operation_after_writer_finishes", "holder_unchanged": True}
+           if code == "work_session_wait_timeout" else {}),
         "completion_verified": False, "original_completion_verified": original_completion_verified is True,
         "private_values_echoed": False, "paths_echoed": False,
     }
@@ -169,7 +171,17 @@ def _dispatch_session_source_intake(
             return apply(
                 resolved, request_path, held=held, reviewer_claim=reviewer_claim, **common, **fresh_options)
 
-        result = sessions._write(resolved, cancel_requested=safe_cancel, progress=safe_progress, run=run)
+        if family == "batch" and mode in {"preview", "apply", "resume"}:
+            from . import work_session_intake_concurrent as concurrent
+            sessions._runtime_guard(resolved)
+            started = True
+            if mode == "resume":
+                result = workflow._safe_call(lambda: concurrent.resume(resolved, **common, cancel_requested=safe_cancel))
+            else:
+                result = workflow._safe_call(lambda: concurrent.fresh(resolved, request_path, mode=mode, reviewer_claim=reviewer_claim,
+                    **common, cancel_requested=safe_cancel, stage_external=stage_external))
+        else:
+            result = sessions._write(resolved, cancel_requested=safe_cancel, progress=safe_progress, run=run)
         return _public_result(result, mode=mode)
     except KeyboardInterrupt:
         code = "work_session_wait_cancelled"
@@ -184,7 +196,7 @@ def _dispatch_session_source_intake(
             if type(error.code) is str and error.code in sessions._ERRORS:
                 code = error.code
         elif isinstance(error, sessions.WorkSessionWaitError) and error.args in (
-                ("work_session_wait_cancelled",), ("work_session_wait_root_changed",)):
+                ("work_session_wait_cancelled",), ("work_session_wait_root_changed",), ("work_session_wait_timeout",), ("work_session_wait_invalid",)):
             code = error.args[0]
     return _failure(code, mode=mode, effects_started=started, original_completion_verified=original_verified)
 

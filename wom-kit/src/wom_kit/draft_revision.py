@@ -119,43 +119,62 @@ def approval_binding(candidate):
 
 
 def write(root, *, draft, proposal, expected_plan_sha256, reviewer, claim, binding, resume=False):
-    from .object_storage_offload import _create_or_match_document
+    from .operation_target_leases import TargetLeases
     root = services.require_existing_archive_root(Path(root))
-    with exact_operation_writer_lock(root):
+    relative = services.normalize_archive_relative_path(draft)
+    _, initial = _read(root, relative)
+    identity = initial["frontmatter"]["id"]
+    # Expensive fidelity/quality preparation holds only this zet's lease.
+    # Unrelated notes and remote transfers can finish while it runs.
+    with TargetLeases(root, [("zet", identity)]):
         fresh = plan(root, draft=draft, proposal=proposal,
             resume_plan_sha256=expected_plan_sha256 if resume else None)
-        public, material = fresh["public"], fresh["material"]
-        if not public["ok"] or public["plan_sha256"] != expected_plan_sha256:
+        if fresh["material"]["zettel_id"] != identity:
             raise DraftRevisionError("draft_revision_plan_changed")
-        approval = services._require_exact_human_operation_approval(root, approval_binding(fresh),
-            reviewer_claim=reviewer, expected_plan_sha256=binding.plan_sha256,
-            expected_target_binding_sha256=binding.target_binding_sha256, claim=claim)
-        digest = expected_plan_sha256[7:]
-        snapshot_path = ROOT + "/snapshots/" + material["before_sha256"][7:] + ".md"
-        intent = {**material, "snapshot_path": snapshot_path, "approval": claim.public_reference()}
-        _create_or_match_document(root, snapshot_path, fresh["before_bytes"], failure_code="object_storage_offload_receipt_conflict", max_bytes=MAX_BYTES)
-        _create_or_match_document(root, ROOT + "/" + digest + ".intent.json", _encoded(intent), failure_code="object_storage_offload_receipt_conflict")
-        # Exact bytes checked through a retained native handle; a replaced target
-        # or mismatched recovery residue never gets overwritten.
-        services._replace_regular_file_bytes_compare_and_swap(root, fresh["target"],
-            expected_bytes=fresh["before_bytes"], replacement_bytes=fresh["after_bytes"],
-            transaction_sha256=expected_plan_sha256, swap_suffix=".draft-revision.swap",
-            max_bytes=MAX_BYTES, error_prefix="draft_revision", allow_already_replacement=resume)
-        receipt = {"schema": "wom-kit/draft-revision-receipt/v1", "action": "draft_revision_write",
-            "status": "applied", **material, "snapshot": {"path": snapshot_path, "sha256": material["before_sha256"]},
-            "after": {"file_sha256": material["proposal_sha256"]},
-            "exact_human_approval": approval, "creation_receipt_overwritten": False,
-            "quality_check": public["quality_check"], "auto_publish": False}
-        receipt["schema"] = "wom-kit/draft-revision-receipt/v1"
-        receipt_path = ROOT + "/" + digest + ".revision.json"
-        existing = services.archive_internal_path(root, receipt_path)
-        if existing.exists():
-            previous = json.loads(existing.read_bytes())
-            if any(previous.get(k) != receipt[k] for k in (*material, "schema", "action", "status", "snapshot", "after", "auto_publish", "creation_receipt_overwritten")):
-                raise DraftRevisionError("draft_revision_receipt_conflict")
-        else:
-            _create_or_match_document(root, receipt_path, _encoded(receipt), failure_code="object_storage_offload_receipt_conflict")
-        services.index_archive(root)
-        return {**public, "dry_run": False, "state": "draft_revised", "writes_performed": True,
-                "before_snapshot_preserved": True, "revision_receipt_written": True, "revision_receipt_path": receipt_path,
-                "creation_receipt_overwritten": False, "auto_publish": False}
+        with exact_operation_writer_lock(root, timeout_seconds=30):
+            canonical = services.resolve_zet_revision_canonical_candidate(root, identity)
+            if canonical != fresh["target"] and canonical.is_file():
+                raise DraftRevisionError("draft_revision_already_published")
+            return _publish(root, fresh, expected_plan_sha256=expected_plan_sha256,
+                reviewer=reviewer, claim=claim, binding=binding, resume=resume)
+
+
+def _publish(root, fresh, *, expected_plan_sha256, reviewer, claim, binding, resume):
+    from .object_storage_offload import _create_or_match_document
+    # Caller holds the zet and shared publication leases. Exact-byte CAS below
+    # rejects external edits made after planning without overwriting them.
+    public, material = fresh["public"], fresh["material"]
+    if not public["ok"] or public["plan_sha256"] != expected_plan_sha256:
+        raise DraftRevisionError("draft_revision_plan_changed")
+    approval = services._require_exact_human_operation_approval(root, approval_binding(fresh),
+        reviewer_claim=reviewer, expected_plan_sha256=binding.plan_sha256,
+        expected_target_binding_sha256=binding.target_binding_sha256, claim=claim)
+    digest = expected_plan_sha256[7:]
+    snapshot_path = ROOT + "/snapshots/" + material["before_sha256"][7:] + ".md"
+    intent = {**material, "snapshot_path": snapshot_path, "approval": claim.public_reference()}
+    _create_or_match_document(root, snapshot_path, fresh["before_bytes"], failure_code="object_storage_offload_receipt_conflict", max_bytes=MAX_BYTES)
+    _create_or_match_document(root, ROOT + "/" + digest + ".intent.json", _encoded(intent), failure_code="object_storage_offload_receipt_conflict")
+    # Exact bytes checked through a retained native handle; a replaced target
+    # or mismatched recovery residue never gets overwritten.
+    services._replace_regular_file_bytes_compare_and_swap(root, fresh["target"],
+        expected_bytes=fresh["before_bytes"], replacement_bytes=fresh["after_bytes"],
+        transaction_sha256=expected_plan_sha256, swap_suffix=".draft-revision.swap",
+        max_bytes=MAX_BYTES, error_prefix="draft_revision", allow_already_replacement=resume)
+    receipt = {"schema": "wom-kit/draft-revision-receipt/v1", "action": "draft_revision_write",
+        "status": "applied", **material, "snapshot": {"path": snapshot_path, "sha256": material["before_sha256"]},
+        "after": {"file_sha256": material["proposal_sha256"]},
+        "exact_human_approval": approval, "creation_receipt_overwritten": False,
+        "quality_check": public["quality_check"], "auto_publish": False}
+    receipt["schema"] = "wom-kit/draft-revision-receipt/v1"
+    receipt_path = ROOT + "/" + digest + ".revision.json"
+    existing = services.archive_internal_path(root, receipt_path)
+    if existing.exists():
+        previous = json.loads(existing.read_bytes())
+        if any(previous.get(k) != receipt[k] for k in (*material, "schema", "action", "status", "snapshot", "after", "auto_publish", "creation_receipt_overwritten")):
+            raise DraftRevisionError("draft_revision_receipt_conflict")
+    else:
+        _create_or_match_document(root, receipt_path, _encoded(receipt), failure_code="object_storage_offload_receipt_conflict")
+    services.index_archive(root)
+    return {**public, "dry_run": False, "state": "draft_revised", "writes_performed": True,
+            "before_snapshot_preserved": True, "revision_receipt_written": True, "revision_receipt_path": receipt_path,
+            "creation_receipt_overwritten": False, "auto_publish": False}

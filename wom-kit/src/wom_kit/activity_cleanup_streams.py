@@ -201,7 +201,7 @@ def verify_bundle(path, body_state, streams):
         raise _fail("activity_cleanup_stream_bundle_invalid") from None
 
 
-def restore_new(body, bundle, destination, body_state, streams):
+def restore_new(body, bundle, destination, body_state, streams, *, before_publish=None):
     """Restore both into a new file; publish only after native stream readback."""
     from . import archive_services as services
     body, bundle, destination = Path(body), Path(bundle), Path(destination)
@@ -212,10 +212,10 @@ def restore_new(body, bundle, destination, body_state, streams):
         for source in (body, bundle):
             parent = held.enter_context(services._bound_directory_chain(Path(source.anchor), source.parent))
             held.enter_context(services._hold_bound_regular_file(parent, source, os.lstat(source)))
-        return _restore_new_held(body, bundle, destination, body_state, streams)
+        return _restore_new_held(body, bundle, destination, body_state, streams, before_publish=before_publish)
 
 
-def _restore_new_held(body, bundle, destination, body_state, streams):
+def _restore_new_held(body, bundle, destination, body_state, streams, *, before_publish=None):
     from .activity_cleanup import _safe_path, file_state
     from .object_storage_restore import _atomic_move_file_no_replace
     if os.name != "nt":
@@ -246,6 +246,8 @@ def _restore_new_held(body, bundle, destination, body_state, streams):
     restored = file_state(temporary)
     if any(restored[key] != body_state[key] for key in ("sha256", "size")) or inventory(temporary, restored) != streams:
         raise _fail("activity_cleanup_restore_verification_failed")
+    if before_publish is not None:
+        before_publish(temporary, restored)
     _atomic_move_file_no_replace(temporary, destination)
     final = file_state(destination)
     if any(final[key] != body_state[key] for key in ("sha256", "size")) or inventory(destination, final) != streams:

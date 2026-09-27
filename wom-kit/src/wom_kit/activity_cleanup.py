@@ -502,7 +502,11 @@ def reconcile_plan(candidate):
     return {**candidate, "material": material, "journal": ReconciliationJournal(journal, identity), "public": public}
 
 
-def restore_plan(candidate, *, number, destination):
+def _restore_request_label(number, destination):
+    return "restore-request-" + digest([number, str(Path(destination))])[7:]
+
+
+def restore_plan(candidate, *, number, destination, resume=False):
     if type(number) is not int or number < 0 or not isinstance(destination, str) or not Path(destination).is_absolute():
         raise ActivityCleanupError("activity_cleanup_restore_arguments_invalid")
     selected = [item for item in candidate["material"]["items"] if item["number"] == number]
@@ -526,14 +530,20 @@ def restore_plan(candidate, *, number, destination):
     _safe_path(target.parent)
     if target.resolve().is_relative_to(candidate["root"].resolve()):
         raise ActivityCleanupError("activity_cleanup_restore_external_destination_required")
-    if os.path.lexists(target):
+    if os.path.lexists(target) and not resume:
         raise ActivityCleanupError("activity_cleanup_restore_destination_exists")
     material = {"schema": "wom-kit/activity-cleanup-restore-intent/v1",
         "activity_id": candidate["material"]["activity_id"], "number": number,
         "destination": str(target), "parent_state": _directory_state(target.parent),
         "body_object_id": item["object_id"], "body_state": item["state"],
         "streams": streams["streams"] if streams else [], "stream_item": streams["item"] if streams else None}
+    saved = None
+    if resume:
+        saved = candidate["journal"].read(_restore_request_label(number, destination))
+        if not saved or saved.get("intent") != material:
+            raise ActivityCleanupError("activity_cleanup_restore_original_missing_or_changed")
     return {**candidate, "restore": material,
+        "restore_approval": saved,
         "restore_public": {"ok": True, "dry_run": True, "plan_sha256": digest(material), "item_number": number,
             "body_bytes": item["state"]["size"], "alternate_stream_count": len(material["streams"]),
             "new_file_only": True, "writes_performed": False, "private_values_echoed": False}}
@@ -547,6 +557,31 @@ def restore_binding(candidate):
 
 
 def restore_item(candidate, *, reviewer, claim, backend):
+    from .operation_target_leases import TargetLeases
+    with TargetLeases(candidate["root"], [("file", candidate["restore"]["destination"])]):
+        return _restore_item_held(candidate, reviewer=reviewer, claim=claim, backend=backend)
+
+
+def _restored_state_matches(candidate, path, approved):
+    from . import activity_cleanup_streams as streams
+    material = candidate["restore"]
+    actual = file_state(path)
+    if actual != approved or streams.inventory(path, actual) != material["streams"]:
+        raise ActivityCleanupError("activity_cleanup_restore_destination_changed")
+
+
+def verify_restore_completion(candidate):
+    material, journal = candidate["restore"], candidate["journal"]
+    final = journal.read("restore-" + digest(material)[7:])
+    staged = journal.read("restore-publish-" + digest(material)[7:])
+    if not final or final.get("intent") != material or not staged:
+        raise ActivityCleanupError("activity_cleanup_restore_completion_missing")
+    _restored_state_matches(candidate, Path(material["destination"]), staged["state"])
+    return {**candidate["restore_public"], **final["result"], "dry_run": False,
+        "writes_performed": False, "replayed_completed_record": True}
+
+
+def _restore_item_held(candidate, *, reviewer, claim, backend):
     from . import activity_cleanup_streams as streams
     material = candidate["restore"]
     binding = restore_binding(candidate)
@@ -555,7 +590,34 @@ def restore_item(candidate, *, reviewer, claim, backend):
         expected_plan_sha256=binding.plan_sha256, expected_target_binding_sha256=binding.target_binding_sha256, claim=claim)
     claim.assert_ready_for_context(context)
     target = Path(material["destination"])
-    if _directory_state(target.parent) != material["parent_state"] or os.path.lexists(target):
+    journal = candidate["journal"]
+    identity = digest(material)[7:]
+    approval = {"intent": material, "approval_id": claim.public_summary()["approval_id"]}
+    journal.write(_restore_request_label(material["number"], str(target)), approval)
+    if _directory_state(target.parent) != material["parent_state"]:
+        raise ActivityCleanupError("activity_cleanup_restore_destination_changed")
+    staged = journal.read("restore-publish-" + identity)
+    if staged:
+        if staged.get("intent_sha256") != digest(material) or staged.get("approval_id") != approval["approval_id"]:
+            raise ActivityCleanupError("activity_cleanup_restore_evidence_changed")
+        pending = Path(staged["temporary"])
+        if pending.parent != target.parent or not re.fullmatch(r"\.wom-restore-[0-9a-f]{32}\.partial", pending.name):
+            raise ActivityCleanupError("activity_cleanup_restore_evidence_changed")
+        if os.path.lexists(target):
+            _restored_state_matches(candidate, target, staged["state"])
+        else:
+            _restored_state_matches(candidate, pending, staged["state"])
+            claim.assert_ready_for_context(context)
+            from .object_storage_restore import _atomic_move_file_no_replace
+            with services._activity_group_bound_directory_chain(Path(target.anchor), target.parent):
+                _atomic_move_file_no_replace(pending, target)
+            _restored_state_matches(candidate, target, staged["state"])
+        result = {"ok": True, "body_verified": True, "alternate_streams_verified": len(material["streams"]),
+            "new_file_created": True, "recovered_original_publication": True}
+        journal.write("restore-" + identity, {"intent": material, "result": result,
+            "approval_id": approval["approval_id"]})
+        return {**candidate["restore_public"], **result, "dry_run": False, "writes_performed": True}
+    if os.path.lexists(target):
         raise ActivityCleanupError("activity_cleanup_restore_destination_changed")
     item = next(item for item in candidate["material"]["items"] if item["number"] == material["number"])
     body = backend.restore_object(item)
@@ -569,7 +631,12 @@ def restore_item(candidate, *, reviewer, claim, backend):
     claim.assert_ready_for_context(context)
     if _directory_state(target.parent) != material["parent_state"]:
         raise ActivityCleanupError("activity_cleanup_restore_destination_changed")
-    result = streams.restore_new(body, bundle, target, material["body_state"], material["streams"])
+    def before_publish(temporary, state):
+        claim.assert_ready_for_context(context)
+        journal.write("restore-publish-" + identity, {"intent_sha256": digest(material),
+            "temporary": str(temporary), "state": state, "approval_id": approval["approval_id"]})
+    result = streams.restore_new(body, bundle, target, material["body_state"], material["streams"],
+        before_publish=before_publish)
     candidate["journal"].write("restore-" + digest(material)[7:], {"intent": material, "result": result,
         "approval_id": claim.public_summary()["approval_id"]})
     return {**candidate["restore_public"], **result, "dry_run": False, "writes_performed": True}

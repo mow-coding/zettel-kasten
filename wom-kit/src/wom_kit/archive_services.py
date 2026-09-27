@@ -158142,9 +158142,9 @@ def objet_rediscovery_plan(
                 check_state="unchecked",
                 match_state="unknown",
                 evidence_scope=(
-                    "The v0.3.296 approved private metadata writer exists, but this "
-                    "release implements no receipt-bound private metadata index or "
-                    "private rediscovery query and proves no private index freshness."
+                    "Use archive find-objet <archive-root> <query> for private receipt-bound "
+                    "metadata lookup and continue with its cursor. This summary does not "
+                    "execute that lookup or prove current private-source freshness."
                 ),
                 freshness_proven=False,
                 negative_claim_contribution=False,
@@ -158178,15 +158178,16 @@ def objet_rediscovery_plan(
             objet_rediscovery_layer(
                 "unrecovered_source_references",
                 applicability="unknown",
-                check_state="not_implemented",
+                check_state="unchecked",
                 match_state="unknown",
                 evidence_scope=(
-                    "Archive-wide unrecovered source-reference coverage is reserved "
-                    "for the v0.3.299 contract."
+                    "Use archive source-reference-coverage-audit <archive-root> --dry-run "
+                    "for its observed source-reference population. This summary does not "
+                    "run that audit or verify remote bytes."
                 ),
                 freshness_proven=False,
                 negative_claim_contribution=False,
-                reason_codes=["source_reference_coverage_not_implemented"],
+                reason_codes=["source_reference_coverage_not_checked"],
             ),
         ]
     )
@@ -158224,6 +158225,8 @@ def objet_rediscovery_plan(
     next_safe_commands.extend(
         [
             "archive search <archive-root> <query> --count-total --format json",
+            "archive find-objet <archive-root> <query> --format json",
+            "archive source-reference-coverage-audit <archive-root> --dry-run --format json",
             (
                 "archive zettel-objet-links <archive-root> "
                 "--zettel-id <reviewed-zettel-id> --dry-run --format json"
@@ -165614,7 +165617,12 @@ def _objet_capture_run(
         manifest_index_rebuild_required = False
         manifest_index_resumed = False
         manifest_index_started_this_run = False
-        with _ObjetCaptureManifestLock(root):
+        from .operation_target_leases import TargetLeases
+        from .exact_operation_manifest import exact_operation_writer_lock
+        capture_targets = [("execution", "capture:" + selection_sha256)]
+        capture_targets.extend(("object", item["object_id"]) for item in preflight_items
+            if isinstance(item.get("object_id"), str) and OBJECT_ID_RE.fullmatch(item["object_id"]))
+        with TargetLeases(root, capture_targets), ExitStack() as publication:
             canonical_ids = objet_capture_canonical_record_ids(load_manifest_records(root))
             pending_manifest_records: list[dict[str, Any]] = []
             publication_outcome_unverified = False
@@ -165651,6 +165659,15 @@ def _objet_capture_run(
                     if "derived_text" in item:
                         item_result["derived_text"] = _objet_capture_derived_text_initial_subresult()
                     item_results.append(item_result)
+
+                # Source bytes are already durable under only their object leases.
+                # Rebase the short shared manifest/index publication on the latest
+                # state; unrelated capture and remote transfer can finish first.
+                publication.enter_context(exact_operation_writer_lock(root, timeout_seconds=30))
+                publication.enter_context(_ObjetCaptureManifestLock(root))
+                current_ids = objet_capture_canonical_record_ids(load_manifest_records(root))
+                pending_manifest_records = [record for record in pending_manifest_records
+                    if record.get("object_id") not in current_ids]
 
                 # Phase boundary — ordering is load-bearing: original bytes durable ->
                 # original manifest line durable (flush+fsync+close) -> derived

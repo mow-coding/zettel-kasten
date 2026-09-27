@@ -36,7 +36,7 @@ class TargetLease(ExactOperationWriterLock):
 class TargetLeases:
     """Deterministic lock order and one bounded, cancelable contention budget."""
 
-    def __init__(self, archive_root, targets, *, timeout_seconds=30, heartbeat=None):
+    def __init__(self, archive_root, targets, *, timeout_seconds=30, heartbeat=None, session_ref=None):
         if (type(timeout_seconds) not in {int, float} or not math.isfinite(timeout_seconds)
                 or not 0 <= timeout_seconds <= 60):
             raise _fail("exact_operation_writer_lock_invalid")
@@ -49,6 +49,7 @@ class TargetLeases:
         self._stack = None
         self.leases = {}
         self.wait_seconds = 0.0
+        self.session_ref = session_ref
 
     def __enter__(self):
         if self._stack is not None:
@@ -63,6 +64,14 @@ class TargetLeases:
                     timeout_seconds=max(0, self.timeout - (time.monotonic() - started)),
                     heartbeat=self.heartbeat))
                 self.leases[(kind, reference)] = lease
+            session_ref = self.session_ref
+            if session_ref is None:
+                from .work_session_permission import _current_context
+                context = _current_context()
+                session_ref = context["work_session_ref"] if context else None
+            if session_ref:
+                from .operation_observation import observe
+                stack.enter_context(observe(self.root, session_ref))
             self._stack = stack
             self.wait_seconds = time.monotonic() - started
             return self

@@ -25,6 +25,7 @@ def runtime_status(root):
 
 
 def inspect_caller(root, *, session_ref, session_row):
+    from .operation_observation import inspect as inspect_execution
     context = permission._current_context()
     grant = None
     if context is None:
@@ -66,8 +67,7 @@ def inspect_caller(root, *, session_ref, session_row):
         },
         # A claimed session is ownership, not proof of a running process. The
         # target coordinator adds observed operation leases separately.
-        "execution": {"state": "not_observed", "session_claim_is_execution_proof": False,
-                      "host_process_lookup_is_wom_execution_proof": False},
+        "execution": inspect_execution(root, session_ref),
         "runtime": runtime_status(root),
         "observation_is_future_write_authority": False,
     }

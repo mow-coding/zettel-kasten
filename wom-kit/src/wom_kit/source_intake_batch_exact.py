@@ -1525,6 +1525,9 @@ class _Writer:
                 request_items=self.request_items,
                 heartbeat=heartbeat,
             )
+        self._publish(target_ref, value, heartbeat)
+
+    def _publish(self, target_ref, value, heartbeat):
         try:
             target = _approved_lexical_target(self.plan, target_ref)
             with archive_services._activity_group_bound_directory_chain(

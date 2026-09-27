@@ -23755,7 +23755,7 @@ def command_activity_cleanup(args: argparse.Namespace) -> int:
         inspect_status = bool(getattr(args, "status", False))
         reconcile = bool(getattr(args, "reconcile", False))
         restore_number = getattr(args, "restore_item", None)
-        if restore_number is not None and (args.resume or inspect_status or reconcile):
+        if restore_number is not None and (inspect_status or reconcile):
             raise activity_cleanup.ActivityCleanupError("activity_cleanup_restore_requires_preview_or_approve")
         if (restore_number is None) != (getattr(args, "destination", None) is None):
             raise activity_cleanup.ActivityCleanupError("activity_cleanup_restore_arguments_invalid")
@@ -23764,7 +23764,7 @@ def command_activity_cleanup(args: argparse.Namespace) -> int:
         candidate = activity_cleanup.plan(Path(args.archive_root), args.request,
             resume=args.resume or inspect_status or reconcile or restore_number is not None, progress=reporter.progress)
         if restore_number is not None:
-            candidate = activity_cleanup.restore_plan(candidate, number=restore_number, destination=args.destination)
+            candidate = activity_cleanup.restore_plan(candidate, number=restore_number, destination=args.destination, resume=args.resume)
             candidate["public"] = candidate["restore_public"]
         if reconcile:
             candidate = activity_cleanup.reconcile_plan(candidate)
@@ -23802,7 +23802,15 @@ def command_activity_cleanup(args: argparse.Namespace) -> int:
         if args.resume:
             from .exact_human_approval_workflow import _resume_exact_human_approved_write_core
             completed = candidate["journal"].read("completed")
-            if completed:
+            if restore_number is not None:
+                original = candidate["restore_approval"]
+                if candidate["journal"].read("restore-" + binding.plan_sha256[7:]):
+                    result = activity_cleanup.verify_restore_completion(candidate)
+                else:
+                    writer_entered = True
+                    result = _resume_exact_human_approved_write_core(candidate["root"], context, original["approval_id"],
+                        lambda claim: original["intent"] == candidate["restore"], run)
+            elif completed:
                 # No mutation and no permission reuse when reporting a terminal journal.
                 replacements = sum(os.path.lexists(item["path"]) for item in candidate["material"]["items"])
                 result = {**completed, "replayed_completed_record": True, "writes_performed": False,

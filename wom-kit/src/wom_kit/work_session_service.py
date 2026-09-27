@@ -34,7 +34,7 @@ _RUNTIME_BLOCKERS = frozenset({
     "project_update_recovery_required",
 })
 _ERRORS = (frozenset({"work_session_service_invalid", "work_session_service_unavailable",
-                     "work_session_wait_cancelled", "work_session_wait_root_changed"})
+                     "work_session_wait_cancelled", "work_session_wait_root_changed", "work_session_wait_timeout", "work_session_wait_invalid"})
            | _RUNTIME_BLOCKERS | registration._ERRORS | lifecycle._ERRORS
            | claim._ERRORS | rereview._ERRORS | session_state._ERRORS | handoff._ERRORS | recovery._ERRORS
            | permission_facade._ERRORS)
@@ -69,7 +69,7 @@ def _safe_call(call):
                                        permission_facade.WorkSessionPermissionModeError))
                      and error.original_commit_verified is True)
     except WorkSessionWaitError as error:
-        if error.args in (("work_session_wait_cancelled",), ("work_session_wait_root_changed",)):
+        if error.args in (("work_session_wait_cancelled",), ("work_session_wait_root_changed",), ("work_session_wait_timeout",), ("work_session_wait_invalid",)):
             code = error.args[0]
     except registry.WorkSessionRegistryError:
         code = "work_session_service_invalid"
