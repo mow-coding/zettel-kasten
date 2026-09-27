@@ -1671,7 +1671,30 @@ class _GitBackupBackend:
             **({'stderr_sink': stderr_sink} if stderr_sink is not None else {}),
         )
 
-    def _git_index_add(
+    def _git_index_add(self, paths: Sequence[str], *, extra_environment=None):
+        """Stage only approved paths in bounded batches; never retry a prefix.
+
+        Large Windows selections can exhaust the per-process deadline before
+        one monolithic add finishes. Each batch keeps the existing timeout and
+        transient-lock retry contract. The caller still verifies the entire
+        approved index/tree and excluded state before committing anything.
+        """
+        batch, size = [], 0
+        result = None
+        for path in paths:
+            cost = len(path.encode("utf-8")) + 1
+            if batch and (len(batch) >= 1024 or size + cost > 256 * 1024):
+                result = self._git_index_add_batch(batch, extra_environment=extra_environment)
+                if result is None or result[0] != 0:
+                    return result
+                batch, size = [], 0
+            batch.append(path)
+            size += cost
+        if batch:
+            result = self._git_index_add_batch(batch, extra_environment=extra_environment)
+        return result
+
+    def _git_index_add_batch(
         self,
         paths: Sequence[str],
         *,
@@ -2201,6 +2224,39 @@ class _GitBackupBackend:
                     return False
         return True
 
+    @staticmethod
+    def _partial_index_matches_group(
+        group: _PreparedGroup,
+        changes: Sequence[Mapping[str, Any]],
+    ) -> bool:
+        """Accept only approved pre-add or post-add bytes for interrupted batches.
+
+        Renames keep the existing all-staged recovery path: their two-path
+        index observations cannot be reconstructed from a one-path receipt.
+        Current observations come from the verified Git blob inventory.
+        """
+        by_path = {row["path"]: row for row in changes}
+        for expected in group.private_changes:
+            current = by_path.get(expected["path"])
+            if (current is None or expected.get("original_path") is not None
+                    or current.get("original_path") is not None):
+                return False
+            public = expected["public_observation"]
+            current_index = current["public_observation"]["index"]
+            if current_index == public["index"]:
+                continue
+            worktree = public["worktree"]
+            if worktree["state"] == "missing":
+                if current_index != {"state": "absent", "mode": None, "bytes": None, "sha256": None}:
+                    return False
+            elif (worktree["state"] != "regular_file"
+                    or current_index.get("state") != "blob"
+                    or current_index.get("mode") not in {"regular_file", "executable_file"}
+                    or current_index.get("bytes") != worktree["bytes"]
+                    or current_index.get("sha256") != worktree["sha256"]):
+                return False
+        return True
+
     def _resume_staged_group_is_pending(
         self,
         group: _PreparedGroup,
@@ -2228,7 +2284,8 @@ class _GitBackupBackend:
                 (row["path"], row.get("original_path")): row for row in changes
             })
             and self._worktree_matches_group(group)
-            and self._index_matches_group(group)
+            and (self._index_matches_group(group)
+                 or self._partial_index_matches_group(group, changes))
         )
 
     def _group_state(self, group: _PreparedGroup) -> bytes:

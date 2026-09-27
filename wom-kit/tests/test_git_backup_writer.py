@@ -63,6 +63,7 @@ class GitBackupWriterTests(unittest.TestCase):
             check=check,
             capture_output=True,
             text=True,
+            encoding="utf-8",
         )
 
     @staticmethod
@@ -72,6 +73,7 @@ class GitBackupWriterTests(unittest.TestCase):
             check=check,
             capture_output=True,
             text=True,
+            encoding="utf-8",
         )
 
     def setUp(self) -> None:

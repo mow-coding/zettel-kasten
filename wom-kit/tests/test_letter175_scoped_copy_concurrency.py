@@ -2,6 +2,7 @@
 import json
 import subprocess
 import sys
+import time
 import unittest
 from unittest.mock import patch
 
@@ -27,6 +28,26 @@ print("official unrelated registration completed")
 '''
 
 
+def run_child(root, label):
+    # The archive lock itself refuses after 30 seconds. Allow interpreter and
+    # CLI startup too; holding A's lock still makes B fail, never pass this test.
+    started = time.monotonic()
+    try:
+        result = subprocess.run([sys.executable, "-c", CHILD, str(root), label],
+            capture_output=True, text=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        print(json.dumps({"child_stage": label, "failure": "timeout", "seconds": time.monotonic()-started}), file=sys.__stderr__, flush=True)
+        raise
+    if result.returncode:
+        # Synthetic fixture only; scrub its exact path from diagnostic stderr.
+        stderr = result.stderr.replace(str(root.parent), "<synthetic-parent>")
+        print(json.dumps({"child_stage": label, "returncode": result.returncode,
+            "stderr": stderr[-2500:], "seconds": time.monotonic()-started}), file=sys.__stderr__, flush=True)
+    print(json.dumps({"child_stage": label, "completed": result.returncode == 0,
+        "seconds": time.monotonic()-started}), file=sys.__stderr__, flush=True)
+    return result
+
+
 class ScopedCopyConcurrencyTests(unittest.TestCase):
     setUp = fixture.PublicSessionSourceIntakeJourneyTests.setUp
     call = fixture.PublicSessionSourceIntakeJourneyTests.call
@@ -39,8 +60,7 @@ class ScopedCopyConcurrencyTests(unittest.TestCase):
             "items": [{"item_id": "one", "local_path": str(source), "source_role": "primary_source"}]}), encoding="utf-8")
         observed = []
         def child(stage):
-            result = subprocess.run([sys.executable, "-c", CHILD, str(self.root), "synthetic-" + stage],
-                capture_output=True, text=True, timeout=12)
+            result = run_child(self.root, "synthetic-" + stage)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("official unrelated registration completed", result.stdout)
             observed.append(stage)
@@ -77,8 +97,7 @@ class ScopedRecordConcurrencyTests(unittest.TestCase):
         original = native.show
         completed = []
         def show(**kwargs):
-            child = subprocess.run([sys.executable, "-c", CHILD, str(case.root), "synthetic-record-wait"],
-                capture_output=True, text=True, timeout=12)
+            child = run_child(case.root, "synthetic-record-wait")
             self.assertEqual(child.returncode, 0, child.stderr)
             completed.append(child.stdout)
             return original(**kwargs)
