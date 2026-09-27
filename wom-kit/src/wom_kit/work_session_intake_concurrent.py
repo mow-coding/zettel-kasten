@@ -294,11 +294,15 @@ def resume(root, *, client_app_ref, task_route_ref, work_session_ref=None, key_p
         return True
     def finish(claim):
         results.update(_finish(view, context, claim, lane, completed=completed))
+    missing = []
     def absent(_reason):
-        raise legacy.WorkSessionIntakeWorkflowError("work_session_intake_original_approval_missing")
+        missing.append(True)
+        return {"ok": False, "status": "work_session_intake_original_approval_missing"}
     outcome = broker._resume_exact_human_approved_transaction_auto_core(root, context,
         started_guard, apply, succeeded_guard, finish, key_provider=key_provider,
         candidate_missing_handler=absent, resume_boundary=lambda: lane.claim_directory(create=False))
+    if missing:
+        raise legacy.WorkSessionIntakeWorkflowError("work_session_intake_original_approval_missing")
     if states.get("started_resume_state") == "authenticated_before_first_checkpoint":
         outcome["resume_discovery"].update(checkpoint_chain_validated_read_only=False,
             authenticated_precheckpoint_preimage_verified=True)

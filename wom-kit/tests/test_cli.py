@@ -68657,8 +68657,7 @@ state:
                 )
             self.assertEqual(self.run_cli(["index", str(archive_root), "--format", "json"])[0], 0)
 
-            # Capped page: truncation is always known, and is proved by reading
-            # one row past the limit rather than by scanning every table.
+            # Capped pages report exact counts from the same pinned search generation.
             code, output = self.run_cli(
                 ["search", str(archive_root), token, "--limit", "2", "--format", "json"]
             )
@@ -68668,12 +68667,14 @@ state:
             self.assertEqual(len(capped["results"]), 2)
             self.assertTrue(capped["truncated"])
             self.assertFalse(capped["complete"])
-            self.assertIsNone(capped["total_matches"])
-            self.assertFalse(capped["total_matches_known"])
+            self.assertEqual(capped["total_matches"], 5)
+            self.assertTrue(capped["total_matches_known"])
+            self.assertEqual(capped["remaining"], 3)
+            self.assertIsNotNone(capped["next_cursor"])
             self.assertEqual(capped["limit_applied"], 2)
             self.assertEqual(capped["count"], capped["returned"])
 
-            # Exact totals are opt-in because they cost a full scan per channel.
+            # The previous explicit count flag remains accepted for compatibility.
             code, output = self.run_cli(
                 ["search", str(archive_root), token, "--limit", "2", "--count-total", "--format", "json"]
             )
@@ -68701,7 +68702,7 @@ state:
             code, text_output = self.run_cli(["search", str(archive_root), token, "--limit", "2"])
             self.assertEqual(code, 0, text_output)
             self.assertIn("more matches exist", text_output)
-            self.assertIn("--count-total", text_output)
+            self.assertIn("--cursor", text_output)
             code, text_output = self.run_cli(["search", str(archive_root), token, "--limit", "50"])
             self.assertEqual(code, 0, text_output)
             self.assertIn("complete match set", text_output)
@@ -68767,6 +68768,11 @@ state:
             second_without_generation = dict(second_result)
             first_without_generation.pop("index_generation")
             second_without_generation.pop("index_generation")
+            for value in (first_without_generation, second_without_generation):
+                snapshot = value.pop("search_snapshot")
+                self.assertTrue(snapshot["ok"])
+                self.assertRegex(snapshot["snapshot"], r"^[0-9a-f]{64}$")
+            self.assertNotEqual(first_result["search_snapshot"]["snapshot"], second_result["search_snapshot"]["snapshot"])
             self.assertEqual(second_without_generation, first_without_generation)
 
             zettel_code, zettel_output = self.run_cli(["search", str(archive_root), "lunch", "--format", "json"])

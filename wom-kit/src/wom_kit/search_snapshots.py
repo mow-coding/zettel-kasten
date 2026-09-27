@@ -83,6 +83,8 @@ def publish(root, *, timeout_seconds=5):
     from . import archive_services as services
     from .operation_target_leases import TargetLease
     root = services.require_existing_archive_root(root)
+    if not (root / services.INDEX_RELATIVE_PATH).is_file():
+        return {"ok": False, "reason": "archive_index_missing"}
     source = target = None
     partial = pointer_partial = None
     started = time.monotonic()
@@ -256,7 +258,7 @@ def _search(root, query, *, limit, types, cursor):
         snapshot, offset = refresh.get("snapshot") or _latest(root), 0
     if snapshot is None:
         return {**services.blocked_search_result(query, limit=limit,
-            index_evidence={"ok": False, "reason_codes": ["search_snapshot_not_ready"]}),
+            index_evidence={"ok": False, "reason_codes": [refresh.get("reason", "search_snapshot_not_ready")]}),
             "next_cursor": None, "next_action": "index"}
     orders = {"zettel": "path", "object": "logical_key, object_id", "derived_text": "text_logical_key, derived_text_id",
               "view": "path", "source_map": "source_id, relative_path, external_url, item_id"}
@@ -268,7 +270,8 @@ def _search(root, query, *, limit, types, cursor):
                 continue
             like = "%" + query.lower() + "%"
             count = int(connection.execute(f"SELECT COUNT(*) FROM {table} WHERE {where}", (like,)).fetchone()[0])
-            counts[channel] = count
+            if count:
+                counts[channel] = count
             if remaining_offset >= count:
                 remaining_offset -= count
                 continue

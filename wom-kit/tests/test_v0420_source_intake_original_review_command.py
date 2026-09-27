@@ -213,8 +213,10 @@ class OriginalReviewHeldRoutingTests(unittest.TestCase):
                 held.verify_held()
 
     def test_normal_resume_missing_claim_never_calls_original_review_or_native(self):
+        from wom_kit import work_session_intake_concurrent as concurrent
         for family, _name, _tool, _input, _path, dispatch_name, workflow in FAMILIES:
-            with patch.object(workflow, "_resume_session_source_intake_" + family + "_held",
+            with patch.object(concurrent if family == "batch" else workflow,
+                    "resume" if family == "batch" else "_resume_session_source_intake_record_held",
                     side_effect=workflow.WorkSessionIntakeWorkflowError("work_session_intake_original_approval_missing")) as resume, \
                  patch.object(workflow, "_review_original_session_source_intake_" + family + "_held", create=True) as review, \
                  patch.object(native, "_CtypesTaskDialogNative", side_effect=AssertionError("automatic native approval")) as dialog:

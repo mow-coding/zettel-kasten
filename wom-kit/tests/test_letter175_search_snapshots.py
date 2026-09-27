@@ -47,7 +47,7 @@ class SearchSnapshotTests(unittest.TestCase):
         first = snapshots.search(self.root, self.query)
         self.assertEqual(first["total_matches"], 311)
         self.assertEqual(first["returned"], 100)
-        self.assertEqual(first["matches_by_type"], dict(zettel=100, object=100, derived_text=0, view=0, source_map=111))
+        self.assertEqual(first["matches_by_type"], dict(zettel=100, object=100, source_map=111))
         # B changes and rebuilds the real index after A has received page one.
         path = self.root / "zettels/zet_20260927_page_0000.md"
         path.write_text(path.read_text(encoding="utf-8").replace(self.query, "unrelated replacement"), encoding="utf-8")

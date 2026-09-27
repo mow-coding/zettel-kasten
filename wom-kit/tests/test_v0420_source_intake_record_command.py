@@ -171,19 +171,22 @@ class RecordCommandHeldTests(unittest.TestCase):
         values.update(changes)
         return command.dispatch_session_source_intake_record(self.root, **values)
 
-    def test_all_modes_use_same_real_held_lock_and_runtime_guard(self):
+    def test_modes_check_runtime_with_apply_approval_outside_archive_lock(self):
         helds, guards = [], []
         original_guard = command.sessions._runtime_guard
         def guard(root):
             guards.append(root)
             return original_guard(root)
         for mode, name in (("preview", "_preview_session_source_intake_record_held"),
-                           ("apply", "_execute_session_source_intake_record_held"),
+                           ("apply", "execute_record_without_approval_writer"),
                            ("resume", "_resume_session_source_intake_record_held")):
-            def run(root, *inputs, held, **values):
-                self.assertIs(type(held), exact.ExactOperationWriterLock)
-                held.verify_held()
-                helds.append(held)
+            def run(root, *inputs, held=None, **values):
+                if mode == "apply":
+                    self.assertIsNone(held)
+                else:
+                    self.assertIs(type(held), exact.ExactOperationWriterLock)
+                    held.verify_held()
+                    helds.append(held)
                 self.assertEqual(len(inputs), 0 if mode == "resume" else 1)
                 return result(mode)
             with patch.object(workflow, name, side_effect=run), patch.object(command.sessions, "_runtime_guard", side_effect=guard):

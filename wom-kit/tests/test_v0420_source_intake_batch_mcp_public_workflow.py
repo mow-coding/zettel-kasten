@@ -20,6 +20,7 @@ from wom_kit import exact_operation_manifest as exact
 from wom_kit import mcp_server as mcp
 from wom_kit import source_intake_batch_exact as intake
 from wom_kit import work_session_actor as actor
+from wom_kit import work_session_intake_concurrent as concurrent
 from wom_kit import work_session_source_intake_bundle as bundle
 from wom_kit import work_session_source_intake_inventory as inventory
 
@@ -88,7 +89,7 @@ class SourceIntakeBatchMcpPublicWorkflowTests(unittest.TestCase):
         if completed:
             forbidden.extend([
                 (intake, "_revalidate_item"), (intake, "_run_session_source_intake_batch_exact_operation"),
-                (intake._SessionSourceIntakeWriter, "write_field"), (intake._Writer, "write_field"),
+                (concurrent.Writer, "write_field"), (intake._Writer, "write_field"),
                 (intake, "_completion_authenticator"), (exact.FileExactOperationCheckpointStore, "finalize"),
                 (actor.WorkSessionActorStore, "save"),
             ])
@@ -103,18 +104,18 @@ class SourceIntakeBatchMcpPublicWorkflowTests(unittest.TestCase):
         registry_before = self.fixture.store.read().sha256
         archive_before = (self.root / "archive.yml").read_bytes()
         effects = []
-        write_field = intake._SessionSourceIntakeWriter.write_field
+        write_field = concurrent.Writer.write_field
 
         def effect_then_cut(writer, **kwargs):
             result = write_field(writer, **kwargs)
-            writer.held.verify_held()
+            writer.require()
             if kwargs["target_kind"] == intake.TARGET_KIND and not effects:
                 path = self.root / kwargs["target_ref"]
                 effects.append((kwargs["target_ref"], path.read_bytes(), self.identity(path)))
                 raise OSError("SYNTHETIC_PRIVATE_BATCH_PUBLICATION_CUT")
             return result
 
-        with patch.object(intake._SessionSourceIntakeWriter, "write_field", new=effect_then_cut):
+        with patch.object(concurrent.Writer, "write_field", new=effect_then_cut):
             failed = fresh(ok=False)
         self.assertEqual(failed["reason_code"], "exact_human_approval_state_unknown", failed)
         self.assertFalse(failed["original_completion_verified"])
@@ -154,7 +155,7 @@ class SourceIntakeBatchMcpPublicWorkflowTests(unittest.TestCase):
             writes.append(kwargs["target_ref"])
             return write_field(writer, **kwargs)
 
-        with self.original_only(), patch.object(intake._SessionSourceIntakeWriter, "write_field", new=observe_write):
+        with self.original_only(), patch.object(concurrent.Writer, "write_field", new=observe_write):
             completed = resume(resume=True)
         self.assertTrue(completed["original_completion_verified"] and completed["completion_authentication_verified"])
         self.assertTrue(completed["independent_verification"] and completed["actor_completion_published"])

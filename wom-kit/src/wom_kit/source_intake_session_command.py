@@ -106,7 +106,7 @@ def _dispatch_session_source_intake(
     request_path=None, reviewer_claim=None, cancel_requested=lambda: False, progress=lambda _event: None,
     family, stage_external=False,
 ):
-    """One held archive lane; resume receives only the retained caller route."""
+    """Short shared boundaries; resume receives only the retained caller route."""
     workflow, started, original_verified = None, False, False
     code = "work_session_intake_command_unavailable"
     try:
@@ -174,6 +174,8 @@ def _dispatch_session_source_intake(
         if family == "batch" and mode in {"preview", "apply", "resume"}:
             from . import work_session_intake_concurrent as concurrent
             sessions._runtime_guard(resolved)
+            if safe_cancel():
+                raise sessions.WorkSessionWaitError("work_session_wait_cancelled")
             started = True
             if mode == "resume":
                 result = workflow._safe_call(lambda: concurrent.resume(resolved, **common, cancel_requested=safe_cancel))
@@ -182,6 +184,8 @@ def _dispatch_session_source_intake(
                     **common, cancel_requested=safe_cancel, stage_external=stage_external))
         elif family == "record" and mode == "apply":
             sessions._runtime_guard(resolved)
+            if safe_cancel():
+                raise sessions.WorkSessionWaitError("work_session_wait_cancelled")
             started = True
             result = workflow._safe_call(lambda: workflow.execute_record_without_approval_writer(
                 resolved, request_path, reviewer_claim=reviewer_claim,

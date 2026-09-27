@@ -19,7 +19,7 @@ CURRENT_WHEEL_URL = (
     f"releases/download/{EXPECTED_CURRENT_TAG}/"
     f"wom_kit-{EXPECTED_CURRENT_VERSION}-py3-none-any.whl"
 )
-CURRENT_RUNTIME_STATUS = f"Status: {CURRENT_VERSION} Git backup retries only a briefly held index, and writer-session coverage is complete"
+CURRENT_RUNTIME_STATUS = f"Status: {CURRENT_VERSION} candidate: activity recovery, Windows stream preservation, scoped Git backup and concurrent archive work"
 CURRENT_MATRIX_VERSION = f"Version: {CURRENT_VERSION} implementation and release scope"
 MATRIX_PATH = KIT_ROOT / "docs" / "capability-matrix.md"
 PRODUCT_ROADMAP_PATH = KIT_ROOT / "docs" / "product-roadmap.md"

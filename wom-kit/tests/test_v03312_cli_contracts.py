@@ -365,7 +365,7 @@ class V03312CliContractTests(unittest.TestCase):
             view_code, view_stdout, _ = self.run_cli_split(
                 ["view-zets", "C:/archive", "--facet", "topic=x", "--format", "json"]
             )
-        with patch.object(archive_services, "search_archive", return_value=search_result):
+        with patch("wom_kit.search_snapshots.search", return_value=search_result):
             search_code, search_stdout, _ = self.run_cli_split(
                 ["search", "C:/archive", "needle", "--format", "json"]
             )
