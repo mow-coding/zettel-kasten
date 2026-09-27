@@ -1596,6 +1596,7 @@ def _structural_snapshot(
     branch: str | None,
     preflight_verified: bool = False,
     max_status_records: int = GIT_BACKUP_PLAN_MAX_CHANGES,
+    inspection_paths: tuple[str, ...] | None = None,
 ) -> tuple[dict[str, Any] | None, list[str]]:
     blockers: list[str] = []
 
@@ -1732,6 +1733,13 @@ def _structural_snapshot(
     flags = _parse_flags(raw_values["flags"])
     if status is None or ignored_status is None or tree is None or index is None or flags is None:
         return None, ["git_machine_output_invalid_or_unsafe"]
+    all_status = status
+    if inspection_paths is not None:
+        wanted = set(inspection_paths)
+        # Select before attributes, body hashes and Git blob inspection. A
+        # rename touching a selected endpoint remains a selected change.
+        status = [record for record in status
+                  if record.path in wanted or record.original_path in wanted]
     if len(status) > max_status_records:
         return None, ["requested_changed_item_limit_exceeded"]
     if any(record.record_kind == "ignored" for record in status):
@@ -1830,6 +1838,8 @@ def _structural_snapshot(
         "attribute_diagnostics": attribute_diagnostics,
         "object_format": object_format,
         "status": status,
+        "all_status": all_status,
+        "uninspected_change_count": len(all_status) - len(status),
         "ignored_status": ignored_items,
         "tree_entries": tree_entries,
         "index_entries": index_entries,
@@ -2724,6 +2734,7 @@ def _git_backup_plan_with_pinned_git(
     dry_run: bool = True,
     _private_capture: dict[str, Any] | None = None,
     _progress: _GitBackupPlanProgress | None = None,
+    _inspection_paths: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     """Return a deterministic, read-only Git backup review plan.
 
@@ -2762,6 +2773,14 @@ def _git_backup_plan_with_pinned_git(
         parameter_blockers.append("max_changed_bytes_invalid")
     if parameter_blockers:
         return _empty_plan_result(blockers=parameter_blockers)
+    if _inspection_paths is not None and (
+        type(_inspection_paths) not in (tuple, list)
+        or len(_inspection_paths) > GIT_BACKUP_PLAN_MAX_CHANGES
+        or any(type(path) is not str or _decode_git_path(path.encode("utf-8")) != path
+               for path in _inspection_paths)
+        or tuple(_inspection_paths) != tuple(sorted(set(_inspection_paths)))
+    ):
+        return _empty_plan_result(blockers=["git_inspection_scope_invalid"])
 
     progress.status("resolving_archive")
     try:
@@ -2816,6 +2835,7 @@ def _git_backup_plan_with_pinned_git(
         branch=branch,
         preflight_verified=True,
         max_status_records=max_changes,
+        inspection_paths=_inspection_paths,
     )
     if snapshot_before is None:
         return _empty_plan_result(blockers=blockers)
@@ -2939,6 +2959,7 @@ def _git_backup_plan_with_pinned_git(
             branch=branch,
             preflight_verified=True,
             max_status_records=max_changes,
+            inspection_paths=_inspection_paths,
         )
         blockers.extend(snapshot_after_blockers)
     progress.status("remote_ref_final")
@@ -3046,6 +3067,8 @@ def _git_backup_plan_with_pinned_git(
         else None
     )
     progress.status("finalizing_plan")
+    scoped_parameters = ({"inspection_paths_sha256": _sha256_json(_inspection_paths)}
+                         if _inspection_paths is not None else {})
     plan_sha256 = _sha256_json(
         {
             "schema": GIT_BACKUP_PLAN_SCHEMA,
@@ -3055,6 +3078,7 @@ def _git_backup_plan_with_pinned_git(
                 "max_changed_bytes": max_changed_bytes,
                 "dry_run": True,
                 "credential_mode": credential_mode,
+                **scoped_parameters,
             },
             "snapshot": _snapshot_comparison_basis(snapshot_before),
             "remote_before": remote_before,
@@ -3191,6 +3215,17 @@ def _git_backup_plan_with_pinned_git(
                 ],
             }
         )
+        if _inspection_paths is not None:
+            _private_capture["inspection_paths"] = list(_inspection_paths)
+            _private_capture["uninspected_change_count"] = snapshot_before["uninspected_change_count"]
+    if _inspection_paths is not None:
+        result["inspection_scope"] = {
+            "kind": "authenticated_session_output_paths",
+            "inspected_change_count": len(public_changes),
+            "uninspected_change_count": snapshot_before["uninspected_change_count"],
+            "uninspected_contents_read": False,
+            "whole_archive_backup_claimed": False,
+        }
     # A final serialization check is part of the public contract.  It also
     # prevents accidental leakage through a non-JSON Python object repr.
     try:
@@ -3212,6 +3247,7 @@ def git_backup_plan(
     _private_capture: dict[str, Any] | None = None,
     progress_hook: Callable[[Mapping[str, Any]], None] | None = None,
     _progress_operation: str = "git_backup_plan",
+    _inspection_paths: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     """Pin one Git executable, run the planner, then verify the same bytes."""
 
@@ -3242,6 +3278,7 @@ def git_backup_plan(
                 dry_run=dry_run,
                 _private_capture=_private_capture,
                 _progress=progress,
+                _inspection_paths=_inspection_paths,
             )
             progress.status("verifying_git_pin")
             final_observation = _pin_git_at(Path(pinned.path))

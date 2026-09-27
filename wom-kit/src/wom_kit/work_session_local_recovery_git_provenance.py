@@ -249,6 +249,49 @@ def _control_candidates(root, held):
     return tuple(digests)
 
 
+def _authenticated_output_inventory_held(actual, held, binding, key_provider=None):
+    candidates = _control_candidates(actual, held)
+    read, expected = _reader_api("key")
+    origins, outputs, overlapping, document_controls, unverified = {}, {}, set(), 0, 0
+    for manifest_sha in candidates:
+        held.verify_held()
+        plan = None
+        try:
+            plan = recovery.load_local_recovery_plan(actual, manifest_sha256=manifest_sha)
+            if plan.session_context is None:
+                continue
+            view = sessions._view(plan)
+            if sessions._document_images(plan) is None:
+                continue
+            document_controls += 1
+            context_sha = approval.exact_human_approval_context_sha256(view.context)
+            verified = read(actual, held=held, manifest_sha256=manifest_sha,
+                            context_sha256=context_sha, key_provider=key_provider)
+            facts, approved, original = _origin(verified, expected)
+            if (facts["manifest_sha256"] != manifest_sha or facts["context_sha256"] != context_sha
+                    or original.archive_identity_sha256 != binding.archive_identity_sha256):
+                raise WorkSessionDocumentGitProvenanceError()
+        except Exception:
+            # Invalid, incomplete or unauthenticated controls are unverified,
+            # never absence, ownership or a reason to repair anything.
+            if plan is not None and plan.session_context is not None:
+                unverified += 1
+            continue
+        key = (facts["manifest_sha256"], facts["context_sha256"], facts["execution_sha256"])
+        origins[key] = facts
+        for path, output in approved.items():
+            if path in outputs and outputs[path][0] != key:
+                # Two completed approvals over one document need actual
+                # consecutive evidence; without it the path stays unknown.
+                overlapping.add(path)
+            outputs[path] = (key, output)
+    for path in overlapping:
+        outputs.pop(path, None)
+    if _control_candidates(actual, held) != candidates:
+        raise WorkSessionDocumentGitProvenanceError()
+    return origins, outputs, candidates, overlapping, document_controls, unverified
+
+
 def _select_document_changes_held(root, *, held, snapshot, selected_binding, key_provider=None):
     def select():
         if type(selected_binding) is not WorkSessionBinding:
@@ -258,43 +301,8 @@ def _select_document_changes_held(root, *, held, snapshot, selected_binding, key
         if binding.archive_identity_sha256 != approval.exact_human_approval_archive_identity_sha256(archive_id):
             raise WorkSessionDocumentGitProvenanceError()
         plan_sha, rows = _snapshot(actual, archive_id, snapshot)
-        candidates = _control_candidates(actual, held)
-        read, expected = _reader_api("key")
-        origins, outputs, overlapping, document_controls, unverified = {}, {}, set(), 0, 0
-        for manifest_sha in candidates:
-            held.verify_held()
-            plan = None
-            try:
-                plan = recovery.load_local_recovery_plan(actual, manifest_sha256=manifest_sha)
-                if plan.session_context is None:
-                    continue
-                view = sessions._view(plan)
-                if sessions._document_images(plan) is None:
-                    continue
-                document_controls += 1
-                context_sha = approval.exact_human_approval_context_sha256(view.context)
-                verified = read(actual, held=held, manifest_sha256=manifest_sha,
-                                context_sha256=context_sha, key_provider=key_provider)
-                facts, approved, original = _origin(verified, expected)
-                if (facts["manifest_sha256"] != manifest_sha or facts["context_sha256"] != context_sha
-                        or original.archive_identity_sha256 != binding.archive_identity_sha256):
-                    raise WorkSessionDocumentGitProvenanceError()
-            except Exception:
-                # Invalid, incomplete or unauthenticated controls are unverified,
-                # never absence, ownership or a reason to repair anything.
-                if plan is not None and plan.session_context is not None:
-                    unverified += 1
-                continue
-            key = (facts["manifest_sha256"], facts["context_sha256"], facts["execution_sha256"])
-            origins[key] = facts
-            for path, output in approved.items():
-                if path in outputs and outputs[path][0] != key:
-                    # Two completed approvals over one document need actual
-                    # consecutive evidence; without it the path stays unknown.
-                    overlapping.add(path)
-                outputs[path] = (key, output)
-        for path in overlapping:
-            outputs.pop(path, None)
+        origins, outputs, candidates, overlapping, document_controls, unverified = (
+            _authenticated_output_inventory_held(actual, held, binding, key_provider))
         proofs = []
         for row in rows:
             found = outputs.get(row["path"])

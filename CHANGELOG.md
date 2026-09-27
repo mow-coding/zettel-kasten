@@ -4,6 +4,12 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.4.48 - 2026-09-28
+
+- Select authenticated session output paths before Git content and attribute inspection, so unrelated large files no longer consume the session backup byte budget.
+- Bind the selected inspection paths in v4 session scope evidence while preserving older receipt validation and exact resume checks.
+- Preserve unrelated staged/working changes and existing limits for selected files. This release does not close other outstanding feedback.
+
 ## v0.4.47 - 2026-09-27
 
 - Split large Git attribute inspections into bounded UTF-8 batches and report fixed failure causes without exposing paths. Session backup keeps the specific cause and preserves checks for other activities.

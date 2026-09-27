@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+from pathlib import Path
 import re
 
 from . import exact_human_approval as approval
@@ -193,12 +194,15 @@ def _capture_git_snapshot_held(
     archive_root, *, held, remote_name="origin", branch=None,
     credential_mode="stored", max_changes=planning.GIT_BACKUP_PLAN_DEFAULT_MAX_CHANGES,
     max_changed_bytes=planning.GIT_BACKUP_PLAN_DEFAULT_MAX_CHANGED_BYTES,
+    inspection_paths=None,
 ) -> _GitChangeSnapshot:
     """Capture only a successful complete existing plan under the archive lock."""
     def capture():
         store, _archive_id = execution._store(archive_root)
         options = dict(remote_name=remote_name, branch=branch, credential_mode=credential_mode,
                        max_changes=max_changes, max_changed_bytes=max_changed_bytes)
+        if inspection_paths is not None:
+            options["_inspection_paths"] = list(inspection_paths)
         return _GitChangeSnapshot(_observe(store, held, options))
     return _safe_failure(capture)
 
@@ -273,6 +277,80 @@ def _session_identity(binding):
     # original binding. Current actor/claimed-binding authority is separate.
     return (binding.archive_identity_sha256, binding.client_app_ref,
             binding.workstream_ref, binding.work_session_ref)
+
+
+def _authenticated_inspection_paths_held(archive_root, *, held, selected_binding,
+                                       branch=None, key_provider=None):
+    """Discover owned output paths before observing changed file bodies.
+
+    Paths come from authenticated producer output maps or completed exact
+    decisions. They are candidates to inspect, not permission to commit. The
+    normal selector still compares actual bytes to each original proof later.
+    In particular an owned file that grew beyond the content budget stays in
+    this set and raises the normal size blocker instead of being omitted.
+    """
+    def discover():
+        if type(selected_binding) is not WorkSessionBinding:
+            raise WorkSessionGitProvenanceError()
+        store, _archive_id = execution._store(archive_root)
+        store._require_held_lock(held)
+        if selected_binding.archive_identity_sha256 != store.archive_identity_sha256:
+            raise WorkSessionGitProvenanceError()
+        from . import work_session_intake_git_provenance as intake
+        from . import work_session_local_recovery_git_provenance as documents
+        owned, producer_paths = set(), set()
+        for module in (intake, documents):
+            inventory = module._authenticated_output_inventory_held(
+                store.root, held, selected_binding, key_provider)
+            origins, outputs = inventory[:2]
+            producer_paths.update(outputs)
+            for path, (key, _output) in outputs.items():
+                original = WorkSessionBinding.from_document(origins[key]["work_session_binding"])
+                if _session_identity(original) == _session_identity(selected_binding):
+                    owned.add(path)
+        # Structural Git metadata is bounded independently of content budgets.
+        # An empty inspection set performs no changed-path attribute/hash/blob
+        # inspection. It only supplies exact receipt discovery hints.
+        pinned = planning._pin_git_executable()
+        if pinned is None:
+            raise WorkSessionGitProvenanceError("work_session_git_snapshot_unavailable",
+                                                cause_code="git_executable_unavailable_or_unsafe")
+        token = planning._PINNED_GIT_EXECUTABLE.set(pinned)
+        try:
+            state, blockers = planning._structural_snapshot(
+                store.root, branch=branch, inspection_paths=())
+            if state is None or blockers:
+                raise WorkSessionGitProvenanceError("work_session_git_snapshot_unavailable",
+                    cause_code=next(iter(blockers), "git_metadata_snapshot_unavailable"))
+            paths = {row.path for row in state["all_status"]
+                     if _RECEIPT_PATH.fullmatch(row.path) and row.path not in producer_paths}
+            if len(paths) > _MAX_RECEIPT_CANDIDATES:
+                raise WorkSessionGitProvenanceError("work_session_git_receipt_limit")
+            for path in sorted(paths):
+                held.verify_held()
+                execution_sha = "sha256:" + _RECEIPT_PATH.fullmatch(path)[1]
+                try:
+                    receipt = exact.load_exact_operation_final_receipt_read_only(
+                        store.root, execution_sha, heartbeat=held.verify_held)
+                    if receipt is None:
+                        continue
+                    raw = exact._canonical_json_bytes(receipt) + b"\n"
+                    row = {"public_observation": {"change_ref": "change:000001", "worktree": {
+                        "bytes": len(raw), "sha256": "sha256:" + hashlib.sha256(raw).hexdigest()}}}
+                    proof = _authenticated_receipt(store, held, row, execution_sha, key_provider=key_provider)
+                    if proof is not None and _session_identity(WorkSessionBinding.from_document(
+                            proof["original_work_session_binding"])) == _session_identity(selected_binding):
+                        owned.add(path)
+                except Exception:
+                    # Unauthenticated hints never establish ownership.
+                    continue
+            if planning._pin_git_at(Path(pinned.path)) != pinned:
+                raise WorkSessionGitProvenanceError("work_session_git_snapshot_changed")
+        finally:
+            planning._PINNED_GIT_EXECUTABLE.reset(token)
+        store._require_held_lock(held)
+        return tuple(sorted(owned))
+    return _safe_failure(discover)
 
 
 def _select_receipt_changes_held(
