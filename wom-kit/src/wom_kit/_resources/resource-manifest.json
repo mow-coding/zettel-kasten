@@ -2,7 +2,7 @@
   "schema": "wom-kit/package-resource-manifest/v0.1",
   "version": "0.4.46",
   "source_of_truth": "wom-kit source resource directories",
-  "file_count": 179,
+  "file_count": 180,
   "files": [
     {
       "source": "schemas/activity-cleanup-request-v1.schema.json",
@@ -421,8 +421,14 @@
     {
       "source": "schemas/private-objet-finder-result-v0.1.schema.json",
       "packaged": "schemas/private-objet-finder-result-v0.1.schema.json",
-      "bytes": 33458,
-      "sha256": "59888a98cdf39977521f29887b25a624f26ba2309b8fda72d12309321c995937"
+      "bytes": 33532,
+      "sha256": "335c9bb789b2ed677989860de382c57041ef2d1579652c7c01038b957ea1711a"
+    },
+    {
+      "source": "schemas/private-objet-finder-result-v0.2.schema.json",
+      "packaged": "schemas/private-objet-finder-result-v0.2.schema.json",
+      "bytes": 34774,
+      "sha256": "5ed09895ce9c7a8ef00b018fa292cb94c0fb87613967cc5b5339f08f967f6d16"
     },
     {
       "source": "schemas/private-objet-generated-schema-manifest-v0.1.json",

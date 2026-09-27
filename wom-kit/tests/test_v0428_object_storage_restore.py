@@ -490,6 +490,8 @@ def _rows_after(root: Path) -> dict[str, dict]:
 
 
 def _run(plan, transport, *, resume=False):
+    if plan.concurrent:
+        return restore._apply_concurrent(plan, _authority(), transport_factory=lambda: transport, resume=resume, progress_hook=None)
     with exact_operation_writer_lock(plan.archive_root) as lock:
         restore._persist_control(plan)
         checkpoints = FileExactOperationCheckpointStore(plan.archive_root, writer_lock=lock)

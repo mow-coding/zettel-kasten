@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "wom-kit/private-objet-finder-result/v0.1",
-  "title": "WOM-kit private objet finder result v0.1",
+  "$id": "wom-kit/private-objet-finder-result/v0.2",
+  "title": "WOM private objet finder historical page",
   "oneOf": [
     {
       "allOf": [
@@ -1173,11 +1173,12 @@
         "diagnostic_codes",
         "blockers",
         "warnings",
-        "privacy"
+        "privacy",
+        "pagination"
       ],
       "properties": {
         "schema": {
-          "const": "wom-kit/private-objet-finder-result/v0.1"
+          "const": "wom-kit/private-objet-finder-result/v0.2"
         },
         "ok": {
           "type": "boolean"
@@ -1326,6 +1327,53 @@
         },
         "privacy": {
           "$ref": "#/$defs/privacy"
+        },
+        "pagination": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "snapshot",
+            "as_of",
+            "offset",
+            "remaining",
+            "next_cursor",
+            "historical_read_only",
+            "current_archive_absence_proven",
+            "remote_backup_proven"
+          ],
+          "properties": {
+            "snapshot": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "as_of": {
+              "type": "string"
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "remaining": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "next_cursor": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 2048
+            },
+            "historical_read_only": {
+              "const": true
+            },
+            "current_archive_absence_proven": {
+              "const": false
+            },
+            "remote_backup_proven": {
+              "const": false
+            }
+          }
         }
       },
       "additionalProperties": false

@@ -458,6 +458,15 @@ class ActivityCleanupTests(unittest.TestCase):
                     return {"present": False, "presence_state": "unavailable", "verification_state": "unavailable"}
                 return super().head_object(**kwargs)
         transport = InterruptedAfterPut() if getattr(self, "interrupt_after_put", False) else _MemoryTransport()
+        if getattr(self, "during_first_put", None) is not None:
+            original_put = transport.put_object
+            first_put = [True]
+            def during_put(**kwargs):
+                if first_put[0]:
+                    first_put[0] = False
+                    self.during_first_put()
+                return original_put(**kwargs)
+            transport.put_object = during_put
         get_count = [0]
         original_head = transport.head_object
         def count_whole_gets(**kwargs):

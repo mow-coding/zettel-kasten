@@ -24,6 +24,8 @@ from __future__ import annotations
 
 from .object_storage_scope import ObjectScope, ObjectStorageScopeError, resolve_scope, validate_scope
 
+from contextlib import nullcontext
+from dataclasses import replace
 import hashlib
 import hmac
 import json
@@ -75,6 +77,7 @@ from .target_collection_preview import TargetCollectionItem, TargetCollectionPre
 
 PLAN_SCHEMA = "wom-kit/object-storage-restore-plan/v0.1"
 CONTROL_SCHEMA = "wom-kit/object-storage-restore-control/v0.1"
+CONCURRENT_CONTROL_SCHEMA = "wom-kit/object-storage-restore-control/v0.2"
 RECEIPT_SCHEMA = "wom-kit/object-storage-restore-receipt/v0.1"
 RESULT_SCHEMA = "wom-kit/object-storage-restore-result/v0.1"
 VERIFY_SCHEMA = "wom-kit/object-storage-restore-verification/v0.1"
@@ -457,7 +460,7 @@ def _manifest_source_token(specs: Sequence[RestoreSpec]) -> bytes:
 
 
 def _manifest_for_specs(
-    archive_id: str, specs: Sequence[RestoreSpec], *, mode: str, scope: ObjectScope | None = None
+    archive_id: str, specs: Sequence[RestoreSpec], *, mode: str, scope: ObjectScope | None = None, concurrent: bool = False
 ) -> ExactOperationManifest | None:
     items: list[ExactOperationItem] = []
     for ordinal, spec in enumerate(specs):
@@ -506,11 +509,16 @@ def _manifest_for_specs(
         )
     if not items:
         return None
+    evidence = scope.evidence(len(specs)) if scope is not None else None
+    if concurrent:
+        evidence = dict(evidence or {"counts": {}, "digests": {}, "private_values_echoed": False})
+        evidence["schema"] = "wom-kit/object-storage-restore-target-delta/v1"
+        evidence["digests"] = {**evidence["digests"], "target_sources_sha256": _sha([_sha_bytes(spec.source_token) for spec in specs])}
     return ExactOperationManifest.build(
         operation=OPERATION,
         archive_identity_sha256=exact_human_approval_archive_identity_sha256(archive_id),
         items=items,
-        operation_evidence=scope.evidence(len(specs)) if scope is not None else None,
+        operation_evidence=evidence or None,
     )
 
 
@@ -528,6 +536,7 @@ class ObjectStorageRestorePlan:
     selected_only: str | None = None
     scope: ObjectScope | None = None
     loaded_from_control: bool = False
+    concurrent: bool = False
 
     @property
     def batch_specs(self) -> tuple[RestoreSpec, ...]:
@@ -772,7 +781,7 @@ def _build_plan(
             )
     if max_objects is not None and len(specs) > max_objects:
         raise _fail("object_storage_restore_plan_invalid")
-    manifest = _manifest_for_specs(archive_id, specs, mode=mode, scope=scope)
+    manifest = _manifest_for_specs(archive_id, specs, mode=mode, scope=scope, concurrent=True)
     return ObjectStorageRestorePlan(
         archive_root=root,
         archive_id=archive_id,
@@ -785,6 +794,7 @@ def _build_plan(
         counts=counts,
         selected_only=selected_only,
         scope=scope,
+        concurrent=True,
     )
 
 
@@ -1011,8 +1021,11 @@ def _fetch_and_promote(
             pass
         raise _fail("object_storage_restore_local_write_failed")
     try:
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        _atomic_move_file_no_replace(sink, destination)
+        with exact_operation_writer_lock(root, timeout_seconds=30) if plan.concurrent else nullcontext():
+            if plan.concurrent:
+                _fresh_revalidated(replace(plan, specs=(spec,)))
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            _atomic_move_file_no_replace(sink, destination)
     except FileExistsError:
         # A file appeared meanwhile: keep it only if it is the same bytes.
         try:
@@ -1445,7 +1458,8 @@ class _Verifier:
             and target_ref == MANIFEST_TARGET_REF
             and field_ref == "local_locations"
         ):
-            return _batch_state(self.plan)
+            with exact_operation_writer_lock(self.plan.archive_root, timeout_seconds=30) if self.plan.concurrent else nullcontext():
+                return _batch_state(self.plan)
         raise ValueError("read boundary")
 
 
@@ -1496,9 +1510,12 @@ class _Writer:
             expected = _manifest_batch_token(self.plan.batch_specs)
             if value != expected:
                 raise ValueError("write boundary")
-            self.manifest_update_count += _apply_manifest_batch(
-                self.plan, lifecycle=self.manifest_index_lifecycle
-            )
+            with exact_operation_writer_lock(self.plan.archive_root, timeout_seconds=30) if self.plan.concurrent else nullcontext():
+                if self.plan.concurrent:
+                    _fresh_revalidated(self.plan)
+                self.manifest_update_count += _apply_manifest_batch(
+                    self.plan, lifecycle=self.manifest_index_lifecycle
+                )
             return
         raise ValueError("write boundary")
 
@@ -1563,7 +1580,7 @@ def _control_document(plan: ObjectStorageRestorePlan) -> dict[str, Any]:
     if plan.manifest is None:
         raise _fail("object_storage_restore_no_writes")
     basis = {
-        "schema_version": CONTROL_SCHEMA,
+        "schema_version": CONCURRENT_CONTROL_SCHEMA if plan.concurrent else CONTROL_SCHEMA,
         "archive_id": plan.archive_id,
         "provider_kind": plan.provider_kind,
         "store_ref": plan.store_ref,
@@ -1624,7 +1641,7 @@ def load_object_storage_restore_plan(
         raise _fail("object_storage_restore_control_invalid") from None
     supplied = document.pop("control_sha256", None)
     if (
-        document.get("schema_version") != CONTROL_SCHEMA
+        document.get("schema_version") not in {CONTROL_SCHEMA, CONCURRENT_CONTROL_SCHEMA}
         or document.get("private_control_document") is not True
         or not isinstance(supplied, str)
         or not hmac.compare_digest(supplied, _sha(document))
@@ -1723,7 +1740,8 @@ def load_object_storage_restore_plan(
             )
         )
     loaded_scope = ObjectScope.from_document(document["scope"]) if document.get("scope") is not None else None
-    rebuilt = _manifest_for_specs(archive_id, specs, mode=mode, scope=loaded_scope)
+    concurrent = document["schema_version"] == CONCURRENT_CONTROL_SCHEMA
+    rebuilt = _manifest_for_specs(archive_id, specs, mode=mode, scope=loaded_scope, concurrent=concurrent)
     if rebuilt is None or rebuilt.document() != manifest.document():
         raise _fail("object_storage_restore_control_invalid")
     return ObjectStorageRestorePlan(
@@ -1739,6 +1757,7 @@ def load_object_storage_restore_plan(
         selected_only=selected_only,
         scope=ObjectScope.from_document(document["scope"]) if document.get("scope") is not None else None,
         loaded_from_control=True,
+        concurrent=concurrent,
     )
 
 
@@ -1747,6 +1766,14 @@ def _fresh_revalidated(plan: ObjectStorageRestorePlan) -> ObjectStorageRestorePl
     if plan.scope is not None:
         if any(not plan.scope.includes(spec.object_id, destructive=False) for spec in plan.specs):
             raise ObjectStorageScopeError("object_storage_scope_control_mismatch")
+    if plan.concurrent:
+        _rows, groups = preservation._read_manifest_groups(plan.archive_root, progress=None)
+        for spec in plan.specs:
+            group = groups.get(spec.object_id)
+            if not group or _source_token(object_id=spec.object_id, rows=group, remote_key=spec.remote_key,
+                    mode=plan.mode, remote_source_kind=spec.remote_source_kind) != spec.source_token:
+                raise _fail("object_storage_restore_plan_changed")
+        return plan
     if plan.loaded_from_control:
         return plan
     if plan.manifest is None:
@@ -1809,7 +1836,8 @@ def _apply_with_store(
 ) -> dict[str, Any]:
     if plan.manifest is None:
         raise _fail("object_storage_restore_no_writes")
-    _require_manifest_index_authority(plan)
+    with exact_operation_writer_lock(plan.archive_root, timeout_seconds=30) if plan.concurrent else nullcontext():
+        _require_manifest_index_authority(plan)
     payloads = _Payloads(plan)
     writer = _Writer(plan, transport)
     verifier = _Verifier(plan)
@@ -1824,12 +1852,13 @@ def _apply_with_store(
         progress_hook=progress_hook,
     )
     if plan.batch_specs and core.get("status") == "completed":
-        evidence = archive_services.require_current_zettel_index(plan.archive_root)
-        if not evidence.get("ok") and "archive_index_dirty" in set(evidence.get("reason_codes") or []):
-            _reseal_dirty_projection(plan, writer.manifest_index_lifecycle)
+        with exact_operation_writer_lock(plan.archive_root, timeout_seconds=30) if plan.concurrent else nullcontext():
             evidence = archive_services.require_current_zettel_index(plan.archive_root)
-        if not evidence.get("ok"):
-            raise _fail("archive_index_rebuild_required")
+            if not evidence.get("ok") and "archive_index_dirty" in set(evidence.get("reason_codes") or []):
+                _reseal_dirty_projection(plan, writer.manifest_index_lifecycle)
+                evidence = archive_services.require_current_zettel_index(plan.archive_root)
+            if not evidence.get("ok"):
+                raise _fail("archive_index_rebuild_required")
     return _result_document(plan, core, writer)
 
 
@@ -1845,6 +1874,8 @@ def _apply_core(
     current = _fresh_revalidated(plan)
     _require_manifest_index_authority(current)
     authority = _assert_approved(current, claim, context)
+    if current.concurrent:
+        return _apply_concurrent(current, authority, transport_factory=transport_factory, resume=resume, progress_hook=progress_hook)
     with exact_operation_writer_lock(current.archive_root) as writer_lock:
         _persist_control(current)
         checkpoints = FileExactOperationCheckpointStore(current.archive_root, writer_lock=writer_lock)
@@ -1857,6 +1888,29 @@ def _apply_core(
         return _apply_with_store(
             current, authority, transport, checkpoints, resume=resume, progress_hook=progress_hook
         )
+
+
+def _apply_concurrent(plan, authority, *, transport_factory, resume, progress_hook):
+    from .operation_target_leases import TargetLeases, ExecutionCheckpointStore
+    execution = exact_operation_execution_sha256(plan.manifest, approval_authority=authority)
+    targets = [("execution", execution), *(("object", spec.object_id) for spec in plan.specs)]
+    with TargetLeases(plan.archive_root, targets) as held:
+        with exact_operation_writer_lock(plan.archive_root, timeout_seconds=30):
+            _fresh_revalidated(plan)
+            _persist_control(plan)
+            _require_manifest_index_authority(plan)
+        checkpoints = ExecutionCheckpointStore(plan.archive_root, execution_sha256=execution,
+            lease=held.leases[("execution", execution)])
+        try:
+            transport = transport_factory()
+        except Exception:
+            raise _fail("object_storage_restore_remote_unavailable") from None
+        if transport is None:
+            raise _fail("object_storage_restore_remote_unavailable")
+        result = _apply_with_store(plan, authority, transport, checkpoints, resume=resume, progress_hook=progress_hook)
+        result["concurrency"] = {"schema": "wom-kit/target-leases/v1", "wait_seconds": held.wait_seconds,
+                                 "remote_transfer_holds_archive_writer": False}
+        return result
 
 
 def _target_collection(plan: ObjectStorageRestorePlan) -> TargetCollectionPreview | None:
@@ -1920,6 +1974,18 @@ def resume_object_storage_restore(
         raise _fail("object_storage_restore_resume_invalid")
     _require_manifest_index_authority(plan)
     context = object_storage_restore_context(plan, reviewer_claim=reviewer_claim)
+    if plan.concurrent:
+        from .exact_operation_manifest import validate_exact_operation_resume_checkpoint_read_only
+        def guard(claim):
+            authority = _assert_approved(plan, claim, context)
+            actual = exact_operation_execution_sha256(plan.manifest, approval_authority=authority)
+            if not hmac.compare_digest(actual, execution_sha256):
+                raise _fail("object_storage_restore_resume_invalid")
+            return validate_exact_operation_resume_checkpoint_read_only(plan.archive_root, plan.manifest,
+                execution_sha256=actual, approval_authority=authority)
+        return _resume_exact_human_approved_write_core(plan.archive_root, context, approval_id, guard,
+            lambda claim: _apply_core(plan, claim, context=context, transport_factory=transport_factory,
+                                     resume=True, progress_hook=progress_hook), key_provider=key_provider)
     with exact_operation_writer_lock(plan.archive_root) as writer_lock:
         checkpoints = FileExactOperationCheckpointStore(plan.archive_root, writer_lock=writer_lock)
 
