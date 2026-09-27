@@ -261,8 +261,9 @@ CURRENT_DATABASE_CANONICAL_SHA256 = (
     "d9a42f08ee12a6d42e40214cfb12441e4077bf50c38c25b2692ec1344328294a"
 )
 RESOURCE_ADDITIONS = {
-    "release-notes/v0.4.46.md",
+    "release-notes/v0.4.47.md",
     "schemas/activity-cleanup-request-v1.schema.json",
+    "schemas/private-objet-finder-result-v0.2.schema.json",
     "templates/ai-runtime/wom-archive/references/storage-scope.md",
     # v0.4.45: the helper-AI skill gained four focused references.
     "templates/ai-runtime/wom-archive/references/credentials-and-sessions.md",
@@ -333,9 +334,9 @@ RESOURCE_ADDITIONS = {
     "schemas/zettel-objet-link-revert-receipt.schema.json",
 }
 RESOURCE_REMOVALS = {"release-notes/v0.3.297.md"}
-CURRENT_RESOURCE_COUNT = 179  # v0.4.45: four helper-AI references
+CURRENT_RESOURCE_COUNT = 180  # v0.4.47: finder cursor result schema
 CURRENT_RESOURCE_CANONICAL_SHA256 = (
-    "173fe9dc018a258c26fe13bacfa0f194cf9e47ac7f180bcd473dba8995db9fb0"  # v0.4.46 resources (release note only)
+    "3c877626b73d8943a38e3f50b781c61728bfba351355aaa6776e960b76785dfe"  # v0.4.47 resources (release note and finder schema)
 )
 
 
@@ -693,10 +694,10 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             actual,
             expected,
             "Current package-resource paths must be the full v0.3.297 set plus "
-            "the exact cumulative v0.3.298 through v0.4.46 delta. "
+            "the exact cumulative v0.3.298 through v0.4.47 delta. "
             f"missing={compact(missing)}; extra={compact(extra)}",
         )
-        self.assertEqual(manifest["version"], "0.4.46")
+        self.assertEqual(manifest["version"], "0.4.47")
         self.assertEqual(len(actual), CURRENT_RESOURCE_COUNT)
         self.assertEqual(
             canonical_sha256(actual),
@@ -716,13 +717,13 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         self.assertNotIn("C:\\Users\\", predecessor_text)
 
     def test_v0419_release_note_is_current_and_older_notes_remain_historical(self) -> None:
-        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.4.46.md"
+        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.4.47.md"
         current_packaged_release = (
             SRC_ROOT
             / "wom_kit"
             / "_resources"
             / "release-notes"
-            / "v0.4.46.md"
+            / "v0.4.47.md"
         )
         self.assertEqual(
             current_source_release.read_bytes(),
@@ -731,10 +732,10 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         current_text = current_source_release.read_text(encoding="utf-8")
         current_flat = " ".join(current_text.split())
         for token in (
-            "v0.4.46",
+            "v0.4.47",
             "project-version-update",
             "Installing the tool alone does not change a customer archive",
-            "wom_kit-0.4.46-py3-none-any.whl",
+            "wom_kit-0.4.47-py3-none-any.whl",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, current_flat)

@@ -1,6 +1,6 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.4.46",
+  "version": "0.4.47",
   "source_of_truth": "wom-kit source resource directories",
   "file_count": 180,
   "files": [
@@ -757,8 +757,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/SKILL.md",
       "packaged": "templates/ai-runtime/wom-archive/SKILL.md",
-      "bytes": 11874,
-      "sha256": "689dfbfdbcbab2c10168653dbd7f16874f716f0ae05e025d9df9f9181b724308"
+      "bytes": 11087,
+      "sha256": "bf74253c28d60723dcb8b8a68bd2d2f177dc709adbe63b1be76b6f37c1aaa8fa"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
@@ -823,8 +823,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/storage-scope.md",
       "packaged": "templates/ai-runtime/wom-archive/references/storage-scope.md",
-      "bytes": 967,
-      "sha256": "0ad1138d62fe09f34a298fa6db846e19c54ad2028a12120c0f29fe037edb488e"
+      "bytes": 2291,
+      "sha256": "e2a5b37c22640268e8ced30490f1f950ff80d38bb882ae68e3ad8c8500a4fc65"
     },
     {
       "source": "templates/company/AGENTS.md",
@@ -1079,10 +1079,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.4.46.md",
-      "packaged": "release-notes/v0.4.46.md",
-      "bytes": 2621,
-      "sha256": "f92fc7c4a55ab301b90e590793839a0cc8cbcda640e089e8a6a6f10d7c20fe43"
+      "source": "docs/releases/v0.4.47.md",
+      "packaged": "release-notes/v0.4.47.md",
+      "bytes": 4173,
+      "sha256": "532df8f9b1c8b55960a82523d7110c5aeb2c0f1f289192f10116fb306382c71a"
     }
   ]
 }

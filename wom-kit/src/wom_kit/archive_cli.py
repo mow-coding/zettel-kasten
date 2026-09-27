@@ -14427,6 +14427,7 @@ def command_session_handoff_checkpoint(args: argparse.Namespace) -> int:
             confirm_chat_reviewed=args.confirm_chat_reviewed,
             expected_state_digest=args.expected_state_digest,
             activity_roots=list(getattr(args, "activity_root", None) or []),
+            cleanup_requests=list(getattr(args, "cleanup_request", None) or []),
         )
     except (archive_services.ArchiveServiceError, OSError) as exc:
         print(str(exc), file=sys.stderr)
@@ -23739,6 +23740,7 @@ def command_abstract_freshness(args: argparse.Namespace) -> int:
 
 def command_activity_cleanup(args: argparse.Namespace) -> int:
     from . import activity_cleanup
+    import time as activity_clock
     writer_entered = False
     reporter = None
     try:
@@ -23788,7 +23790,9 @@ def command_activity_cleanup(args: argparse.Namespace) -> int:
         binding = (activity_cleanup.restore_binding(candidate) if restore_number is not None
                    else activity_cleanup.approval_binding(candidate))
         context = binding.context(archive_id=archive_services.read_archive_id(candidate["root"]), reviewer_claim=reviewer)
+        approval_started = activity_clock.monotonic()
         def run(claim):
+            candidate["approval_resolution_seconds"] = round(activity_clock.monotonic() - approval_started, 6)
             storage = candidate["material"]["storage"]
             backend = None
             if any(i["disposition"] == "preserve" for i in candidate["material"]["items"]):
@@ -40366,6 +40370,8 @@ def build_parser() -> argparse.ArgumentParser:
             "folders and counts files already preserved as objets as preserved."
         ),
     )
+    session_handoff_checkpoint.add_argument("--cleanup-request", action="append",
+        help="Private activity-cleanup request whose authenticated completion and recorded preservation belong to this handoff (repeatable).")
     session_handoff_checkpoint.add_argument("--format", choices=["json"], default="json", help="Output format.")
     session_handoff_checkpoint.set_defaults(func=command_session_handoff_checkpoint)
 

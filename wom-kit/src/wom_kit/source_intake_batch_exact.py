@@ -2179,11 +2179,21 @@ def _source_intake_batch_completion_evidence_view(
 
 
 def _verify_source_intake_batch_completion_with_claim_held(
+    plan: SourceIntakeBatchExactPlan, *, context: ExactHumanApprovalContext,
+    claim: _ClaimedExactHumanApproval, writer_lock: ExactOperationWriterLock,
+) -> dict[str, Any]:
+    # Legacy callers retain their held-lock semantics byte for byte.
+    from contextlib import nullcontext
+    return _verify_source_intake_batch_completion_with_claim_boundary(plan,
+        context=context, claim=claim, shared_boundary=lambda: nullcontext(writer_lock))
+
+
+def _verify_source_intake_batch_completion_with_claim_boundary(
     plan: SourceIntakeBatchExactPlan,
     *,
     context: ExactHumanApprovalContext,
     claim: _ClaimedExactHumanApproval,
-    writer_lock: ExactOperationWriterLock,
+    shared_boundary,
 ) -> dict[str, Any]:
     """Verify succeeded evidence and whole output bytes in an existing consumer.
 
@@ -2197,42 +2207,43 @@ def _verify_source_intake_batch_completion_with_claim_held(
         if (type(plan) is not SourceIntakeBatchExactPlan
                 or type(plan.manifest) is not ExactOperationManifest):
             raise _fail("source_intake_batch_plan_blocked")
-        _require_source_intake_batch_held_lock(plan, writer_lock)
-        if (type(context) is not ExactHumanApprovalContext
-                or type(claim) is not _ClaimedExactHumanApproval):
-            raise _fail("source_intake_batch_approval_required")
-        _require_approval_context(plan, claim, context, allow_resume=True)
-        reference = claim.assert_succeeded_for_context(context)
-        # A same-context claim from a copied archive is not this held archive's
-        # original claim. Keep the claim's bound, authenticated read as well.
-        same_claim = False
-        try:
-            same_claim = os.path.samefile(
-                claim._path,
-                plan.archive_root / CLAIMS_RELATIVE_ROOT / (claim.approval_id + ".json"),
-            )
-        except OSError:
-            pass
-        if not same_claim:
-            raise _fail("source_intake_batch_approval_required")
-        authority = ExactOperationApprovalAuthority.from_reference(reference)
-        execution = exact_operation_execution_sha256(
-            plan.manifest, mode="apply", approval_authority=authority,
-        )
-
-        def authenticated_final() -> dict[str, Any]:
+        with shared_boundary() as writer_lock:
             _require_source_intake_batch_held_lock(plan, writer_lock)
-            if claim.assert_succeeded_for_context(context) != reference:
-                raise _fail("source_intake_batch_completion_evidence_required")
-            final = load_exact_operation_final_receipt_read_only(plan.archive_root, execution)
-            _authority_view, auth, payload = _source_intake_batch_completion_evidence_view(
-                plan, context=context, reference=reference, execution=execution, final=final)
-            if not claim.exact_terminal_record_matches(
-                reference, context.operation, context.plan_sha256, context.target_binding_sha256,
-                frozenset({"succeeded"}), None, payload, auth.get("terminal_mac"),
-            ):
-                raise _fail("source_intake_batch_completion_evidence_required")
-            return final
+            if (type(context) is not ExactHumanApprovalContext
+                    or type(claim) is not _ClaimedExactHumanApproval):
+                raise _fail("source_intake_batch_approval_required")
+            _require_approval_context(plan, claim, context, allow_resume=True)
+            reference = claim.assert_succeeded_for_context(context)
+            # A same-context claim from a copied archive is not this held archive's
+            # original claim. Keep the claim's bound, authenticated read as well.
+            same_claim = False
+            try:
+                same_claim = os.path.samefile(
+                    claim._path,
+                    plan.archive_root / CLAIMS_RELATIVE_ROOT / (claim.approval_id + ".json"),
+                )
+            except OSError:
+                pass
+            if not same_claim:
+                raise _fail("source_intake_batch_approval_required")
+            authority = ExactOperationApprovalAuthority.from_reference(reference)
+            execution = exact_operation_execution_sha256(
+                plan.manifest, mode="apply", approval_authority=authority,
+            )
+        def authenticated_final() -> dict[str, Any]:
+            with shared_boundary() as writer_lock:
+                _require_source_intake_batch_held_lock(plan, writer_lock)
+                if claim.assert_succeeded_for_context(context) != reference:
+                    raise _fail("source_intake_batch_completion_evidence_required")
+                final = load_exact_operation_final_receipt_read_only(plan.archive_root, execution)
+                _authority_view, auth, payload = _source_intake_batch_completion_evidence_view(
+                    plan, context=context, reference=reference, execution=execution, final=final)
+                if not claim.exact_terminal_record_matches(
+                    reference, context.operation, context.plan_sha256, context.target_binding_sha256,
+                    frozenset({"succeeded"}), None, payload, auth.get("terminal_mac"),
+                ):
+                    raise _fail("source_intake_batch_completion_evidence_required")
+                return final
 
         final = authenticated_final()
         verification = verify_exact_operation(plan.manifest, verifier=_Verifier(plan), state="post")
@@ -2242,8 +2253,9 @@ def _verify_source_intake_batch_completion_with_claim_held(
         # success. The loader also revalidates the complete checkpoint chain.
         if authenticated_final() != final:
             raise _fail("source_intake_batch_completion_evidence_required")
-        claim.assert_succeeded_for_context(context)
-        _require_source_intake_batch_held_lock(plan, writer_lock)
+        with shared_boundary() as writer_lock:
+            claim.assert_succeeded_for_context(context)
+            _require_source_intake_batch_held_lock(plan, writer_lock)
         return {
             "schema_version": RESULT_SCHEMA,
             "ok": True,

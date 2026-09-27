@@ -1,8 +1,8 @@
 ﻿# WOM-kit Capability Matrix
 
-Version: v0.4.46 implementation and release scope
+Version: v0.4.47 implementation and release scope
 
-Status: v0.4.46 Git backup retries only a briefly held index, and writer-session coverage is complete; [triage decision](archive-infra-decision-log-2026-09-24-closed-writer-triage.md).
+Status: v0.4.47 candidate: activity recovery, Windows stream preservation, scoped Git backup and concurrent archive work; [release scope](releases/v0.4.47.md).
 
 Status: v0.4.36 no-dialog grants, letter-168, and session-owned writes truth
 Date: 2026-09-04

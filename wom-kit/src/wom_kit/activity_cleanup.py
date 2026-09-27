@@ -15,6 +15,7 @@ import re
 import stat
 import uuid
 import subprocess
+import time
 from contextlib import contextmanager
 
 from . import archive_services as services
@@ -614,8 +615,12 @@ def _restore_item_held(candidate, *, reviewer, claim, backend):
             _restored_state_matches(candidate, target, staged["state"])
         result = {"ok": True, "body_verified": True, "alternate_streams_verified": len(material["streams"]),
             "new_file_created": True, "recovered_original_publication": True}
-        journal.write("restore-" + identity, {"intent": material, "result": result,
-            "approval_id": approval["approval_id"]})
+        with streams.hold(target, staged["state"], expected=material["streams"]) as (_rows, _handles, verify):
+            claim.assert_ready_for_context(context)
+            verify()
+            journal.write("restore-" + identity, {"intent": material, "result": result,
+                "approval_id": approval["approval_id"]})
+            verify()
         return {**candidate["restore_public"], **result, "dry_run": False, "writes_performed": True}
     if os.path.lexists(target):
         raise ActivityCleanupError("activity_cleanup_restore_destination_changed")
@@ -637,8 +642,13 @@ def _restore_item_held(candidate, *, reviewer, claim, backend):
             "temporary": str(temporary), "state": state, "approval_id": approval["approval_id"]})
     result = streams.restore_new(body, bundle, target, material["body_state"], material["streams"],
         before_publish=before_publish)
-    candidate["journal"].write("restore-" + digest(material)[7:], {"intent": material, "result": result,
-        "approval_id": claim.public_summary()["approval_id"]})
+    staged = journal.read("restore-publish-" + identity)
+    with streams.hold(target, staged["state"], expected=material["streams"]) as (_rows, _handles, verify):
+        claim.assert_ready_for_context(context)
+        verify()
+        journal.write("restore-" + identity, {"intent": material, "result": result,
+            "approval_id": claim.public_summary()["approval_id"]})
+        verify()
     return {**candidate["restore_public"], **result, "dry_run": False, "writes_performed": True}
 
 
@@ -702,8 +712,12 @@ def status(candidate):
 def execute(candidate, *, reviewer, claim, backend):
     if os.name != "nt":
         raise ActivityCleanupError("activity_cleanup_native_delete_not_supported")
-    with candidate["journal"].writer_lock():
-        return _execute_locked(candidate, reviewer=reviewer, claim=claim, backend=backend)
+    from .operation_target_leases import TargetLeases
+    _notify(candidate.get("progress"), "activity-cleanup-items", "waiting-for-activity-writer")
+    with TargetLeases(candidate["root"], [("activity", candidate["material"]["activity_id"])]) as leases:
+        candidate["activity_writer_wait_seconds"] = leases.wait_seconds
+        with candidate["journal"].writer_lock():
+            return _execute_locked(candidate, reviewer=reviewer, claim=claim, backend=backend)
 
 
 def _execute_locked(candidate, *, reviewer, claim, backend):
@@ -712,6 +726,7 @@ def _execute_locked(candidate, *, reviewer, claim, backend):
     if os.name != "nt":
         raise ActivityCleanupError("activity_cleanup_native_delete_not_supported")
     material, root, journal = candidate["material"], candidate["root"], candidate["journal"]
+    execution_started = time.monotonic()
     if material["blockers"]:
         raise ActivityCleanupError("activity_cleanup_plan_blocked")
     binding = approval_binding(candidate)
@@ -752,6 +767,7 @@ def _execute_locked(candidate, *, reviewer, claim, backend):
             results.append({"number": number, "state": "retained", "code": "activity_cleanup_classification_retained_no_upload"})
             continue
         try:
+            item_started = time.monotonic()
             authorize()
             pending = journal.read(name + "-delete-intent")
             if not os.path.lexists(path):
@@ -770,15 +786,19 @@ def _execute_locked(candidate, *, reviewer, claim, backend):
                     "streams": item["alternate_streams"]})
             _assert_no_new_git_worktree_dependency(item)
             if item["disposition"] == "preserve":
+                _notify(progress, "activity-cleanup-items", "preserving", number + 1, len(material["items"]))
                 backend.preserve(item, journal)
                 authorize()
+                _notify(progress, "activity-cleanup-items", "verifying-remote", number + 1, len(material["items"]))
                 # Even a resumed preserved item must check current remote bytes.
                 if not backend.verify(item):
                     raise ActivityCleanupError("activity_cleanup_remote_preservation_unverified")
             if item["disposition"] == "preserve":
                 authorize()
+                _notify(progress, "activity-cleanup-items", "offloading-verified-copy", number + 1, len(material["items"]))
                 backend.finish_local_preservation(item)
             authorize()
+            _notify(progress, "activity-cleanup-items", "deleting-bound-original", number + 1, len(material["items"]))
             journal.write(name + "-delete-intent", {"number": number, "state": item["state"],
                 "preservation": "remote_verified" if item["disposition"] == "preserve" else "explicit_discard"})
             _delete_exact_approved_file(item["root"], path, item["state"], allow_readonly=True,
@@ -791,6 +811,9 @@ def _execute_locked(candidate, *, reviewer, claim, backend):
             if not isinstance(code, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,127}", code):
                 code = "activity_cleanup_item_failed"
             results.append({"number": number, "state": "retained", "code": code})
+        finally:
+            if results and results[-1]["number"] == number:
+                results[-1]["processing_seconds"] = round(time.monotonic() - item_started, 6)
     _notify(progress, "activity-cleanup-items", "done", len(results), len(material["items"]))
     _notify(progress, "activity-cleanup-directories", "start", 0, len(material["directories"]))
     directory_results = []
@@ -814,6 +837,27 @@ def _execute_locked(candidate, *, reviewer, claim, backend):
         "state": "completed" if success else "partial", "writes_performed": True,
         "items": results, "directories": directory_results, "whole_folder_preservation_claimed": False,
         "remaining": remaining_inventory(material)}
+    deleted_now = {row["number"] for row in results if row["state"] == "deleted"}
+    unique_preserved = {item["object_id"]: item["state"]["size"] for item in material["items"]
+                        if item["disposition"] == "preserve"}
+    result["measurements"] = {
+        "activity_writer_wait_seconds": round(candidate.get("activity_writer_wait_seconds", 0), 6),
+        "approval_resolution_seconds": candidate.get("approval_resolution_seconds"),
+        "processing_seconds_including_child_waits": round(time.monotonic() - execution_started, 6),
+        "newly_deleted_file_payload_bytes": sum(item["state"]["size"] + sum(s["size"] for s in item.get("alternate_streams", []))
+            for item in material["items"] if item["number"] in deleted_now),
+        "unique_body_bytes_selected_for_preservation": sum(unique_preserved.values()),
+        "unique_body_bytes_excludes_ads_bundle_overhead": True,
+        "actual_physical_disk_reclaimed_bytes": None,
+        "physical_disk_measurement_state": "not_attributable_from_file_payload_sizes",
+        "completed_item_count": sum(row["state"] in {"deleted", "already_deleted", "already_absent_after_intent"} for row in results),
+        "retained_item_count": sum(row["state"] in {"retained", "replacement_retained"} for row in results),
+        "unprocessed_item_count": len(material["items"]) - len(results),
+    }
+    if isinstance(backend, OfficialPreservationBackend):
+        observe = getattr(backend.transport, "transfer_observation", None)
+        result["measurements"]["remote_transfer"] = observe() if callable(observe) else {"state": "transport_measurement_unavailable"}
+        result["measurements"]["manifest_lookup"] = backend.manifest_lookup.observations()
     journal.write("attempt-" + uuid.uuid4().hex, result)
     if success and journal.read("completed") is None:
         journal.write("completed", result)
@@ -830,6 +874,7 @@ class OfficialPreservationBackend:
         from .remote_preservation_proof import PreservationVerifier, ProofStore, ExecutionTransport
         self.root, self.material = candidate["root"], candidate["material"]
         self.journal = candidate["journal"]
+        self.progress = candidate.get("progress")
         self.reviewer, self.transport_factory = reviewer, transport_factory
         storage = self.material["storage"]
         self.provider_kind = storage.get("provider_kind", "cloudflare-r2")
@@ -837,6 +882,8 @@ class OfficialPreservationBackend:
         self.transport = ExecutionTransport(transport_factory())
         self.verifier = PreservationVerifier(self.transport, store_ref=self.store_ref,
             execution_sha256=digest(self.material), proof_store=ProofStore(self.root))
+        from .manifest_lookup import ManifestLookup
+        self.manifest_lookup = ManifestLookup(self.root)
 
     def _staged(self, item):
         suffix = Path(item["path"]).suffix.lower()
@@ -888,7 +935,7 @@ class OfficialPreservationBackend:
 
     def _remote(self, item):
         from .object_storage_restore import _remote_location
-        rows = [row for row in services.load_manifest_records(self.root) if row.get("object_id") == item["object_id"]]
+        rows = self.manifest_lookup.rows(item["object_id"])
         keys = {location["remote_key"] for row in rows
             if (location := _remote_location(row, provider_kind=self.provider_kind, store_ref=self.store_ref))}
         if len(keys) != 1:
@@ -1032,6 +1079,7 @@ class OfficialPreservationBackend:
         from .object_storage_offload import _create_or_match_document
         name = "item-" + str(item["number"])
         if journal.read(name + "-intake") is None:
+            _notify(self.progress, "activity-cleanup-items", "staging-source", item["number"], len(self.material["items"]))
             staged = self._stage(item)
             relative = ROOT + "/" + self.material["activity_id"] + "/" + name + "-source-plan.json"
             saved_plan = journal.read(name + "-intake-plan")
@@ -1050,6 +1098,7 @@ class OfficialPreservationBackend:
         # Reuse existing object bytes across identical sources; each item still
         # retains its own intake and original source association in the journal.
         if self._remote(item) is None or journal.read(name + "-upload-control"):
+            _notify(self.progress, "activity-cleanup-items", "uploading-or-resuming", item["number"], len(self.material["items"]))
             self._storage_step(item, "upload", lambda: upload.plan_object_storage_upload(self.root,
                 provider_kind=self.provider_kind, store_ref=self.store_ref,
                 scope=ObjectScope("object_list", (item["object_id"],))))

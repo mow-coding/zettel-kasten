@@ -180,6 +180,12 @@ def _dispatch_session_source_intake(
             else:
                 result = workflow._safe_call(lambda: concurrent.fresh(resolved, request_path, mode=mode, reviewer_claim=reviewer_claim,
                     **common, cancel_requested=safe_cancel, stage_external=stage_external))
+        elif family == "record" and mode == "apply":
+            sessions._runtime_guard(resolved)
+            started = True
+            result = workflow._safe_call(lambda: workflow.execute_record_without_approval_writer(
+                resolved, request_path, reviewer_claim=reviewer_claim,
+                **common, cancel_requested=safe_cancel))
         else:
             result = sessions._write(resolved, cancel_requested=safe_cancel, progress=safe_progress, run=run)
         return _public_result(result, mode=mode)

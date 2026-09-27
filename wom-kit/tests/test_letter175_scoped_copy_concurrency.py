@@ -32,7 +32,7 @@ class ScopedCopyConcurrencyTests(unittest.TestCase):
     call = fixture.PublicSessionSourceIntakeJourneyTests.call
     session_command = fixture.PublicSessionSourceIntakeJourneyTests.session_command
 
-    def test_separate_writer_finishes_before_approval_and_copy_return(self):
+    def test_separate_writer_finishes_during_approval_copy_and_completion_hashing(self):
         source = self.fixture.workspace / "synthetic-concurrent-external.bin"
         source.write_bytes(b"synthetic source" * 8192)
         self.request.write_text(json.dumps({"schema": intake.REQUEST_SCHEMA, "batch_id": "parallel-copy",
@@ -53,9 +53,36 @@ class ScopedCopyConcurrencyTests(unittest.TestCase):
         def copy(plan, item, *, heartbeat):
             child("copy")
             return original(plan, item, heartbeat=heartbeat)
-        with patch.object(external, "copy_approved", side_effect=copy):
+        original_verify = intake.verify_exact_operation
+        def verify(*args, **kwargs):
+            if kwargs.get("state") == "post" and "completion" not in observed:
+                child("completion")
+            return original_verify(*args, **kwargs)
+        with patch.object(external, "copy_approved", side_effect=copy), \
+                patch.object(intake, "verify_exact_operation", side_effect=verify):
             result = self.call("source-intake-batch", *self.refs, "--work-session-ref", self.session,
                 "--manifest", str(self.request), "--stage-external", "--approve", "--reviewed-by", "person:synthetic")
         self.assertTrue(result["ok"], result)
-        self.assertEqual(observed, ["approval", "copy"])
+        self.assertEqual(observed, ["approval", "copy", "completion"])
         self.assertEqual(source.read_bytes(), b"synthetic source" * 8192)
+
+
+class ScopedRecordConcurrencyTests(unittest.TestCase):
+    def test_metadata_approval_wait_does_not_hold_archive_writer(self):
+        from . import test_v0420_source_intake_record_public_workflow as record_fixture
+        case = record_fixture.PublicSingleRecordJourneyTests("runTest")
+        case.setUp()
+        self.addCleanup(case.doCleanups)
+        native = case.fixture.native
+        original = native.show
+        completed = []
+        def show(**kwargs):
+            child = subprocess.run([sys.executable, "-c", CHILD, str(case.root), "synthetic-record-wait"],
+                capture_output=True, text=True, timeout=12)
+            self.assertEqual(child.returncode, 0, child.stderr)
+            completed.append(child.stdout)
+            return original(**kwargs)
+        native.show = show
+        result = case.cli()
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(len(completed), 1)

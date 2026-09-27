@@ -277,10 +277,12 @@ class GitBackupWriterTests(unittest.TestCase):
         native = _Native()
         key_provider = _KeyProvider()
         git_commands: list[list[str]] = []
+        git_inputs: list[bytes | None] = []
         original_git_raw = writer._GitBackupBackend._git_raw
 
         def recording_git_raw(backend, args, **kwargs):
             git_commands.append(list(args))
+            git_inputs.append(kwargs.get("input_bytes"))
             return original_git_raw(backend, args, **kwargs)
 
         with (
@@ -326,21 +328,20 @@ class GitBackupWriterTests(unittest.TestCase):
         add_commands = [command for command in git_commands if "add" in command]
         self.assertTrue(add_commands)
         for command in add_commands:
-            self.assertIn("--", command)
+            self.assertIn("--pathspec-from-file=-", command)
+            self.assertIn("--pathspec-file-nul", command)
             self.assertNotIn("-A", command)
             self.assertNotIn("--all", command)
-            delimiter = command.index("--")
-            self.assertTrue(set(command[delimiter + 1 :]).issubset(set(prepared.groups[0].paths)))
+        for command, payload in zip(git_commands, git_inputs):
+            if "add" in command or ("commit" in command and "--only" in command):
+                self.assertEqual(payload, b"".join(path.encode() + b"\0" for path in prepared.groups[0].paths))
         commit_commands = [
             command
             for command in git_commands
             if "commit" in command and "--only" in command
         ]
         self.assertEqual(len(commit_commands), 1)
-        self.assertEqual(
-            tuple(commit_commands[0][commit_commands[0].index("--") + 1 :]),
-            prepared.groups[0].paths,
-        )
+        self.assertIn("--pathspec-from-file=-", commit_commands[0])
         forbidden = {"pull", "fetch", "merge", "rebase", "reset", "clean"}
         self.assertFalse(
             [command for command in git_commands if forbidden.intersection(command)]
@@ -1122,14 +1123,15 @@ class GitBackupWriterTests(unittest.TestCase):
             encoding="utf-8",
         )
         with patch.object(planning, "git_backup_plan", side_effect=fake_plan):
-            with self.assertRaises(writer.GitBackupWriterError) as oversized:
-                writer.prepare_git_backup(
-                    self.root,
-                    expected_plan_sha256=expected_plan,
-                    selection_manifest_path=self.selection_path,
-                    credential_mode="stored",
-                )
-        self.assertEqual(oversized.exception.code, "git_backup_selection_invalid")
+            large = writer.prepare_git_backup(
+                self.root,
+                expected_plan_sha256=expected_plan,
+                selection_manifest_path=self.selection_path,
+                credential_mode="stored",
+            )
+        self.assertEqual(len(large.groups), 1)
+        self.assertEqual(len(large.groups[0].paths), 8192)
+        self.assertEqual(large.public_plan()["path_transport"], "literal_nul_stdin")
 
 
 if __name__ == "__main__":

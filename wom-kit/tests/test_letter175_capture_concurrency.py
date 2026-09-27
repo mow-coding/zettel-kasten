@@ -14,6 +14,18 @@ class CaptureConcurrencyTests(unittest.TestCase):
     _plan = fixture.ObjetCaptureBatchExactTests._plan
     _workflow = staticmethod(fixture.ObjetCaptureBatchExactTests._workflow)
 
+    def test_manifest_holder_times_out_without_removing_its_lock(self):
+        with services._ObjetCaptureManifestLock(self.root):
+            path = self.root / "objects/manifests/.files.jsonl.lock"
+            before = path.stat()
+            with ThreadPoolExecutor(max_workers=1) as worker:
+                def blocked():
+                    with services._ObjetCaptureManifestLock(self.root, timeout_seconds=0.1):
+                        raise AssertionError("conflicting publication entered")
+                with self.assertRaisesRegex(services.ArchiveServiceError, "objet_capture_writer_busy_timeout"):
+                    worker.submit(blocked).result(timeout=5)
+            self.assertEqual(path.stat().st_ino, before.st_ino)
+
     def test_second_capture_commits_before_first_source_processing_returns(self):
         request_a, execution_a = self._request(1, batch_id="parallel-a")
         with patch.object(fixture, "PRIVATE_BODY", b"synthetic distinct second source\n"):

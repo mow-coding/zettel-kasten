@@ -74,6 +74,96 @@ class Writer(intake._Writer):
             super()._publish(target_ref, value, held.verify_held)
 
 
+def _completion_targets(prepared):
+    return [("file", item.target_ref) for item in prepared.plan.manifest.items]
+
+
+def _verify_completed(prepared, context, claim, lane):
+    return intake._verify_source_intake_batch_completion_with_claim_boundary(prepared.plan,
+        context=context, claim=claim, shared_boundary=lane.shared)
+
+
+def _started_state(prepared, context, claim, lane):
+    """Authenticate original resume facts around unlocked byte verification."""
+    with TargetLeases(prepared.plan.archive_root, _completion_targets(prepared), heartbeat=lane.heartbeat):
+        with lane.shared() as held:
+            frozen = legacy._require_pending_source_intake_scope_held(prepared,
+                context=context, claim=claim, held=held)
+            plan = frozen.plan
+            authority = intake._authority(plan, claim, context, allow_resume=True)
+            execution = exact.exact_operation_execution_sha256(plan.manifest, approval_authority=authority)
+            present = exact.validate_exact_operation_resume_checkpoint_read_only(plan.archive_root, plan.manifest,
+                execution_sha256=execution, approval_authority=authority)
+            final = exact.load_exact_operation_final_receipt_read_only(plan.archive_root, execution)
+        if final is not None:
+            result, reference = final["result"], claim.public_reference()
+            auth = result.get("completion_authentication")
+            binding = plan.manifest.work_session_binding
+            if (result["mode"] != "apply" or result["manifest_sha256"] != plan.manifest.manifest_sha256
+                    or result["execution_sha256"] != execution or result["approval_binding_sha256"] != authority.binding_sha256
+                    or result.get("operation_evidence") != plan.manifest.operation_evidence.document()
+                    or result.get("work_session_binding_sha256") != binding.binding_sha256
+                    or result.get("extension_sha256") != plan.manifest.extension_sha256
+                    or result["item_count"] != len(plan.manifest.items)
+                    or result["field_count"] != sum(len(item.fields) for item in plan.manifest.items)
+                    or type(auth) is not dict or auth["approval_reference"] != reference
+                    or auth["operation"] != intake.OPERATION or auth["target_binding_sha256"] != context.target_binding_sha256
+                    or not claim.exact_terminal_record_matches(reference, context.operation, context.plan_sha256,
+                        context.target_binding_sha256, frozenset({"started"}), None,
+                        exact.exact_operation_completion_authentication_payload(result), auth["terminal_mac"])
+                    or exact.verify_exact_operation(plan.manifest, verifier=intake._Verifier(plan), state="post")["all_match"] is not True):
+                raise legacy.WorkSessionIntakeWorkflowError("work_session_intake_original_evidence_invalid")
+            state = "common_final_present"
+        elif present:
+            state = "checkpoint_present"
+        else:
+            _preimage(frozen, lane)
+            state = "authenticated_before_first_checkpoint"
+        with lane.shared() as held:
+            legacy._require_pending_source_intake_scope_held(frozen, context=context, claim=claim, held=held)
+            if exact.load_exact_operation_final_receipt_read_only(plan.archive_root, execution) != final:
+                raise legacy.WorkSessionIntakeWorkflowError("work_session_intake_original_evidence_invalid")
+        return state
+
+
+def _finish(prepared, context, claim, lane, *, completed):
+    # Keep the immutable output set leased while hashing outside the archive
+    # writer. Reauthenticate original authority and current ownership before
+    # clearing the actor's pending operation; no cached ownership grants access.
+    with TargetLeases(prepared.plan.archive_root, _completion_targets(prepared), heartbeat=lane.heartbeat):
+        verified = _verify_completed(prepared, context, claim, lane)
+        failure = None
+        try:
+            with lane.shared() as held:
+                frozen, store, routing, selected = legacy._selected_scope(prepared, context, held, completed=completed)
+                legacy._authenticate_establishment(frozen, store, claim, held)
+                legacy._current(frozen, store, routing, selected, held)
+            if _verify_completed(frozen, context, claim, lane) != verified:
+                raise legacy.WorkSessionIntakeWorkflowError("work_session_intake_original_evidence_invalid")
+            with lane.shared() as held:
+                repeated, _, _, current = legacy._selected_scope(prepared, context, held, completed=completed)
+                if repeated.original_raw != frozen.original_raw or current._raw != selected._raw:
+                    raise legacy.WorkSessionIntakeWorkflowError("work_session_intake_changed")
+                legacy._authenticate_establishment(repeated, store, claim, held)
+                legacy._current(repeated, store, routing, selected, held)
+                if not completed:
+                    binding = frozen.plan.manifest.work_session_binding
+                    selected = routing.save(expected_sha256=selected.sha256, held_lock=held,
+                        work_session_ref=binding.work_session_ref, claim_ref=selected.document()["claim_ref"],
+                        observed_binding=binding, pending_operation=None, pending_registry_intent_plan_sha256=None,
+                        last_completed_operation=legacy.actor.CompletedOperationSelector.from_document(legacy._pointer(frozen, context)))
+                legacy._assert_actor(routing, selected)
+        except legacy.WorkSessionIntakeWorkflowError as error:
+            failure = error.code
+        except Exception:
+            failure = "work_session_intake_ownership_unavailable"
+        if failure:
+            raise legacy.WorkSessionIntakeWorkflowError(failure, original_completion_verified=True)
+        return {**verified, "original_completion_verified": True, "current_claim_ownership_verified": True,
+            "actor_completion_published": not completed, "original_operation_already_completed": completed,
+            "artifact_capture_performed": False, "requires_new_capture_approval": True}
+
+
 def run(prepared, context, claim, lane, *, resume):
     with lane.shared() as held:
         view = legacy._source_intake_operation_view(prepared, context, held)
@@ -146,8 +236,7 @@ def fresh(root, request_path, *, mode, client_app_ref, task_route_ref, work_sess
             yield
 
     def finish(claim):
-        with lane.shared() as held:
-            results.update(legacy._finish(prepared, context, claim, held, completed=False))
+        results.update(_finish(prepared, context, claim, lane, completed=False))
 
     outcome = broker._execute_exact_human_approved_write_core(root, context,
         lambda claim: run(prepared, context, claim, lane, resume=False),
@@ -187,8 +276,7 @@ def resume(root, *, client_app_ref, task_route_ref, work_session_ref=None, key_p
         view = legacy._source_intake_operation_view(prepared, context, held)
     results, states = {}, {}
     def started_state(claim):
-        with lane.shared() as held:
-            return legacy._started_state(view, context, claim, held)
+        return _started_state(view, context, claim, lane)
     def started_guard(claim):
         if completed:
             raise legacy.WorkSessionIntakeWorkflowError("work_session_intake_original_evidence_invalid")
@@ -201,13 +289,11 @@ def resume(root, *, client_app_ref, task_route_ref, work_session_ref=None, key_p
             return {"ok": True, "writes_performed": False, "domain_writer_reentered": False}
         return run(prepared, context, claim, lane, resume=state == "checkpoint_present")
     def succeeded_guard(claim):
-        with lane.shared() as held:
-            intake._verify_source_intake_batch_completion_with_claim_held(prepared.plan,
-                context=context, claim=claim, writer_lock=held)
+        with TargetLeases(prepared.plan.archive_root, _completion_targets(prepared), heartbeat=lane.heartbeat):
+            _verify_completed(prepared, context, claim, lane)
         return True
     def finish(claim):
-        with lane.shared() as held:
-            results.update(legacy._finish(view, context, claim, held, completed=completed))
+        results.update(_finish(view, context, claim, lane, completed=completed))
     def absent(_reason):
         raise legacy.WorkSessionIntakeWorkflowError("work_session_intake_original_approval_missing")
     outcome = broker._resume_exact_human_approved_transaction_auto_core(root, context,

@@ -1,11 +1,9 @@
 ---
 name: wom-archive
-description: Safely inspect and update a local WOM archive. Use for context recovery, zet reading, source capture, drafting, publication, shared review, or Doctor.
+description: Inspect/update WOM archives for context recovery, zet reading, capture, drafts, publication, shared review, Doctor.
 ---
 
 # WOM Archive
-
-Archives preserve memory.
 
 ## Core Rules (read first, every session)
 
@@ -89,25 +87,15 @@ Do not preload every reference.
 
 ## Classify Before Backing Up an Activity
 
-The helper AI owns classification when the user delegates cleanup. Inspect
-contents, how files were produced, references and recovery needs. Do not ask
-the user to label every file and do not upload the whole working folder first.
-Use the private `activity-cleanup` request to record each role and its reason:
-
-- Preserve originals, useful deliverables and recovery evidence.
-- Discard proven disposable caches, intermediates and redundant temporary
-  copies without intake or upload: `role: temporary`, `disposition: discard`,
-  `discard_intent: true`. Record reproducible inputs/steps, verified retained
-  copies including alternate streams, or the user's delegated disposal intent.
-- Retain uncertain or still-used files: `disposition: retain`. No upload or
-  deletion; explain the remaining uncertainty without calling cleanup complete.
-
-A filename, age or ignore rule alone is not disposal evidence. Preserve unique
-work, secret configuration, Git history and other activities' dependencies.
-Temporary files cannot silently use `preserve`; meaningful intermediate
-evidence needs the appropriate role and reason. A valid full-access grant
-covers the official child operations without additional approval windows.
-Do not delete already-uploaded remote temporary objects through local cleanup.
+The helper AI classifies delegated cleanup before upload; do not make the user
+label every file. Preserve originals, useful results and recovery evidence.
+Discard proven disposable temporary files without intake/upload. Retain unknown
+or still-used files without upload/deletion. Names, age and ignore rules alone
+are insufficient. Record reasons in the private request; preserve other
+activities' dependencies. Full access covers child operations without extra
+approval windows. Read [storage-scope.md](references/storage-scope.md) for the
+required classification fields and evidence. Local cleanup never deletes
+already-uploaded remote temporary objects.
 
 ## Universal Contract
 
@@ -194,11 +182,8 @@ Do not delete already-uploaded remote temporary objects through local cleanup.
 
 ## Finish
 
-Finish the goal and report verified state. Separate engineering
-completion, human review, and real-use validation. Record substantial decisions
-and corrections. Before reset/handoff, use the receipt-backed close procedure in
+Report verified progress; distinguish engineering, human review, and real-use validation. Record decisions/corrections. Before reset/handoff, follow
 [reading-memory-and-revision.md](references/reading-memory-and-revision.md).
 
-Use plain language first: “published note,” “source file,” “change
-record,” “health check,” and “preview.” Use `zettel` for the general zettel-kasten concept,
+Use plain language: “published note,” “source file,” “change record,” “health check,” “preview.” Use `zettel` for the general zettel-kasten concept,
 `zet` for one WOM document, and `ZET` for the shareable protocol layer.

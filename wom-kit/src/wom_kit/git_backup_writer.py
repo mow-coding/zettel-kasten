@@ -83,7 +83,7 @@ GIT_BACKUP_MAX_COMMAND_PATH_BYTES = 24 * 1024
 # Reserve more than 8 KiB for the pinned Git path, archive root, fixed safety
 # options, and the temporary commit-message path.  Safe Git paths cannot carry
 # quotes or backslashes, but we still measure Python's Windows quoting form and
-# fail before approval if the literal path argv alone exceeds this cap.
+# bound each read-only query. Writers send exact NUL-separated paths on stdin.
 GIT_BACKUP_WINDOWS_MAX_COMMAND_LINE_CHARS = 32_767
 GIT_BACKUP_MAX_LITERAL_PATH_ARGV_CHARS = 24 * 1024
 GIT_BACKUP_MAX_COMMIT_OUTPUT_BYTES = 4 * 1024 * 1024
@@ -321,8 +321,10 @@ class PreparedGitBackup:
                 GIT_BACKUP_WINDOWS_MAX_COMMAND_LINE_CHARS
             ),
             "literal_path_argv_max_chars_per_group": (
-                GIT_BACKUP_MAX_LITERAL_PATH_ARGV_CHARS
+                None
             ),
+            "path_transport": "literal_nul_stdin",
+            "path_input_max_bytes_per_group": GIT_BACKUP_MAX_SELECTION_BYTES,
             "would_change": [
                 {
                     "action": "commit_group",
@@ -620,7 +622,7 @@ def _literal_path_argv_metrics(paths: Sequence[str]) -> tuple[int, int]:
 
     return (
         sum(len(path.encode("utf-8")) + 1 for path in paths),
-        len(subprocess.list2cmdline(["--", *paths])),
+        len(subprocess.list2cmdline(["--", *paths]).encode("utf-16-le")) // 2,
     )
 
 
@@ -631,6 +633,17 @@ def _literal_path_argv_is_bounded(paths: Sequence[str]) -> bool:
         and path_bytes <= GIT_BACKUP_MAX_COMMAND_PATH_BYTES
         and windows_chars <= GIT_BACKUP_MAX_LITERAL_PATH_ARGV_CHARS
     )
+
+
+def _path_input_is_bounded(paths: Sequence[str]) -> bool:
+    return bool(paths and len(paths) <= planning.GIT_BACKUP_PLAN_MAX_TRACKED_PATHS
+                and all(_literal_path_argv_is_bounded((path,)) for path in paths)
+                and sum(len(path.encode("utf-8")) + 1 for path in paths)
+                <= GIT_BACKUP_MAX_SELECTION_BYTES)
+
+
+def _path_input(paths: Sequence[str]) -> bytes:
+    return b"".join(path.encode("utf-8") + b"\0" for path in paths)
 
 
 def _build_exact_manifest(
@@ -858,7 +871,7 @@ def _prepare_git_backup_core(
                 paths.append(value)
         exact_paths = tuple(sorted(set(paths)))
         if (
-            not _literal_path_argv_is_bounded(exact_paths)
+            not _path_input_is_bounded(exact_paths)
             or any(path in all_paths for path in exact_paths)
         ):
             raise _fail("git_backup_selection_invalid")
@@ -1255,7 +1268,7 @@ def _decode_private_git_backup_bundle(
             or paths != sorted(set(paths))
             or any(type(path_value) is not str or not path_value for path_value in paths)
             or not archive_services.wom_kit_project_update_safe_worktree_paths(paths)
-            or not _literal_path_argv_is_bounded(paths)
+            or not _path_input_is_bounded(paths)
             or any(path_value in seen_paths for path_value in paths)
             or not isinstance(change_refs, list)
             or change_refs != sorted(set(change_refs))
@@ -1644,6 +1657,7 @@ class _GitBackupBackend:
         stderr_sink: list[bytes] | None = None,
     ) -> tuple[int, bytes] | None:
         environment = planning._local_git_environment()
+        environment["GIT_LITERAL_PATHSPECS"] = "1"
         if extra_environment:
             environment.update(extra_environment)
         return archive_services._wom_kit_project_update_run_capped(
@@ -1652,6 +1666,8 @@ class _GitBackupBackend:
             timeout_seconds=timeout_seconds,
             max_output_bytes=max_output_bytes,
             input_bytes=input_bytes,
+            **({"max_input_bytes": GIT_BACKUP_MAX_SELECTION_BYTES}
+               if input_bytes is not None and len(input_bytes) > 1024 * 1024 else {}),
             **({'stderr_sink': stderr_sink} if stderr_sink is not None else {}),
         )
 
@@ -1688,9 +1704,10 @@ class _GitBackupBackend:
                     "-c",
                     "core.safecrlf=true",
                     "add",
-                    "--",
-                    *paths,
+                    "--pathspec-from-file=-",
+                    "--pathspec-file-nul",
                 ],
+                input_bytes=_path_input(paths),
                 max_output_bytes=64 * 1024,
                 extra_environment=environment,
                 stderr_sink=errors,
@@ -1883,10 +1900,7 @@ class _GitBackupBackend:
         expected = self._expected_group_worktree(group)
         if expected is None:
             return False
-        tree_result = self._git_raw(
-            ["ls-tree", "-r", "-z", treeish, "--", *group.paths],
-            max_output_bytes=planning.GIT_BACKUP_PLAN_MAX_GIT_OUTPUT_BYTES,
-        )
+        tree_result = self._git_path_query(["ls-tree", "-r", "-z", treeish], group.paths)
         if tree_result is None or tree_result[0] != 0:
             return False
         parsed = planning._parse_tree(tree_result[1])
@@ -1902,10 +1916,7 @@ class _GitBackupBackend:
         expected = self._expected_group_worktree(group)
         if expected is None:
             return False
-        index_result = self._git_raw(
-            ["ls-files", "--stage", "-z", "--", *group.paths],
-            max_output_bytes=planning.GIT_BACKUP_PLAN_MAX_GIT_OUTPUT_BYTES,
-        )
+        index_result = self._git_path_query(["ls-files", "--stage", "-z"], group.paths)
         if index_result is None or index_result[0] != 0:
             return False
         parsed = planning._parse_index(index_result[1])
@@ -2291,17 +2302,29 @@ class _GitBackupBackend:
     @staticmethod
     def _path_batches(paths: Sequence[str]) -> Iterable[list[str]]:
         batch: list[str] = []
-        size = 0
         for path in paths:
-            encoded = len(path.encode("utf-8")) + 1
-            if batch and size + encoded > GIT_BACKUP_MAX_COMMAND_PATH_BYTES:
+            if batch and not _literal_path_argv_is_bounded([*batch, path]):
                 yield batch
                 batch = []
-                size = 0
+            if not _literal_path_argv_is_bounded((path,)):
+                raise _fail("git_backup_selection_invalid")
             batch.append(path)
-            size += encoded
         if batch:
             yield batch
+
+    def _git_path_query(self, args: list[str], paths: Sequence[str]) -> tuple[int, bytes] | None:
+        """Bound argv and aggregate output, while inspecting only selected paths."""
+        chunks: list[bytes] = []
+        remaining = planning.GIT_BACKUP_PLAN_MAX_GIT_OUTPUT_BYTES
+        for batch in self._path_batches(paths):
+            result = self._git_raw([*args, "--", *batch], max_output_bytes=remaining)
+            if result is None or result[0] != 0:
+                return result
+            remaining -= len(result[1])
+            if remaining <= 0:
+                return None
+            chunks.append(result[1])
+        return 0, b"".join(chunks)
 
     def _exact_add(self, group: _PreparedGroup) -> str:
         """Prove exact staging in an isolated index without touching user state."""
@@ -2318,10 +2341,9 @@ class _GitBackupBackend:
             )
             if initialized is None or initialized[0] != 0:
                 raise _fail("git_backup_exact_add_failed")
-            for batch in self._path_batches(group.paths):
-                result = self._git_index_add(batch, extra_environment=environment)
-                if result is None or result[0] != 0:
-                    raise _fail("git_backup_exact_add_failed")
+            result = self._git_index_add(group.paths, extra_environment=environment)
+            if result is None or result[0] != 0:
+                raise _fail("git_backup_exact_add_failed")
             written = self._git_text_with_environment(
                 ["write-tree"],
                 extra_environment=environment,
@@ -2405,7 +2427,7 @@ class _GitBackupBackend:
             raise _fail("git_backup_git_state_drifted")
         # The isolated index proves that `git add -- <exact paths>` produces
         # only the reviewed tree delta and exact approved blob bytes.  The
-        # porcelain commit then receives the same bounded literal path list;
+        # porcelain commit then receives the same exact NUL-delimited stdin;
         # `--only` preserves any pre-existing staging outside this group.
         self._exact_add(group)
         exact_add = self._git_index_add(group.paths)
@@ -2452,14 +2474,16 @@ class _GitBackupBackend:
                     "-c",
                     "core.safecrlf=true",
                     "commit",
+                    "--quiet",
                     "--only",
                     "--no-verify",
                     "--no-gpg-sign",
                     "--cleanup=verbatim",
                     f"--file={message_name}",
-                    "--",
-                    *group.paths,
+                    "--pathspec-from-file=-",
+                    "--pathspec-file-nul",
                 ],
+                input_bytes=_path_input(group.paths),
                 timeout_seconds=GIT_BACKUP_COMMIT_TIMEOUT_SECONDS,
             )
         finally:

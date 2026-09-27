@@ -514,7 +514,9 @@ class ActivityCleanupTests(unittest.TestCase):
                 stack.enter_context(patch.object(services, "objet_capture_apply", side_effect=interrupt_capture))
             stack.enter_context(patch.object(upload, "plan_object_storage_upload", side_effect=remember))
             stack.enter_context(patch.object(broker, "_production_key_provider", return_value=self.key))
-            stack.enter_context(patch.object(windows, "_CtypesTaskDialogNative", return_value=native))
+            native_factory = getattr(self, "actual_native_factory", None)
+            stack.enter_context(patch.object(windows, "_CtypesTaskDialogNative",
+                **({"side_effect": native_factory} if native_factory else {"return_value": native})))
             stack.enter_context(patch.object(archive_cli, "_object_storage_live_transport_factory", return_value=lambda: transport))
             with redirect_stdout(output), redirect_stderr(io.StringIO()):
                 code = archive_cli.main(["activity-cleanup", str(self.root), "--request", str(self.request),

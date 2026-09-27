@@ -267,6 +267,70 @@ def _execute_session_source_intake_record_held(root, plan_path, *, held, client_
     return _safe_call(execute)
 
 
+def execute_record_without_approval_writer(root, plan_path, *, client_app_ref, task_route_ref,
+        work_session_ref, reviewer_claim, native=None, key_provider=None,
+        progress_hook=None, cancel_requested=lambda: False):
+    """Single metadata publication stays short; human waiting owns no writer.
+
+    This does not change record payloads or legacy recovery semantics.
+    Current ownership, retained input and origin are rechecked after waiting.
+    """
+    import json
+    from .work_session_intake_concurrent import Lane
+    lane = Lane(root, progress=progress_hook, cancel=cancel_requested)
+    args = dict(client_app_ref=client_app_ref, task_route_ref=task_route_ref,
+        work_session_ref=work_session_ref, key_provider=key_provider, progress_hook=progress_hook)
+    with lane.shared() as held:
+        prepared, store, routing, selected = _fresh(root, plan_path, held=held, **args)
+    context = intake.approval_context(prepared.plan, reviewer_claim=reviewer_claim)
+    results = {}
+
+    @contextmanager
+    def post_decision():
+        with lane.shared() as held:
+            repeated, _, _, current = _fresh(root, plan_path, held=held, **args)
+            before, after = json.loads(prepared._raw), json.loads(repeated._raw)
+            ignored = {"registry_preimage_sha256", "scope_sha256"}
+            left = {k: v for k, v in before["scope"].items() if k not in ignored}
+            right = {k: v for k, v in after["scope"].items() if k not in ignored}
+            if before["input"] != after["input"] or left != right or current._raw != selected._raw:
+                raise WorkSessionIntakeWorkflowError("work_session_intake_changed")
+        with lane.claim_directory(create=True) as boundary:
+            yield boundary
+
+    @contextmanager
+    def publication():
+        with lane.shared() as held:
+            _preimage(prepared, held, require_input=True)
+            _current(prepared, store, routing, selected, held)
+            bundle._save_original_source_intake_record_context_held(prepared, context=context, held=held)
+            _current(prepared, store, routing, selected, held)
+            scope, binding = prepared.scope.document(), prepared.plan.manifest.work_session_binding
+            routing.save(expected_sha256=selected.sha256, held_lock=held, work_session_ref=work_session_ref,
+                claim_ref=scope["claim_ref"], observed_binding=binding,
+                established_origin=establishment.EstablishmentSelector.from_document(scope["original_establishment"]),
+                pending_registry_intent_plan_sha256=None,
+                pending_operation=actor.PendingOperationSelector.from_document(_pointer(prepared, context)))
+            frozen, _, _, pending = _selected_scope(prepared, context, held)
+            _current(frozen, store, routing, pending, held)
+            yield
+
+    def apply(claim):
+        with lane.shared() as held:
+            return domain._run_session_source_intake_record_exact_operation(prepared,
+                context=context, claim=claim, writer_lock=held, resume=False, progress_hook=progress_hook)
+
+    def finish(claim):
+        with lane.shared() as held:
+            results.update(_finish(prepared, context, claim, held, completed=False))
+
+    outcome = broker._execute_exact_human_approved_write_core(root, context, apply,
+        native=native, key_provider=key_provider, post_decision_boundary=post_decision,
+        claim_publication_boundary=publication, claim_succeeded_finalizer=finish)
+    return {**results, "native_approval_redisplayed": False,
+        "writes_performed": outcome.get("writes_performed") is True}
+
+
 def _started_state(prepared, context, claim, held):
     frozen = _require_pending_source_intake_record_scope_held(prepared, context=context, claim=claim, held=held)
     plan = frozen.plan

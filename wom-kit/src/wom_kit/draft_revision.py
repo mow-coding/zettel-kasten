@@ -135,8 +135,28 @@ def write(root, *, draft, proposal, expected_plan_sha256, reviewer, claim, bindi
             canonical = services.resolve_zet_revision_canonical_candidate(root, identity)
             if canonical != fresh["target"] and canonical.is_file():
                 raise DraftRevisionError("draft_revision_already_published")
-            return _publish(root, fresh, expected_plan_sha256=expected_plan_sha256,
-                reviewer=reviewer, claim=claim, binding=binding, resume=resume)
+            evidence = services.require_current_zettel_index(root)
+            generation = evidence.get("generation") if evidence.get("ok") else None
+            token = services.begin_archive_index_mutation(root, expected_generation=generation) if generation else None
+            indexed = False
+            try:
+                result = _publish(root, fresh, expected_plan_sha256=expected_plan_sha256,
+                    reviewer=reviewer, claim=claim, binding=binding, resume=resume)
+                if token is not None:
+                    indexed = services.upsert_zettel_index_entry(root, fresh["target"], {}, "",
+                        expected_generation=generation, expected_file_sha256=fresh["material"]["proposal_sha256"][7:],
+                        lease_token=token)
+            finally:
+                if token is not None:
+                    services._release_archive_index_mutation_lease(root, lease_token=token)
+        if not indexed:
+            # Legacy dirty/missing generations require recovery, outside the
+            # shared archive writer. The normal route updates just this row.
+            services.index_archive(root)
+        else:
+            from .search_snapshots import publish
+            publish(root)
+        return result
 
 
 def _publish(root, fresh, *, expected_plan_sha256, reviewer, claim, binding, resume):
@@ -174,7 +194,6 @@ def _publish(root, fresh, *, expected_plan_sha256, reviewer, claim, binding, res
             raise DraftRevisionError("draft_revision_receipt_conflict")
     else:
         _create_or_match_document(root, receipt_path, _encoded(receipt), failure_code="object_storage_offload_receipt_conflict")
-    services.index_archive(root)
     return {**public, "dry_run": False, "state": "draft_revised", "writes_performed": True,
             "before_snapshot_preserved": True, "revision_receipt_written": True, "revision_receipt_path": receipt_path,
             "creation_receipt_overwritten": False, "auto_publish": False}
