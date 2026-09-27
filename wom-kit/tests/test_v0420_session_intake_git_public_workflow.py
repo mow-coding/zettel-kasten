@@ -245,16 +245,18 @@ class SessionIntakeGitPublicWorkflowTests(unittest.TestCase):
         original, pointer = self.original_git(task_a)
         self.assertEqual({path for group in original.prepared.groups for path in group.paths}, set(a_outputs))
         scope = original.prepared.session_scope.document()
-        self.assertEqual(scope["schema"], "wom-kit/git-backup-session-scope/v2")
+        self.assertEqual(scope["schema"], "wom-kit/git-backup-session-scope/v4")
+        self.assertTrue(set(a_outputs) <= set(scope["inspection_paths"]))
         self.assertEqual(scope["selected_change_count"], 3)
         b_proofs = [proof for proof in scope["producer_proofs"]
                     if proof["original_work_session_binding"]["work_session_ref"] == task_b["session"]]
-        self.assertEqual(len(b_proofs), 4)
-        excluded = {row["private_change"]["path"]: row for row in original.prepared.excluded_changes}
+        self.assertEqual(b_proofs, [])
+        self.assertEqual(scope["excluded_change_count"], 0)
+        self.assertEqual(original.prepared.excluded_changes, ())
         for path in {*intake_b["outputs"], case["b_common"]}:
-            self.assertEqual(excluded[path]["scope"], "other_session")
-        self.assertEqual(excluded[case["generic"]]["scope"], "unknown")
-        self.assertEqual(excluded["notes.md"]["scope"], "unknown")
+            self.assertNotIn(path, scope["inspection_paths"])
+        self.assertNotIn(case["generic"], scope["inspection_paths"])
+        self.assertNotIn("notes.md", scope["inspection_paths"])
         claims_after_cut = set(self.root.joinpath(approval.CLAIMS_RELATIVE_ROOT).glob("*.json"))
         self.assertEqual(len(claims_after_cut - case["claims_before"]), 1)
 

@@ -78,7 +78,7 @@ class OriginalGitReviewTests(unittest.TestCase):
             self.assertTrue(replay["original_operation_already_completed"])
             self.assertEqual(f.evidence(), evidence)
 
-    def test_cancel_and_after_click_excluded_source_drift_preserve_original_pending(self):
+    def test_cancel_and_after_click_selected_source_drift_preserve_original_pending(self):
         f = self.f
 
         class CancelNative:
@@ -95,16 +95,42 @@ class OriginalGitReviewTests(unittest.TestCase):
             self.assertIsNone(caught.exception.__context__)
             self.assertNotIn(True, f.key.create_if_missing)
             self.assertEqual(f.evidence(), before)
-            f.native.callback = lambda: (f.root / "new-private.txt").write_text("synthetic postclick drift\n")
+            selected_receipt = f.root / "receipts" / "ops" / "exact-operations" / (
+                f.original["execution_sha256"].removeprefix("sha256:") + ".json")
+            f.native.callback = lambda: selected_receipt.write_bytes(b"synthetic postclick drift\n")
             with patch.object(writer, "_run_git_backup_exact_operation", side_effect=AssertionError("Git effects")):
                 with self.assertRaises(subject.WorkSessionGitWorkflowError) as changed:
                     self.review(held)
             self.assertEqual(changed.exception.code, "work_session_git_changed")
             self.assertIsNone(changed.exception.__context__)
             self.assertNotIn(True, f.key.create_if_missing)
-            self.assertEqual(f.evidence(), before)
+            expected = dict(before)
+            expected[str(selected_receipt.relative_to(f.root))] = b"synthetic postclick drift\n"
+            self.assertEqual(f.evidence(), expected)
             self.assertEqual(f.routing._read(current=False)._raw, pending._raw)
             self.assertEqual(f.git("rev-parse", "HEAD").stdout.strip(), f.fixture.initial_head)
+
+    def test_after_click_unrelated_source_drift_keeps_original_scope_and_completes(self):
+        f = self.f
+        unrelated = f.root / "new-private.txt"
+        with exact.ExactOperationWriterLock(f.root) as held:
+            original, _pending = self.cut(held)
+            immutable_bundle = writer._canonical(writer._bundle_document(original.prepared))
+            f.native.callback = lambda: unrelated.write_bytes(b"synthetic unrelated postclick edit\n")
+            with patch.object(writer.planning, "git_backup_plan", side_effect=AssertionError("new plan")), \
+                 patch.object(bundle, "_save_original_git_context_held", side_effect=AssertionError("context rewritten")):
+                result = self.review(held)
+            self.assertTrue(result["original_commit_verified"])
+            self.assertTrue(result["original_context_preserved"])
+            self.assertEqual(writer._canonical(writer._bundle_document(original.prepared)), immutable_bundle)
+            self.assertEqual(f.native.calls, 2)
+            self.assertEqual(unrelated.read_bytes(), b"synthetic unrelated postclick edit\n")
+            selected = {path for group in original.prepared.groups for path in group.paths}
+            self.assertEqual(set(f.git("diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD").stdout.splitlines()), selected)
+            self.assertNotIn("new-private.txt", selected)
+            self.assertNotEqual(f.git("cat-file", "-e", "HEAD:new-private.txt", check=False).returncode, 0)
+            self.assertIn("new-private.txt", f.git("status", "--porcelain").stdout)
+            f.fixture.assert_remote_matches_head()
 
     def test_repeated_preclaim_cut_then_started_claim_uses_original_resume_without_third_review(self):
         f = self.f
