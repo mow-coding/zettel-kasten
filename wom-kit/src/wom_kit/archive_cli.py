@@ -23750,7 +23750,13 @@ def command_activity_cleanup(args: argparse.Namespace) -> int:
         reporter = CommandProgressReporter(bool(getattr(args, "progress", True)), label="activity-cleanup",
             stage_order=("activity-cleanup-inventory", "activity-cleanup-hash", "activity-cleanup-items", "activity-cleanup-directories"),
             progress_log_path=getattr(args, "progress_log", None))
-        candidate = activity_cleanup.plan(Path(args.archive_root), args.request, resume=args.resume, progress=reporter.progress)
+        inspect_status = bool(getattr(args, "status", False))
+        candidate = activity_cleanup.plan(Path(args.archive_root), args.request,
+            resume=args.resume or inspect_status, progress=reporter.progress)
+        if inspect_status:
+            result = activity_cleanup.status(candidate)
+            print_json(result)
+            return 0 if result["ok"] else 1
         if getattr(args, "private_plan_output", None):
             activity_cleanup.write_private_plan(candidate, args.private_plan_output)
             candidate["public"]["private_plan_written"] = True
@@ -41264,6 +41270,7 @@ def build_parser() -> argparse.ArgumentParser:
     activity_cleanup_modes.add_argument("--dry-run", action="store_true")
     activity_cleanup_modes.add_argument("--approve", action="store_true")
     activity_cleanup_modes.add_argument("--resume", action="store_true")
+    activity_cleanup_modes.add_argument("--status", action="store_true", help="Read saved intent and item evidence without repeating writes or asserting fresh remote verification.")
     activity_cleanup_parser.add_argument("--expected-plan-sha256")
     activity_cleanup_parser.add_argument("--reviewed-by")
     activity_cleanup_progress = activity_cleanup_parser.add_mutually_exclusive_group()

@@ -60,6 +60,61 @@ class ActivityCleanupTests(unittest.TestCase):
         self.request.write_text(json.dumps(self.document))
         self.assertIn("activity_cleanup_unknown_classification", self.plan()["public"]["blockers"])
 
+    def test_status_reuses_completed_evidence_without_hashing_absent_files(self):
+        import copy
+        candidate = self.plan()
+        material = candidate["material"]
+        prototype = material["items"][0]
+        material["items"] = []
+        for number in range(1070):
+            item = copy.deepcopy(prototype)
+            item["number"] = number
+            if number < 1017:
+                item["path"] = str(self.external / f"done-{number}.txt")
+            material["items"].append(item)
+        def read(name):
+            if name.endswith("-deleted") and int(name.split("-")[1]) < 1017:
+                return {"number": int(name.split("-")[1]), "state": "absent_after_bound_delete_intent"}
+            return None
+        candidate["journal"] = Mock()
+        candidate["journal"].read.side_effect = read
+        with patch.object(cleanup, "file_state", wraps=cleanup.file_state) as probe:
+            result = cleanup.status(candidate)
+        self.assertEqual(result["counts"]["completed"], 1017)
+        self.assertEqual(result["counts"]["pending"], 53)
+        self.assertEqual(probe.call_count, 53)
+        self.assertFalse(result["writes_performed"])
+        self.assertFalse(result["remote_bytes_verified_now"])
+        self.assertNotIn("PRIVATE_SYNTHETIC", json.dumps(result))
+        candidate["journal"].write.assert_not_called()
+
+    def test_status_missing_without_receipt_is_not_completed(self):
+        candidate = self.plan()
+        candidate["journal"].write("intent", candidate["material"])
+        self.source.unlink()
+        result = cleanup.status(self.plan(resume=True))
+        self.assertEqual(result["counts"]["missing_without_evidence"], 1)
+        self.assertEqual(result["counts"]["completed"], 0)
+        self.assertEqual(result["state"], "partial")
+        self.assertFalse(result["writes_performed"])
+
+    def test_conflicting_legacy_journal_is_not_silently_ignored(self):
+        candidate = self.plan()
+        journal = candidate["journal"]
+        journal.write("intent", candidate["material"])
+        original = self.root / journal.relative("intent")
+        legacy = self.root / journal.relative("intent", base=cleanup.LEGACY_ROOT)
+        legacy.parent.mkdir(parents=True)
+        legacy.write_bytes(original.read_bytes())
+        self.assertEqual(journal.read("intent"), candidate["material"])
+        altered = {**candidate["material"], "archive_id": "archive:synthetic:other"}
+        legacy.write_bytes(cleanup.encoded({"document": altered, "mac": journal._mac(altered)}))
+        with self.assertRaisesRegex(cleanup.ActivityCleanupError, "journal_locations_conflict"):
+            journal.read("intent")
+        legacy.write_bytes(b"{}")
+        with self.assertRaisesRegex(cleanup.ActivityCleanupError, "journal_invalid"):
+            journal.read("intent")
+
     def test_directory_only_metadata_churn_keeps_plan_while_content_changes_do_not(self):
         # Letter 173 A: preview and approve differed only in folder size rows
         # (0 <-> 4096 on Windows). Folder size and mtime carry no content that the

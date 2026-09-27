@@ -140,7 +140,9 @@ def _resolved_session_permission(archive_root, session_permission, context):
         grant = session_permission
     if grant is None or type(grant) is not permission.SessionPermissionGrant:
         return None, reason
-    if permission.grant_blocking_warnings(context.warning_codes):
+    # Full access already covers reviewed operation warnings. Preserve the
+    # warning evidence and domain validation, without adding another dialog.
+    if grant.mode != permission.MODE_ALLOW_ALL and permission.grant_blocking_warnings(context.warning_codes):
         return None, "work_session_grant_warning_review_required"
     return (grant, None) if grant.permits(context.operation) else (None, None)
 

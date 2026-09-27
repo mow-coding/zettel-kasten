@@ -6,6 +6,10 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+- Split large Git attribute inspections into bounded UTF-8 batches and report fixed failure causes without exposing paths. Session backup keeps the specific cause and preserves checks for other activities.
+- Add read-only `activity-cleanup --status` to distinguish completed, pending, replaced and unexplained missing files. Conflicting authenticated legacy and private journals now block instead of silently preferring one.
+- A valid full-access grant no longer opens an additional approval dialog for legacy-identifier warnings. Warning evidence and explicit domain validation remain in place.
+
 ## v0.4.46 - 2026-09-26
 
 - Git backup no longer stops with `git_backup_exact_add_failed` when another program briefly holds the Git index (a Windows virus scanner or an editor's Git client): the exact `git add` is retried up to four times within about four seconds, only for that fixed condition. Any other failure stops at once as before.

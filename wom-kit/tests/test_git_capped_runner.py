@@ -146,6 +146,88 @@ class GitCappedRunnerTests(unittest.TestCase):
             self.assertTrue(source_matches)
             self.assertGreater(capped_runner.call_count, 1)
 
+    def test_attribute_probe_batches_large_unicode_path_inventory(self) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is required")
+        # Synthetic paths need not exist for check-attr; retain long UTF-8 names.
+        paths = [f"자료 정리/{'가나다' * 14}/item-{i:05d}.md" for i in range(11132)]
+        self.assertGreater(len("\0".join(paths).encode("utf-8")), 1024 * 1024)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self.create_repository(Path(temporary))
+            token = git_backup_plan._PINNED_GIT_EXECUTABLE.set(
+                git_backup_plan._pin_git_executable()
+            )
+            try:
+                with patch.object(
+                    archive_services, "_wom_kit_project_update_run_capped",
+                    wraps=archive_services._wom_kit_project_update_run_capped,
+                ) as runner:
+                    self.assertTrue(git_backup_plan._changed_path_attributes_are_inert(root, paths))
+                self.assertGreater(runner.call_count, 1)
+                self.assertTrue(all(len(call.kwargs["input_bytes"]) <= 1024 * 1024
+                                    for call in runner.call_args_list))
+                # An unsafe attribute in the last batch must still block.
+                (root / ".gitattributes").write_text("*11131.md filter=unsafe\n", encoding="utf-8")
+                self.assertFalse(git_backup_plan._changed_path_attributes_are_inert(root, paths))
+            finally:
+                git_backup_plan._PINNED_GIT_EXECUTABLE.reset(token)
+
+    @patch.object(git_backup_plan, "_git_command", return_value=["git"])
+    def test_attribute_probe_rejects_missing_duplicate_and_foreign_records(self, _command) -> None:
+        good = b"a\0filter\0unspecified\0a\0working-tree-encoding\0unset\0"
+        cases = [good[:-1], good.split(b"a\0working")[0],
+                 good.replace(b"working-tree-encoding", b"filter"),
+                 good.replace(b"a\0working", b"PRIVATE_PATH\0working"),
+                 good.replace(b"unset", b"\xff")]
+        for raw in cases:
+            with self.subTest(raw=raw), patch.object(
+                archive_services, "_wom_kit_project_update_run_capped", return_value=(0, raw)
+            ):
+                diagnostics = {}
+                self.assertIsNone(git_backup_plan._changed_path_attributes_are_inert(
+                    Path("."), ["a"], diagnostics=diagnostics))
+                self.assertTrue(diagnostics["reason"].startswith("response_"))
+                self.assertNotIn("PRIVATE_PATH", str(diagnostics))
+
+    @patch.object(git_backup_plan, "_git_command", return_value=["git"])
+    def test_attribute_probe_boundaries_and_fixed_failure_diagnostics(self, _command) -> None:
+        def answer(command, **kwargs):
+            rows = kwargs["input_bytes"].split(b"\0")[:-1]
+            return (0, b"".join(path + b"\0" + attr + b"\0unspecified\0"
+                               for path in rows for attr in (b"filter", b"working-tree-encoding")))
+        with patch.object(git_backup_plan, "GIT_ATTRIBUTE_BATCH_MAX_BYTES", 6), patch.object(
+            archive_services, "_wom_kit_project_update_run_capped", side_effect=answer,
+        ) as runner:
+            diagnostics = {}
+            self.assertTrue(git_backup_plan._changed_path_attributes_are_inert(
+                Path("."), ["abcde", "a", "가"], diagnostics=diagnostics))
+            self.assertEqual(diagnostics["completed_batches"], 3)
+            self.assertEqual(sorted(call.kwargs["input_bytes"] for call in runner.call_args_list),
+                             [b"a\0", b"abcde\0", "가\0".encode()])
+
+        for reason in ("timeout", "output_cap_exceeded", "launch_failed", "stdin_write_failed"):
+            def failed(*args, **kwargs):
+                archive_services._wom_kit_git_note_failure(reason)
+                return None
+            with self.subTest(reason=reason), patch.object(
+                archive_services, "_wom_kit_project_update_run_capped", side_effect=failed,
+            ):
+                diagnostics = {}
+                self.assertIsNone(git_backup_plan._changed_path_attributes_are_inert(
+                    Path("."), ["private.txt"], diagnostics=diagnostics))
+                self.assertEqual(diagnostics["reason"], reason)
+                self.assertNotIn("private.txt", str(diagnostics))
+
+    def test_empty_and_invalid_attribute_inputs_do_not_launch_git(self) -> None:
+        with patch.object(archive_services, "_wom_kit_project_update_run_capped") as runner:
+            self.assertTrue(git_backup_plan._changed_path_attributes_are_inert(Path("."), []))
+            for path in ("", "bad\0path", "\ud800", "x" * (1024 * 1024)):
+                diagnostics = {}
+                self.assertIsNone(git_backup_plan._changed_path_attributes_are_inert(
+                    Path("."), [path], diagnostics=diagnostics))
+                self.assertIsNotNone(diagnostics["reason"])
+            runner.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

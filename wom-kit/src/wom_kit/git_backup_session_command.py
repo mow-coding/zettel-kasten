@@ -15,6 +15,18 @@ from . import work_session_service as sessions
 
 # Letter 173 C: fixed sub-causes and the next action for each, without secrets.
 _CAUSE_NEXT_ACTIONS = {
+    "changed_path_attribute_timeout": (
+        "Git attribute inspection timed out before backup; inspect attribute_inspection in "
+        "`archive git-backup-plan <archive-root> --dry-run --format json`. No attribute rules were disabled."),
+    "changed_path_attribute_output_cap_exceeded": (
+        "Git attribute output exceeded the per-batch bound; provide the content-free attribute_inspection "
+        "diagnostic to the developer. Do not disable attribute rules."),
+    "changed_path_attribute_single_path_input_limit_exceeded": (
+        "One encoded path exceeds the bounded Git input; inspect the path privately. "
+        "Do not split one path or bypass the attribute check."),
+    "changed_path_attribute_exit_nonzero": (
+        "Git attribute inspection exited unsuccessfully; inspect the content-free exit code in "
+        "attribute_inspection. The backup has not been validated."),
     "repository_attributes_not_supported": (
         "an untracked or ignored .gitattributes can change what Git would commit; run "
         "`archive git-backup-plan <archive-root> --dry-run --format json` and see its "

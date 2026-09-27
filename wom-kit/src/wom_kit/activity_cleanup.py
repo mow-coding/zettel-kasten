@@ -385,11 +385,18 @@ class Journal:
             raise ActivityCleanupError("activity_cleanup_private_journal_not_ignored") from None
     def read(self, name):
         path = services.archive_internal_path(self.root, self.relative(name))
-        if not path.exists():
-            legacy = services.archive_internal_path(self.root, self.relative(name, base=LEGACY_ROOT))
-            if not legacy.exists():
-                return None
-            path = legacy
+        legacy = services.archive_internal_path(self.root, self.relative(name, base=LEGACY_ROOT))
+        documents = []
+        for candidate in (path, legacy):
+            if os.path.lexists(candidate):
+                documents.append(self._read_signed(candidate))
+        if not documents:
+            return None
+        if any(encoded(value) != encoded(documents[0]) for value in documents[1:]):
+            raise ActivityCleanupError("activity_cleanup_journal_locations_conflict")
+        return documents[0]
+
+    def _read_signed(self, path):
         try:
             _safe_path(path)
             if path.stat().st_size > MAX_CONTROL_BYTES:
@@ -406,6 +413,63 @@ class Journal:
         raw = encoded({"document": document, "mac": self._mac(document)})
         _create_or_match_document(self.root, self.relative(name), raw,
             failure_code="object_storage_offload_receipt_conflict", max_bytes=MAX_CONTROL_BYTES)
+
+
+def status(candidate):
+    """Read authenticated intent and item evidence without entering any writer.
+
+    Preserved receipts describe a past verification, never a fresh remote check.
+    Missing files without bound deletion evidence remain unresolved effects.
+    """
+    material, journal = candidate["material"], candidate["journal"]
+    approval = journal.read("approval")
+    expected = approval_binding(candidate)
+    approval_matches = bool(approval and approval.get("plan_sha256") == expected.plan_sha256
+                            and approval.get("target_binding_sha256") == expected.target_binding_sha256)
+    counts = {"completed": 0, "pending": 0, "held": 0, "missing_without_evidence": 0,
+              "replacement_retained": 0, "preserved_receipt": 0}
+    results = []
+    for item in material["items"]:
+        label = "item-" + str(item["number"])
+        deleted = journal.read(label + "-deleted")
+        pending = journal.read(label + "-delete-intent")
+        preserved = journal.read(label + "-preserved")
+        has_path = os.path.lexists(item["path"])
+        row = {"number": item["number"], "state": "pending", "code": None,
+               "preserved_receipt_present": bool(preserved),
+               "remote_bytes_verified_now": False}
+        counts["preserved_receipt"] += bool(preserved)
+        if deleted:
+            if deleted.get("number") != item["number"] or deleted.get("state") != "absent_after_bound_delete_intent":
+                row.update(state="held", code="activity_cleanup_deleted_record_invalid")
+            else:
+                row["state"] = "replacement_retained" if has_path else "completed"
+        elif not has_path:
+            if pending and pending.get("number") == item["number"] and pending.get("state") == item["state"]:
+                row.update(state="held", code="activity_cleanup_delete_completion_requires_reconcile")
+            else:
+                row.update(state="missing_without_evidence", code="activity_cleanup_missing_without_delete_intent")
+        else:
+            try:
+                if file_state(item["path"]) != item["state"]:
+                    row.update(state="held", code="activity_cleanup_file_changed")
+            except (ActivityCleanupError, OSError):
+                row.update(state="held", code="activity_cleanup_file_state_unavailable")
+        controls = {}
+        for operation in ("chain", "upload", "offload"):
+            control = journal.read(label + "-" + operation + "-control")
+            controls[operation] = "recorded_effects_not_reconciled" if control else "not_recorded_effects_unknown"
+        row["child_evidence"] = controls
+        counts[row["state"]] += 1
+        results.append(row)
+    complete = counts["completed"] == len(material["items"])
+    return {"schema": "wom-kit/activity-cleanup-status/v1", "ok": True, "dry_run": True,
+            "state": "selected_files_completed" if complete else "partial",
+            "plan_sha256": digest(material), "approval_evidence_matches": approval_matches,
+            "counts": counts, "items": results, "remaining": remaining_inventory(material),
+            "whole_folder_cleanup_complete": False, "remote_bytes_verified_now": False,
+            "writes_performed": False, "private_values_echoed": False,
+            "next_action": "review_remaining_scope" if complete else "reconcile_authenticated_item_evidence"}
 
 
 def execute(candidate, *, reviewer, claim, backend):
