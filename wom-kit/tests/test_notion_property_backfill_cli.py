@@ -324,7 +324,7 @@ class NotionPropertyBackfillCliTests(unittest.TestCase):
         # the Notion recovery chain and trash, and seven more writers.
         self.assertEqual(
             inventory["counts"]["approval_available_command_count"],
-            103,  # v0.4.42: imap-mailbox-message-fetch
+            106,  # v0.4.49: cleanup, open and scoped operation control
         )
         self.assertEqual(
             by_path["operator-feedback-archive"]["approval_status"],
@@ -332,21 +332,17 @@ class NotionPropertyBackfillCliTests(unittest.TestCase):
         )
         self.assertEqual(
             inventory["counts"]["approval_fixed_closed_command_count"],
-            6,  # v0.4.41: five ZET commands, IMAP header scan, notion-recover, operation-control
+            5,  # v0.4.49: five ZET sharing/ownership commands remain closed
         )
-        # Unsupported cancellation is a separate fixed-close reason, not a
-        # change to the sole approved Notion migration target above.
+        # Scoped remote-cleanup cancellation is available; unsupported kinds
+        # are rejected by operation-control before effects.
         self.assertEqual(
-            by_path["operation-control"]["approval_status"], "approval_fixed_closed"
-        )
-        self.assertEqual(
-            by_path["operation-control"]["approval_reason_code"],
-            "operation_cancel_not_supported",
+            by_path["operation-control"]["approval_status"], "approval_available"
         )
         self.assertNotIn("operation-control", archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS)
         self.assertEqual(
             inventory["counts"]["approval_fixed_closed_command_count"],
-            inventory["counts"]["matched_fixed_closed_command_count"] + 1,
+            inventory["counts"]["matched_fixed_closed_command_count"],
         )
         self.assertEqual(
             inventory["counts"]["conditional_approval_command_count"],

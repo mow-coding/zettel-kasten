@@ -51314,14 +51314,14 @@ state:
         source_path = Path(archive_services.__file__)
         tree = ast.parse(source_path.read_text(encoding="utf-8"))
         by_name = {
-            node.name: node.lineno
+            node.name: min([node.lineno, *(decorator.lineno for decorator in node.decorator_list)])
             for node in tree.body
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         }
         for name in ("write_text_atomic", "write_bytes_atomic", "replace_with_retry"):
             bound = getattr(archive_services, name)
             self.assertEqual(
-                inspect.getsourcelines(bound)[1],
+                inspect.unwrap(bound).__code__.co_firstlineno,
                 by_name[name],
                 f"{name} does not bind to its definition in the source file",
             )

@@ -70,7 +70,7 @@ class SourceIntakeBatchClaimCompletionTests(unittest.TestCase):
         self.assertNotIn(str(self.root), repr(caught.exception))
         self.assertEqual(self.snapshot(), before)
 
-    def test_actual_broker_succeeded_finalizer_reuses_active_key_and_held_lock_without_writes(self):
+    def test_actual_broker_succeeded_finalizer_uses_retained_claim_and_held_lock_without_writes(self):
         observations = []
         keys = legacy._KeyProvider()
         active = False
@@ -86,7 +86,7 @@ class SourceIntakeBatchClaimCompletionTests(unittest.TestCase):
                 active = False
 
         def finalizer(claim):
-            self.assertTrue(active)
+            self.assertFalse(active, "credential provider must be released before finalization")
             self.assertEqual(claim.status, "succeeded")
             before = self.snapshot()
             with mock.patch.object(subject, "_production_key_provider", side_effect=AssertionError("nested key")), \
