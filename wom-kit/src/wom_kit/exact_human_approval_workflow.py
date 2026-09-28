@@ -103,7 +103,7 @@ class _ArchiveAuthenticationKeyProvider(Protocol):
 _CAUSE_CODE_RE = re.compile(r"[a-z][a-z0-9_]{0,95}")
 # v0.4.22 (beta letters 161/162): the domain writer and the key/claim stage may
 # also carry one fixed inner code.  The stage names are fixed literals.
-_CAUSE_STAGES = frozenset({"candidate_missing_handler", "domain_writer", "key_or_claim"})
+_CAUSE_STAGES = frozenset({"candidate_missing_handler", "domain_writer", "key_or_claim", "native_approval"})
 
 
 # v0.4.24: "not supplied" means resolve the caller's work-session permission
@@ -254,6 +254,11 @@ def _content_free_cause_code(cause: BaseException | None) -> str | None:
             "ProjectUpdateTransactionError",
             "ProjectRuntimeError",
             "ExactHumanApprovalError",
+            "ExactHumanApprovalWindowsError",
+            "ExactHumanApprovalWorkflowError",
+            "ObjetCaptureBatchExactError",
+            "CaptureRecoveryError",
+            "OperationCancelled",
             # v0.4.36 (beta letter 168 ①): the object-storage writers and
             # the exact-operation runner construct with exactly one
             # _CODES-validated string; their code was dropped here since
@@ -386,6 +391,72 @@ def _production_key_provider() -> _ArchiveAuthenticationKeyProvider:
         raise _fail("exact_human_approval_key_unavailable") from None
 
 
+def _after_provider_release(
+    provider: _ArchiveAuthenticationKeyProvider,
+    archive_root: Path | str,
+    prepare: Callable[[memoryview, Callable[[_ClaimedExactHumanApproval], None]], Callable[[], _T]],
+    *,
+    create_if_missing: bool = False,
+) -> _T:
+    """Keep only claim-owned key copies after releasing the credential provider.
+
+    Register each claim immediately after construction, including before a
+    publication boundary exits.  Provider cleanup and domain exceptions must
+    both wipe every copy.  Callers keep their filesystem boundary around this
+    entire operation; releasing a credential lock grants no write authority.
+    """
+    retained: list[_ClaimedExactHumanApproval] = []
+    try:
+        continuation = provider.use_key(
+            archive_root,
+            lambda key: prepare(key, retained.append),
+            create_if_missing=create_if_missing,
+        )
+        return continuation()
+    finally:
+        for claim in retained:
+            claim.close()
+
+
+def _checkpoint_matches(
+    claim: _ClaimedExactHumanApproval,
+    guard: Callable[[_ClaimedExactHumanApproval], bool],
+    context: ExactHumanApprovalContext,
+) -> bool:
+    from .operation_cancellation import ACTIVE_CLAIM, claim_scope
+
+    if claim.status == "started":
+        claim.assert_ready_for_context(context)
+        with claim_scope(claim):
+            return guard(claim)
+    # Terminal claims deliberately cannot sign active-operation journals.
+    # Their read-only checkpoint verifier can reacquire the released provider;
+    # do not accidentally borrow a surrounding parent's signing capability.
+    claim.assert_succeeded_for_context(context)
+    token = ACTIVE_CLAIM.set(None)
+    try:
+        return guard(claim)
+    finally:
+        ACTIVE_CLAIM.reset(token)
+
+
+def _run_succeeded_finalizer(
+    claim: _ClaimedExactHumanApproval,
+    finalizer: _ClaimSucceededFinalizer,
+    context: ExactHumanApprovalContext,
+) -> None:
+    from .operation_cancellation import ACTIVE_CLAIM
+
+    # A succeeded tail may validate durable journals, but has no active
+    # operation signing authority (including that of an enclosing parent).
+    claim.assert_succeeded_for_context(context)
+    token = ACTIVE_CLAIM.set(None)
+    try:
+        finalizer(claim)
+    finally:
+        ACTIVE_CLAIM.reset(token)
+
+
 def _run_started_claim_writer(
     context: ExactHumanApprovalContext,
     writer: Callable[[_ClaimedExactHumanApproval], Mapping[str, Any]],
@@ -399,7 +470,9 @@ def _run_started_claim_writer(
     try:
         reference = claim.assert_ready_for_context(context)
         try:
-            raw_result = writer(claim)
+            from .operation_cancellation import claim_scope
+            with claim_scope(claim):
+                raw_result = writer(claim)
         except BaseException as failure:
             # The writer is the mutation boundary.  Once it has been entered,
             # an exception cannot prove whether zero, some, or all durable
@@ -443,7 +516,7 @@ def _run_started_claim_writer(
                     record_object_usage(archive_root, context, claim, result)
                 claim.finalize_succeeded()
                 if claim_succeeded_finalizer is not None:
-                    claim_succeeded_finalizer(claim)
+                    _run_succeeded_finalizer(claim, claim_succeeded_finalizer, context)
             except BaseException:
                 # The claim may already be durably ``succeeded`` and the
                 # bounded domain finalizer may have completed zero, some, or
@@ -682,15 +755,20 @@ def _execute_exact_human_approved_write_with_review_kind_core(
                 native=native,
                 **review_options,
             )
-        except ExactHumanApprovalWindowsError:
-            raise _fail("exact_human_approval_operation_failed") from None
+        except ExactHumanApprovalWindowsError as error:
+            raise _fail(
+                "exact_human_approval_operation_failed",
+                cause=error,
+                cause_stage="native_approval",
+            ) from None
         if decision.approved is not True:
             raise _fail("exact_human_approval_cancelled")
 
     def _with_key(
         key: memoryview,
         filesystem_boundary: tuple[Path, dict[str, Any]] | None,
-    ) -> dict[str, Any]:
+        retain,
+    ) -> Callable[[], dict[str, Any]]:
         try:
             publication_context = (
                 claim_publication_boundary()
@@ -737,18 +815,21 @@ def _execute_exact_human_approved_write_with_review_kind_core(
                     ),
                     session_presenter=session_presenter,
                 )
+                retain(claim)
         except ExactHumanApprovalError:
             raise _fail("exact_human_approval_claim_failed") from None
-        result = _run_started_claim_writer(
-            context,
-            writer,
-            claim,
-            archive_root=archive_root,
-            claim_succeeded_finalizer=claim_succeeded_finalizer,
-        )
-        return _attach_session_permission_evidence(
-            result, session_presenter=session_presenter, grant_refusal=grant_refusal,
-        )
+        def _after_key():
+            result = _run_started_claim_writer(
+                context,
+                writer,
+                claim,
+                archive_root=archive_root,
+                claim_succeeded_finalizer=claim_succeeded_finalizer,
+            )
+            return _attach_session_permission_evidence(
+                result, session_presenter=session_presenter, grant_refusal=grant_refusal,
+            )
+        return _after_key
 
     try:
         boundary_context = (
@@ -762,9 +843,9 @@ def _execute_exact_human_approved_write_with_review_kind_core(
                 if key_provider is not None
                 else _production_key_provider()
             )
-            return selected.use_key(
-                archive_root,
-                lambda key: _with_key(key, filesystem_boundary),
+            return _after_provider_release(
+                selected, archive_root,
+                lambda key, retain: _with_key(key, filesystem_boundary, retain),
                 create_if_missing=review_kind is _ExactHumanApprovalReviewKind.fresh,
             )
     except ExactHumanApprovalWorkflowError:
@@ -843,7 +924,8 @@ def _resume_exact_human_approved_write_core(
     def _with_key(
         key: memoryview,
         filesystem_boundary: tuple[Path, dict[str, Any]] | None,
-    ) -> dict[str, Any]:
+        retain,
+    ) -> Callable[[], dict[str, Any]]:
         try:
             claim = _rehydrate_exact_human_approval_core(
                 archive_root,
@@ -861,27 +943,30 @@ def _resume_exact_human_approved_write_core(
                     else None
                 ),
             )
+            retain(claim)
         except ExactHumanApprovalError:
             raise _fail("exact_human_approval_resume_claim_invalid") from None
-        try:
+        def _after_key():
             try:
-                checkpoint_matches = checkpoint_guard(claim)
+                try:
+                    checkpoint_matches = _checkpoint_matches(claim, checkpoint_guard, context)
+                except BaseException:
+                    raise _fail(
+                        "exact_human_approval_resume_checkpoint_invalid"
+                    ) from None
+                if checkpoint_matches is not True:
+                    raise _fail("exact_human_approval_resume_checkpoint_invalid")
             except BaseException:
-                raise _fail(
-                    "exact_human_approval_resume_checkpoint_invalid"
-                ) from None
-            if checkpoint_matches is not True:
-                raise _fail("exact_human_approval_resume_checkpoint_invalid")
-        except BaseException:
-            claim.close()
-            raise
-        return _run_started_claim_writer(
-            context,
-            writer,
-            claim,
-            archive_root=archive_root,
-            claim_succeeded_finalizer=claim_succeeded_finalizer,
-        )
+                claim.close()
+                raise
+            return _run_started_claim_writer(
+                context,
+                writer,
+                claim,
+                archive_root=archive_root,
+                claim_succeeded_finalizer=claim_succeeded_finalizer,
+            )
+        return _after_key
 
     try:
         boundary_context = (
@@ -893,9 +978,9 @@ def _resume_exact_human_approved_write_core(
                 if key_provider is not None
                 else _production_key_provider()
             )
-            return selected.use_key(
-                archive_root,
-                lambda key: _with_key(key, filesystem_boundary),
+            return _after_provider_release(
+                selected, archive_root,
+                lambda key, retain: _with_key(key, filesystem_boundary, retain),
                 create_if_missing=False,
             )
     except ExactHumanApprovalWorkflowError:
@@ -939,7 +1024,8 @@ def _resume_succeeded_claim_finalizer_core(
     def _with_key(
         key: memoryview,
         filesystem_boundary: tuple[Path, dict[str, Any]] | None,
-    ) -> dict[str, Any]:
+        retain,
+    ) -> Callable[[], dict[str, Any]]:
         try:
             claim = _rehydrate_succeeded_exact_human_approval_core(
                 archive_root,
@@ -957,32 +1043,35 @@ def _resume_succeeded_claim_finalizer_core(
                     else None
                 ),
             )
+            retain(claim)
         except ExactHumanApprovalError:
             raise _fail("exact_human_approval_resume_claim_invalid") from None
-        try:
-            reference = claim.assert_succeeded_for_context(context)
+        def _after_key():
             try:
-                checkpoint_matches = checkpoint_guard(claim)
-            except BaseException:
-                raise _fail(
-                    "exact_human_approval_resume_checkpoint_invalid"
-                ) from None
-            if checkpoint_matches is not True:
-                raise _fail("exact_human_approval_resume_checkpoint_invalid")
-            try:
-                claim_succeeded_finalizer(claim)
-            except BaseException:
-                raise _fail("exact_human_approval_state_unknown") from None
-            return {
-                "ok": True,
-                "status": "succeeded_claim_finalizer_completed",
-                "domain_writer_reentered": False,
-                "native_approval_redisplayed": False,
-                "exact_human_approval": claim.public_summary(),
-                "exact_human_approval_reference": reference,
-            }
-        finally:
-            claim.close()
+                reference = claim.assert_succeeded_for_context(context)
+                try:
+                    checkpoint_matches = _checkpoint_matches(claim, checkpoint_guard, context)
+                except BaseException:
+                    raise _fail(
+                        "exact_human_approval_resume_checkpoint_invalid"
+                    ) from None
+                if checkpoint_matches is not True:
+                    raise _fail("exact_human_approval_resume_checkpoint_invalid")
+                try:
+                    _run_succeeded_finalizer(claim, claim_succeeded_finalizer, context)
+                except BaseException:
+                    raise _fail("exact_human_approval_state_unknown") from None
+                return {
+                    "ok": True,
+                    "status": "succeeded_claim_finalizer_completed",
+                    "domain_writer_reentered": False,
+                    "native_approval_redisplayed": False,
+                    "exact_human_approval": claim.public_summary(),
+                    "exact_human_approval_reference": reference,
+                }
+            finally:
+                claim.close()
+        return _after_key
 
     try:
         boundary_context = (
@@ -994,9 +1083,9 @@ def _resume_succeeded_claim_finalizer_core(
                 if key_provider is not None
                 else _production_key_provider()
             )
-            return selected.use_key(
-                archive_root,
-                lambda key: _with_key(key, filesystem_boundary),
+            return _after_provider_release(
+                selected, archive_root,
+                lambda key, retain: _with_key(key, filesystem_boundary, retain),
                 create_if_missing=False,
             )
     except ExactHumanApprovalWorkflowError:
@@ -1017,7 +1106,7 @@ def _resume_exact_human_approved_transaction_with_key_core(
     key: memoryview,
     filesystem_boundary: tuple[Path, dict[str, Any]] | None,
 ) -> dict[str, Any]:
-    """Finish one selected transaction while its discovery lock is held."""
+    """Compatibility helper for callers that already own a key consumer."""
 
     if (
         type(context) is not ExactHumanApprovalContext
@@ -1049,10 +1138,37 @@ def _resume_exact_human_approved_transaction_with_key_core(
     except ExactHumanApprovalError:
         raise _fail("exact_human_approval_resume_claim_invalid") from None
 
+    return _resume_exact_human_approved_transaction_with_claim_core(
+        archive_root, context, claim, started_checkpoint_guard, started_writer,
+        succeeded_checkpoint_guard, claim_succeeded_finalizer,
+    )
+
+
+def _resume_exact_human_approved_transaction_with_claim_core(
+    archive_root: Path | str,
+    context: ExactHumanApprovalContext,
+    claim: _ClaimedExactHumanApproval,
+    started_checkpoint_guard: Callable[[_ClaimedExactHumanApproval], bool],
+    started_writer: Callable[[_ClaimedExactHumanApproval], Mapping[str, Any]],
+    succeeded_checkpoint_guard: Callable[[_ClaimedExactHumanApproval], bool],
+    claim_succeeded_finalizer: _ClaimSucceededFinalizer,
+) -> dict[str, Any]:
+    """Execute an authenticated claim while the filesystem boundary is held."""
+    if (
+        type(context) is not ExactHumanApprovalContext
+        or type(claim) is not _ClaimedExactHumanApproval
+        or not callable(started_checkpoint_guard)
+        or not callable(started_writer)
+        or not callable(succeeded_checkpoint_guard)
+        or not callable(claim_succeeded_finalizer)
+    ):
+        if type(claim) is _ClaimedExactHumanApproval:
+            claim.close()
+        raise _fail("exact_human_approval_writer_result_invalid")
     if claim.status == "started":
         try:
             try:
-                checkpoint_matches = started_checkpoint_guard(claim)
+                checkpoint_matches = _checkpoint_matches(claim, started_checkpoint_guard, context)
             except BaseException:
                 raise _fail(
                     "exact_human_approval_resume_checkpoint_invalid"
@@ -1078,7 +1194,7 @@ def _resume_exact_human_approved_transaction_with_key_core(
     try:
         reference = claim.assert_succeeded_for_context(context)
         try:
-            checkpoint_matches = succeeded_checkpoint_guard(claim)
+            checkpoint_matches = _checkpoint_matches(claim, succeeded_checkpoint_guard, context)
         except BaseException:
             raise _fail(
                 "exact_human_approval_resume_checkpoint_invalid"
@@ -1086,7 +1202,7 @@ def _resume_exact_human_approved_transaction_with_key_core(
         if checkpoint_matches is not True:
             raise _fail("exact_human_approval_resume_checkpoint_invalid")
         try:
-            claim_succeeded_finalizer(claim)
+            _run_succeeded_finalizer(claim, claim_succeeded_finalizer, context)
         except BaseException:
             raise _fail("exact_human_approval_state_unknown") from None
         return {
@@ -1135,17 +1251,20 @@ def _resume_exact_human_approved_transaction_core(
     def _with_key(
         key: memoryview,
         filesystem_boundary: tuple[Path, dict[str, Any]] | None,
-    ) -> dict[str, Any]:
-        return _resume_exact_human_approved_transaction_with_key_core(
-            archive_root,
-            context,
-            approval_id,
-            started_checkpoint_guard,
-            started_writer,
-            succeeded_checkpoint_guard,
-            claim_succeeded_finalizer,
-            key=key,
-            filesystem_boundary=filesystem_boundary,
+        retain,
+    ) -> Callable[[], dict[str, Any]]:
+        try:
+            claim = _rehydrate_existing_exact_human_approval_core(
+                archive_root, context, approval_id, key,
+                bound_archive_root=filesystem_boundary[0] if filesystem_boundary else None,
+                claim_parent_binding=filesystem_boundary[1] if filesystem_boundary else None,
+            )
+            retain(claim)
+        except ExactHumanApprovalError:
+            raise _fail("exact_human_approval_resume_claim_invalid") from None
+        return lambda: _resume_exact_human_approved_transaction_with_claim_core(
+            archive_root, context, claim, started_checkpoint_guard, started_writer,
+            succeeded_checkpoint_guard, claim_succeeded_finalizer,
         )
 
     try:
@@ -1158,9 +1277,9 @@ def _resume_exact_human_approved_transaction_core(
                 if key_provider is not None
                 else _production_key_provider()
             )
-            return selected.use_key(
-                archive_root,
-                lambda key: _with_key(key, filesystem_boundary),
+            return _after_provider_release(
+                selected, archive_root,
+                lambda key, retain: _with_key(key, filesystem_boundary, retain),
                 create_if_missing=False,
             )
     except ExactHumanApprovalWorkflowError:
@@ -1177,6 +1296,7 @@ def _authenticated_resume_candidates_with_key_core(
     *,
     key: memoryview,
     filesystem_boundary: tuple[Path, dict[str, Any]] | None,
+    _retain_claim: Callable[[_ClaimedExactHumanApproval], None] | None = None,
 ) -> tuple[str, ...]:
     """Shared authenticated enumeration; never acquire a key or publish a claim."""
     candidates: list[str] = []
@@ -1264,6 +1384,12 @@ def _authenticated_resume_candidates_with_key_core(
             raise _fail(
                 "exact_human_approval_resume_claim_invalid"
             ) from None
+        if _retain_claim is not None:
+            # The credential callback authenticates only.  Domain guards run
+            # after it releases the provider, using these scoped key copies.
+            _retain_claim(claim)
+            candidates.append(approval_id)
+            continue
         try:
             guard = (
                 started_checkpoint_guard
@@ -1271,7 +1397,7 @@ def _authenticated_resume_candidates_with_key_core(
                 else succeeded_checkpoint_guard
             )
             try:
-                checkpoint_matches = guard(claim)
+                checkpoint_matches = _checkpoint_matches(claim, guard, context)
             except BaseException:
                 raise _fail(
                     "exact_human_approval_resume_checkpoint_invalid"
@@ -1303,6 +1429,10 @@ def _discover_exact_human_approved_transaction_resume_core(
         ]
         | None
     ) = None,
+    _selected_claim_handler: (
+        Callable[[_ClaimedExactHumanApproval, tuple[Path, dict[str, Any]] | None], Mapping[str, Any]]
+        | None
+    ) = None,
     key_provider: _ArchiveAuthenticationKeyProvider | None = None,
     resume_boundary: Callable[
         [],
@@ -1314,11 +1444,10 @@ def _discover_exact_human_approved_transaction_resume_core(
     The returned identifier is an internal hand-off to the ordinary resume
     workflow.  It is never needed from the operator and is never included in
     the discovery summary.  The caller must provide a non-creating filesystem
-    boundary for the claim directory.  When supplied, the candidate-missing
-    handler runs inside the key-provider consumer for an existing claim store
-    with zero authenticated checkpoint-valid candidates.  The private selected
-    handler likewise runs before that consumer releases the key, so an auto
-    resume can finish without a discovery-to-resume lock gap.
+    boundary for the claim directory.  Typed claims retain their own key copies,
+    so domain guards and handlers run after the credential provider is released
+    while the same filesystem boundary remains held.  The legacy raw-key
+    selected handler retains its existing contract until that caller migrates.
     """
 
     if (
@@ -1333,6 +1462,11 @@ def _discover_exact_human_approved_transaction_resume_core(
             _selected_candidate_handler is not None
             and not callable(_selected_candidate_handler)
         )
+        or (
+            _selected_claim_handler is not None
+            and not callable(_selected_claim_handler)
+        )
+        or (_selected_claim_handler is not None and _selected_candidate_handler is not None)
         or not callable(resume_boundary)
     ):
         raise _fail("exact_human_approval_writer_result_invalid")
@@ -1407,6 +1541,51 @@ def _discover_exact_human_approved_transaction_resume_core(
             raise _fail("exact_human_approval_state_unknown")
         return dict(raw_result)
 
+    def _prepare_claims(key, filesystem_boundary, retain):
+        claims: list[_ClaimedExactHumanApproval] = []
+
+        def retain_candidate(claim):
+            retain(claim)
+            claims.append(claim)
+
+        _authenticated_resume_candidates_with_key_core(
+            archive_root, context, started_checkpoint_guard, succeeded_checkpoint_guard,
+            key=key, filesystem_boundary=filesystem_boundary,
+            _retain_claim=retain_candidate,
+        )
+
+        def after_key():
+            candidates = []
+            for claim in claims:
+                guard = started_checkpoint_guard if claim.status == "started" else succeeded_checkpoint_guard
+                try:
+                    matches = _checkpoint_matches(claim, guard, context)
+                except BaseException:
+                    raise _fail("exact_human_approval_resume_checkpoint_invalid") from None
+                if matches is True:
+                    candidates.append(claim)
+            if not candidates:
+                result = _handle_candidate_missing(_RESUME_MISSING_REASON_AUTHENTICATED_CANDIDATE)
+                if result is None:
+                    raise _fail("exact_human_approval_resume_candidate_missing")
+                return result
+            if len(candidates) != 1:
+                raise _fail("exact_human_approval_resume_candidate_ambiguous")
+            claim = candidates[0]
+            if _selected_claim_handler is None:
+                return claim.approval_id
+            try:
+                result = _selected_claim_handler(claim, filesystem_boundary)
+            except ExactHumanApprovalWorkflowError:
+                raise
+            except BaseException:
+                raise _fail("exact_human_approval_state_unknown") from None
+            if not isinstance(result, Mapping) or type(result.get("ok")) is not bool:
+                raise _fail("exact_human_approval_state_unknown")
+            return dict(result)
+
+        return after_key
+
     filesystem_boundary_entered = False
     try:
         with resume_boundary() as filesystem_boundary:
@@ -1416,6 +1595,11 @@ def _discover_exact_human_approved_transaction_resume_core(
                 if key_provider is not None
                 else _production_key_provider()
             )
+            if _selected_candidate_handler is None:
+                return _after_provider_release(
+                    selected, archive_root,
+                    lambda key, retain: _prepare_claims(key, filesystem_boundary, retain),
+                )
             return selected.use_key(
                 archive_root,
                 lambda key: _with_key(key, filesystem_boundary),
@@ -1469,8 +1653,8 @@ def _resume_exact_human_approved_transaction_auto_core(
         if operator_approval_id_supplied:
             # A supplied id is an exact assertion about an authenticated
             # candidate, never authority to enter claimless recovery.  For an
-            # existing claim store this executes inside the same key and
-            # filesystem boundaries that established the zero-candidate fact.
+            # existing claim store this executes inside the same filesystem
+            # boundary that established the zero-candidate fact.
             raise _fail("exact_human_approval_resume_claim_invalid")
         missing_reasons.append(reason)
         if candidate_missing_handler is None:
@@ -1478,26 +1662,24 @@ def _resume_exact_human_approved_transaction_auto_core(
         return candidate_missing_handler(reason)
 
     def _resume_selected_candidate(
-        approval_id: str,
-        key: memoryview,
+        claim: _ClaimedExactHumanApproval,
         filesystem_boundary: tuple[Path, dict[str, Any]] | None,
     ) -> Mapping[str, Any]:
+        approval_id = claim.approval_id
         if operator_approval_id_supplied and (
             type(supplied_approval_id) is not str
             or supplied_approval_id != approval_id
         ):
             raise _fail("exact_human_approval_resume_claim_invalid")
         selected_approval_ids.append(approval_id)
-        return _resume_exact_human_approved_transaction_with_key_core(
+        return _resume_exact_human_approved_transaction_with_claim_core(
             archive_root,
             context,
-            approval_id,
+            claim,
             started_checkpoint_guard,
             started_writer,
             succeeded_checkpoint_guard,
             claim_succeeded_finalizer,
-            key=key,
-            filesystem_boundary=filesystem_boundary,
         )
 
     discovered = _discover_exact_human_approved_transaction_resume_core(
@@ -1506,7 +1688,7 @@ def _resume_exact_human_approved_transaction_auto_core(
         started_checkpoint_guard,
         succeeded_checkpoint_guard,
         candidate_missing_handler=_record_candidate_missing,
-        _selected_candidate_handler=_resume_selected_candidate,
+        _selected_claim_handler=_resume_selected_candidate,
         key_provider=key_provider,
         resume_boundary=resume_boundary,
     )
@@ -1621,7 +1803,8 @@ def _abandon_started_exact_human_approved_claims_core(
     def _with_key(
         key: memoryview,
         filesystem_boundary: tuple[Path, dict[str, Any]] | None,
-    ) -> dict[str, Any]:
+        retain,
+    ) -> Callable[[], dict[str, Any]]:
         if filesystem_boundary is None:
             raise _fail("exact_human_approval_resume_claim_invalid")
         bound_archive_root, claim_parent_binding = filesystem_boundary
@@ -1642,7 +1825,7 @@ def _abandon_started_exact_human_approved_claims_core(
             or any(type(name) is not str for name in names)
         ):
             raise _fail("exact_human_approval_resume_claim_invalid")
-        abandoned: list[str] = []
+        claims: list[_ClaimedExactHumanApproval] = []
         for name in sorted(names):
             match = _APPROVAL_CLAIM_FILENAME_RE.fullmatch(name)
             if match is None:
@@ -1664,39 +1847,47 @@ def _abandon_started_exact_human_approved_claims_core(
                 raise _fail(
                     "exact_human_approval_resume_claim_invalid"
                 ) from None
-            try:
-                if claim.status == "succeeded":
-                    raise _fail("exact_human_approval_resume_claim_invalid")
-                if claim.status != "started":
-                    continue
+            retain(claim)
+            claims.append(claim)
+
+        def after_key():
+            abandoned: list[str] = []
+            for claim in claims:
+                approval_id = claim.approval_id
                 try:
-                    checkpoint_matches = started_checkpoint_guard(claim)
-                except BaseException:
-                    raise _fail(
-                        "exact_human_approval_resume_checkpoint_invalid"
-                    ) from None
-                if checkpoint_matches is not True:
-                    continue
-                try:
-                    claim.finalize_failed(failure_code)
-                except ExactHumanApprovalError as error:
-                    raise _fail(
-                        "exact_human_approval_state_unknown",
-                        cause=error,
-                        cause_stage="key_or_claim",
-                    ) from None
-                abandoned.append(approval_id)
-            finally:
-                claim.close()
-        return {
-            "schema_version": "wom-kit/exact-human-approval-abandon/v0.1",
-            "abandoned_started_claim_count": len(abandoned),
-            "failure_code": failure_code,
-            "native_approval_redisplayed": False,
-            "claims_created": 0,
-            "private_values_echoed": False,
-            "paths_echoed": False,
-        }
+                    if claim.status == "succeeded":
+                        raise _fail("exact_human_approval_resume_claim_invalid")
+                    if claim.status != "started":
+                        continue
+                    try:
+                        checkpoint_matches = _checkpoint_matches(claim, started_checkpoint_guard, context)
+                    except BaseException:
+                        raise _fail(
+                            "exact_human_approval_resume_checkpoint_invalid"
+                        ) from None
+                    if checkpoint_matches is not True:
+                        continue
+                    try:
+                        claim.finalize_failed(failure_code)
+                    except ExactHumanApprovalError as error:
+                        raise _fail(
+                            "exact_human_approval_state_unknown",
+                            cause=error,
+                            cause_stage="key_or_claim",
+                        ) from None
+                    abandoned.append(approval_id)
+                finally:
+                    claim.close()
+            return {
+                "schema_version": "wom-kit/exact-human-approval-abandon/v0.1",
+                "abandoned_started_claim_count": len(abandoned),
+                "failure_code": failure_code,
+                "native_approval_redisplayed": False,
+                "claims_created": 0,
+                "private_values_echoed": False,
+                "paths_echoed": False,
+            }
+        return after_key
 
     try:
         with resume_boundary() as filesystem_boundary:
@@ -1705,9 +1896,9 @@ def _abandon_started_exact_human_approved_claims_core(
                 if key_provider is not None
                 else _production_key_provider()
             )
-            return selected.use_key(
-                archive_root,
-                lambda key: _with_key(key, filesystem_boundary),
+            return _after_provider_release(
+                selected, archive_root,
+                lambda key, retain: _with_key(key, filesystem_boundary, retain),
                 create_if_missing=False,
             )
     except ExactHumanApprovalWorkflowError:

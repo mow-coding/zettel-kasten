@@ -1,5 +1,18 @@
 # 업그레이드 가이드
 
+## v0.4.49 원격 임시물 정리와 파일 열기
+
+공개 후 기존 프로젝트의 설치 버전은 공식 업데이트 절차로 바꾸세요. 이번 버전에는 이미 원격에 올라간 임시물의 정확한 키를 검토해 정리하는 명령과 검증된 원격 파일 하나를 한시적으로 여는 명령이 추가됩니다. 설치만으로 원격 파일이 삭제되지는 않습니다. 다른 고객 요청은 계속 처리 중입니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0449-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.49/wom_kit-0.4.49-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
 ## v0.4.48 activity recovery and concurrent work
 
 Use this candidate only after publication and public-install verification. Existing project pins require the official project update flow.

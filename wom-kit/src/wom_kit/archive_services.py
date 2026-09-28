@@ -5028,6 +5028,63 @@ class _OperatorFeedbackRecordLock:
         return False
 
 
+@contextmanager
+def _note_remote_reference_fence(path: Path, value: bytes | str, *, archive_root=None):
+    """Serialize new note references with exact-key remote disposal.
+
+    Canonical byte writers remain byte-exact. The fence is inactive until this
+    archive has a cleanup journal; it never examines arbitrary external trees.
+    """
+    path = Path(os.path.abspath(path))
+    root = Path(archive_root) if archive_root is not None else None
+    if path.suffix.lower() != ".md":
+        yield
+        return
+    if root is None:
+        for parent in path.parents:
+            if parent.name in {"zettels", "inbox"} and (parent.parent / "archive.yml").is_file():
+                root = parent.parent
+                break
+    if root is None:
+        yield
+        return
+    try:
+        relative = path.relative_to(root).as_posix()
+    except ValueError:
+        yield
+        return
+    if not relative.startswith(VALID_ZETTEL_FOLDERS):
+        yield
+        return
+    from . import object_storage_cleanup as cleanup
+    targets = archive_internal_path(root, cleanup.ROOT + "/targets")
+    if not targets.exists():
+        yield
+        return
+    raw = value.encode("utf-8") if isinstance(value, str) else value
+    ids = {"sha256:" + digest.decode("ascii") for digest in
+        re.findall(rb"(?<![0-9a-f])([0-9a-f]{64})(?![0-9a-f])", raw)}
+    if not ids:
+        yield
+        return
+    from .exact_operation_manifest import current_writer_lock, exact_operation_writer_lock
+    held = current_writer_lock(root)
+    with nullcontext(held) if held is not None else exact_operation_writer_lock(root, timeout_seconds=30):
+        cleanup.assert_referenceable(root, ids)
+        yield
+
+
+def _note_reference_guard(writer):
+    from functools import wraps
+    @wraps(writer)
+    def guarded(path, *args, **kwargs):
+        value = args[0] if args else kwargs.get("value", kwargs.get("text", kwargs.get("data")))
+        with _note_remote_reference_fence(path, value):
+            return writer(path, *args, **kwargs)
+    return guarded
+
+
+@_note_reference_guard
 def _write_bytes_create_if_absent(path: Path, value: bytes) -> None:
     """Publish complete bytes atomically and never replace an existing file."""
 
@@ -43871,7 +43928,12 @@ def _cleanup_activity_group_canonical_swap_residue(
     return removed
 
 
-def _replace_regular_file_bytes_compare_and_swap(
+def _replace_regular_file_bytes_compare_and_swap(root, path, **kwargs):
+    with _note_remote_reference_fence(path, kwargs["replacement_bytes"], archive_root=root):
+        return _replace_regular_file_bytes_compare_and_swap_unfenced(root, path, **kwargs)
+
+
+def _replace_regular_file_bytes_compare_and_swap_unfenced(
     root: Path,
     path: Path,
     *,
@@ -52890,6 +52952,7 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
         tmp.unlink(missing_ok=True)
 
 
+@_note_reference_guard
 def _atomic_write_text(path: Path, text: str) -> None:
     """Durable temp+fsync+os.replace writer for JSONL/text files.
 
@@ -52909,6 +52972,7 @@ def _atomic_write_text(path: Path, text: str) -> None:
         tmp.unlink(missing_ok=True)
 
 
+@_note_reference_guard
 def _atomic_write(path: Path, data: bytes) -> None:
     """Durable temp+fsync+os.replace writer for RAW bytes (byte-exact).
 
@@ -101723,6 +101787,7 @@ def fsync_directory(directory: Path) -> None:
             pass
 
 
+@_note_reference_guard
 def write_text_atomic(path: Path, text: str) -> None:
     """Durable temp+fsync+os.replace text writer.
 
@@ -117507,6 +117572,7 @@ def wom_kit_project_update_target_ref_snapshot_legacy_read_only(
         return result
 
 
+@_note_reference_guard
 def write_bytes_atomic(path: Path, value: bytes) -> None:
     """Durable, byte-exact writer. This is the ONLY definition; see the note above
     the text writer about a shadowed duplicate.
@@ -147289,10 +147355,10 @@ class _ReplayableObjectStoragePathBody:
             raise OSError("object-storage request body length changed")
 
 
-def _object_storage_bounded_control_body(handle: Any) -> tuple[bytes, bool]:
+def _object_storage_bounded_control_body(handle: Any, *, max_bytes: int = OBJECT_STORAGE_HTTP_CONTROL_BODY_MAX_BYTES) -> tuple[bytes, bool]:
     """Read at most cap+1 bytes and retain only the bounded prefix."""
 
-    limit = OBJECT_STORAGE_HTTP_CONTROL_BODY_MAX_BYTES + 1
+    limit = max_bytes + 1
     chunks: list[bytes] = []
     total = 0
     while total < limit:
@@ -147306,8 +147372,8 @@ def _object_storage_bounded_control_body(handle: Any) -> tuple[bytes, bool]:
         chunks.append(chunk)
         total += len(chunk)
     value = b"".join(chunks)
-    truncated = len(value) > OBJECT_STORAGE_HTTP_CONTROL_BODY_MAX_BYTES
-    return value[:OBJECT_STORAGE_HTTP_CONTROL_BODY_MAX_BYTES], truncated
+    truncated = len(value) > max_bytes
+    return value[:max_bytes], truncated
 
 
 def _object_storage_stream_response_digest(handle: Any) -> tuple[str, int]:
@@ -147446,6 +147512,15 @@ def _default_urllib_sender() -> Callable[..., dict[str, Any]]:
             ) as response:
                 resp_headers = {str(k).lower(): str(v) for k, v in response.headers.items()}
                 status = int(response.status)
+                if (normalized_method == "GET" and status == 200
+                        and urllib.parse.parse_qs(urllib.parse.urlsplit(url).query).get("list-type") == ["2"]):
+                    # Bucket inventory is bounded XML, not object bytes. Keep
+                    # provider bodies internal; only the inventory adapter parses it.
+                    raw, truncated = _object_storage_bounded_control_body(response, max_bytes=4 * 1024 * 1024)
+                    complete = _object_storage_control_body_complete(resp_headers, raw, truncated=truncated)
+                    return {"status": status, "headers": resp_headers, "body": raw,
+                            "body_complete": complete, "body_truncated": truncated,
+                            "transport_error": not complete}
                 if normalized_method == "GET" and status == 200 and sink_path is not None:
                     expected_size = _object_storage_response_content_length(resp_headers)
                     limit = (
@@ -152376,7 +152451,8 @@ def resolve_objet_ref(
         locations = record.get("locations")
         if not isinstance(locations, list):
             continue
-        for location in locations:
+        from .object_storage_cleanup import filter_remote_locations
+        for location in filter_remote_locations(root, locations, object_id=normalized_object_id):
             if not isinstance(location, dict):
                 continue
             provider = safe_label(location.get("provider"), field="provider") or "unknown"
@@ -167637,7 +167713,7 @@ def staged_cleanup_check(
             candidates = [remote for record in manifest_records
                 if record.get("object_id") == object_id
                 and (remote := _remote_location(record, provider_kind=remote_provider_kind,
-                    store_ref=remote_verifier.store_ref)) is not None]
+                    store_ref=remote_verifier.store_ref, archive_root=root)) is not None]
             keys = {remote["remote_key"] for remote in candidates}
             if len(keys) == 1:
                 remote_result = remote_verifier.verify(key=next(iter(keys)), object_id=object_id,

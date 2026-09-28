@@ -223,6 +223,7 @@ jobs:
           wom-kit/tests/test_v03297_private_objet_metadata_index_rebuild.py
           wom-kit/tests/test_v03298_private_objet_finder.py
           wom-kit/tests/test_v03314_index_private_projection_recovery.py
+          wom-kit/tests/test_exact_approval_provider_lifetime.py
 
       # A test that writes into the repository would break the project's
       # artifact-hygiene contract, so fail loudly instead of silently drifting.

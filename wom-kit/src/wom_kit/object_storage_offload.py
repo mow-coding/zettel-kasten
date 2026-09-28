@@ -648,7 +648,7 @@ def _build_plan(
         remote = None
         conflicting = False
         for row in group:
-            candidate = restore._remote_location(row, provider_kind=normalized_provider, store_ref=normalized_store)
+            candidate = restore._remote_location(row, provider_kind=normalized_provider, store_ref=normalized_store, archive_root=root)
             if candidate is not None:
                 if remote is not None and remote.get("remote_key") != candidate.get("remote_key"):
                     conflicting = True

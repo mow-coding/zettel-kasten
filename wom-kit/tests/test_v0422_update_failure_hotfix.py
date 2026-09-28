@@ -10,7 +10,7 @@ Synthetic archives only; keys and dialogs are injected.
 
 from __future__ import annotations
 
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import nullcontext, redirect_stderr, redirect_stdout
 from datetime import datetime, timezone
 import io
 import json
@@ -75,8 +75,12 @@ class CausePropagationTests(unittest.TestCase):
         def writer(_claim):
             raise archive_services.ArchiveServiceError("project_version_update_approved_snapshot_unavailable")
 
-        with self.assertRaises(workflow.ExactHumanApprovalWorkflowError) as raised:
-            workflow._run_started_claim_writer(object(), writer, _ReadyClaim())
+        # This unit test injects a minimal claim. The production cancellation
+        # scope correctly accepts only authenticated claims; bypass that seam
+        # here to exercise the writer-error projection itself.
+        with patch("wom_kit.operation_cancellation.claim_scope", side_effect=lambda _claim: nullcontext()):
+            with self.assertRaises(workflow.ExactHumanApprovalWorkflowError) as raised:
+                workflow._run_started_claim_writer(object(), writer, _ReadyClaim())
         error = raised.exception
         self.assertEqual(error.code, "exact_human_approval_state_unknown")
         self.assertEqual(error.cause_code, "project_version_update_approved_snapshot_unavailable")
@@ -91,8 +95,9 @@ class CausePropagationTests(unittest.TestCase):
         def writer(_claim):
             raise archive_services.ArchiveServiceError("C:\\Users\\<user>\\private path leaked")
 
-        with self.assertRaises(workflow.ExactHumanApprovalWorkflowError) as raised:
-            workflow._run_started_claim_writer(object(), writer, _ReadyClaim())
+        with patch("wom_kit.operation_cancellation.claim_scope", side_effect=lambda _claim: nullcontext()):
+            with self.assertRaises(workflow.ExactHumanApprovalWorkflowError) as raised:
+                workflow._run_started_claim_writer(object(), writer, _ReadyClaim())
         self.assertIsNone(raised.exception.cause_code)
         foreign = workflow.ExactHumanApprovalWorkflowError(
             "exact_human_approval_state_unknown", cause_code="some_other_family_code", cause_stage="domain_writer"

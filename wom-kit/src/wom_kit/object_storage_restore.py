@@ -198,7 +198,7 @@ def _logical_key(object_id: str) -> str:
 
 
 def _remote_location(
-    row: Mapping[str, Any], *, provider_kind: str, store_ref: str
+    row: Mapping[str, Any], *, provider_kind: str, store_ref: str, archive_root: Path | None = None
 ) -> dict[str, Any] | None:
     """Return the one verified ``wom_uploaded`` location for this store, if any.
 
@@ -207,9 +207,13 @@ def _remote_location(
     remote-bytes proof and is never restored from.
     """
 
+    locations = _locations(row)
+    if archive_root is not None:
+        from .object_storage_cleanup import filter_remote_locations
+        locations = filter_remote_locations(archive_root, locations, object_id=row.get("object_id"))
     matches = [
         location
-        for location in _locations(row)
+        for location in locations
         if location.get("provider") == "object_storage"
         and location.get("availability") == "wom_uploaded"
         and location.get("provider_kind") == provider_kind
@@ -265,7 +269,11 @@ def _preservation_receipt_remote_key(
         ):
             continue
         try:
-            return preservation.object_storage_bytes_preserved_remote_key(object_id)
+            key = preservation.object_storage_bytes_preserved_remote_key(object_id)
+            from .object_storage_cleanup import filter_remote_locations
+            if not filter_remote_locations(root, [{"provider": "object_storage", "store_ref": store_ref, "remote_key": key}], object_id=object_id):
+                return None
+            return key
         except preservation.ObjectStoragePreservationError:
             return None
     return None
@@ -699,7 +707,7 @@ def _build_plan(
         size_bytes = int(next(iter(sizes)))
         remote = None
         for row in group:
-            candidate = _remote_location(row, provider_kind=normalized_provider, store_ref=normalized_store)
+            candidate = _remote_location(row, provider_kind=normalized_provider, store_ref=normalized_store, archive_root=root)
             if candidate is not None:
                 if remote is not None and remote.get("remote_key") != candidate.get("remote_key"):
                     remote = None
@@ -961,6 +969,8 @@ def _fetch_and_promote(
     """
 
     root = plan.archive_root
+    with exact_operation_writer_lock(root, timeout_seconds=30) if plan.concurrent else nullcontext():
+        _assert_disposal_available(plan, specs=(spec,))
     digest = spec.object_id.removeprefix("sha256:")
     destination = archive_services.archive_internal_path(root, spec.local_relative)
     if plan.mode == MODE_RESTORE:
@@ -1022,6 +1032,7 @@ def _fetch_and_promote(
         raise _fail("object_storage_restore_local_write_failed")
     try:
         with exact_operation_writer_lock(root, timeout_seconds=30) if plan.concurrent else nullcontext():
+            _assert_disposal_available(plan, specs=(spec,))
             if plan.concurrent:
                 _fresh_revalidated(replace(plan, specs=(spec,)))
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -1761,7 +1772,19 @@ def load_object_storage_restore_plan(
     )
 
 
+def _assert_disposal_available(plan: ObjectStorageRestorePlan, *, specs=None) -> None:
+    """Caller holds the archive writer lock before a mutation (and object leases
+    before that lock). Read-only preflight may also use this early refusal."""
+    from .object_storage_cleanup import assert_referenceable, assert_remote_available
+    selected = plan.specs if specs is None else specs
+    assert_referenceable(plan.archive_root, (spec.object_id for spec in selected))
+    for spec in selected:
+        assert_remote_available(plan.archive_root, store_ref=plan.store_ref, remote_key=spec.remote_key,
+                                object_id=spec.object_id)
+
+
 def _fresh_revalidated(plan: ObjectStorageRestorePlan) -> ObjectStorageRestorePlan:
+    _assert_disposal_available(plan)
     _require_setup_evidence(plan.archive_root, provider_kind=plan.provider_kind, store_ref=plan.store_ref)
     if plan.scope is not None:
         if any(not plan.scope.includes(spec.object_id, destructive=False) for spec in plan.specs):
@@ -1837,6 +1860,7 @@ def _apply_with_store(
     if plan.manifest is None:
         raise _fail("object_storage_restore_no_writes")
     with exact_operation_writer_lock(plan.archive_root, timeout_seconds=30) if plan.concurrent else nullcontext():
+        _assert_disposal_available(plan)
         _require_manifest_index_authority(plan)
     payloads = _Payloads(plan)
     writer = _Writer(plan, transport)
@@ -1876,7 +1900,9 @@ def _apply_core(
     authority = _assert_approved(current, claim, context)
     if current.concurrent:
         return _apply_concurrent(current, authority, transport_factory=transport_factory, resume=resume, progress_hook=progress_hook)
-    with exact_operation_writer_lock(current.archive_root) as writer_lock:
+    from .operation_target_leases import TargetLeases
+    with TargetLeases(current.archive_root, [("object", spec.object_id) for spec in current.specs]), exact_operation_writer_lock(current.archive_root) as writer_lock:
+        _assert_disposal_available(current)
         _persist_control(current)
         checkpoints = FileExactOperationCheckpointStore(current.archive_root, writer_lock=writer_lock)
         try:
@@ -1986,7 +2012,9 @@ def resume_object_storage_restore(
         return _resume_exact_human_approved_write_core(plan.archive_root, context, approval_id, guard,
             lambda claim: _apply_core(plan, claim, context=context, transport_factory=transport_factory,
                                      resume=True, progress_hook=progress_hook), key_provider=key_provider)
-    with exact_operation_writer_lock(plan.archive_root) as writer_lock:
+    from .operation_target_leases import TargetLeases
+    with TargetLeases(plan.archive_root, [("object", spec.object_id) for spec in plan.specs]), exact_operation_writer_lock(plan.archive_root) as writer_lock:
+        _assert_disposal_available(plan)
         checkpoints = FileExactOperationCheckpointStore(plan.archive_root, writer_lock=writer_lock)
 
         def writer(claim: _ClaimedExactHumanApproval) -> Mapping[str, Any]:
