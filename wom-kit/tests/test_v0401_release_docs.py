@@ -139,7 +139,7 @@ class V0401ReleaseDocsTests(unittest.TestCase):
         # read-only exact-approval-claims (one alias) and the always-dialog
         # exact-approval-claim-finalize writer, and makes revert-edge --approve
         # unconditional (one conditional scope fewer).
-        self.assertEqual(counts["canonical_executable_command_count"], 303)  # v0.4.49: remote cleanup and open
+        self.assertEqual(counts["canonical_executable_command_count"], 303)  # v0.4.50: remote cleanup and open
         self.assertEqual(counts["alias_invocation_path_count"], 215)  # v0.4.44: aliases of the superseded IMAP chain removed
         self.assertEqual(counts["invocation_path_count"], 518)
         # v0.4.33 reopened object-storage-upload (one path moves from fixed-closed to available).
@@ -152,7 +152,7 @@ class V0401ReleaseDocsTests(unittest.TestCase):
         by_path = {
             row["canonical_path"]: row for row in inventory["commands"]
         }
-        # v0.4.49 exposes signed cancellation for remote cleanup only.
+        # v0.4.50 exposes signed cancellation for remote cleanup only.
         self.assertNotIn("operation-control", blocked)
         self.assertEqual(
             [

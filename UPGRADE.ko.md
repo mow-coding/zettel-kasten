@@ -1,5 +1,18 @@
 # 업그레이드 가이드
 
+## v0.4.50 원격 정리 전 비공개 내용 검토
+
+공개된 뒤 기존 프로젝트는 공식 업데이트 절차로 설치 버전을 바꾸세요. WOM 도우미는 원격 파일의 실제 내용과 생성 목적·현재 사용처를 비공개로 확인하고, 확실한 임시물의 정확한 키만 정리할 수 있습니다. 내용이 일부만 보이거나 판단이 불명확하면 정리하지 않고 보류합니다. 설치만으로 고객 버킷을 읽거나 삭제하지 않습니다. 나머지 과거 요청은 계속 처리 중입니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0450-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.50/wom_kit-0.4.50-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
 ## v0.4.49 원격 임시물 정리와 파일 열기
 
 공개 후 기존 프로젝트의 설치 버전은 공식 업데이트 절차로 바꾸세요. 이번 버전에는 이미 원격에 올라간 임시물의 정확한 키를 검토해 정리하는 명령과 검증된 원격 파일 하나를 한시적으로 여는 명령이 추가됩니다. 설치만으로 원격 파일이 삭제되지는 않습니다. 다른 고객 요청은 계속 처리 중입니다.

@@ -14,6 +14,7 @@ protect another device or a writer outside WOM.
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
@@ -39,6 +40,8 @@ RESULT_SCHEMA = "wom-kit/object-storage-cleanup-result/v1"
 QUALIFICATION_SCHEMA = "wom-kit/remote-disposal-qualification/v1"
 MAX_ENTRIES = 100_000
 MAX_DOCUMENT = 64 * 1024 * 1024
+MAX_CONTENT_SAMPLE_ENTRIES = 4096
+CONTENT_SAMPLE_BYTES = 4096
 OID = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _DOMAIN = b"wom-kit/remote-disposal-journal/v1\0"
 
@@ -586,6 +589,11 @@ class CleanupTransportAdapter:
     def head_object(self, **kwargs):
         return self.transport.head_object(**kwargs)
 
+    def inspect_object(self, *, key):
+        inspect = getattr(self.transport, "inspect_object", None)
+        return (inspect(key=key, max_prefix_bytes=CONTENT_SAMPLE_BYTES) if callable(inspect)
+                else self.transport.head_object(key=key, presence_only=False))
+
     def delete_exact(self, *, key, etag=None):
         # Never use the legacy delete_object method which discards HTTP status.
         response = self.transport._dispatch(method="DELETE", key=key, payload_hash=services.SIGV4_UNSIGNED_PAYLOAD)
@@ -773,6 +781,9 @@ def _inventory_request(root, request_path):
         raise _fail()
     _store(request.get("store_ref"))
     _binding(request.get("remote_binding"))
+    include_content_samples = request.get("include_content_samples", False)
+    if type(include_content_samples) is not bool:
+        raise _fail("object_storage_cleanup_inventory_samples_invalid")
     keys = request.get("keys")
     prefix = request.get("prefix")
     if (keys is None) == (prefix is None):
@@ -783,6 +794,8 @@ def _inventory_request(root, request_path):
             raise _fail()
         for key in keys:
             _key(key)
+        if include_content_samples and len(keys) > MAX_CONTENT_SAMPLE_ENTRIES:
+            raise _fail("object_storage_cleanup_inventory_sample_limit")
     elif not isinstance(prefix, str) or not prefix or len(prefix.encode("utf-8")) > 1024:
         raise _fail("object_storage_cleanup_inventory_prefix_required")
     return request, _digest({"request_sha256": sha, "archive_identity_sha256": _archive_identity(root), "effect": "inventory_full_get"})
@@ -793,7 +806,8 @@ def plan_inventory(archive_root, *, request_path):
     request, digest = _inventory_request(root, request_path)
     return {"schema": "wom-kit/remote-disposal-inventory-plan/v1", "ok": True, "blockers": [], "plan_sha256": digest, "state": "ready",
             "selection_kind": "exact_keys" if request.get("keys") is not None else "explicit_prefix",
-            "whole_get_required": True, "remote_write": False, "private_values_echoed": False}
+            "whole_get_required": True, "content_samples_private": request.get("include_content_samples", False),
+            "remote_write": False, "private_values_echoed": False}
 
 
 def execute_inventory_approved(archive_root, *, request_path, expected_plan_sha256, reviewed_by,
@@ -840,6 +854,8 @@ def execute_inventory_approved(archive_root, *, request_path, expected_plan_sha2
                 seen_keys.add(key)
             if len(keys) > MAX_ENTRIES:
                 raise _fail("object_storage_cleanup_inventory_limit")
+            if request.get("include_content_samples") and len(keys) > MAX_CONTENT_SAMPLE_ENTRIES:
+                raise _fail("object_storage_cleanup_inventory_sample_limit")
             token = page.get("continuation_token")
             if token is None:
                 break
@@ -852,14 +868,23 @@ def execute_inventory_approved(archive_root, *, request_path, expected_plan_sha2
         if cancellation is not None:
             return cancellation
         heartbeat()
-        proof = transport.head_object(key=key, presence_only=False)
+        proof = (transport.inspect_object(key=key) if request.get("include_content_samples")
+                 else transport.head_object(key=key, presence_only=False))
         if (proof.get("presence_state") != "present" or proof.get("present") is not True
                 or proof.get("verification_state") != "complete" or type(proof.get("size")) is not int
                 or proof["size"] < 0 or not re.fullmatch(r"[0-9a-f]{64}", str(proof.get("checksum_sha256")))):
             raise _fail("object_storage_cleanup_inventory_proof_unavailable")
-        rows.append({"entry_id": entry_id(request["store_ref"], key), "remote_key": key,
+        row = {"entry_id": entry_id(request["store_ref"], key), "remote_key": key,
                      "object_id": "sha256:" + proof["checksum_sha256"], "size": proof["size"],
-                     "etag": strong_etag(proof.get("whole_get_etag"))})
+                     "etag": strong_etag(proof.get("whole_get_etag"))}
+        if request.get("include_content_samples"):
+            prefix = proof.get("content_prefix")
+            if not isinstance(prefix, bytes) or len(prefix) != min(CONTENT_SAMPLE_BYTES, proof["size"]):
+                raise _fail("object_storage_cleanup_inventory_sample_unavailable")
+            row["content_prefix_base64"] = base64.b64encode(prefix).decode("ascii")
+            row["content_prefix_bytes"] = len(prefix)
+            row["content_prefix_complete"] = len(prefix) == proof["size"]
+        rows.append(row)
     cancellation = stopped(len(rows))
     if cancellation is not None:
         return cancellation

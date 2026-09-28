@@ -1,9 +1,9 @@
 ﻿# WOM-kit Capability Matrix
 
-Current v0.4.49 candidate: reviewed exact remote temporary objects can be removed without deleting referenced files. [Release scope](releases/v0.4.49.md). Other ongoing requests are not included.
-Version: v0.4.49 implementation and release scope
+Current v0.4.50 candidate: WOM can privately inspect verified remote content before selecting confirmed temporary objects. [Release scope](releases/v0.4.50.md). Other ongoing requests are not included.
+Version: v0.4.50 implementation and release scope
 
-Status: v0.4.49 candidate: exact remote-key cleanup and temporary verified file opening; [release scope](releases/v0.4.49.md).
+Status: v0.4.50 candidate: private content review for exact remote-key cleanup; [release scope](releases/v0.4.50.md).
 
 Status: v0.4.36 no-dialog grants, letter-168, and session-owned writes truth
 Date: 2026-09-04
