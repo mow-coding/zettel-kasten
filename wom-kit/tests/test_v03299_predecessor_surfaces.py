@@ -232,7 +232,7 @@ MCP_REMOVALS = {
     "imap_mailbox_adapter_manifest_plan",
     "imap_mailbox_adapter_preflight_plan",
 }
-CURRENT_CLI_COUNT = 519  # v0.4.49: exact cleanup and open
+CURRENT_CLI_COUNT = 519  # v0.4.50: exact cleanup and open
 CURRENT_CLI_CANONICAL_SHA256 = (
     "e1a19fa302d7c93717d4b6a3be7b80e8eceed8a655545de145f0a24d4466d489"
 )
@@ -263,7 +263,7 @@ CURRENT_DATABASE_CANONICAL_SHA256 = (
     "d9a42f08ee12a6d42e40214cfb12441e4077bf50c38c25b2692ec1344328294a"
 )
 RESOURCE_ADDITIONS = {
-    "release-notes/v0.4.49.md",
+    "release-notes/v0.4.50.md",
     "schemas/activity-cleanup-request-v1.schema.json",
     "schemas/private-objet-finder-result-v0.2.schema.json",
     "templates/ai-runtime/wom-archive/references/storage-scope.md",
@@ -336,9 +336,9 @@ RESOURCE_ADDITIONS = {
     "schemas/zettel-objet-link-revert-receipt.schema.json",
 }
 RESOURCE_REMOVALS = {"release-notes/v0.3.297.md"}
-CURRENT_RESOURCE_COUNT = 180  # v0.4.49: finder cursor result schema
+CURRENT_RESOURCE_COUNT = 180  # v0.4.50: finder cursor result schema
 CURRENT_RESOURCE_CANONICAL_SHA256 = (
-    "059bd55560a3e346fde7c66c92fad4a6f7f946f856d9f4061f8145e0159edd81"  # v0.4.49 resources (release note and finder schema)
+    "fbeff99d111eb9c0d8cb0e10e66536167e3445b96e92b8dd0dc3385126238639"  # v0.4.50 resources (release note and finder schema)
 )
 
 
@@ -696,10 +696,10 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             actual,
             expected,
             "Current package-resource paths must be the full v0.3.297 set plus "
-            "the exact cumulative v0.3.298 through v0.4.49 delta. "
+            "the exact cumulative v0.3.298 through v0.4.50 delta. "
             f"missing={compact(missing)}; extra={compact(extra)}",
         )
-        self.assertEqual(manifest["version"], "0.4.49")
+        self.assertEqual(manifest["version"], "0.4.50")
         self.assertEqual(len(actual), CURRENT_RESOURCE_COUNT)
         self.assertEqual(
             canonical_sha256(actual),
@@ -719,13 +719,13 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         self.assertNotIn("C:\\Users\\", predecessor_text)
 
     def test_v0419_release_note_is_current_and_older_notes_remain_historical(self) -> None:
-        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.4.49.md"
+        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.4.50.md"
         current_packaged_release = (
             SRC_ROOT
             / "wom_kit"
             / "_resources"
             / "release-notes"
-            / "v0.4.49.md"
+            / "v0.4.50.md"
         )
         self.assertEqual(
             current_source_release.read_bytes(),
@@ -734,10 +734,10 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         current_text = current_source_release.read_text(encoding="utf-8")
         current_flat = " ".join(current_text.split())
         for token in (
-            "v0.4.49",
+            "v0.4.50",
             "project-version-update",
             "Installing the tool alone does not change a customer archive",
-            "wom_kit-0.4.49-py3-none-any.whl",
+            "wom_kit-0.4.50-py3-none-any.whl",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, current_flat)

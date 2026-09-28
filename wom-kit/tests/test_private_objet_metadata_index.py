@@ -69,7 +69,7 @@ EMPTY_ALLOWLIST_SHA256 = (
 )
 
 # v0.4.36 adds only operator-feedback-archive to the previous pinned CLI paths.
-CLI_COUNT = 519  # v0.4.49: exact cleanup and open
+CLI_COUNT = 519  # v0.4.50: exact cleanup and open
 CLI_CANONICAL_SHA256 = (
     "e1a19fa302d7c93717d4b6a3be7b80e8eceed8a655545de145f0a24d4466d489"
 )
@@ -83,7 +83,7 @@ DB_SOURCE_CANONICAL_SHA256 = (
 )
 RESOURCE_ADDITIONS = frozenset(
     {
-        "release-notes/v0.4.49.md",
+        "release-notes/v0.4.50.md",
     "schemas/activity-cleanup-request-v1.schema.json",
     "schemas/private-objet-finder-result-v0.2.schema.json",
     "templates/ai-runtime/wom-archive/references/storage-scope.md",
@@ -1207,7 +1207,7 @@ class PrivateObjetMetadataIndexPrivacyGateTests(unittest.TestCase):
             manifest["schema"],
             "wom-kit/package-resource-manifest/v0.1",
         )
-        self.assertEqual(manifest["version"], "0.4.49")
+        self.assertEqual(manifest["version"], "0.4.50")
         self.assertEqual(manifest["file_count"], len(manifest["files"]))
         current_paths = {row["packaged"] for row in manifest["files"]}
         self.assertEqual(

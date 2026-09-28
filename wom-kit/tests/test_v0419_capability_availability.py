@@ -46,7 +46,7 @@ class V0419CapabilityAvailabilityTests(unittest.TestCase):
         # principal-register reopened in v0.4.40; credential-lifecycle and the
         # IMAP manifest writer in v0.4.41; the IMAP chain was removed in v0.4.44;
         # the ZET sharing commands stay closed until the v0.5 design.
-        # v0.4.49 opens scoped cleanup cancellation. Delegation remains
+        # v0.4.50 opens scoped cleanup cancellation. Delegation remains
         # fixed-closed, so the shared gate must refuse before its handler.
         argv = ["delegate-zet", "synthetic-root-must-not-be-read",
                 "--view", "synthetic-view", "--approve", "--format", "json"]

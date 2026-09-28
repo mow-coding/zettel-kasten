@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from contextlib import ExitStack, redirect_stdout, redirect_stderr
 from datetime import datetime, timezone
+import base64
 import hashlib
 import io
 import json
@@ -55,6 +56,12 @@ class MemoryTransport:
         raw = self.objects[key]
         return {"present": True, "presence_state": "present", "verification_state": "complete", "size": len(raw),
                 "checksum_sha256": None if presence_only else hashlib.sha256(raw).hexdigest(), "whole_get_etag": '"synthetic-etag"'}
+
+    def inspect_object(self, *, key, max_prefix_bytes=4096):
+        proof = self.head_object(key=key, presence_only=False)
+        if proof.get("present"):
+            proof["content_prefix"] = self.objects[key][:max_prefix_bytes]
+        return proof
 
     def delete_exact(self, *, key, etag=None):
         self.calls.append(("DELETE", key, etag))
@@ -232,6 +239,34 @@ class CleanupOpenTests(unittest.TestCase):
         self.assertTrue(self.run_cleanup()["ok"])
         self.assertEqual(sum(row[0] == "FULL_GET" for row in self.transport.calls), 2)
 
+    def test_private_inventory_binds_one_verified_content_sample_without_echo(self):
+        inv_request = {"schema": "wom-kit/remote-disposal-inventory-request/v1", "store_ref": STORE,
+                       "remote_binding": BINDING, "keys": [KEY], "include_content_samples": True}
+        self.write("profiles/local/inventory-request.json", inv_request)
+        plan = cleanup.plan_inventory(self.root, request_path="profiles/local/inventory-request.json")
+        self.assertTrue(plan["content_samples_private"])
+        result = self.approved(cleanup.execute_inventory_approved, plan,
+                               request_path="profiles/local/inventory-request.json")
+        document = cleanup._load_signed(self.root, result["inventory_path"], self.key_provider)
+        row = document["entries"][0]
+        self.assertEqual(base64.b64decode(row["content_prefix_base64"]), BODY)
+        self.assertTrue(row["content_prefix_complete"])
+        self.assertEqual(row["object_id"], OID)
+        self.assertEqual(sum(call[0] == "FULL_GET" for call in self.transport.calls), 1)
+        self.assertNotIn("content_prefix_base64", result)
+
+    def test_private_inventory_rejects_missing_content_sample_before_record(self):
+        inv_request = {"schema": "wom-kit/remote-disposal-inventory-request/v1", "store_ref": STORE,
+                       "remote_binding": BINDING, "keys": [KEY], "include_content_samples": True}
+        self.write("profiles/local/inventory-request.json", inv_request)
+        plan = cleanup.plan_inventory(self.root, request_path="profiles/local/inventory-request.json")
+        self.transport.inspect_object = lambda **kw: {
+            **self.transport.head_object(key=kw["key"], presence_only=False), "content_prefix": BODY[:2]}
+        with self.assertRaises(broker.ExactHumanApprovalWorkflowError):
+            self.approved(cleanup.execute_inventory_approved, plan,
+                          request_path="profiles/local/inventory-request.json")
+        self.assertFalse((self.root / cleanup.ROOT / "inventories").exists())
+
     def test_inventory_pagination_and_token_loop_fail_closed(self):
         self.write("profiles/local/inventory-request.json", {"schema": "wom-kit/remote-disposal-inventory-request/v1",
                    "store_ref": STORE, "remote_binding": BINDING, "prefix": "legacy/"})
@@ -329,6 +364,30 @@ class CleanupOpenTests(unittest.TestCase):
             credential={**{key: value for key, value in BINDING.items() if key != "service"},
                         "access_key_id": "SYNTHETICACCESS", "secret_access_key": "synthetic-unused-secret"})
         self.assertEqual(cleanup.CleanupTransportAdapter(transport).list_page(prefix="legacy/")["keys"], keys)
+
+    def test_actual_s3_sender_inspection_keeps_only_bounded_prefix_from_one_get(self):
+        body = b"synthetic temporary evidence\n" * 500
+        calls = []
+        class Response(io.BytesIO):
+            status = 200
+            def __init__(self, content):
+                super().__init__(content)
+                self.headers = {"content-length": str(len(body)), "etag": '"synthetic-etag"'}
+        class Opener:
+            def open(self, request, timeout):
+                calls.append(request.get_method())
+                return Response(body if request.get_method() == "GET" else b"")
+        with patch("urllib.request.build_opener", return_value=Opener()):
+            sender = services._default_urllib_sender()
+        transport = services._object_storage_resolve_transport("cloudflare-r2", send=sender,
+            credential={**{key: value for key, value in BINDING.items() if key != "service"},
+                        "access_key_id": "SYNTHETICACCESS", "secret_access_key": "synthetic-unused-secret"})
+        proof = transport.inspect_object(key=KEY)
+        self.assertEqual(calls, ["HEAD", "GET"])
+        self.assertEqual(proof["checksum_sha256"], hashlib.sha256(body).hexdigest())
+        self.assertEqual(proof["size"], len(body))
+        self.assertEqual(proof["content_prefix"], body[:4096])
+        self.assertEqual(proof["verification_state"], "complete")
 
     def test_retained_snapshot_body_protects_its_only_remaining_reference(self):
         snapshot = ("---\nstatus: canonical\n---\nobjet:" + OID).encode()

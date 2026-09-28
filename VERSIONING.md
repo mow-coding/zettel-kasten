@@ -106,7 +106,7 @@ before approving any frontmatter rewrite.
 Current public baseline:
 
 ```text
-v0.4.49
+v0.4.50
 ```
 
 Previous public baseline:

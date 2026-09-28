@@ -324,7 +324,7 @@ class NotionPropertyBackfillCliTests(unittest.TestCase):
         # the Notion recovery chain and trash, and seven more writers.
         self.assertEqual(
             inventory["counts"]["approval_available_command_count"],
-            106,  # v0.4.49: cleanup, open and scoped operation control
+            106,  # v0.4.50: cleanup, open and scoped operation control
         )
         self.assertEqual(
             by_path["operator-feedback-archive"]["approval_status"],
@@ -332,7 +332,7 @@ class NotionPropertyBackfillCliTests(unittest.TestCase):
         )
         self.assertEqual(
             inventory["counts"]["approval_fixed_closed_command_count"],
-            5,  # v0.4.49: five ZET sharing/ownership commands remain closed
+            5,  # v0.4.50: five ZET sharing/ownership commands remain closed
         )
         # Scoped remote-cleanup cancellation is available; unsupported kinds
         # are rejected by operation-control before effects.

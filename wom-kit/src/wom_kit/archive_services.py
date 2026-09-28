@@ -147394,6 +147394,29 @@ def _object_storage_stream_response_digest(handle: Any) -> tuple[str, int]:
     return digest.hexdigest(), size
 
 
+def _object_storage_stream_response_digest_with_prefix(
+    handle: Any, *, max_prefix_bytes: int
+) -> tuple[str, int, bytes]:
+    """Verify the full GET while retaining only a bounded private inspection prefix."""
+
+    if type(max_prefix_bytes) is not int or not 0 < max_prefix_bytes <= 4096:
+        raise ValueError("invalid private inspection limit")
+    digest = hashlib.sha256()
+    size = 0
+    prefix = bytearray()
+    while True:
+        chunk = handle.read(OBJECT_STORAGE_HTTP_STREAM_CHUNK_BYTES)
+        if not chunk:
+            break
+        if not isinstance(chunk, (bytes, bytearray)) or len(chunk) > OBJECT_STORAGE_HTTP_STREAM_CHUNK_BYTES:
+            raise OSError("object-storage response returned invalid bytes")
+        digest.update(chunk)
+        size += len(chunk)
+        if len(prefix) < max_prefix_bytes:
+            prefix.extend(chunk[: max_prefix_bytes - len(prefix)])
+    return digest.hexdigest(), size, bytes(prefix)
+
+
 def _object_storage_stream_response_to_sink(
     handle: Any, sink_path: Path, *, max_bytes: int
 ) -> tuple[str, int]:
@@ -147487,11 +147510,11 @@ def _default_urllib_sender() -> Callable[..., dict[str, Any]]:
         data_bytes=None,
         sink_path=None,
         sink_max_bytes=None,
+        sample_max_bytes=None,
     ) -> dict[str, Any]:
-        # sink_path / sink_max_bytes are passed ONLY by the v0.4.28 restore GET
-        # (ObjectStorageTransport.get_object); every other call keeps the
-        # original five-keyword contract, so injected fakes without the two
-        # extra keywords keep working for HEAD/PUT/multipart/verification GETs.
+        # The restore GET supplies sink_path/sink_max_bytes; private disposal
+        # inspection supplies sample_max_bytes. All ordinary callers keep the
+        # original five-keyword injected-sender contract.
         normalized_method = str(method).upper()
         body = None
         if data_path is not None:
@@ -147559,10 +147582,16 @@ def _default_urllib_sender() -> Callable[..., dict[str, Any]]:
                         "transport_error": not complete,
                     }
                 if normalized_method == "GET" and status == 200:
-                    digest_hex, body_size = _object_storage_stream_response_digest(response)
+                    if sample_max_bytes is None:
+                        digest_hex, body_size = _object_storage_stream_response_digest(response)
+                        private_prefix = None
+                    else:
+                        digest_hex, body_size, private_prefix = _object_storage_stream_response_digest_with_prefix(
+                            response, max_prefix_bytes=sample_max_bytes
+                        )
                     expected_size = _object_storage_response_content_length(resp_headers)
                     complete = expected_size is None or body_size == expected_size
-                    return {
+                    result = {
                         "status": status,
                         "headers": resp_headers,
                         "body": b"",
@@ -147573,6 +147602,9 @@ def _default_urllib_sender() -> Callable[..., dict[str, Any]]:
                         "body_truncated": False,
                         "transport_error": not complete,
                     }
+                    if sample_max_bytes is not None:
+                        result["body_prefix"] = private_prefix if complete else None
+                    return result
                 raw, truncated = _object_storage_bounded_control_body(response)
                 body_complete = _object_storage_control_body_complete(
                     resp_headers, raw, truncated=truncated
@@ -147719,12 +147751,18 @@ class _S3CompatibleTransport:
         data_bytes=None,
         sink_path=None,
         sink_max_bytes=None,
+        sample_max_bytes=None,
     ) -> dict[str, Any]:
         headers = self._signed_request(
             method=method, key=key, payload_hash=payload_hash, query=query, extra_headers=extra_headers
         )
         url = self._url(key, query)
-        if sink_path is not None:
+        if sample_max_bytes is not None:
+            response = self._transfer_observation.call(method, lambda: self._send(
+                method=method, url=url, headers=headers, data_path=data_path,
+                data_bytes=data_bytes, sample_max_bytes=sample_max_bytes,
+            ))
+        elif sink_path is not None:
             # Restore GET only: the two sink keywords are omitted everywhere
             # else so the five-keyword injected-sender contract is unchanged.
             response = self._transfer_observation.call(method, lambda: self._send(
@@ -147889,6 +147927,38 @@ class _S3CompatibleTransport:
                 return None, None, False, None
             return hashlib.sha256(value).hexdigest(), len(value), True, etag
         return None, None, False, None
+
+    def inspect_object(self, *, key: str, max_prefix_bytes: int = 4096) -> dict[str, Any]:
+        """Verify one whole object and retain a small private content prefix.
+
+        The prefix comes from the same GET used for whole-object SHA-256
+        verification, so inspection does not download the object twice.
+        """
+        if type(max_prefix_bytes) is not int or not 0 < max_prefix_bytes <= 4096:
+            raise ValueError("invalid private inspection limit")
+        head = self.head_object(key=key, presence_only=True)
+        if head.get("presence_state") != "present" or head.get("verification_state") != "complete":
+            return head
+        expected_size = head["size"]
+        response = self._dispatch(method="GET", key=key,
+                                  payload_hash=SIGV4_UNSIGNED_PAYLOAD,
+                                  sample_max_bytes=max_prefix_bytes)
+        prefix = response.get("body_prefix")
+        digest = response.get("body_sha256")
+        body_size = response.get("body_size")
+        headers = response.get("headers") or {}
+        from .remote_preservation_proof import strong_etag
+        if (response.get("transport_error") or response.get("status") != 200
+                or response.get("body_complete") is not True
+                or type(body_size) is not int or body_size != expected_size
+                or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)
+                or not isinstance(prefix, bytes) or len(prefix) != min(max_prefix_bytes, body_size)):
+            return {"present": True, "size": expected_size, "checksum_sha256": None,
+                    "presence_state": "present", "verification_state": "unavailable"}
+        return {"present": True, "size": body_size, "checksum_sha256": digest,
+                "presence_state": "present", "verification_state": "complete",
+                "whole_get_etag": strong_etag(headers.get("etag")) if isinstance(headers, dict) else None,
+                "content_prefix": prefix}
 
     def put_object(
         self,

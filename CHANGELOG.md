@@ -4,7 +4,13 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
-## v0.4.49 - 2026-09-28 (candidate)
+## v0.4.50 - 2026-09-28 (candidate)
+
+- Let the WOM helper privately inspect bounded content from a verified whole-object download before classifying already-uploaded temporary files. The helper prepares exact-key requests from content, purpose and references; uncertain files remain untouched.
+- Keep content out of ordinary results and retain the existing exact deletion, absence, resume and re-upload protections. A synthetic installed-command test passed on the isolated developer R2 bucket; customer use remains unverified.
+- Other historical feedback remains open. This candidate is not public until its exact CI, release asset and fresh installation pass.
+
+## v0.4.49 - 2026-09-28
 
 - Add a reviewed, exact-key cleanup path for temporary objects already uploaded to remote storage. Remote inventory, current references, unknown outcomes and later reuploads are checked before any selected deletion is reported complete.
 - Open one verified remote object through a temporary read-only link without retaining the bearer URL in normal records.
