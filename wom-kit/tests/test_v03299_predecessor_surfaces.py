@@ -106,6 +106,12 @@ CLI_ADDITIONS = {
     ("operation-control",),
     ("object-storage-cleanup",),
     ("object-storage-open",),
+    ("connection-evidence-import",),
+    ("draft-disposition",),
+    ("feedback-closure-check",),
+    ("human-artifact-inventory",),
+    ("tiro-content-import",),
+    ("title-diagnostics",),
     ("principal-list",),
     ("principal-register",),
     ("principal-register-plan",),
@@ -232,9 +238,9 @@ MCP_REMOVALS = {
     "imap_mailbox_adapter_manifest_plan",
     "imap_mailbox_adapter_preflight_plan",
 }
-CURRENT_CLI_COUNT = 519  # v0.4.50: exact cleanup and open
+CURRENT_CLI_COUNT = 525  # 2026-09-29: six feedback-completion commands (A08-A15)
 CURRENT_CLI_CANONICAL_SHA256 = (
-    "e1a19fa302d7c93717d4b6a3be7b80e8eceed8a655545de145f0a24d4466d489"
+    "355aa71b715d954a4c7a6f298b56fefc017854504b74845b67d870d6f5eb33e3"
 )
 CURRENT_MCP_COUNT = 129  # v0.4.44: seven IMAP planning previews removed
 CURRENT_MCP_CANONICAL_SHA256 = (

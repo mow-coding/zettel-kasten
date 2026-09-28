@@ -4,6 +4,15 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## Unreleased
+
+- Registration after external staging (letter 176): a failed `objet-capture-batch` now keeps its cause, stage, approval and write state and an `operation_ref`; `--resume` with the original approval finishes only the unfinished items without a second dialog or re-copying staged bytes.
+- Long operations: cooperative cancellation (`operation-control --action cancel`) now covers capture batches, remote upload, offload, restore, local-only preservation and activity cleanup, and every tracked run keeps its result artifact for inspection and resume.
+- `work-session --action inspect --caller-status` now tells a caller whose process ended apart from an expired or foreign grant and names the official next step, instead of only reporting a missing context.
+- New read and review commands: `title-diagnostics` (every title verdict and its reason, paged), `human-artifact-inventory` (every human-made file, paged, with a reviewed batch registration), `draft-disposition` (hold a draft with its reason, conditions and next action; never publishes or deletes), `feedback-closure-check` (checks each requested outcome against evidence), and relation-candidate batches with revert.
+- Provider intake with the adopted Notion PAT only: Notion attachments and media, Notion connection evidence (`connection-evidence-import`), mailbox fetch across accounts, and Tiro transcripts and audio (`tiro-content-import`), each with exact bytes, provenance and reuse of already-imported material.
+- These were validated with synthetic data and simulated providers; real provider accounts and customers' own runs are not confirmed. Letters 174–176 stay open until each requested outcome is confirmed.
+
 ## v0.4.50 - 2026-09-28 (candidate)
 
 - Let the WOM helper privately inspect bounded content from a verified whole-object download before classifying already-uploaded temporary files. The helper prepares exact-key requests from content, purpose and references; uncertain files remain untouched.
