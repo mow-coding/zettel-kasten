@@ -263,6 +263,27 @@ class _ProjectUpdateResumeKeyProvider:
             key[:] = b"\0" * len(key)
 
 
+def _archive_tree_observation(root: Path) -> dict[str, list[Any]]:
+    """Test-only relative path -> [kind, size, mtime_ns] map (no contents)."""
+
+    observed: dict[str, list[Any]] = {}
+    try:
+        for current, directories, files in os.walk(root):
+            for name in directories + files:
+                path = Path(current) / name
+                try:
+                    info = os.lstat(path)
+                except OSError:
+                    continue
+                kind = "dir" if name in directories else "file"
+                observed[path.relative_to(root).as_posix()] = [
+                    kind, info.st_size if kind == "file" else None, info.st_mtime_ns,
+                ]
+    except OSError:
+        pass
+    return observed
+
+
 class ArchiveCliTests(unittest.TestCase):
     def trusted_project_update_git_runner(self):
         """One explicit local-only runner for direct helper seams in a test."""
@@ -342,10 +363,27 @@ class ArchiveCliTests(unittest.TestCase):
         old_stdin = sys.stdin
         if stdin_text is not None:
             sys.stdin = io.StringIO(stdin_text)
+        tree_before = (
+            _archive_tree_observation(Path(effective_args[1]))
+            if effective_args[:1] == ["doctor"] and len(effective_args) > 1
+            else None
+        )
         try:
             with redirect_stdout(buffer), redirect_stderr(buffer):
                 code = archive_cli.main(effective_args)
-            return code, buffer.getvalue()
+            output = buffer.getvalue()
+            if tree_before is not None and "doctor_cache_snapshot_stale" in output:
+                # Name what changed while Doctor ran so a CI-only stale
+                # snapshot is diagnosable from the log.
+                tree_after = _archive_tree_observation(Path(effective_args[1]))
+                changed = sorted(
+                    key for key in set(tree_before) | set(tree_after)
+                    if tree_before.get(key) != tree_after.get(key)
+                )
+                output += "\nTEST-DIAGNOSTIC changed-during-doctor: " + json.dumps(
+                    [(key, tree_before.get(key), tree_after.get(key)) for key in changed[:40]]
+                )
+            return code, output
         finally:
             sys.stdin = old_stdin
 
