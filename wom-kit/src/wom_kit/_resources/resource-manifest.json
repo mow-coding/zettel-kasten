@@ -1,6 +1,6 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.4.50",
+  "version": "0.4.51b28",
   "source_of_truth": "wom-kit source resource directories",
   "file_count": 180,
   "files": [
@@ -1079,10 +1079,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.4.50.md",
-      "packaged": "release-notes/v0.4.50.md",
-      "bytes": 2913,
-      "sha256": "313bc4b023bbfa79d48a01106bd95594ac1790397e681d8163ba97a2beb15b10"
+      "source": "docs/releases/v0.4.51b28.md",
+      "packaged": "release-notes/v0.4.51b28.md",
+      "bytes": 357,
+      "sha256": "1e372040a452d4a77905d5113d3e257f307330bdbe9087c4b6f95215ae15a66f"
     }
   ]
 }
