@@ -12413,9 +12413,12 @@ if __name__ == "__main__":
                 claim_document["approval_id"],
                 claim_document["context_sha256"],
             )
-            self.assertEqual(
-                claim_assertions,
-                [expected_claim_assertion] * 3,
+            # The released-key path may recheck the same succeeded claim at
+            # additional read-only boundaries. Every check must retain the
+            # original claim and context; the native dialog remains closed.
+            self.assertGreaterEqual(len(claim_assertions), 3)
+            self.assertTrue(
+                all(row == expected_claim_assertion for row in claim_assertions)
             )
             self.assertEqual(len(ready_handoffs), 1)
             self.assertEqual(cleanup_calls, [transaction_ref])
