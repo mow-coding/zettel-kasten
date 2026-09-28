@@ -1107,6 +1107,13 @@ def _build_specs(
             continue
         if not _has_local(row) or _has_object_storage_record(row):
             continue
+        from .object_storage_cleanup import filter_remote_locations, assert_referenceable
+        assert_referenceable(root, [object_id])
+        target = {"provider": "object_storage", "store_ref": store_ref,
+                  "remote_key": object_storage_bytes_preserved_remote_key(object_id)}
+        if not filter_remote_locations(root, [target], object_id=object_id):
+            review_count += 1
+            continue
         paths = _local_paths(row)
         if len(paths) != 1:
             review_count += 1
@@ -1293,6 +1300,7 @@ def _plan_core(
         store_ref=normalized_store,
     )
     rows, groups = _read_manifest_groups(root, progress=progress)
+    rows, groups = _project_disposal_locations(root, rows)
     inventory, unique_rows = _inventory(rows, groups)
     specs, already_recorded, existing_review_required, review_count = _build_specs(
         root,
@@ -2503,6 +2511,11 @@ class _Writer:
             or value != spec.receipt_token
         ):
             raise ValueError("write boundary")
+        from .operation_cancellation import checkpoint
+        checkpoint()
+        # This legacy preservation core holds object leases then the archive
+        # writer lock for its complete write. Never reacquire either here.
+        _assert_disposal_available(self.plan, specs=(spec,))
         digest, size = _hash_plain_file(spec.local_path, heartbeat=heartbeat)
         if digest != spec.object_id.removeprefix("sha256:") or size != spec.size_bytes:
             raise _fail("object_storage_preservation_source_drifted")
@@ -2519,6 +2532,7 @@ class _Writer:
             if evidence.state != terminal["remote_state"]:
                 raise _fail("object_storage_preservation_remote_conflict")
             _create_terminal_receipt(self.plan, spec, self.ledger)
+            checkpoint()
             return
 
         before = self.query.query(
@@ -2639,6 +2653,9 @@ class _Writer:
         # fsync succeeds do we create the dynamic immutable receipt.  The exact
         # verifier independently re-queries the remote before checkpointing.
         _create_terminal_receipt(self.plan, spec, self.ledger)
+        # Complete the whole provider mutation (including multipart cleanup),
+        # ledger and receipt before acknowledging a cooperative stop.
+        checkpoint()
 
 
 def _approval_binding(plan: ObjectStorageBytesPreservationPlan) -> ExactOperationApprovalBinding:
@@ -2867,6 +2884,7 @@ def load_object_storage_bytes_preservation_plan(
         store_ref=store_ref,
     )
     rows, groups = _read_manifest_groups(root, progress=None)
+    rows, groups = _project_disposal_locations(root, rows)
     current_inventory, _current_unique_rows = _inventory(rows, groups)
     if (
         current_inventory != inventory
@@ -2964,11 +2982,33 @@ def load_object_storage_bytes_preservation_plan(
     )
 
 
+def _project_disposal_locations(root, rows):
+    """Only exact discarded remote locations disappear from the live view."""
+    from .object_storage_cleanup import filter_remote_locations
+    projected, groups = [], {}
+    for row in rows:
+        value = dict(row)
+        value["locations"] = filter_remote_locations(root, _locations(row), object_id=row.get("object_id"))
+        projected.append(value)
+        groups.setdefault(value["object_id"], []).append(value)
+    return projected, groups
+
+
+def _assert_disposal_available(plan, *, specs=None):
+    from .object_storage_cleanup import assert_referenceable, assert_remote_available
+    selected = plan.specs if specs is None else specs
+    assert_referenceable(plan.archive_root, (spec.object_id for spec in selected))
+    for spec in selected:
+        assert_remote_available(plan.archive_root, store_ref=plan.store_ref, remote_key=spec.remote_key,
+                                object_id=spec.object_id)
+
+
 def _fresh_revalidated(
     plan: ObjectStorageBytesPreservationPlan,
     *,
     progress_hook: Callable[[ExactOperationProgress], None] | None,
 ) -> ObjectStorageBytesPreservationPlan:
+    _assert_disposal_available(plan)
     _require_setup_evidence(
         plan.archive_root,
         provider_kind=plan.provider_kind,
@@ -3094,17 +3134,26 @@ def _apply_with_store(
 ) -> dict[str, Any]:
     if plan.manifest is None:
         raise _fail("object_storage_preservation_no_writes")
+    _assert_disposal_available(plan)
     payloads, writer, verifier, ledger = _execution_adapters(plan, transport)
-    core = apply_exact_operation(
-        plan.manifest,
-        payloads=payloads,
-        writer=writer,
-        verifier=verifier,
-        checkpoint_store=checkpoints,
-        approval_authority=authority,
-        resume=resume,
-        progress_hook=progress_hook,
-    )
+    try:
+        core = apply_exact_operation(
+            plan.manifest,
+            payloads=payloads,
+            writer=writer,
+            verifier=verifier,
+            checkpoint_store=checkpoints,
+            approval_authority=authority,
+            resume=resume,
+            progress_hook=progress_hook,
+        )
+    except ExactOperationManifestError as error:
+        from .storage_cancellation import is_cancelled, exact_result
+        if not is_cancelled(error):
+            raise
+        receipt_count = sum(_read_terminal_receipt(plan, spec, ledger) is not None for spec in plan.specs)
+        return exact_result(schema=RESULT_SCHEMA, manifest=plan.manifest, authority=authority,
+                            checkpoints=checkpoints, durable_receipt_count=receipt_count)
     durable = _durable_result_counts(plan, ledger)
     classifications = durable["classification_counts"]
     review_count = int(classifications["review_required"])
@@ -3170,7 +3219,9 @@ def _apply_core(
         raise _fail("object_storage_preservation_no_writes")
     current = _fresh_revalidated(plan, progress_hook=progress_hook)
     authority = _assert_approved(current, claim, context)
-    with exact_operation_writer_lock(current.archive_root) as writer_lock:
+    from .operation_target_leases import TargetLeases
+    with TargetLeases(current.archive_root, [("object", spec.object_id) for spec in current.specs]), exact_operation_writer_lock(current.archive_root) as writer_lock:
+        _assert_disposal_available(current)
         _persist_control(current)
         checkpoints = FileExactOperationCheckpointStore(current.archive_root, writer_lock=writer_lock)
         try:
@@ -3230,7 +3281,9 @@ def resume_object_storage_bytes_preservation(
     ):
         raise _fail("object_storage_preservation_resume_invalid")
     context = object_storage_bytes_preservation_context(plan, reviewer_claim=reviewer_claim)
-    with exact_operation_writer_lock(plan.archive_root) as writer_lock:
+    from .operation_target_leases import TargetLeases
+    with TargetLeases(plan.archive_root, [("object", spec.object_id) for spec in plan.specs]), exact_operation_writer_lock(plan.archive_root) as writer_lock:
+        _assert_disposal_available(plan)
         checkpoints = FileExactOperationCheckpointStore(plan.archive_root, writer_lock=writer_lock)
 
         def _writer(claim: _ClaimedExactHumanApproval) -> Mapping[str, Any]:

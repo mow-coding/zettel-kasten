@@ -34,3 +34,48 @@ Temporary files cannot silently use `preserve`; meaningful intermediate
 evidence needs the appropriate role and reason. A valid full-access grant
 covers the official child operations without additional approval windows.
 Do not delete already-uploaded remote temporary objects through local cleanup.
+
+## Already-uploaded disposable files
+
+The helper AI owns this classification when cleanup has been delegated. Read
+the signed private inventory and the actual content, creation purpose,
+references, and active-work records. Prepare the private classification and
+exact-key request with a reason for each proposed deletion; do not ask the user
+to label each object. Management/exclusive-writer evidence must be established
+from real operating facts, never assumed from a bucket name or credential.
+Unknown ownership, uncertain content, or an active reference means retain and
+report the missing fact, with no upload or delete.
+
+Use `object-storage-cleanup` for remote inventory, qualification, exact-key
+planning, execution and resume. Local activity cleanup does not delete a remote
+copy. Classify from creation purpose, contents, recorded work and present
+references, never solely a filename, age or absence of links. The remote
+inventory path can qualify eligible legacy files lacking receipts; that absence
+is not a permanent unsupported state. Preserve necessary/shared data and active
+work. Delete only approved exact keys and verify absence. An upload history is
+not by itself a permanent preservation requirement. Keep uncertain effects and
+use the original request's authenticated resume; never blindly repeat DELETE.
+
+For a legacy inventory that needs content review, set
+`include_content_samples: true` in the private inventory request. WOM then
+verifies each complete remote object's SHA-256 while retaining at most the
+first 4,096 bytes in the signed private inventory. Decode
+`content_prefix_base64` only inside the private activity context and compare
+it with creation purpose, work records and present references. The ordinary
+command result deliberately does not echo content or remote keys. Work in
+bounded selections of at most 4,096 objects. A prefix that is truncated,
+binary, secret-bearing or ambiguous is not proof that the whole file is
+disposable; hold it for further supported review rather than infer from its
+name. Prepare the exact classification file yourself from evidence instead of
+asking the user to label each object. Do not assert exclusive-writer control
+without actual management evidence.
+
+Use `object-storage-open` to open a temporary read link. Keep links and credential
+values out of ordinary logs and zet bodies; opening is not a backup verification.
+
+Upload, local-only bytes preservation (`object-storage-adopt-existing
+--preserve-local-only`), offload, restore and activity cleanup retain an early
+operation reference and a complete result artifact. After interruption inspect
+that run and follow the saved plan/claim recovery route. Do not report all objects
+preserved from a partial result, or re-upload a terminally verified object merely
+because the parent command was interrupted.

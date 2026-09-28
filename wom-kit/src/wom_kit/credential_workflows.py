@@ -4442,6 +4442,120 @@ def execute_spawned_authenticated_notion_ancestor_recovery(
     return {key: raw[key] for key in _ANCESTOR_PUBLIC_KEYS if key in raw}
 
 
+_CONTENT_WORKER_KEYS = {"ok", "reason_code", "provider_calls", "item_count", "candidate_count"}
+
+
+def _execute_authenticated_notion_content_core(invocation, *, native, notion_adapter=None, key_provider=None,
+                                               download=None, pacer=None):
+    """PAT-only child engine; the bearer cannot cross its aggregate IPC result."""
+    from dataclasses import replace
+    from .credential_capability import CREDENTIAL_CAPABILITY_CONTENT_OPERATION
+    from .provider_workflows import plan_notion_content
+    from .provider_notion_read import collect
+    from .provider_notion_media import open_media
+    payload = invocation.manifest
+    manifest, options = payload["request"], payload["options"]
+    preview = plan_notion_content(invocation.archive_root, manifest, **options)
+    if preview["plan_sha256"] != invocation.expected_plan_sha256:
+        raise ValueError("provider_plan_changed")
+    capability = _CredentialCapability.from_document(invocation.credential_capability)
+    if capability.operation != CREDENTIAL_CAPABILITY_CONTENT_OPERATION:
+        raise ValueError("credential_capability_operation_invalid")
+    capability.validate_recovery_binding(request_sha256=preview["request_sha256"], plan_sha256=preview["plan_sha256"],
+        scopes=_credential_capability_scopes(manifest, max_items=invocation.max_items, offset=invocation.offset),
+        reviewed_by=invocation.reviewed_by, now_utc=datetime.now(timezone.utc))
+    provider = notion_adapter if notion_adapter is not None else _NotionHttpAdapter()
+    if type(provider) is not _NotionHttpAdapter or provider.capability_transport_attempts_per_call != 1:
+        raise ValueError("credential_capability_invalid")
+    request = parse_manifest(manifest)
+    plan = replace(build_plan(request, max_items=invocation.max_items, offset=invocation.offset), plan_sha256=preview["plan_sha256"])
+    def with_key(key_view):
+        claimed = _claim_credential_capability_use(invocation.archive_root, capability, key_view,
+            clock=lambda: datetime.now(timezone.utc))
+        fingerprint_key = None
+        try:
+            fingerprint_key = derive_windows_fingerprint_key(key_view, current_windows_owner_binding(native))
+            broker = _ReceiptBackedNotionCredentialBroker(archive_root=invocation.archive_root, native=native,
+                receipt_authentication_key=key_view, secret_fingerprint_key=fingerprint_key, claimed_use=claimed)
+            result = collect(Path(invocation.archive_root), request=request, plan=plan, broker=broker, adapter=provider,
+                include_media=options["include_media"], include_connections=options["include_connections"],
+                max_provider_requests=options["max_provider_requests"], download=download or open_media,
+                pacer=pacer or ArchiveInterprocessRequestPacer(invocation.archive_root))
+            claimed.finalize_succeeded()
+            return {"ok": True, "reason_code": "notion_content_staged", "provider_calls": result["provider_calls"],
+                "item_count": result["item_count"], "candidate_count": result["candidate_count"]}
+        except Exception:
+            if claimed.status == "started":
+                try:
+                    claimed.finalize_failed("notion_content_fetch_failed")
+                except Exception:
+                    pass
+            return {"ok": False, "reason_code": "notion_content_fetch_failed", "provider_calls": claimed.provider_request_authorizations,
+                "item_count": 0, "candidate_count": 0}
+        finally:
+            if fingerprint_key is not None:
+                fingerprint_key[:] = b"\0" * len(fingerprint_key)
+    return _key_provider(native, key_provider).use_key(invocation.archive_root, with_key, create_if_missing=False)
+
+
+def _spawned_content_entry(send_connection, invocation):
+    try:
+        native = _CtypesWindowsNativeFacade(cli_live_approved=True)
+        result = _execute_authenticated_notion_content_core(invocation, native=native,
+            key_provider=_StableArchiveFingerprintKeyProvider(native))
+    except Exception:
+        # Failure can follow a credential/provider boundary; never invent zero
+        # side effects when this outer layer has no authenticated counts.
+        result = _recovery_worker_transport_marker()
+    try:
+        send_connection.send(result)
+    finally:
+        send_connection.close()
+
+
+def execute_spawned_authenticated_notion_content(archive_root, manifest, *, expected_plan_sha256, reviewed_by,
+        max_items=1000, offset=0, include_media=True, include_connections=False, max_provider_requests=20000,
+        exact_human_approval_claim=None, expected_exact_approval_plan_sha256=None,
+        expected_exact_approval_target_binding_sha256=None, worker_spawner=None):
+    from . import archive_services
+    from .credential_capability import CREDENTIAL_CAPABILITY_CONTENT_OPERATION
+    from .provider_workflows import plan_notion_content
+    from .exact_human_approval_windows import ExactHumanApprovalOperation
+    from .operation_approval_binding import plan_digest_approval_binding
+    if exact_human_approval_claim is None:
+        return archive_services._compound_exact_human_approval_blocked(lifecycle_action="notion_provider_content")
+    root = archive_services.require_existing_archive_root(archive_root)
+    archive_services._require_exact_human_operation_approval(root,
+        plan_digest_approval_binding(ExactHumanApprovalOperation.notion_page_recovery, expected_plan_sha256), reviewer_claim=reviewed_by,
+        expected_plan_sha256=expected_exact_approval_plan_sha256, expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+        claim=exact_human_approval_claim)
+    options = dict(max_items=max_items, offset=offset, include_media=include_media, include_connections=include_connections,
+        max_provider_requests=max_provider_requests)
+    preview = plan_notion_content(root, manifest, **options)
+    if preview["plan_sha256"] != expected_plan_sha256:
+        raise ValueError("provider_plan_changed")
+    capability = _CredentialCapability.issue(request_sha256=preview["request_sha256"], plan_sha256=preview["plan_sha256"],
+        scopes=_credential_capability_scopes(manifest, max_items=max_items, offset=offset), reviewed_by=reviewed_by,
+        max_provider_requests=max_provider_requests, operation=CREDENTIAL_CAPABILITY_CONTENT_OPERATION)
+    invocation = _NotionRecoveryWorkerInvocation(archive_root=str(root), manifest={"request": dict(manifest), "options": options},
+        credential_capability=capability.canonical_document(), expected_plan_sha256=expected_plan_sha256,
+        reviewed_by=reviewed_by, max_items=max_items, offset=offset)
+    outcome = (worker_spawner or _SpawnNotionRecoveryWorkerSpawner(target=_spawned_content_entry)).run_worker(invocation)
+    raw = outcome.result if isinstance(outcome, _NotionRecoveryWorkerRunOutcome) else outcome
+    # No child-provided paths, arbitrary reason strings, titles or snippets
+    # are allowed across this boundary, including in failures.
+    if (type(raw) is not dict or set(raw) != _CONTENT_WORKER_KEYS or any(type(key) is not str for key in raw)
+            or type(raw.get("ok")) is not bool or type(raw.get("reason_code")) is not str
+            or raw.get("reason_code") not in {"notion_content_staged", "notion_content_fetch_failed"}
+            or any(type(raw.get(key)) is not int or raw[key] < 0 for key in ("provider_calls", "item_count", "candidate_count"))
+            or raw["provider_calls"] > max_provider_requests
+            or raw["item_count"] > 1000000 or raw["candidate_count"] > 1000000
+            or raw["ok"] != (raw["reason_code"] == "notion_content_staged")):
+        return {"ok": False, "reason_code": "notion_content_worker_outcome_unknown", "provider_calls": None,
+            "item_count": None, "candidate_count": None}
+    return {key: raw[key] for key in _CONTENT_WORKER_KEYS}
+
+
 __all__ = [
     "WORKFLOW_PLAN_SCHEMA_VERSION",
     "WORKFLOW_RESULT_SCHEMA_VERSION",
@@ -4449,6 +4563,7 @@ __all__ = [
     "decide_authenticated_credential_lifecycle",
     "execute_authenticated_notion_page_recovery",
     "execute_spawned_authenticated_notion_page_recovery",
+    "execute_spawned_authenticated_notion_content",
     "execute_spawned_authenticated_notion_ancestor_recovery",
     "execute_spawned_authenticated_notion_page_trash",
     "execute_windows_notion_credential_adoption",

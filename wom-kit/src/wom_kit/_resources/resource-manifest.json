@@ -133,8 +133,8 @@
     {
       "source": "schemas/credential-capability-v0.1.schema.json",
       "packaged": "schemas/credential-capability-v0.1.schema.json",
-      "bytes": 5201,
-      "sha256": "6cdff54e6d05c1708bd57b1c3bc390773107d0d614fde652c7dc6a92e717eba4"
+      "bytes": 5810,
+      "sha256": "2a8d601e624d1cec08590a91661d74dcc5ae8e1a6269325f9449a542ccfd1b03"
     },
     {
       "source": "schemas/delegate-receipt.schema.json",
@@ -211,8 +211,8 @@
     {
       "source": "schemas/human-artifact-registry-v0.1.schema.json",
       "packaged": "schemas/human-artifact-registry-v0.1.schema.json",
-      "bytes": 11165,
-      "sha256": "ede8eb329822fbc3f4cc423ab65bdf17aba7d9a7877d936c5e0a7553a297ab56"
+      "bytes": 11210,
+      "sha256": "8dc16832a9a23c3ac2f57d4b1da6753b67b6045ed5e5c5030a3abd3203be3a15"
     },
     {
       "source": "schemas/imap-mailbox-adapter-manifest.schema.json",
@@ -757,8 +757,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/SKILL.md",
       "packaged": "templates/ai-runtime/wom-archive/SKILL.md",
-      "bytes": 11087,
-      "sha256": "bf74253c28d60723dcb8b8a68bd2d2f177dc709adbe63b1be76b6f37c1aaa8fa"
+      "bytes": 11398,
+      "sha256": "dd3aa108a1aa7cd1e97734cde889f75015142c637c541ce47e8238740bc61847"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
@@ -787,8 +787,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/long-operations-and-updates.md",
       "packaged": "templates/ai-runtime/wom-archive/references/long-operations-and-updates.md",
-      "bytes": 2631,
-      "sha256": "ab0eba0ac4c91905bcd2ce4c7f88c38fcd41e443f78383b5c1fdf37532f000fd"
+      "bytes": 2934,
+      "sha256": "b753ebcc37a2d387f271b3432e5eba8e8ee5df74235ee477567c4f4bfb22a040"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/models-and-reasoning.md",
@@ -817,20 +817,20 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/startup-and-update.md",
       "packaged": "templates/ai-runtime/wom-archive/references/startup-and-update.md",
-      "bytes": 9337,
-      "sha256": "827f2bb33b4aae57cfe7e53edc1aadfaa580e88f4f4d72c56c0b68cce6d85b12"
+      "bytes": 9507,
+      "sha256": "964377f12e549134da12dd0c316eeba2f0e787bdf28709edda63260abf30c25f"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/storage-scope.md",
       "packaged": "templates/ai-runtime/wom-archive/references/storage-scope.md",
-      "bytes": 2291,
-      "sha256": "e2a5b37c22640268e8ced30490f1f950ff80d38bb882ae68e3ad8c8500a4fc65"
+      "bytes": 5123,
+      "sha256": "81ae46cfb1ce3257539a4e72cff81ffa8f96cf456d1e77b4e1eb829b5950c745"
     },
     {
       "source": "templates/company/AGENTS.md",
       "packaged": "templates/company/AGENTS.md",
-      "bytes": 11843,
-      "sha256": "6821f498014c19a9f5f280d9b3173195deb37fbb76154a5a64f01b5951a3f280"
+      "bytes": 12035,
+      "sha256": "38ccbe481544a47ff4fff5a452697c7ded71b8544d85016529eb82526b6cab00"
     },
     {
       "source": "templates/company/archive-identity.yml",
@@ -901,8 +901,8 @@
     {
       "source": "templates/family/AGENTS.md",
       "packaged": "templates/family/AGENTS.md",
-      "bytes": 11983,
-      "sha256": "ad3c124bf7d66d3d8922f717171b79e0e22600c9bbfc91aacaedc57dc521102d"
+      "bytes": 12175,
+      "sha256": "c87330c2ea7b09fff892c7f030a0139f7c019be95e7377109a69618d1059c9a0"
     },
     {
       "source": "templates/family/archive-identity.yml",
@@ -973,8 +973,8 @@
     {
       "source": "templates/personal/AGENTS.md",
       "packaged": "templates/personal/AGENTS.md",
-      "bytes": 13061,
-      "sha256": "211e622af1be463de989039ced7bc38e79703ec8e1c614b524a0770173197706"
+      "bytes": 13253,
+      "sha256": "13d56592109d92ea0342a328a861b4e0f6f89d159b0fe397cc23ed7cf4aa3841"
     },
     {
       "source": "templates/personal/archive-identity.yml",

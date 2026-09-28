@@ -47,7 +47,16 @@ CREDENTIAL_CAPABILITY_TRASH_OPERATION = "notion_page_trash_write"
 # v0.4.44: notion-recover reads only the parent link of pages, blocks,
 # databases and data sources (GET), never content.
 CREDENTIAL_CAPABILITY_ANCESTOR_OPERATION = "notion_ancestor_recovery_read"
+CREDENTIAL_CAPABILITY_CONTENT_OPERATION = "notion_provider_content_read"
 CREDENTIAL_CAPABILITY_PROFILES: dict[str, dict[str, Any]] = {
+    CREDENTIAL_CAPABILITY_CONTENT_OPERATION: {
+        "consumer": "wom:workflow:notion-provider-content",
+        # POST/DELETE are limited by the adapter to cached read-query handles.
+        # This profile never allows page/block/database/view content writes.
+        "allowed_methods": ("GET", "POST", "DELETE"),
+        "endpoint_classes": ("retrieve_source", "retrieve_page_property", "create_view_query", "retrieve_view_query", "delete_view_query"),
+        "required_registered_capabilities": ("read_content", "retrieve_page"),
+    },
     CREDENTIAL_CAPABILITY_OPERATION: {
         "consumer": CREDENTIAL_CAPABILITY_CONSUMER,
         "allowed_methods": CREDENTIAL_CAPABILITY_ALLOWED_METHODS,

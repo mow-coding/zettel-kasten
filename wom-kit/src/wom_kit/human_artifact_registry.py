@@ -1075,11 +1075,12 @@ def _validate_approval_use_document(
         result["approval_id"]
     ) is None:
         raise _fail("human_artifact_registry_document_invalid")
-    if result.get("operation") not in {"register_project_root", "transition_artifact"}:
+    if result.get("operation") not in {"register_project_root", "transition_artifact", "transition_batch"}:
         raise _fail("human_artifact_registry_document_invalid")
     if type(result.get("target_id")) is not str or not (
         ROOT_ID_RE.fullmatch(result["target_id"])
         or ARTIFACT_ID_RE.fullmatch(result["target_id"])
+        or (result.get("operation") == "transition_batch" and re.fullmatch(r"har_batch_[0-9a-f]{64}", result["target_id"]))
     ):
         raise _fail("human_artifact_registry_document_invalid")
     for name in ("context_sha256", "approval_authority_sha256"):
@@ -1572,6 +1573,8 @@ def _validate_receipt_document(
 def _load_receipt_chains(
     context: _ArchiveContext,
     authority: tuple[bytes, dict[str, Any]] | None,
+    *,
+    _artifact_ids: set[str] | None = None,
 ) -> dict[str, _ReceiptChain]:
     directory = _registry_subdirectory(context, RECEIPTS_DIRECTORY, create=False)
     if directory is None:
@@ -1586,6 +1589,8 @@ def _load_receipt_chains(
     chains: dict[str, _ReceiptChain] = {}
     for artifact_entry in sorted(artifact_entries, key=lambda item: item.name):
         artifact_id = artifact_entry.name
+        if _artifact_ids is not None and artifact_id not in _artifact_ids:
+            continue
         try:
             info = artifact_entry.stat(follow_symlinks=False)
         except OSError:
@@ -1773,7 +1778,7 @@ def _scan_scope(
     pending: list[tuple[Path, dict[str, int]]] = [(scope, root_identity)]
     observed: list[_ObservedArtifact] = []
     reasons: list[str] = []
-    while pending and summary["entries_seen"] < max_entries:
+    while pending and (max_entries is None or summary["entries_seen"] < max_entries):
         directory, expected_identity = pending.pop()
         try:
             before = os.lstat(directory)
@@ -1796,7 +1801,7 @@ def _scan_scope(
             continue
         with iterator:
             for entry in iterator:
-                if summary["entries_seen"] >= max_entries:
+                if max_entries is not None and summary["entries_seen"] >= max_entries:
                     summary["truncated"] = True
                     reasons.append("entry_limit_reached")
                     break
@@ -1922,9 +1927,10 @@ def _scan_internal(
     archive_root: Path | str,
     *,
     max_entries_per_root: int,
+    _complete_inventory: bool = False,
 ) -> _ScanResult:
     context = _validated_archive(archive_root)
-    limit = _normalize_scan_limit(max_entries_per_root)
+    limit = None if _complete_inventory else _normalize_scan_limit(max_entries_per_root)
     authority = _load_authority(context, create=False)
     roots = _load_root_documents(context, authority)
     chains = _load_receipt_chains(context, authority)
@@ -2140,6 +2146,7 @@ def _transition_plan_internal(
     size_bytes: int,
     related_refs: Sequence[Mapping[str, Any]] | None,
     max_entries_per_root: int,
+    _selected_state: _ArtifactState | None = None,
 ) -> tuple[dict[str, Any], _ArtifactState, dict[str, Any]]:
     if type(artifact_id) is not str or ARTIFACT_ID_RE.fullmatch(artifact_id) is None:
         raise _fail("human_artifact_artifact_id_invalid")
@@ -2152,13 +2159,15 @@ def _transition_plan_internal(
         refs,
         code="human_artifact_related_ref_invalid",
     )
-    scan = _scan_internal(
-        archive_root,
-        max_entries_per_root=max_entries_per_root,
-    )
-    if not scan.public["coverage_complete"]:
-        raise _fail("human_artifact_scan_incomplete")
-    state = scan.states.get(artifact_id)
+    if _selected_state is None:
+        scan = _scan_internal(archive_root, max_entries_per_root=max_entries_per_root)
+        if not scan.public["coverage_complete"]:
+            raise _fail("human_artifact_scan_incomplete")
+        state = scan.states.get(artifact_id)
+    else:
+        state = _selected_state
+        if state.observed.artifact_id != artifact_id:
+            raise _fail("human_artifact_artifact_id_invalid")
     if state is None:
         raise _fail("human_artifact_artifact_not_found")
     if target_state not in ALLOWED_TRANSITIONS[state.lifecycle_state]:

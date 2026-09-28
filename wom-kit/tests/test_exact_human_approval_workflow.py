@@ -152,7 +152,7 @@ class ExactHumanApprovalWorkflowTests(unittest.TestCase):
         claim_path = next((self.root / CLAIMS_RELATIVE_ROOT).glob("*.json"))
         self.assertIn('"status":"succeeded"', claim_path.read_text(encoding="utf-8"))
 
-    def test_claim_publication_boundary_exits_before_writer_inside_key_consumer(
+    def test_claim_publication_and_provider_exit_before_writer(
         self,
     ) -> None:
         events: list[str] = []
@@ -200,7 +200,7 @@ class ExactHumanApprovalWorkflowTests(unittest.TestCase):
                 events.append("boundary_exit")
 
         def writer(_claim) -> dict[str, Any]:
-            self.assertTrue(key_active)
+            self.assertFalse(key_active)
             self.assertFalse(boundary_active)
             self.assertEqual(
                 events,
@@ -209,6 +209,7 @@ class ExactHumanApprovalWorkflowTests(unittest.TestCase):
                     "boundary_enter",
                     "claim_publication",
                     "boundary_exit",
+                    "key_exit",
                 ],
             )
             events.append("writer")
@@ -231,8 +232,8 @@ class ExactHumanApprovalWorkflowTests(unittest.TestCase):
                 "boundary_enter",
                 "claim_publication",
                 "boundary_exit",
-                "writer",
                 "key_exit",
+                "writer",
             ],
         )
 
@@ -787,7 +788,7 @@ class ExactHumanApprovalWorkflowTests(unittest.TestCase):
         self.assertFalse(result["approval_identifier_exposed"])
         self.assertFalse(result["transaction_identifier_exposed"])
 
-    def test_transaction_auto_resume_holds_key_through_unique_selection_and_writer(
+    def test_transaction_auto_resume_releases_provider_inside_same_filesystem_boundary(
         self,
     ) -> None:
         started = execute_exact_human_approved_write(
@@ -842,41 +843,23 @@ class ExactHumanApprovalWorkflowTests(unittest.TestCase):
         provider = NonReentrantKeyProvider()
         original_selected_resume = (
             workflow_module
-            ._resume_exact_human_approved_transaction_with_key_core
+            ._resume_exact_human_approved_transaction_with_claim_core
         )
 
-        def old_gap_publisher_attempt(*args, **kwargs):
+        def selected_handler(*args, **kwargs):
             events.append("selected_handler_enter")
-            with self.assertRaises(
-                ExactHumanApprovalWorkflowError
-            ) as blocked:
-                execute_exact_human_approved_write(
-                    self.root,
-                    self.context,
-                    lambda _claim: {
-                        "ok": False,
-                        "reason_code": "competing_interrupted",
-                    },
-                    native=_Native((APPROVE_BUTTON_ID, True)),
-                    key_provider=provider,
-                )
-            self.assertEqual(
-                blocked.exception.code,
-                "exact_human_approval_key_unavailable",
-            )
-            events.append("publisher_rejected")
-            self.assertEqual(
-                len(list((self.root / CLAIMS_RELATIVE_ROOT).glob("*.json"))),
-                1,
-            )
+            self.assertFalse(provider.active)
+            # A child may authenticate while the parent retains only its own
+            # exact-context claim. The filesystem boundary is still held.
+            provider.use_key(self.root, lambda _key: events.append("child_authenticated"))
             result = original_selected_resume(*args, **kwargs)
             events.append("selected_handler_exit")
             return result
 
         with patch.object(
             workflow_module,
-            "_resume_exact_human_approved_transaction_with_key_core",
-            side_effect=old_gap_publisher_attempt,
+            "_resume_exact_human_approved_transaction_with_claim_core",
+            side_effect=selected_handler,
         ):
             result = resume_exact_human_approved_transaction_auto(
                 self.root,
@@ -902,20 +885,21 @@ class ExactHumanApprovalWorkflowTests(unittest.TestCase):
             [
                 "filesystem_enter",
                 "key_enter",
+                "key_exit",
                 "checkpoint_guard",
                 "selected_handler_enter",
-                "publisher_key_blocked",
-                "publisher_rejected",
+                "key_enter",
+                "child_authenticated",
+                "key_exit",
                 "checkpoint_guard",
                 "writer",
                 "finalizer_succeeded",
                 "selected_handler_exit",
-                "key_exit",
                 "filesystem_exit",
             ],
         )
-        self.assertEqual(provider.successful_acquisitions, 1)
-        self.assertEqual(provider.blocked_acquisitions, 1)
+        self.assertEqual(provider.successful_acquisitions, 2)
+        self.assertEqual(provider.blocked_acquisitions, 0)
         serialized = json.dumps(result, sort_keys=True)
         self.assertNotIn(approval_id, serialized)
         self.assertNotIn("exact_human_approval", result)
@@ -1147,7 +1131,7 @@ class ExactHumanApprovalWorkflowTests(unittest.TestCase):
         self.assertEqual(guard_calls, 2)
         self.assertEqual(writer_calls, 0)
 
-    def test_transaction_auto_resume_candidate_missing_handler_runs_inside_key_and_filesystem_boundaries(
+    def test_transaction_auto_resume_missing_handler_runs_after_key_inside_filesystem_boundary(
         self,
     ) -> None:
         (self.root / CLAIMS_RELATIVE_ROOT).mkdir(parents=True)
@@ -1182,7 +1166,7 @@ class ExactHumanApprovalWorkflowTests(unittest.TestCase):
 
         def handle_missing(reason: str) -> dict[str, Any]:
             self.assertEqual(reason, "authenticated_candidate_missing")
-            self.assertEqual(events, ["filesystem_enter", "key_enter"])
+            self.assertEqual(events, ["filesystem_enter", "key_enter", "key_exit"])
             events.append("handler")
             return {
                 "ok": True,
@@ -1207,8 +1191,8 @@ class ExactHumanApprovalWorkflowTests(unittest.TestCase):
             [
                 "filesystem_enter",
                 "key_enter",
-                "handler",
                 "key_exit",
+                "handler",
                 "filesystem_exit",
             ],
         )

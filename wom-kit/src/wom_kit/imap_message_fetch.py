@@ -91,6 +91,9 @@ def plan_fetch(
     since_days: int | None = None,
     max_messages: int = 50,
     timeout_seconds: int = 30,
+    sync: bool = False,
+    resume: bool = False,
+    extract_mime: bool = False,
 ) -> dict[str, Any]:
     """Read-only plan; reads no credential and opens no connection."""
 
@@ -124,8 +127,17 @@ def plan_fetch(
     if not isinstance(timeout_seconds, int) or not 1 <= timeout_seconds <= 120:
         blockers.append("imap_fetch_timeout_invalid")
     output_relative = f"{OUTPUT_PREFIX}/{batch_id}"
-    if _SAFE_ID_RE.fullmatch(str(batch_id or "")) and root.joinpath(*output_relative.split("/")).exists():
+    if resume and not sync:
+        blockers.append("imap_fetch_resume_requires_sync")
+    if _SAFE_ID_RE.fullmatch(str(batch_id or "")) and root.joinpath(*output_relative.split("/")).exists() and not resume:
         blockers.append("imap_fetch_output_exists")
+    incremental = {}
+    if sync or resume or extract_mime:
+        from . import provider_imap
+        scope = provider_imap.scope_identity(dict(source_id=source_id, imap_host=imap_host,
+            imap_port=imap_port, username_ref=username_ref, mailbox=mailbox))
+        incremental = {"sync": sync, "resume": resume, "extract_mime": extract_mime,
+            "uid_state_sha256": provider_imap.state_digest(root, scope)}
     plan_sha256 = "sha256:" + hashlib.sha256(json.dumps({
         "schema": PLAN_SCHEMA,
         "archive_id": archive_id,
@@ -141,6 +153,7 @@ def plan_fetch(
         "max_messages": max_messages,
         "timeout_seconds": timeout_seconds,
         "output": output_relative,
+        **incremental,
     }, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
     return {
         "ok": not blockers,
@@ -149,6 +162,7 @@ def plan_fetch(
         "plan_sha256": plan_sha256,
         "source_id": source_id,
         "batch_id": batch_id,
+        **incremental,
         "output": output_relative,
         "selection_rule": selection_rule,
         "max_messages": max_messages,
@@ -178,6 +192,9 @@ def execute_fetch(
     since_days: int | None = None,
     max_messages: int = 50,
     timeout_seconds: int = 30,
+    sync: bool = False,
+    resume: bool = False,
+    extract_mime: bool = False,
     expected_plan_sha256: str,
     environment: Callable[[str], str | None] | None = None,
     clock: Callable[[], datetime] | None = None,
@@ -189,7 +206,7 @@ def execute_fetch(
     arguments = dict(source_id=source_id, batch_id=batch_id, imap_host=imap_host, imap_port=imap_port,
                      username_ref=username_ref, app_password_ref=app_password_ref, mailbox=mailbox,
                      selection_rule=selection_rule, since_days=since_days, max_messages=max_messages,
-                     timeout_seconds=timeout_seconds)
+                     timeout_seconds=timeout_seconds, sync=sync, resume=resume, extract_mime=extract_mime)
     plan = plan_fetch(archive_root, **arguments)
     if not plan["ok"]:
         return {**plan, "dry_run": False}
@@ -202,6 +219,10 @@ def execute_fetch(
     if not username or not password:
         return {**plan, "dry_run": False, "ok": False, "credential_reads": 2,
                 "blockers": ["imap_fetch_credential_unavailable"]}
+    if sync or resume or extract_mime:
+        from . import provider_imap
+        return provider_imap.execute(root, arguments=arguments, plan=plan, username=username,
+                                     password=password, factory=_client_factory)
     output = root.joinpath(*plan["output"].split("/"))
     output.mkdir(parents=True, exist_ok=False)
     items: list[dict[str, Any]] = []

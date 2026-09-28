@@ -115,20 +115,26 @@ class SingleRecordGitPublicWorkflowTests(unittest.TestCase):
         original, pointer = self.base.original_git(case["a"])
         self.assertEqual({path for group in original.prepared.groups for path in group.paths}, set(case["selected"]))
         scope = original.prepared.session_scope.document()
-        self.assertEqual(scope["schema"], "wom-kit/git-backup-session-scope/v2")
+        self.assertEqual(scope["schema"], "wom-kit/git-backup-session-scope/v4")
+        self.assertTrue(set(case["selected"]) <= set(scope["inspection_paths"]))
+        self.assertTrue(set(scope["inspection_paths"]) <= set(case["intake_a"]["outputs"]))
         self.assertEqual(scope["selected_change_count"], len(case["selected"]))
         self.assertTrue(all(proof["producer"] == "authenticated_source_intake_record_output"
                             for proof in scope["producer_proofs"]))
         self.assertEqual({proof["output_kind"] for proof in scope["producer_proofs"]},
-                         {"source_intake_receipt", "common_completion_receipt"})
+                         {"common_completion_receipt" if path == case["intake_a"]["common"]
+                          else "source_intake_receipt" for path in case["selected"]})
         other = [proof for proof in scope["producer_proofs"]
                  if proof["original_work_session_binding"]["work_session_ref"] == case["b"]["session"]]
-        self.assertEqual(len(other), 2)
-        exclusions = {row["private_change"]["path"]: row for row in original.prepared.excluded_changes}
-        for path in case["intake_b"]["outputs"]:
-            self.assertEqual(exclusions[path]["scope"], "other_session")
+        # v4 chooses authenticated owned paths before content inspection.
+        # Other-session/unknown files remain outside the observation, rather
+        # than requiring full hashes just to classify them as exclusions.
+        self.assertEqual(other, [])
+        self.assertEqual(scope["excluded_change_count"], 0)
+        self.assertEqual(original.prepared.excluded_changes, ())
+        self.assertTrue(set(scope["inspection_paths"]).isdisjoint(case["intake_b"]["outputs"]))
         for path in (case["generic"], "notes.md", case["intake_a"]["source"], case["intake_b"]["source"]):
-            self.assertEqual(exclusions[path]["scope"], "unknown")
+            self.assertNotIn(path, scope["inspection_paths"])
         self.base.assert_exclusions()
         return original, pointer
 

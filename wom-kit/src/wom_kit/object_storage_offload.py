@@ -648,7 +648,7 @@ def _build_plan(
         remote = None
         conflicting = False
         for row in group:
-            candidate = restore._remote_location(row, provider_kind=normalized_provider, store_ref=normalized_store)
+            candidate = restore._remote_location(row, provider_kind=normalized_provider, store_ref=normalized_store, archive_root=root)
             if candidate is not None:
                 if remote is not None and remote.get("remote_key") != candidate.get("remote_key"):
                     conflicting = True
@@ -1556,6 +1556,8 @@ class _Writer:
                 raise ValueError("write boundary")
             if value is None or value != spec.receipt_token:
                 raise ValueError("write boundary")
+            from .operation_cancellation import checkpoint
+            checkpoint()
             if _read_receipt(self.plan, spec) is not None:
                 _discard_marker(self.plan, spec, execution_sha256=self.execution_sha256)
                 return
@@ -1581,11 +1583,16 @@ class _Writer:
             self.status_counts[status] += 1
             if status == STATUS_BYTES_OFFLOADED:
                 self.local_bytes_freed += spec.size_bytes
+            # Do not interrupt native unlink before receipt + marker cleanup.
+            checkpoint()
             return
         if target_kind == "object_storage_offload_manifest_batch" and target_ref == MANIFEST_TARGET_REF and field_ref == "local_locations":
             if value != _manifest_batch_token(self.plan.specs):
                 raise ValueError("write boundary")
+            from .operation_cancellation import checkpoint
+            checkpoint()
             self.manifest_update_count += _apply_manifest_batch(self.plan, lifecycle=self.manifest_index_lifecycle)
+            checkpoint()
             return
         raise ValueError("write boundary")
 
@@ -1910,16 +1917,23 @@ def _apply_with_store(
     payloads = _Payloads(plan)
     writer = _Writer(plan, transport, execution_sha256=execution_sha256)
     verifier = _Verifier(plan, execution_sha256=execution_sha256)
-    core = apply_exact_operation(
-        plan.manifest,
-        payloads=payloads,
-        writer=writer,
-        verifier=verifier,
-        checkpoint_store=checkpoints,
-        approval_authority=authority,
-        resume=resume,
-        progress_hook=progress_hook,
-    )
+    try:
+        core = apply_exact_operation(
+            plan.manifest, payloads=payloads, writer=writer, verifier=verifier,
+            checkpoint_store=checkpoints, approval_authority=authority,
+            resume=resume, progress_hook=progress_hook,
+        )
+    except ExactOperationManifestError as error:
+        from .storage_cancellation import is_cancelled, exact_result
+        if not is_cancelled(error):
+            raise
+        result = exact_result(schema=RESULT_SCHEMA, manifest=plan.manifest, authority=authority,
+            checkpoints=checkpoints, durable_receipt_count=sum(_read_receipt(plan, spec) is not None for spec in plan.specs))
+        result.update(local_bytes_freed=writer.local_bytes_freed, provider_get_call_count=writer.provider_get_count,
+            manifest_location_updates=writer.manifest_update_count, remote_delete_performed=False,
+            recorded_local_unlink_count=sum((_read_receipt(plan, spec) or {}).get("offload_status") == STATUS_BYTES_OFFLOADED
+                                            for spec in plan.specs))
+        return result
     if plan.specs and core.get("status") == "completed":
         with exact_operation_writer_lock(plan.archive_root, timeout_seconds=30) if plan.concurrent else nullcontext():
             evidence = archive_services.require_current_zettel_index(plan.archive_root)

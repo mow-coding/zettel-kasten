@@ -40,6 +40,7 @@ from .exact_human_approval import (
     _ClaimedExactHumanApproval,
     _archive_identity,
     _authenticated_claim_document_core,
+    _bound_claim_document_reader,
     _parse_timestamp,
     _validated_key,
     exact_human_approval_archive_identity_sha256,
@@ -365,19 +366,17 @@ def _enumerate_claims_with_key(
         complete = False
     claims: list[dict[str, Any]] = []
     invalid = 0
-    for approval_id in matching:
-        try:
-            parsed, _archive_id = _authenticated_claim_document_core(
-                archive_root,
-                approval_id,
-                key,
-                bound_archive_root=bound_archive_root,
-                claim_parent_binding=claim_parent_binding,
-            )
-        except ExactHumanApprovalError:
-            invalid += 1
-            continue
-        claims.append(_project_claim(parsed, clock=clock))
+    with _bound_claim_document_reader(
+        archive_root, bound_archive_root=bound_archive_root,
+        claim_parent_binding=claim_parent_binding,
+    ) as read_claim:
+        for approval_id in matching:
+            try:
+                parsed, _archive_id = read_claim(approval_id, key)
+            except ExactHumanApprovalError:
+                invalid += 1
+                continue
+            claims.append(_project_claim(parsed, clock=clock))
     return claims, len(matching), invalid, complete
 
 
@@ -407,6 +406,8 @@ def _with_key_and_boundary(
             )
     except ExactApprovalClaimsError:
         raise
+    except ExactHumanApprovalError:
+        raise _fail("exact_approval_claim_store_unavailable") from None
     except _workflow.ExactHumanApprovalWorkflowError as error:
         if error.code == "exact_human_approval_key_unavailable":
             raise _fail("exact_approval_claim_key_unavailable") from None

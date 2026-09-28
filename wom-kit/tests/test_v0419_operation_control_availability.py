@@ -30,23 +30,21 @@ class OperationControlAvailabilityTests(unittest.TestCase):
             code = archive_cli.main(argv)
         return code, output.getvalue(), errors.getvalue()
 
-    def test_inventory_and_projection_distinguish_unsupported_writer(self) -> None:
+    def test_inventory_distinguishes_available_cancel_from_runtime_target_support(self) -> None:
         row = next(row for row in self.inventory["commands"]
                    if row["canonical_path"] == "operation-control")
-        self.assertEqual(row["approval_status"], "approval_fixed_closed")
-        self.assertEqual(row["approval_reason_code"], "operation_cancel_not_supported")
+        self.assertEqual(row["approval_status"], "approval_available")
+        self.assertIsNone(row["approval_reason_code"])
         self.assertTrue(row["dry_run_exposed"])
         self.assertNotIn("operation-control", command_status.COMPOUND_APPROVAL_FIXED_CLOSED_COMMANDS)
         projection = command_status.build_capability_availability_projection(self.inventory)
         projected = next(row for row in projection["rows"]
                          if row["canonical_path"] == "operation-control")
         self.assertEqual(projected["dry_run"]["state"], "available")
-        self.assertEqual(projected["approve_without_arguments"]["state"], "writer_unavailable")
-        self.assertEqual(projected["approve_without_arguments"]["detail_reason_code"],
-                         "operation_cancel_not_supported")
+        self.assertEqual(projected["approve_without_arguments"]["state"], "available")
         counts = self.inventory["counts"]
         self.assertEqual(counts["approval_fixed_closed_command_count"],
-                         counts["matched_fixed_closed_command_count"] + 1)
+                         counts["matched_fixed_closed_command_count"])
         self.assertEqual(counts["unmatched_fixed_closed_command_count"], 0)
 
     def test_parsed_modes_and_suggestions_share_reason(self) -> None:
@@ -54,7 +52,7 @@ class OperationControlAvailabilityTests(unittest.TestCase):
             ("status", "--dry-run", "available"),
             ("wait", "--dry-run", "available"),
             ("recovery-plan", "--dry-run", "available"),
-            ("cancel", "--approve", "writer_unavailable"),
+            ("cancel", "--approve", "available"),
         ):
             with self.subTest(action=action):
                 argv = self.argv(action, mode)
@@ -71,7 +69,7 @@ class OperationControlAvailabilityTests(unittest.TestCase):
     def test_help_and_doctor_suggestion_do_not_claim_compound_gap(self) -> None:
         leaf = command_status._subparser_actions(self.parser)[0].choices["operation-control"]
         text = " ".join(leaf.format_help().split())
-        self.assertIn("Writer unavailable: cancel is unsupported", text)
+        self.assertIn("Request cooperative cancellation", text)
         self.assertNotIn("compound", text)
         doctor = object.__new__(archive_cli.Doctor)
         doctor.diagnostics = [archive_cli.Diagnostic(
@@ -80,30 +78,31 @@ class OperationControlAvailabilityTests(unittest.TestCase):
         )]
         doctor._attach_suggested_command_statuses()
         status = doctor.diagnostics[0].suggested_command_status
-        self.assertEqual(status["requested_mode_reason_code"], "operation_cancel_not_supported")
-        self.assertEqual(status["capability_availability"]["state"], "writer_unavailable")
+        self.assertNotEqual(status["requested_mode_reason_code"], "operation_cancel_not_supported")
+        self.assertEqual(status["capability_availability"]["state"], "available")
 
     def test_cancel_dispatch_refuses_before_control_reads_and_echoes_no_inputs(self) -> None:
         private_marker = "PRIVATE_CONTROL_VALUE_MUST_NOT_BE_ECHOED"
         argv = self.argv("cancel", "--approve", private_marker)
         argv[argv.index("--operation-ref") + 1] = private_marker
-        with mock.patch.object(operation_control, "unsupported_cancel",
+        from wom_kit import operation_cancellation
+        with mock.patch.object(operation_cancellation, "request_cancel",
                                side_effect=AssertionError("control_handler_must_not_run")):
             code, output, errors = self.invoke(argv)
             self.assertEqual(code, 1)
             self.assertEqual(errors, "")
             result = json.loads(output)
-            self.assertEqual(result["capability_state"], "writer_unavailable")
-            self.assertEqual(result["reason_codes"], ["operation_cancel_not_supported"])
-            self.assertEqual(result["effects_state"], "none")
-            self.assertEqual(result["files_written"], [])
+            self.assertEqual(result["state"], "blocked")
+            self.assertFalse(result["control"]["cancel_requested"])
+            self.assertIsNone(result["operation_ref"])
             self.assertNotIn(private_marker, output)
             self.assertNotIn("compound_exact", output)
             argv[-1] = "text"
             code, output, errors = self.invoke(argv)
             self.assertEqual(code, 1)
-            self.assertEqual(output, "")
-            self.assertIn("cancel is unsupported", errors)
+            self.assertEqual(errors, "")
+            self.assertIn("State: blocked", output)
+            self.assertNotIn(private_marker, output)
             self.assertNotIn("compound", errors)
             self.assertNotIn(private_marker, errors)
 

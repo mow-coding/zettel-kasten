@@ -23,6 +23,7 @@ import re
 import secrets
 import stat
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -492,51 +493,8 @@ def _validate_claim_document(
     return result
 
 
-def _read_bound_claim_bytes(
-    path: Path,
-    *,
-    parent_binding: dict[str, Any],
-) -> bytes:
-    """Read one single-link claim through its already-bound parent."""
-
-    if parent_binding.get("path") != path.parent:
-        raise OSError("exact_human_approval_claim_parent_mismatch")
-    parent_descriptor = parent_binding.get("descriptor")
-    if isinstance(parent_descriptor, int):
-        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
-        flags |= getattr(os, "O_NOFOLLOW", 0)
-        descriptor = os.open(path.name, flags, dir_fd=parent_descriptor)
-        try:
-            info = os.fstat(descriptor)
-            if (
-                not stat.S_ISREG(info.st_mode)
-                or info.st_nlink != 1
-                or info.st_size > _MAX_CLAIM_BYTES
-            ):
-                raise OSError("exact_human_approval_claim_file_unsafe")
-            chunks: list[bytes] = []
-            remaining = info.st_size
-            while remaining:
-                chunk = os.read(descriptor, min(remaining, 65536))
-                if not chunk:
-                    raise OSError("exact_human_approval_claim_read_incomplete")
-                chunks.append(chunk)
-                remaining -= len(chunk)
-            if os.read(descriptor, 1):
-                raise OSError("exact_human_approval_claim_file_changed")
-            return b"".join(chunks)
-        finally:
-            os.close(descriptor)
-
-    named_info = os.lstat(path)
-    if (
-        _is_reparse(named_info)
-        or not stat.S_ISREG(named_info.st_mode)
-        or named_info.st_nlink != 1
-        or named_info.st_size > _MAX_CLAIM_BYTES
-    ):
-        raise OSError("exact_human_approval_claim_file_unsafe")
-
+def _claim_windows_read_api():
+    """Prepare fixed native declarations only; no archive/key/handle is cached."""
     import ctypes
     from ctypes import wintypes
 
@@ -584,6 +542,60 @@ def _read_bound_claim_bytes(
     close_handle = kernel32.CloseHandle
     close_handle.argtypes = [wintypes.HANDLE]
     close_handle.restype = wintypes.BOOL
+
+    return (ctypes, wintypes, ByHandleFileInformation, create_file,
+            get_information, read_file, close_handle)
+
+
+def _read_bound_claim_bytes(
+    path: Path,
+    *,
+    parent_binding: dict[str, Any],
+    windows_read_api: tuple[Any, ...] | None = None,
+) -> bytes:
+    """Read one single-link claim through its already-bound parent."""
+
+    if parent_binding.get("path") != path.parent:
+        raise OSError("exact_human_approval_claim_parent_mismatch")
+    parent_descriptor = parent_binding.get("descriptor")
+    if isinstance(parent_descriptor, int):
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path.name, flags, dir_fd=parent_descriptor)
+        try:
+            info = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_nlink != 1
+                or info.st_size > _MAX_CLAIM_BYTES
+            ):
+                raise OSError("exact_human_approval_claim_file_unsafe")
+            chunks: list[bytes] = []
+            remaining = info.st_size
+            while remaining:
+                chunk = os.read(descriptor, min(remaining, 65536))
+                if not chunk:
+                    raise OSError("exact_human_approval_claim_read_incomplete")
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            if os.read(descriptor, 1):
+                raise OSError("exact_human_approval_claim_file_changed")
+            return b"".join(chunks)
+        finally:
+            os.close(descriptor)
+
+    named_info = os.lstat(path)
+    if (
+        _is_reparse(named_info)
+        or not stat.S_ISREG(named_info.st_mode)
+        or named_info.st_nlink != 1
+        or named_info.st_size > _MAX_CLAIM_BYTES
+    ):
+        raise OSError("exact_human_approval_claim_file_unsafe")
+
+    api = windows_read_api if windows_read_api is not None else _claim_windows_read_api()
+    (ctypes, wintypes, ByHandleFileInformation, create_file,
+     get_information, read_file, close_handle) = api
 
     generic_read = 0x80000000
     file_share_read = 0x00000001
@@ -642,6 +654,7 @@ def _read_claim_bytes(
     *,
     bound_archive_root: Path | None = None,
     claim_parent_binding: dict[str, Any] | None = None,
+    windows_read_api: tuple[Any, ...] | None = None,
 ) -> bytes:
     try:
         if (
@@ -650,9 +663,11 @@ def _read_claim_bytes(
         ):
             if claim_parent_binding.get("path") != path.parent:
                 raise _fail("exact_human_approval_claim_path_unsafe")
+            options = {} if windows_read_api is None else {"windows_read_api": windows_read_api}
             raw = _read_bound_claim_bytes(
                 path,
                 parent_binding=claim_parent_binding,
+                **options,
             )
         elif (
             bound_archive_root is not None
@@ -713,6 +728,84 @@ def _authenticated_claim_document_core(
     """
 
     root, archive_id = _archive_identity(archive_root)
+    return _authenticated_claim_document_for_identity(
+        root, archive_id, approval_id, receipt_authentication_key,
+        bound_archive_root=bound_archive_root,
+        claim_parent_binding=claim_parent_binding,
+    )
+
+
+def _claim_listing_identity_generation(root: Path) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    """Identity and marker generation, excluding unrelated directory changes."""
+    try:
+        root_info = os.lstat(root)
+        marker_info = os.lstat(root / "archive.yml")
+        if (_is_reparse(root_info) or not stat.S_ISDIR(root_info.st_mode)
+                or _is_reparse(marker_info) or not stat.S_ISREG(marker_info.st_mode)):
+            raise _fail("exact_human_approval_archive_invalid")
+        return (
+            (root_info.st_dev, root_info.st_ino, root_info.st_mode),
+            tuple(getattr(marker_info, name) for name in (
+                "st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns", "st_ctime_ns")),
+        )
+    except (OSError, TypeError, ValueError):
+        raise _fail("exact_human_approval_archive_invalid") from None
+
+
+@contextmanager
+def _bound_claim_document_reader(
+    archive_root: Path | str,
+    *,
+    bound_archive_root: Path,
+    claim_parent_binding: dict[str, Any],
+):
+    """Read-only invocation scope; every document still gets its bytes/MAC checked.
+
+    Keep this inside the caller's held claim-directory boundary and key scope.
+    No writer accepts the closure. Archive identity is checked at both ends;
+    replacement or mutation invalidates the entire buffered listing before it
+    can escape, and the closure cannot be reused after this context exits.
+    """
+    before = _claim_listing_identity_generation(bound_archive_root)
+    root, archive_id = _archive_identity(archive_root)
+    if (root != bound_archive_root
+            or claim_parent_binding.get("path") != root.joinpath(*Path(CLAIMS_RELATIVE_ROOT).parts)
+            or before != _claim_listing_identity_generation(root)):
+        raise _fail("exact_human_approval_archive_invalid")
+    active = True
+    windows_read_api = _claim_windows_read_api() if os.name == "nt" else None
+
+    def read(approval_id: str, key: bytes | bytearray | memoryview):
+        if not active:
+            raise _fail("exact_human_approval_claim_state_invalid")
+        return _authenticated_claim_document_for_identity(
+            root, archive_id, approval_id, key,
+            bound_archive_root=bound_archive_root,
+            claim_parent_binding=claim_parent_binding,
+            windows_read_api=windows_read_api,
+        )
+
+    try:
+        yield read
+    finally:
+        active = False
+        closing_root, closing_id = _archive_identity(archive_root)
+        if (closing_root != root or closing_id != archive_id
+                or before != _claim_listing_identity_generation(root)):
+            raise _fail("exact_human_approval_archive_invalid")
+
+
+def _authenticated_claim_document_for_identity(
+    root: Path,
+    archive_id: str,
+    approval_id: str,
+    receipt_authentication_key: bytes | bytearray | memoryview,
+    *,
+    bound_archive_root: Path | None,
+    claim_parent_binding: dict[str, Any] | None,
+    windows_read_api: tuple[Any, ...] | None = None,
+) -> tuple[dict[str, Any], str]:
+    """Shared byte/MAC verification; identity comes from an active caller scope."""
     if (
         type(approval_id) is not str
         or _APPROVAL_ID_RE.fullmatch(approval_id) is None
@@ -731,10 +824,12 @@ def _authenticated_claim_document_core(
             raise _fail("exact_human_approval_claim_path_unsafe")
         else:
             claims_root = _claims_root(root, create=False)
+        read_options = {} if windows_read_api is None else {"windows_read_api": windows_read_api}
         raw = _read_claim_bytes(
             claims_root / f"{approval_id}.json",
             bound_archive_root=bound_archive_root,
             claim_parent_binding=claim_parent_binding,
+            **read_options,
         )
         try:
             parsed = json.loads(raw.decode("utf-8"))
@@ -1265,6 +1360,60 @@ class _ClaimedExactHumanApproval:
                 APPROVAL_INTEGRITY_MAC_DOMAIN + raw,
                 hashlib.sha256,
             ).hexdigest()
+
+    def _assert_operation_mac_root(self, archive_root: Path | str) -> None:
+        # Standard legacy claims do not populate _bound_archive_root. Bind
+        # those to their authenticated claim's actual, non-reparse directory;
+        # absence of the optional stronger binding does not broaden scope.
+        root, archive_id = _archive_identity(archive_root)
+        if (archive_id != self._archive_id
+                or self._path.parent != _claims_root(root, create=False)
+                or (self._bound_archive_root is not None and root != self._bound_archive_root)):
+            raise _fail("exact_human_approval_claim_state_invalid")
+
+    def operation_cancel_mac(self, archive_root: Path | str, payload: bytes) -> str:
+        """Sign only the cancellation domain while this archive's claim is active.
+
+        This keeps cooperative checkpoints inside the current key consumer;
+        neither the key nor a general-purpose signing callback is exposed.
+        """
+        if type(payload) is not bytes or not payload or len(payload) > 65536:
+            raise _fail("exact_human_approval_integrity_payload_invalid")
+        self._assert_operation_mac_root(archive_root)
+        with self._lock:
+            self._assert_current_started()
+            return hmac.new(self._key, b"wom-kit/operation-cancellation/v1\0" + payload,
+                            hashlib.sha256).hexdigest()
+
+    def remote_disposal_mac(self, archive_root: Path | str, payload: bytes) -> str:
+        """Authenticate bounded disposal evidence without reopening the key."""
+        if type(payload) is not bytes or not payload or len(payload) > 64 * 1024 * 1024:
+            raise _fail("exact_human_approval_integrity_payload_invalid")
+        self._assert_operation_mac_root(archive_root)
+        with self._lock:
+            self._assert_current_started()
+            return hmac.new(self._key, b"wom-kit/remote-disposal-journal/v1\0" + payload,
+                            hashlib.sha256).hexdigest()
+
+    def activity_cleanup_mac(self, archive_root: Path | str, payload: bytes) -> str:
+        """Authenticate the bounded private activity journal, never key bytes."""
+        if type(payload) is not bytes or not payload or len(payload) > 32 * 1024 * 1024:
+            raise _fail("exact_human_approval_integrity_payload_invalid")
+        self._assert_operation_mac_root(archive_root)
+        with self._lock:
+            self._assert_current_started()
+            return hmac.new(self._key, b"wom-kit/activity-cleanup/v1\0" + payload,
+                            hashlib.sha256).hexdigest()
+
+    def remote_preservation_proof_mac(self, archive_root: Path | str, payload: bytes) -> str:
+        """Authenticate only the fixed preservation-proof domain and size."""
+        if type(payload) is not bytes or not payload or len(payload) > 16384:
+            raise _fail("exact_human_approval_integrity_payload_invalid")
+        self._assert_operation_mac_root(archive_root)
+        with self._lock:
+            self._assert_current_started()
+            return hmac.new(self._key, b"wom-kit/remote-preservation-proof/v1\0" + payload,
+                            hashlib.sha256).hexdigest()
 
     def approval_integrity_mac_matches(
         self,

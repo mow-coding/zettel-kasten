@@ -57,9 +57,7 @@ COMPOUND_APPROVAL_REASON_CODE = (
 # exists. Do not describe them as compound-approval migrations or enable a
 # write merely because the parser accepts its forward-compatible option.
 OPERATION_CANCEL_UNSUPPORTED_REASON_CODE = "operation_cancel_not_supported"
-UNSUPPORTED_APPROVAL_COMMAND_REASONS = {
-    "operation-control": OPERATION_CANCEL_UNSUPPORTED_REASON_CODE,
-}
+UNSUPPORTED_APPROVAL_COMMAND_REASONS = {}
 OPERATION_CANCEL_UNSUPPORTED_HELP = (
     "Writer unavailable: cancel is unsupported and no cancel request is "
     "written. Use status, wait, or recovery-plan with --dry-run; those "
@@ -86,6 +84,13 @@ COMPOUND_APPROVAL_FIXED_CLOSED_PLAN_WRITERS: dict[str, str] = {}
 # approval.  Their plan documents keep the same contract shape so an AI
 # operator can tell a validation preview from approval authority.
 EXACT_APPROVAL_REOPENED_WRITERS = frozenset({
+    "operation-control",
+    "draft-disposition",
+    "human-artifact-inventory",
+    "tiro-content-import",
+    "connection-evidence-import",
+    "object-storage-cleanup",
+    "object-storage-open",
     "draft-revision-write",
     "activity-cleanup",
     "discard-draft",

@@ -5028,6 +5028,63 @@ class _OperatorFeedbackRecordLock:
         return False
 
 
+@contextmanager
+def _note_remote_reference_fence(path: Path, value: bytes | str, *, archive_root=None):
+    """Serialize new note references with exact-key remote disposal.
+
+    Canonical byte writers remain byte-exact. The fence is inactive until this
+    archive has a cleanup journal; it never examines arbitrary external trees.
+    """
+    path = Path(os.path.abspath(path))
+    root = Path(archive_root) if archive_root is not None else None
+    if path.suffix.lower() != ".md":
+        yield
+        return
+    if root is None:
+        for parent in path.parents:
+            if parent.name in {"zettels", "inbox"} and (parent.parent / "archive.yml").is_file():
+                root = parent.parent
+                break
+    if root is None:
+        yield
+        return
+    try:
+        relative = path.relative_to(root).as_posix()
+    except ValueError:
+        yield
+        return
+    if not relative.startswith(VALID_ZETTEL_FOLDERS):
+        yield
+        return
+    from . import object_storage_cleanup as cleanup
+    targets = archive_internal_path(root, cleanup.ROOT + "/targets")
+    if not targets.exists():
+        yield
+        return
+    raw = value.encode("utf-8") if isinstance(value, str) else value
+    ids = {"sha256:" + digest.decode("ascii") for digest in
+        re.findall(rb"(?<![0-9a-f])([0-9a-f]{64})(?![0-9a-f])", raw)}
+    if not ids:
+        yield
+        return
+    from .exact_operation_manifest import current_writer_lock, exact_operation_writer_lock
+    held = current_writer_lock(root)
+    with nullcontext(held) if held is not None else exact_operation_writer_lock(root, timeout_seconds=30):
+        cleanup.assert_referenceable(root, ids)
+        yield
+
+
+def _note_reference_guard(writer):
+    from functools import wraps
+    @wraps(writer)
+    def guarded(path, *args, **kwargs):
+        value = args[0] if args else kwargs.get("value", kwargs.get("text", kwargs.get("data")))
+        with _note_remote_reference_fence(path, value):
+            return writer(path, *args, **kwargs)
+    return guarded
+
+
+@_note_reference_guard
 def _write_bytes_create_if_absent(path: Path, value: bytes) -> None:
     """Publish complete bytes atomically and never replace an existing file."""
 
@@ -43871,7 +43928,12 @@ def _cleanup_activity_group_canonical_swap_residue(
     return removed
 
 
-def _replace_regular_file_bytes_compare_and_swap(
+def _replace_regular_file_bytes_compare_and_swap(root, path, **kwargs):
+    with _note_remote_reference_fence(path, kwargs["replacement_bytes"], archive_root=root):
+        return _replace_regular_file_bytes_compare_and_swap_unfenced(root, path, **kwargs)
+
+
+def _replace_regular_file_bytes_compare_and_swap_unfenced(
     root: Path,
     path: Path,
     *,
@@ -52890,6 +52952,7 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
         tmp.unlink(missing_ok=True)
 
 
+@_note_reference_guard
 def _atomic_write_text(path: Path, text: str) -> None:
     """Durable temp+fsync+os.replace writer for JSONL/text files.
 
@@ -52909,6 +52972,7 @@ def _atomic_write_text(path: Path, text: str) -> None:
         tmp.unlink(missing_ok=True)
 
 
+@_note_reference_guard
 def _atomic_write(path: Path, data: bytes) -> None:
     """Durable temp+fsync+os.replace writer for RAW bytes (byte-exact).
 
@@ -101723,6 +101787,7 @@ def fsync_directory(directory: Path) -> None:
             pass
 
 
+@_note_reference_guard
 def write_text_atomic(path: Path, text: str) -> None:
     """Durable temp+fsync+os.replace text writer.
 
@@ -117507,6 +117572,7 @@ def wom_kit_project_update_target_ref_snapshot_legacy_read_only(
         return result
 
 
+@_note_reference_guard
 def write_bytes_atomic(path: Path, value: bytes) -> None:
     """Durable, byte-exact writer. This is the ONLY definition; see the note above
     the text writer about a shadowed duplicate.
@@ -147289,10 +147355,10 @@ class _ReplayableObjectStoragePathBody:
             raise OSError("object-storage request body length changed")
 
 
-def _object_storage_bounded_control_body(handle: Any) -> tuple[bytes, bool]:
+def _object_storage_bounded_control_body(handle: Any, *, max_bytes: int = OBJECT_STORAGE_HTTP_CONTROL_BODY_MAX_BYTES) -> tuple[bytes, bool]:
     """Read at most cap+1 bytes and retain only the bounded prefix."""
 
-    limit = OBJECT_STORAGE_HTTP_CONTROL_BODY_MAX_BYTES + 1
+    limit = max_bytes + 1
     chunks: list[bytes] = []
     total = 0
     while total < limit:
@@ -147306,8 +147372,8 @@ def _object_storage_bounded_control_body(handle: Any) -> tuple[bytes, bool]:
         chunks.append(chunk)
         total += len(chunk)
     value = b"".join(chunks)
-    truncated = len(value) > OBJECT_STORAGE_HTTP_CONTROL_BODY_MAX_BYTES
-    return value[:OBJECT_STORAGE_HTTP_CONTROL_BODY_MAX_BYTES], truncated
+    truncated = len(value) > max_bytes
+    return value[:max_bytes], truncated
 
 
 def _object_storage_stream_response_digest(handle: Any) -> tuple[str, int]:
@@ -147326,6 +147392,29 @@ def _object_storage_stream_response_digest(handle: Any) -> tuple[str, int]:
         digest.update(chunk)
         size += len(chunk)
     return digest.hexdigest(), size
+
+
+def _object_storage_stream_response_digest_with_prefix(
+    handle: Any, *, max_prefix_bytes: int
+) -> tuple[str, int, bytes]:
+    """Verify the full GET while retaining only a bounded private inspection prefix."""
+
+    if type(max_prefix_bytes) is not int or not 0 < max_prefix_bytes <= 4096:
+        raise ValueError("invalid private inspection limit")
+    digest = hashlib.sha256()
+    size = 0
+    prefix = bytearray()
+    while True:
+        chunk = handle.read(OBJECT_STORAGE_HTTP_STREAM_CHUNK_BYTES)
+        if not chunk:
+            break
+        if not isinstance(chunk, (bytes, bytearray)) or len(chunk) > OBJECT_STORAGE_HTTP_STREAM_CHUNK_BYTES:
+            raise OSError("object-storage response returned invalid bytes")
+        digest.update(chunk)
+        size += len(chunk)
+        if len(prefix) < max_prefix_bytes:
+            prefix.extend(chunk[: max_prefix_bytes - len(prefix)])
+    return digest.hexdigest(), size, bytes(prefix)
 
 
 def _object_storage_stream_response_to_sink(
@@ -147421,11 +147510,11 @@ def _default_urllib_sender() -> Callable[..., dict[str, Any]]:
         data_bytes=None,
         sink_path=None,
         sink_max_bytes=None,
+        sample_max_bytes=None,
     ) -> dict[str, Any]:
-        # sink_path / sink_max_bytes are passed ONLY by the v0.4.28 restore GET
-        # (ObjectStorageTransport.get_object); every other call keeps the
-        # original five-keyword contract, so injected fakes without the two
-        # extra keywords keep working for HEAD/PUT/multipart/verification GETs.
+        # The restore GET supplies sink_path/sink_max_bytes; private disposal
+        # inspection supplies sample_max_bytes. All ordinary callers keep the
+        # original five-keyword injected-sender contract.
         normalized_method = str(method).upper()
         body = None
         if data_path is not None:
@@ -147446,6 +147535,15 @@ def _default_urllib_sender() -> Callable[..., dict[str, Any]]:
             ) as response:
                 resp_headers = {str(k).lower(): str(v) for k, v in response.headers.items()}
                 status = int(response.status)
+                if (normalized_method == "GET" and status == 200
+                        and urllib.parse.parse_qs(urllib.parse.urlsplit(url).query).get("list-type") == ["2"]):
+                    # Bucket inventory is bounded XML, not object bytes. Keep
+                    # provider bodies internal; only the inventory adapter parses it.
+                    raw, truncated = _object_storage_bounded_control_body(response, max_bytes=4 * 1024 * 1024)
+                    complete = _object_storage_control_body_complete(resp_headers, raw, truncated=truncated)
+                    return {"status": status, "headers": resp_headers, "body": raw,
+                            "body_complete": complete, "body_truncated": truncated,
+                            "transport_error": not complete}
                 if normalized_method == "GET" and status == 200 and sink_path is not None:
                     expected_size = _object_storage_response_content_length(resp_headers)
                     limit = (
@@ -147484,10 +147582,16 @@ def _default_urllib_sender() -> Callable[..., dict[str, Any]]:
                         "transport_error": not complete,
                     }
                 if normalized_method == "GET" and status == 200:
-                    digest_hex, body_size = _object_storage_stream_response_digest(response)
+                    if sample_max_bytes is None:
+                        digest_hex, body_size = _object_storage_stream_response_digest(response)
+                        private_prefix = None
+                    else:
+                        digest_hex, body_size, private_prefix = _object_storage_stream_response_digest_with_prefix(
+                            response, max_prefix_bytes=sample_max_bytes
+                        )
                     expected_size = _object_storage_response_content_length(resp_headers)
                     complete = expected_size is None or body_size == expected_size
-                    return {
+                    result = {
                         "status": status,
                         "headers": resp_headers,
                         "body": b"",
@@ -147498,6 +147602,9 @@ def _default_urllib_sender() -> Callable[..., dict[str, Any]]:
                         "body_truncated": False,
                         "transport_error": not complete,
                     }
+                    if sample_max_bytes is not None:
+                        result["body_prefix"] = private_prefix if complete else None
+                    return result
                 raw, truncated = _object_storage_bounded_control_body(response)
                 body_complete = _object_storage_control_body_complete(
                     resp_headers, raw, truncated=truncated
@@ -147644,12 +147751,18 @@ class _S3CompatibleTransport:
         data_bytes=None,
         sink_path=None,
         sink_max_bytes=None,
+        sample_max_bytes=None,
     ) -> dict[str, Any]:
         headers = self._signed_request(
             method=method, key=key, payload_hash=payload_hash, query=query, extra_headers=extra_headers
         )
         url = self._url(key, query)
-        if sink_path is not None:
+        if sample_max_bytes is not None:
+            response = self._transfer_observation.call(method, lambda: self._send(
+                method=method, url=url, headers=headers, data_path=data_path,
+                data_bytes=data_bytes, sample_max_bytes=sample_max_bytes,
+            ))
+        elif sink_path is not None:
             # Restore GET only: the two sink keywords are omitted everywhere
             # else so the five-keyword injected-sender contract is unchanged.
             response = self._transfer_observation.call(method, lambda: self._send(
@@ -147814,6 +147927,39 @@ class _S3CompatibleTransport:
                 return None, None, False, None
             return hashlib.sha256(value).hexdigest(), len(value), True, etag
         return None, None, False, None
+
+    def inspect_object(self, *, key: str, max_prefix_bytes: int = 4096) -> dict[str, Any]:
+        """Verify one whole remote object and retain a small private content prefix.
+
+        This is for an AI-assisted disposal inventory, not a public receipt or
+        log. The content prefix comes from the same GET used for whole-object
+        SHA-256 verification, so inventory does not download the object twice.
+        """
+        if type(max_prefix_bytes) is not int or not 0 < max_prefix_bytes <= 4096:
+            raise ValueError("invalid private inspection limit")
+        head = self.head_object(key=key, presence_only=True)
+        if head.get("presence_state") != "present" or head.get("verification_state") != "complete":
+            return head
+        expected_size = head["size"]
+        response = self._dispatch(method="GET", key=key,
+                                  payload_hash=SIGV4_UNSIGNED_PAYLOAD,
+                                  sample_max_bytes=max_prefix_bytes)
+        prefix = response.get("body_prefix")
+        digest = response.get("body_sha256")
+        body_size = response.get("body_size")
+        headers = response.get("headers") or {}
+        from .remote_preservation_proof import strong_etag
+        if (response.get("transport_error") or response.get("status") != 200
+                or response.get("body_complete") is not True
+                or type(body_size) is not int or body_size != expected_size
+                or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)
+                or not isinstance(prefix, bytes) or len(prefix) != min(max_prefix_bytes, body_size)):
+            return {"present": True, "size": expected_size, "checksum_sha256": None,
+                    "presence_state": "present", "verification_state": "unavailable"}
+        return {"present": True, "size": body_size, "checksum_sha256": digest,
+                "presence_state": "present", "verification_state": "complete",
+                "whole_get_etag": strong_etag(headers.get("etag")) if isinstance(headers, dict) else None,
+                "content_prefix": prefix}
 
     def put_object(
         self,
@@ -152376,7 +152522,8 @@ def resolve_objet_ref(
         locations = record.get("locations")
         if not isinstance(locations, list):
             continue
-        for location in locations:
+        from .object_storage_cleanup import filter_remote_locations
+        for location in filter_remote_locations(root, locations, object_id=normalized_object_id):
             if not isinstance(location, dict):
                 continue
             provider = safe_label(location.get("provider"), field="provider") or "unknown"
@@ -154069,11 +154216,13 @@ def index_archive(
         rebuild_lock.__enter__()
     except OSError:
         raise ArchiveServiceError("archive_index_mutation_in_progress") from None
+    title_basis = {}
     try:
         result = _index_archive_locked(
             root,
             progress_callback=progress_callback,
             initial_progress_emitted=True,
+            _title_diagnostic_capture=title_basis,
         )
     finally:
         rebuild_lock.__exit__(None, None, None)
@@ -154082,6 +154231,16 @@ def index_archive(
         # mutation lease. Cache failure does not invalidate the live index.
         from .search_snapshots import publish
         result["search_snapshot"] = publish(root)
+        if result["search_snapshot"].get("ok"):
+            from . import relation_batch, title_diagnostics
+            source_snapshot = result["search_snapshot"]["snapshot"]
+            result["relation_snapshot"] = relation_batch.publish(root, source_snapshot=source_snapshot)
+            result["title_snapshot"] = title_diagnostics.publish(root, source_snapshot=source_snapshot)
+    if result.get("index_rebuilt") and "title_snapshot" not in result and title_basis:
+        from . import title_diagnostics
+        result["title_snapshot"] = title_diagnostics.publish(root,
+            index_rows=title_basis["rows"], index_generation=title_basis["generation"],
+            index_diagnostics=title_basis["quarantined"])
     return result
 
 
@@ -154198,6 +154357,7 @@ def _index_archive_locked(
     *,
     progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
     initial_progress_emitted: bool = False,
+    _title_diagnostic_capture: dict | None = None,
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
@@ -154837,6 +154997,11 @@ def _index_archive_locked(
             raise ArchiveServiceError(
                 "archive_index_source_changed_during_rebuild"
             )
+        if _title_diagnostic_capture is not None:
+            _title_diagnostic_capture.update(
+                rows=[dict(zip(("path", "title", "status", "frontmatter_json"), row)) for row in conn.execute(
+                    "SELECT path,title,status,frontmatter_json FROM zettels ORDER BY path")],
+                generation=index_generation, quarantined=list(quarantined_zettels))
         commit_attempted = True
         rebuild_session.validate_and_commit()
     except BaseException as exc:
@@ -165684,7 +165849,18 @@ def _objet_capture_run(
             try:
                 # Phase 1 — original halves, byte-for-byte unchanged in what they write
                 # (publish bytes -> manifest_appender record).
-                for item in items_sorted:
+                for item_index, item in enumerate(items_sorted):
+                    from .operation_cancellation import checkpoint, OperationCancelled
+                    try:
+                        checkpoint()
+                    except OperationCancelled:
+                        aborted = True
+                        for planned in preflight_items[item_index:]:
+                            deferred = copy.deepcopy(planned)
+                            deferred["action"] = "blocked"
+                            deferred["blockers"] = ["operation_cancelled_at_checkpoint"]
+                            item_results.append(deferred)
+                        break
 
                     def manifest_appender(record: dict[str, Any]) -> None:
                         pending_manifest_records.append(record)
@@ -165923,7 +166099,7 @@ def _objet_capture_run(
                 # derive-text does; it must not block unrelated original captures.
                 publication.close()
                 for item, item_result in zip(items_sorted, item_results):
-                    if manifest_index_rebuild_required:
+                    if manifest_index_rebuild_required or aborted:
                         break
                     if "derived_text" not in item:
                         continue
@@ -167637,7 +167813,7 @@ def staged_cleanup_check(
             candidates = [remote for record in manifest_records
                 if record.get("object_id") == object_id
                 and (remote := _remote_location(record, provider_kind=remote_provider_kind,
-                    store_ref=remote_verifier.store_ref)) is not None]
+                    store_ref=remote_verifier.store_ref, archive_root=root)) is not None]
             keys = {remote["remote_key"] for remote in candidates}
             if len(keys) == 1:
                 remote_result = remote_verifier.verify(key=next(iter(keys)), object_id=object_id,
@@ -167925,6 +168101,7 @@ def objet_capture_apply(
     expected_exact_approval_target_binding_sha256: str | None = None,
     exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
     batch_authority: _ExactBatchItemAuthority | None = None,
+    recovery_authority=None,
 ) -> dict[str, Any]:
     try:
         if approval_operation not in (
@@ -167939,6 +168116,12 @@ def objet_capture_apply(
             or approval_operation is not ExactHumanApprovalOperation.objet_capture
         ):
             raise ArchiveServiceError("exact_batch_authority_invalid")
+        if recovery_authority is not None:
+            from .objet_capture_recovery import CaptureRecoveryAuthority
+            if (type(recovery_authority) is not CaptureRecoveryAuthority
+                    or batch_authority is not None
+                    or approval_operation is not ExactHumanApprovalOperation.objet_capture_batch):
+                raise ArchiveServiceError("objet_capture_recovery_authority_invalid")
         _require_exact_human_approval_inputs_before_archive_read(
             claim=exact_human_approval_claim,
             expected_plan_sha256=(
@@ -167979,12 +168162,14 @@ def objet_capture_apply(
                 item_identity_sha256=_objet_capture_item_identity(preview),
             )
         else:
+            binding = (recovery_authority.binding_for(
+                root, selection_path=selection_path, selection_document=selection_document,
+                preview=preview, claim=exact_human_approval_claim, reviewed_by=reviewed_by,
+            ) if recovery_authority is not None else objet_capture_approval_binding(
+                preview, operation=approval_operation))
             approval_receipt = _require_exact_human_operation_approval(
                 root,
-                objet_capture_approval_binding(
-                    preview,
-                    operation=approval_operation,
-                ),
+                binding,
                 reviewer_claim=reviewed_by,
                 expected_plan_sha256=expected_exact_approval_plan_sha256,
                 expected_target_binding_sha256=(

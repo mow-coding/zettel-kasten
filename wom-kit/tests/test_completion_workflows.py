@@ -6987,11 +6987,6 @@ class CompletionWorkflowTests(unittest.TestCase):
 
     def test_markup_normalization_keeps_letter117_display_and_structure_gaps_fail_closed(self) -> None:
         cases = {
-            "callout": (
-                '<callout icon="star" color="yellow_background">\n'
-                "\tVisible content\n"
-                "</callout>\n"
-            ),
             "unknown_columns": (
                 "<unknown:column_list/>\n"
                 "<unknown:column/>\n"

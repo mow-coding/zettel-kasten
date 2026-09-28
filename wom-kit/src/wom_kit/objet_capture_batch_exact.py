@@ -37,7 +37,10 @@ from .exact_human_approval_windows import (
     ExactHumanApprovalContext,
     ExactHumanApprovalOperation,
 )
-from .exact_human_approval_workflow import _execute_exact_human_approved_write
+from .exact_human_approval_workflow import (
+    _execute_exact_human_approved_write,
+    _content_free_cause_code,
+)
 from .exact_operation_manifest import (
     ExactOperationManifestError,
     exact_operation_completion_authentication_payload,
@@ -72,6 +75,7 @@ class ObjetCaptureBatchExactError(RuntimeError):
         "objet_capture_batch_intake_execution_required",
         "objet_capture_batch_intake_chain_invalid",
         "objet_capture_batch_state_drifted",
+        "objet_capture_batch_resume_inputs_invalid",
         "objet_capture_batch_write_failed",
         "exact_human_approval_cancelled",
     }
@@ -121,6 +125,9 @@ def _emit(
     current: int,
     total: int,
 ) -> None:
+    from .operation_cancellation import checkpoint
+    if event == "start":
+        checkpoint()
     if hook is not None:
         hook(
             ObjetCaptureBatchProgress(
@@ -232,7 +239,7 @@ def _blocked_public_plan(
             "item_count": int(summary.get("item_count") or len(items)),
             "ready_item_count": 0,
             "blocked_item_count": int(summary.get("item_count") or len(items)),
-            "convergence_model": "fresh_exact_dry_run_then_reapproval",
+            "convergence_model": "authenticated_original_selection_resume",
             "all_or_nothing_claimed": False,
             "same_claim_resume_supported": False,
             "automatic_retry_allowed": False,
@@ -330,9 +337,9 @@ def _plan_from_exact_preview(
             "would_re_materialize": preview_summary.get("would_re_materialize", 0),
             "would_skip": preview_summary.get("would_skip", 0),
             **completion_counts,
-            "convergence_model": "fresh_exact_dry_run_then_reapproval",
+            "convergence_model": "authenticated_original_selection_resume",
             "all_or_nothing_claimed": False,
-            "same_claim_resume_supported": False,
+            "same_claim_resume_supported": True,
             "automatic_retry_allowed": False,
         },
         "items": projected,
@@ -982,6 +989,8 @@ def _terminal_counts(items: list[dict[str, Any]]) -> dict[str, int]:
 
 def _outcome_unverified_result(
     plan: ObjetCaptureBatchExactPlan,
+    *,
+    error: BaseException | None = None,
 ) -> dict[str, Any]:
     items = [
         {
@@ -1008,12 +1017,14 @@ def _outcome_unverified_result(
         },
         "summary": {
             **_terminal_counts(items),
-            "convergence_model": "fresh_exact_dry_run_then_reapproval",
+            "convergence_model": "authenticated_original_selection_resume",
             "same_claim_resume_supported": False,
             "automatic_retry_allowed": False,
         },
         "items": items,
         "blockers": ["batch_capture_outcome_unverified"],
+        "cause_code": _content_free_cause_code(error),
+        "cause_stage": "domain_writer",
         "warnings": [],
         "next_safe_actions": list(
             completion_workflows.OBJET_CAPTURE_BATCH_OUTCOME_UNVERIFIED_NEXT_SAFE_ACTIONS
@@ -1160,7 +1171,7 @@ def _capture_result(
             "capture_summary": copy.deepcopy(capture.get("summary", {})),
             "capture_receipt_path": capture.get("receipt_path"),
             "capture_status_class": capture.get("status_class"),
-            "convergence_model": "fresh_exact_dry_run_then_reapproval",
+            "convergence_model": "authenticated_original_selection_resume",
             "same_claim_resume_supported": False,
             "automatic_retry_allowed": False,
         },
@@ -1220,53 +1231,8 @@ def _execute_core(
         return _drift_result(plan)
     _emit(progress_hook, stage="batch-rederive", event="complete", current=1, total=1)
 
-    assert fresh.native_binding is not None
-    assert fresh.selection_document is not None
-    assert fresh.selection_relative_path is not None
-    _emit(progress_hook, stage="batch-capture", event="start", current=0, total=1)
-    try:
-        capture = archive_services.objet_capture_apply(
-            fresh.archive_root,
-            fresh.selection_relative_path,
-            reviewed_by=context.reviewer_claim,
-            approval_operation=ExactHumanApprovalOperation.objet_capture_batch,
-            project_intake_receipt=fresh.project_intake_receipt,
-            selection_document=copy.deepcopy(fresh.selection_document),
-            expected_exact_approval_plan_sha256=(
-                fresh.native_binding.plan_sha256
-            ),
-            expected_exact_approval_target_binding_sha256=(
-                fresh.native_binding.target_binding_sha256
-            ),
-            exact_human_approval_claim=claim,
-        )
-    except Exception:
-        _emit(
-            progress_hook,
-            stage="batch-capture",
-            event="outcome-unverified",
-            current=1,
-            total=1,
-        )
-        return _outcome_unverified_result(fresh)
-    if not isinstance(capture, dict):
-        _emit(
-            progress_hook,
-            stage="batch-capture",
-            event="outcome-unverified",
-            current=1,
-            total=1,
-        )
-        return _outcome_unverified_result(fresh)
-    result = _capture_result(fresh, capture)
-    _emit(
-        progress_hook,
-        stage="batch-capture",
-        event="complete" if result.get("ok") else "terminal",
-        current=1,
-        total=1,
-    )
-    return result
+    from .objet_capture_recovery import run_registration
+    return run_registration(fresh, claim, context, progress_hook=progress_hook)
 
 
 def execute_objet_capture_batch(
@@ -1287,31 +1253,59 @@ def execute_objet_capture_batch(
     if not plan.approveable:
         raise _fail("objet_capture_batch_plan_blocked")
     context = approval_context(plan, reviewer_claim=reviewer_claim)
-    return _execute_exact_human_approved_write(
-        plan.archive_root,
-        context,
-        lambda claim: _execute_core(
-            plan,
-            claim,
-            context,
-            progress_hook=progress_hook,
-        ),
-    )
+    _emit(progress_hook, stage="native-approval", event="start", current=0, total=1)
+    completed_writer = {}
+
+    def writer(claim):
+        result = _execute_core(plan, claim, context, progress_hook=progress_hook)
+        completed_writer["result"] = copy.deepcopy(result)
+        return result
+
+    try:
+        return _execute_exact_human_approved_write(plan.archive_root, context, writer)
+    except Exception as error:
+        result = completed_writer.get("result")
+        if not isinstance(result, dict) or not isinstance(result.get("recovery"), dict):
+            raise
+        # The domain result reached memory before claim finalization failed.
+        # Retain its durable recovery identity; never assert which claim state
+        # won the final publication race or discard already verified effects.
+        result["ok"] = False
+        result["state"] = "outcome_unverified"
+        result["outcome_unverified"] = True
+        result["writes_may_have_occurred"] = True
+        result["cause_code"] = _content_free_cause_code(error)
+        result["cause_stage"] = "key_or_claim"
+        result["blockers"] = [result["cause_code"] or "exact_human_approval_state_unknown"]
+        result["same_claim_resume_supported"] = False
+        result["summary"]["same_claim_resume_supported"] = False
+        result["recovery"]["same_claim_resume_supported"] = False
+        result["recovery"]["requires_claim_state_validation"] = True
+        result["next_safe_actions"] = ["preserve_registration_evidence", "resume_original_capture_execution_to_validate_claim_state"]
+        return result
 
 
-def failure_document(code: str) -> dict[str, Any]:
+def failure_document(code: str, *, error: BaseException | None = None, resume: bool = False) -> dict[str, Any]:
     safe = ObjetCaptureBatchExactError(code).code
     # Only ``state_unknown`` can be raised after the mutation boundary has
     # been entered.  Native-dialog failures and workflow argument/contract
     # failures happen before the writer is called, so their capture effect is
     # known to be zero.
     outcome_unverified = code == "exact_human_approval_state_unknown"
-    return {
+    document = {
         "schema_version": RESULT_SCHEMA,
         "ok": False,
         "state": "blocked",
         "lifecycle_action": "objet_capture_batch_exact_write",
         "blockers": [safe],
+        "cause_code": _content_free_cause_code(error),
+        "cause_stage": (
+            getattr(error, "cause_stage", None)
+            if getattr(error, "cause_stage", None) in {
+                "candidate_missing_handler", "domain_writer", "key_or_claim", "native_approval"
+            }
+            else None
+        ),
         "summary": {"terminal_item_count": 0},
         "items": [],
         "files_written": [],
@@ -1325,7 +1319,7 @@ def failure_document(code: str) -> dict[str, Any]:
                 "do_not_reuse_previous_approval",
             ]
             if outcome_unverified
-            else []
+            else ["preserve_prepared_intake", "inspect_caller_status", "fresh_dry_run_same_intake"]
         ),
         "next_safe_actions": (
             [
@@ -1334,7 +1328,11 @@ def failure_document(code: str) -> dict[str, Any]:
                 "Do not reuse the previous capture approval or automatically retry it.",
             ]
             if outcome_unverified
-            else []
+            else [
+                "Keep the completed source-intake result; do not copy or prepare the original files again.",
+                "Inspect this conversation with work-session --action inspect --caller-status before retrying approval.",
+                "Run objet-capture-batch --dry-run with the same --source-intake-execution-sha256, then use its current plan for the next approved capture.",
+            ]
         ),
         "provider_calls_performed": False,
         # The exception alone does not prove whether key access completed.
@@ -1343,6 +1341,15 @@ def failure_document(code: str) -> dict[str, Any]:
         "private_values_echoed": False,
         "paths_echoed": False,
     }
+    if resume:
+        document["prior_registration_effects_may_exist"] = True
+        document["safe_recovery_actions"] = ["preserve_original_registration_evidence", "resolve_reported_cause", "resume_original_execution_after_validation"]
+        document["next_safe_actions"] = [
+            "Keep the original prepared sources and registration recovery evidence.",
+            "Resolve the reported cause; do not replace the original selection or reuse an expired session permission.",
+            "Retry the same resume command only after correcting the cause; a completed claim cannot be replayed.",
+        ]
+    return document
 
 
 __all__ = [
@@ -1353,4 +1360,14 @@ __all__ = [
     "execute_objet_capture_batch",
     "failure_document",
     "plan_objet_capture_batch",
+    "resume_objet_capture_batch",
 ]
+
+
+def resume_objet_capture_batch(archive_root, *, reviewer_claim, approval_id, execution_sha256,
+                              progress_hook=None, key_provider=None):
+    """Continue only the authenticated original selection and started claim."""
+    from .objet_capture_recovery import resume_objet_capture_batch as resume
+    return resume(archive_root, reviewer_claim=reviewer_claim, approval_id=approval_id,
+                  execution_sha256=execution_sha256, progress_hook=progress_hook,
+                  key_provider=key_provider)

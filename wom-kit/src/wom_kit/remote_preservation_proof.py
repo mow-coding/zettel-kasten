@@ -35,8 +35,28 @@ class ProofStore:
     def __init__(self, root, key_provider=None):
         self.root = Path(root)
         self.key_provider = key_provider
+        self._claim = None
+        self.capture_active_claim()
+
+    def capture_active_claim(self):
+        """Capture a fixed MAC capability for provider worker-thread callbacks.
+
+        Context variables do not automatically cross thread boundaries. The
+        captured exact claim still validates its archive and started state for
+        every use, and becomes unusable after close/finalization.
+        """
+        from .operation_cancellation import ACTIVE_CLAIM
+        from .exact_human_approval import _ClaimedExactHumanApproval
+        active = ACTIVE_CLAIM.get()
+        if type(active) is _ClaimedExactHumanApproval:
+            active.remote_preservation_proof_mac(self.root, b"{}")
+            self._claim = active
 
     def _mac(self, document):
+        from .operation_cancellation import ACTIVE_CLAIM
+        active = ACTIVE_CLAIM.get() or self._claim
+        if active is not None:
+            return active.remote_preservation_proof_mac(self.root, _canonical(document))
         from .exact_human_approval_workflow import _production_key_provider
         provider = self.key_provider or _production_key_provider()
         return provider.use_key(self.root,
@@ -71,6 +91,8 @@ class ProofStore:
         from .operator_feedback_body import _require_effective_gitignore
         signed = {"proof": proof, "mac": self._mac(proof)}
         raw = _canonical(signed) + b"\n"
+        if len(raw) > 16384:
+            raise ValueError("remote_preservation_proof_too_large")
         name = hashlib.sha256(raw).hexdigest() + ".json"
         relative = self._directory(proof["binding"]) + "/" + name
         # Refuses (and the caller keeps only the in-run proof) unless the private

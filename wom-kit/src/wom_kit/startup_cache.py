@@ -1,8 +1,8 @@
-"""Deterministic source-checked startup cache for two large installed modules.
+"""Deterministic source-checked startup cache for large installed modules.
 
 Built only while materializing a verified runtime. The launcher verifies source
 and payload hashes before executing retained bytes; ordinary launches write no
-cache. The runtime's full wheel verifier also recompiles these two derived files
+cache. The runtime's full wheel verifier also recompiles these derived files
 and compares their complete code metadata, so the cache manifest is not a new
 trust root.
 """
@@ -19,11 +19,25 @@ import struct
 import sys
 import types
 
-MODULES = ("archive_services", "archive_cli")
+LEGACY_MODULES = ("archive_services", "archive_cli")
+# Fixed package modules observed on the installed CLI's startup path. Cache
+# preparation does not import them, and retaining bytecode does not eagerly
+# execute a module the selected command would otherwise leave unimported.
+MODULES = LEGACY_MODULES + (
+    "completion_workflows", "project_runtime", "project_update_transaction",
+    "project_update_legacy_recovery", "private_objet_metadata_writer",
+    "notion_page_recovery", "notion_property_backfill",
+    "object_storage_preservation", "git_backup_plan", "git_backup_writer",
+    "local_recovery_execution", "credential_secure_registry",
+    "duplicate_object_reconciliation", "operation_control",
+    "credential_secure_intake",
+)
 MANIFEST = "startup-cache.json"
-SCHEMA = "wom-kit/startup-cache/v1"
+LEGACY_SCHEMA = "wom-kit/startup-cache/v1"
+SCHEMA = "wom-kit/startup-cache/v2"
 MAX_BYTES = 64 * 1024 * 1024
 _COMPILED_PROOF_CACHE = set()
+_MAX_COMPILED_PROOFS = max(8, 4 * len(MODULES))
 
 
 class StartupCacheError(ValueError):
@@ -113,13 +127,28 @@ def verify(package_root, *, verify_compiled=False):
             if directory.is_symlink() or getattr(directory.lstat(), "st_file_attributes", 0) & 1024:
                 raise ValueError()
         document = json.loads(_read(root / MANIFEST))
-        if (set(document) != {"schema", "cache_tag", "magic", "modules"} or document["schema"] != SCHEMA
+        if not isinstance(document, dict):
+            raise ValueError()
+        expected_modules = {
+            LEGACY_SCHEMA: LEGACY_MODULES,
+            SCHEMA: MODULES,
+        }.get(document.get("schema"))
+        if (set(document) != {"schema", "cache_tag", "magic", "modules"} or expected_modules is None
             or document["cache_tag"] != sys.implementation.cache_tag
             or document["magic"] != importlib.util.MAGIC_NUMBER.hex()
-            or set(document["modules"]) != set(MODULES)):
+            or set(document["modules"]) != set(expected_modules)):
             raise ValueError()
+        # The runtime's existing allow-list covers MODULES. A v1 manifest must
+        # not silently admit an unverified extension cache through that list.
+        for name in set(MODULES) - set(expected_modules):
+            try:
+                (root / _filename(name)).lstat()
+            except FileNotFoundError:
+                continue
+            else:
+                raise ValueError()
         retained = {}
-        for name in MODULES:
+        for name in expected_modules:
             entry = document["modules"][name]
             source, payload = _read(root / (name + ".py")), _read(root / _filename(name))
             if (entry != {"source_sha256": _sha(source), "cache_sha256": _sha(payload), "source_size": len(source), "cache_size": len(payload)}
@@ -130,7 +159,7 @@ def verify(package_root, *, verify_compiled=False):
                 if proof_key not in _COMPILED_PROOF_CACHE:
                     if not _compiled_code_matches(payload, source, name):
                         raise ValueError()
-                    if len(_COMPILED_PROOF_CACHE) >= 8:
+                    if len(_COMPILED_PROOF_CACHE) >= _MAX_COMPILED_PROOFS:
                         _COMPILED_PROOF_CACHE.clear()
                     _COMPILED_PROOF_CACHE.add(proof_key)
             retained["wom_kit." + name] = (str(root / (name + ".py")), payload)

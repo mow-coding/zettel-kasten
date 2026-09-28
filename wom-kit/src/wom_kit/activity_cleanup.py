@@ -384,6 +384,10 @@ class Journal:
                 msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
 
     def _mac(self, value):
+        from .operation_cancellation import ACTIVE_CLAIM
+        active = ACTIVE_CLAIM.get()
+        if active is not None:
+            return active.activity_cleanup_mac(self.root, encoded(value))
         from .exact_human_approval_workflow import _production_key_provider
         provider = self.key_provider or _production_key_provider()
         return provider.use_key(self.root, lambda key: hmac.new(bytes(key), DOMAIN + encoded(value), hashlib.sha256).hexdigest(), create_if_missing=False)
@@ -560,7 +564,23 @@ def restore_binding(candidate):
 def restore_item(candidate, *, reviewer, claim, backend):
     from .operation_target_leases import TargetLeases
     with TargetLeases(candidate["root"], [("file", candidate["restore"]["destination"])]):
-        return _restore_item_held(candidate, reviewer=reviewer, claim=claim, backend=backend)
+        try:
+            return _restore_item_held(candidate, reviewer=reviewer, claim=claim, backend=backend)
+        except Exception as error:
+            from .storage_cancellation import is_cancelled
+            if not is_cancelled(error):
+                raise
+            journal, material = candidate["journal"], candidate["restore"]
+            result = {**candidate["restore_public"], "ok": False, "dry_run": False,
+                "state": "cancelled_at_checkpoint", "cause_code": "operation_cancelled_at_checkpoint",
+                "cause_stage": "activity_cleanup_restore", "cancel_requested": True, "cancel_acknowledged": True,
+                "writes_performed": True, "provider_request_in_flight": False, "process_killed": False,
+                "publication_recorded": journal.read("restore-" + digest(material)[7:]) is not None,
+                "child_operation_terminal_verified": False, "child_recovery": getattr(error, "child_recovery", None),
+                "same_claim_resume_supported": True,
+                "next_safe_actions": ["preserve_original_restore_request_and_child_controls", "resume_original_activity_restore"]}
+            journal.write("attempt-" + uuid.uuid4().hex, result)
+            return result
 
 
 def _restored_state_matches(candidate, path, approved):
@@ -584,6 +604,7 @@ def verify_restore_completion(candidate):
 
 def _restore_item_held(candidate, *, reviewer, claim, backend):
     from . import activity_cleanup_streams as streams
+    from .operation_cancellation import checkpoint
     material = candidate["restore"]
     binding = restore_binding(candidate)
     context = binding.context(archive_id=services.read_archive_id(candidate["root"]), reviewer_claim=reviewer)
@@ -595,6 +616,9 @@ def _restore_item_held(candidate, *, reviewer, claim, backend):
     identity = digest(material)[7:]
     approval = {"intent": material, "approval_id": claim.public_summary()["approval_id"]}
     journal.write(_restore_request_label(material["number"], str(target)), approval)
+    if isinstance(backend, OfficialPreservationBackend):
+        backend.verifier.proof_store.capture_active_claim()
+    checkpoint()
     if _directory_state(target.parent) != material["parent_state"]:
         raise ActivityCleanupError("activity_cleanup_restore_destination_changed")
     staged = journal.read("restore-publish-" + identity)
@@ -626,8 +650,10 @@ def _restore_item_held(candidate, *, reviewer, claim, backend):
         raise ActivityCleanupError("activity_cleanup_restore_destination_changed")
     item = next(item for item in candidate["material"]["items"] if item["number"] == material["number"])
     body = backend.restore_object(item)
+    checkpoint()
     if material["stream_item"] is not None:
         bundle = backend.restore_object(material["stream_item"])
+        checkpoint()
     else:
         # Empty ADS inventory is still verified by the same restore path.
         bundle = services.archive_internal_path(candidate["root"], ROOT + "/" + candidate["material"]["activity_id"]
@@ -723,6 +749,7 @@ def execute(candidate, *, reviewer, claim, backend):
 def _execute_locked(candidate, *, reviewer, claim, backend):
     """Backend uses the official intake/upload writers; no raw provider deletion."""
     from .legacy_cleanup_bound_delete import _delete_exact_approved_file, _delete_exact_approved_empty_directory
+    from .operation_cancellation import checkpoint, OperationCancelled
     if os.name != "nt":
         raise ActivityCleanupError("activity_cleanup_native_delete_not_supported")
     material, root, journal = candidate["material"], candidate["root"], candidate["journal"]
@@ -743,6 +770,8 @@ def _execute_locked(candidate, *, reviewer, claim, backend):
         reviewer_claim=reviewer, expected_plan_sha256=binding.plan_sha256,
         expected_target_binding_sha256=binding.target_binding_sha256, claim=claim)
     authorize()
+    if isinstance(backend, OfficialPreservationBackend):
+        backend.verifier.proof_store.capture_active_claim()
     # Immutable first intent is the only resume source; edited requests cannot
     # silently substitute different paths, roles or file identities.
     journal.write("intent", material)
@@ -750,9 +779,20 @@ def _execute_locked(candidate, *, reviewer, claim, backend):
         "plan_sha256": binding.plan_sha256, "target_binding_sha256": binding.target_binding_sha256,
         "mechanism": claim.public_summary().get("approval_mechanism")})
     results = []
+    cancelled = False
+    child_interruption = None
+    def stop_requested():
+        try:
+            checkpoint()
+        except OperationCancelled:
+            return True
+        return False
     progress = candidate.get("progress")
     _notify(progress, "activity-cleanup-items", "start", 0, len(material["items"]))
     for item in material["items"]:
+        if stop_requested():
+            cancelled = True
+            break
         _notify(progress, "activity-cleanup-items", "file", len(results) + 1, len(material["items"]))
         number, path = item["number"], Path(item["path"])
         name = "item-" + str(number)
@@ -788,15 +828,18 @@ def _execute_locked(candidate, *, reviewer, claim, backend):
             if item["disposition"] == "preserve":
                 _notify(progress, "activity-cleanup-items", "preserving", number + 1, len(material["items"]))
                 backend.preserve(item, journal)
+                checkpoint()
                 authorize()
                 _notify(progress, "activity-cleanup-items", "verifying-remote", number + 1, len(material["items"]))
                 # Even a resumed preserved item must check current remote bytes.
                 if not backend.verify(item):
                     raise ActivityCleanupError("activity_cleanup_remote_preservation_unverified")
+                checkpoint()
             if item["disposition"] == "preserve":
                 authorize()
                 _notify(progress, "activity-cleanup-items", "offloading-verified-copy", number + 1, len(material["items"]))
                 backend.finish_local_preservation(item)
+                checkpoint()
             authorize()
             _notify(progress, "activity-cleanup-items", "deleting-bound-original", number + 1, len(material["items"]))
             journal.write(name + "-delete-intent", {"number": number, "state": item["state"],
@@ -805,19 +848,44 @@ def _execute_locked(candidate, *, reviewer, claim, backend):
                                         expected_streams=item.get("alternate_streams"))
             journal.write(name + "-deleted", {"number": number, "state": "absent_after_bound_delete_intent"})
             results.append({"number": number, "state": "deleted"})
+        except OperationCancelled as error:
+            # A child may acknowledge this parent's request after its own safe
+            # receipt. Do not convert cancellation to retained-and-continue.
+            cancelled = True
+            child_interruption = getattr(error, "child_recovery", None)
+            results.append({"number": number, "state": "interrupted", "code": error.code,
+                "original_file_present": os.path.lexists(path),
+                "child_effects_require_reconciliation": True})
+            break
         except Exception as error:
+            from .storage_cancellation import is_cancelled
+            if is_cancelled(error):
+                cancelled = True
+                results.append({"number": number, "state": "interrupted", "code": "operation_cancelled_at_checkpoint",
+                    "original_file_present": os.path.lexists(path), "child_effects_require_reconciliation": True})
+                break
             code = getattr(error, "code", "activity_cleanup_item_failed")
             # Never echo provider messages, exception paths, or request prose.
             if not isinstance(code, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,127}", code):
                 code = "activity_cleanup_item_failed"
-            results.append({"number": number, "state": "retained", "code": code})
+            results.append({"number": number, "state": "retained" if os.path.lexists(path) else "outcome_unknown",
+                            "code": code, "child_effects_require_reconciliation": item["disposition"] == "preserve"})
         finally:
             if results and results[-1]["number"] == number:
                 results[-1]["processing_seconds"] = round(time.monotonic() - item_started, 6)
+    if not cancelled and stop_requested():
+        cancelled = True
+    if cancelled:
+        recorded = {row["number"] for row in results}
+        results.extend({"number": item["number"], "state": "not_attempted"}
+                       for item in material["items"] if item["number"] not in recorded)
     _notify(progress, "activity-cleanup-items", "done", len(results), len(material["items"]))
     _notify(progress, "activity-cleanup-directories", "start", 0, len(material["directories"]))
     directory_results = []
     for index, directory in sorted(enumerate(material["directories"]), key=lambda pair: len(Path(pair[1]["path"]).parts), reverse=True):
+        if cancelled or stop_requested():
+            cancelled = True
+            break
         path = Path(directory["path"])
         try:
             authorize()
@@ -828,15 +896,33 @@ def _execute_locked(candidate, *, reviewer, claim, backend):
                 directory_results.append({"number": index, "state": "retained_nonempty_or_changed"})
                 continue
             _delete_exact_approved_empty_directory(path.parent, path, directory["state"])
+            journal.write("directory-" + str(index) + "-deleted", {"number": index, "state": "removed_empty"})
             directory_results.append({"number": index, "state": "removed_empty"})
+        except OperationCancelled:
+            cancelled = True
+            break
         except Exception:
-            directory_results.append({"number": index, "state": "retained"})
+            directory_results.append({"number": index, "state": "retained" if os.path.lexists(path) else "outcome_unknown"})
+    if not cancelled and stop_requested():
+        cancelled = True
+    if cancelled:
+        recorded = {row["number"] for row in directory_results}
+        directory_results.extend({"number": number, "state": "not_attempted"}
+                                 for number in range(len(material["directories"])) if number not in recorded)
     success = all(row["state"] in {"deleted", "already_deleted", "already_absent_after_intent"} for row in results)
     success = success and all(row["state"] in {"absent", "removed_empty"} for row in directory_results)
     result = {**candidate["public"], "ok": success, "dry_run": False,
         "state": "completed" if success else "partial", "writes_performed": True,
         "items": results, "directories": directory_results, "whole_folder_preservation_claimed": False,
         "remaining": remaining_inventory(material)}
+    if cancelled:
+        success = False
+        result.update(ok=False, state="cancelled_at_checkpoint", cause_code="operation_cancelled_at_checkpoint",
+            cause_stage="activity_cleanup", reason_codes=["operation_cancelled_at_checkpoint"],
+            cancel_requested=True, cancel_acknowledged=True, provider_request_in_flight=False,
+            process_killed=False, same_claim_resume_supported=True,
+            child_operation_terminal_verified=False, child_recovery=child_interruption,
+            next_safe_actions=["preserve_original_activity_intent_and_child_controls", "resume_original_activity_cleanup"])
     deleted_now = {row["number"] for row in results if row["state"] == "deleted"}
     unique_preserved = {item["object_id"]: item["state"]["size"] for item in material["items"]
                         if item["disposition"] == "preserve"}
@@ -852,7 +938,9 @@ def _execute_locked(candidate, *, reviewer, claim, backend):
         "physical_disk_measurement_state": "not_attributable_from_file_payload_sizes",
         "completed_item_count": sum(row["state"] in {"deleted", "already_deleted", "already_absent_after_intent"} for row in results),
         "retained_item_count": sum(row["state"] in {"retained", "replacement_retained"} for row in results),
-        "unprocessed_item_count": len(material["items"]) - len(results),
+        "unprocessed_item_count": sum(row["state"] == "not_attempted" for row in results),
+        "interrupted_item_count": sum(row["state"] == "interrupted" for row in results),
+        "unknown_local_outcome_count": sum(row["state"] == "outcome_unknown" for row in results),
     }
     if isinstance(backend, OfficialPreservationBackend):
         observe = getattr(backend.transport, "transfer_observation", None)
@@ -937,7 +1025,7 @@ class OfficialPreservationBackend:
         from .object_storage_restore import _remote_location
         rows = self.manifest_lookup.rows(item["object_id"])
         keys = {location["remote_key"] for row in rows
-            if (location := _remote_location(row, provider_kind=self.provider_kind, store_ref=self.store_ref))}
+            if (location := _remote_location(row, provider_kind=self.provider_kind, store_ref=self.store_ref, archive_root=self.root))}
         if len(keys) != 1:
             return None
         return next(iter(keys))
@@ -1031,6 +1119,11 @@ class OfficialPreservationBackend:
         else:
             result = getattr(module, "execute_object_storage_" + operation)(plan, reviewer_claim=self.reviewer,
                 transport_factory=lambda: self.transport)
+        if result.get("cause_code") == "operation_cancelled_at_checkpoint":
+            from .operation_cancellation import OperationCancelled
+            error = OperationCancelled()
+            error.child_recovery = result.get("recovery")
+            raise error
         if not result.get("ok"):
             raise ActivityCleanupError("activity_cleanup_" + operation + "_incomplete")
         return result
@@ -1091,6 +1184,11 @@ class OfficialPreservationBackend:
             _create_or_match_document(self.root, relative, encoded(intake),
                 failure_code="object_storage_offload_receipt_conflict", max_bytes=MAX_CONTROL_BYTES)
             result = self._intake_step(item, relative, journal)
+            if result.get("cause_code") == "operation_cancelled_at_checkpoint":
+                from .operation_cancellation import OperationCancelled
+                error = OperationCancelled()
+                error.child_recovery = result.get("recovery")
+                raise error
             if not result.get("ok"):
                 raise ActivityCleanupError("activity_cleanup_intake_incomplete")
             journal.write(name + "-intake", {"object_id": item["object_id"], "source_state": item["state"],
@@ -1181,7 +1279,7 @@ class OfficialPreservationBackend:
         from . import object_storage_restore as restore
         from .object_storage_scope import ObjectScope
         path = self.root / "objects/sha256" / item["object_id"][7:9] / item["object_id"][7:]
-        if not os.path.lexists(path):
+        if not os.path.lexists(path) or self.journal.read("item-" + str(item["number"]) + "-restore-control"):
             self._storage_step(item, "restore", lambda: restore.plan_object_storage_restore(self.root,
                 provider_kind=self.provider_kind, store_ref=self.store_ref,
                 scope=ObjectScope("object_list", (item["object_id"],))))

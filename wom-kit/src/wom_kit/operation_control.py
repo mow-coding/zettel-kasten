@@ -122,9 +122,26 @@ COMMAND_KINDS = {
     "index": "archive_index",
     "index-health": "archive_index_health",
     "staged-cleanup-check": "staged_cleanup_check",
+    "objet-capture-batch": "objet_capture_batch",
+    "object-storage-cleanup": "object_storage_cleanup",
+    "object-storage-restore": "object_storage_restore",
+    "object-storage-upload": "object_storage_upload",
+    "object-storage-offload": "object_storage_offload",
+    "object-storage-adopt-existing": "object_storage_bytes_preservation",
+    "activity-cleanup": "activity_cleanup",
 }
 KIND_COMMANDS = {value: key for key, value in COMMAND_KINDS.items()}
 COMMAND_STAGES = {
+    "object-storage-upload": frozenset({"starting", "preparation", "approval", "remote-io", "verification", "recording", "unknown"}),
+    "object-storage-offload": frozenset({"starting", "preparation", "approval", "remote-io", "verification", "recording", "unknown"}),
+    "object-storage-adopt-existing": frozenset({"starting", "preparation", "approval", "remote-io", "verification", "recording", "unknown"}),
+    "activity-cleanup": frozenset({"starting", "preparation", "approval", "remote-io", "verification", "recording", "unknown"}),
+    "object-storage-cleanup": frozenset({"starting", "preparation", "approval", "remote-io", "verification", "recording", "unknown"}),
+    "object-storage-restore": frozenset({"starting", "preparation", "approval", "remote-io", "verification", "recording", "unknown"}),
+    "objet-capture-batch": frozenset({
+        "starting", "objet-capture-batch-plan", "batch-plan", "native-approval",
+        "batch-rederive", "batch-capture", "unknown",
+    }),
     "project-version-update": frozenset(
         {
             "starting",
@@ -1656,6 +1673,7 @@ class OperationRunJournal:
         return not self._failed
 
     def metadata(self) -> dict[str, Any]:
+        from .operation_cancellation import SUPPORTED
         return {
             "operation_ref": self.operation_ref,
             "operation_kind": self.operation_kind,
@@ -1672,7 +1690,7 @@ class OperationRunJournal:
                 f"--operation-ref {self.operation_ref} --action wait "
                 "--timeout-seconds 60 --dry-run --format json"
             ),
-            "cancel_supported": False,
+            "cancel_supported": self.operation_kind in SUPPORTED,
             "resume_supported": False,
         }
 
@@ -3433,6 +3451,14 @@ def inspect_operation(
         }
     )
     result["privacy_guards"]["writes"] = durability_flush_attempted
+    from . import operation_cancellation
+    if first["operation_kind"] in operation_cancellation.SUPPORTED:
+        try:
+            result["control"].update(operation_cancellation.state(root, candidates[0], first))
+            result["control"]["cancellation_completed"] = bool(effective_terminal and result["control"]["cancel_acknowledged"])
+        except (ValueError, OSError, KeyError):
+            result["ok"] = False
+            result["blockers"].append("operation_cancel_request_invalid")
     if durability_flush_attempted:
         result["dry_run"] = False
     if state == "running_observed":
@@ -3546,6 +3572,11 @@ def recovery_plan(
             actions = [
                 "Run archive index-health <archive-root> --dry-run --progress --format json before retrying an index-dependent command."
             ]
+        elif kind == "objet_capture_batch":
+            actions = [
+                "Read the complete capture result, cause_code, cause_stage and per-item effects before deciding what remains.",
+                "Keep the completed source-intake result. Run objet-capture-batch --dry-run with the same --source-intake-execution-sha256 to reconcile preserved objects; do not copy the originals again.",
+            ]
         else:
             actions = [
                 "Review the complete index-health result together with its exit code and index_state."
@@ -3562,6 +3593,10 @@ def recovery_plan(
         elif kind in {"archive_index", "archive_index_health"}:
             actions.append(
                 "Run a fresh archive index-health <archive-root> --dry-run --progress --format json; treat committed SQLite truth as authoritative over missing terminal output."
+            )
+        elif kind == "objet_capture_batch":
+            actions.append(
+                "Keep the prepared source-intake result and authenticated capture receipts. Reconcile with objet-capture-batch --dry-run using the same --source-intake-execution-sha256; missing terminal output does not prove zero writes."
             )
     result["next_safe_actions"] = actions
     return result

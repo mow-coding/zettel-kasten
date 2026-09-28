@@ -13103,13 +13103,21 @@ def command_operation_control(args: argparse.Namespace) -> int:
                 result["inspection_root_resolved_to_parent_project"] = True
             break
     if action not in {"status", "wait", "recovery-plan"}:
-        result = operation_control.unsupported_cancel(
-            root,
-            args.operation_ref,
-            approve=bool(args.approve),
-            reviewed_by=None,
-            expected_control_digest=None,
-        )
+        from . import operation_cancellation
+        try:
+            if not args.approve:
+                raise ValueError("operation_cancel_approval_required")
+            if (not operation_control.OPERATION_REF_RE.fullmatch(str(args.operation_ref))
+                    or not operation_control.CONTROL_DIGEST_RE.fullmatch(str(args.expected_control_digest or ""))
+                    or archive_services.safe_project_intake_actor_id(args.reviewed_by) is None):
+                raise ValueError("operation_cancel_inputs_invalid")
+            result = operation_cancellation.request_cancel(root, args.operation_ref,
+                expected_control_digest=args.expected_control_digest, reviewed_by=args.reviewed_by)
+        except (ValueError, OSError, operation_control.OperationControlError, ExactHumanApprovalWorkflowError) as error:
+            result = {"ok": False, "state": "blocked",
+                "operation_ref": args.operation_ref if operation_control.OPERATION_REF_RE.fullmatch(str(args.operation_ref)) else None,
+                "blockers": [getattr(error, "code", "operation_cancel_request_refused")],
+                "control": {"cancel_requested": False}, "private_values_echoed": False}
 
     if action != "cancel" and not bool(args.dry_run):
         result["ok"] = False
@@ -13143,7 +13151,7 @@ def command_operation_control(args: argparse.Namespace) -> int:
             print(f"BLOCKED: {blocker}")
         for next_action in result.get("next_safe_actions", []):
             print(f"NEXT: {next_action}")
-        print("Writes: none")
+        print("Writes: cancellation request recorded" if result.get("cancel_requested") else "Writes: none")
     return 0 if result.get("ok") else 1
 
 
@@ -18032,6 +18040,10 @@ def command_object_storage_scope_list(args: argparse.Namespace) -> int:
 
 
 def command_object_storage_upload(args: argparse.Namespace) -> int:
+    return _run_storage_command(args, command_object_storage_upload_result, print_object_storage_upload_result)
+
+
+def command_object_storage_upload_result(args: argparse.Namespace) -> dict[str, Any]:
     """v0.4.33 (beta letter 164 ①③④): upload local objet bytes under one native approval.
 
     Dry-run reports the writer line first, then classifies every manifest
@@ -18094,8 +18106,7 @@ def command_object_storage_upload(args: argparse.Namespace) -> int:
             result = object_storage_upload_exact.abandon_object_storage_upload(
                 plan, reviewer_claim=reviewer, approval_id=resume_approval_id,
                 execution_sha256=resume_execution_sha256, dry_run=bool(args.dry_run))
-            print_object_storage_upload_result(result, args.format)
-            return 0 if result.get("ok") else 1
+            return result
         if args.dry_run:
             result = plan.public_document()
             # v0.4.36 (beta letter 168 ①): env-ref presence, no value read.
@@ -18220,8 +18231,7 @@ def command_object_storage_upload(args: argparse.Namespace) -> int:
     finally:
         if plan_progress is not None:
             getattr(plan_progress, "close", lambda: None)()
-    print_object_storage_upload_result(result, args.format)
-    return 0 if result.get("ok", False) else 1
+    return result
 
 
 def _object_storage_preservation_cli_error(
@@ -18349,6 +18359,10 @@ def _object_storage_live_transport_factory(
 
 
 def _command_object_storage_preserve_local_only(args: argparse.Namespace) -> int:
+    return _run_storage_command(args, _command_object_storage_preserve_local_only_result, print_object_storage_bytes_preservation_result)
+
+
+def _command_object_storage_preserve_local_only_result(args: argparse.Namespace) -> dict[str, Any]:
     if bool(args.dry_run) == bool(args.approve):
         return _object_storage_preservation_cli_error(
             args, "object_storage_preservation_plan_invalid"
@@ -18453,8 +18467,7 @@ def _command_object_storage_preserve_local_only(args: argparse.Namespace) -> int
             args,
             str(getattr(exc, "code", "object_storage_preservation_remote_unavailable")),
         )
-    print_object_storage_bytes_preservation_result(result, args.format)
-    return 0 if result.get("ok", False) else 1
+    return result
 
 
 def _command_object_storage_formal_adoption(args: argparse.Namespace) -> int:
@@ -18655,7 +18668,7 @@ def command_object_storage_restore(args: argparse.Namespace) -> int:
         else object_storage_restore.MODE_RESTORE
     )
     plan_progress, exact_progress = _object_storage_restore_progress_hooks(args)
-    try:
+    def perform_restore():
         if resume_requested:
             plan = object_storage_restore.load_object_storage_restore_plan(
                 Path(args.archive_root), manifest_sha256=expected_manifest_sha256
@@ -18679,7 +18692,7 @@ def command_object_storage_restore(args: argparse.Namespace) -> int:
             if plan.manifest is None or not secrets.compare_digest(
                 plan.manifest.manifest_sha256, expected_manifest_sha256
             ):
-                return _object_storage_restore_cli_error(args, "object_storage_restore_plan_changed")
+                raise object_storage_restore.ObjectStorageRestoreError("object_storage_restore_plan_changed")
             transport_factory = _object_storage_live_transport_factory(
                 args,
                 invalid=lambda: object_storage_restore.ObjectStorageRestoreError(
@@ -18705,6 +18718,10 @@ def command_object_storage_restore(args: argparse.Namespace) -> int:
                     transport_factory=transport_factory,
                     progress_hook=exact_progress,
                 )
+        return result
+    try:
+        result = (_run_tracked_domain_operation(args, perform_restore)
+                  if args.approve else perform_restore())
     except object_storage_scope.ObjectStorageScopeError as error:
         return _object_storage_restore_cli_error(args, error.code)
     except object_storage_restore.ObjectStorageRestoreError as exc:
@@ -18770,6 +18787,10 @@ def _object_storage_offload_cli_error(args: argparse.Namespace, reason_code: str
 
 
 def command_object_storage_offload(args: argparse.Namespace) -> int:
+    return _run_storage_command(args, command_object_storage_offload_result, print_object_storage_offload_result)
+
+
+def command_object_storage_offload_result(args: argparse.Namespace) -> dict[str, Any]:
     """v0.4.29 (OB-02): free local disk only after the way back is proven.
 
     Dry-run scans the manifest and every inbox draft, hashes local candidates
@@ -18890,8 +18911,7 @@ def command_object_storage_offload(args: argparse.Namespace) -> int:
             close = getattr(plan_progress, "close", None)
             if close is not None:
                 close()
-    print_object_storage_offload_result(result, args.format)
-    return 0 if result.get("ok", False) else 1
+    return result
 
 
 def _print_storage_capacity_cost(result):
@@ -19852,6 +19872,9 @@ def command_notion_page_trash(args: argparse.Namespace) -> int:
 
 
 def command_notion_page_recovery_plan(args: argparse.Namespace) -> int:
+    if getattr(args, "include_media", False) or getattr(args, "include_connections", False):
+        args.approve = False
+        return _command_notion_recovery_with_content(args)
     if not args.dry_run:
         result = _notion_page_recovery_request_blocked(
             "notion_page_recovery_plan_requires_dry_run"
@@ -19995,7 +20018,33 @@ def _notion_page_recovery_execute_blocked(code: str) -> dict[str, Any]:
     return result
 
 
+def _command_notion_recovery_with_content(args: argparse.Namespace) -> int:
+    from . import provider_workflows
+    try:
+        if bool(args.dry_run) == bool(args.approve):
+            raise ValueError("notion_content_mode_required")
+        root = archive_services.require_existing_archive_root(Path(args.archive_root))
+        request = _load_notion_page_recovery_request(root, args.request)
+        _require_letter118_reviewed_batch_contract(request)
+        options = dict(max_items=args.max_items, offset=args.offset,
+            include_media=args.include_media, include_connections=args.include_connections,
+            max_provider_requests=args.max_provider_requests)
+        if args.dry_run:
+            result = provider_workflows.plan_notion_recovery_with_content(root, request, **options)
+        else:
+            if not args.reviewed_by or not args.expected_plan_sha256:
+                raise ValueError("notion_content_review_required")
+            result = provider_workflows.execute_notion_recovery_with_content(root, request, **options,
+                reviewed_by=args.reviewed_by, expected_plan_sha256=args.expected_plan_sha256)
+    except (ValueError, OSError, ExactHumanApprovalWorkflowError, archive_services.ArchiveServiceError) as error:
+        result = _feedback_mode_error(error, "notion_content_recovery_failed")
+    print_json(result)
+    return 0 if result.get("ok") else 1
+
+
 def command_notion_page_recovery(args: argparse.Namespace) -> int:
+    if getattr(args, "include_media", False) or getattr(args, "include_connections", False):
+        return _command_notion_recovery_with_content(args)
     if args.approve and not args.dry_run:
         # Reopened in v0.4.41 (letters 116-118, 142/148/156): one fresh plan,
         # one exact approval (a native dialog, or none under a valid session
@@ -21251,7 +21300,9 @@ def print_object_storage_bytes_preservation_result(
             f"{metrics.get('manifest_scope_remote_key_verified_object_count', 0)} / "
             f"{metrics.get('official_deduplicated_wom_uploaded_evidence_object_count', 0)}"
         )
-    print("Preservation status: bytes_preserved (not formal adoption)")
+    print(f"Preservation status: {result.get('state') or 'unknown'} (not formal adoption)")
+    for action in result.get("next_safe_actions") or []:
+        print(f"Next: {action}")
     print("Manifest location updates: 0")
 
 
@@ -21308,6 +21359,31 @@ def command_source_intake(args: argparse.Namespace) -> int:
             for warning in result["warnings"]:
                 print(f"- {warning}")
     return 0 if result.get("ok", True) else 1
+
+
+def command_provider_content_import(args: argparse.Namespace) -> int:
+    from . import provider_workflows
+    try:
+        if args.command == "tiro-content-import":
+            options = dict(bundle_path=args.bundle, batch_id=args.batch_id,
+                audio_manifest=args.audio_manifest, enrichment_manifest=args.enrichment_manifest)
+            planner, executor = provider_workflows.plan_tiro_content, provider_workflows.execute_tiro_content
+        else:
+            options = dict(source_path=args.source, source_page_id=args.source_page_id,
+                format=args.source_format, batch_id=args.batch_id, relation_columns=args.relation_column,
+                judgments_path=args.judgments, bindings_path=args.bindings)
+            planner, executor = provider_workflows.plan_connection_import, provider_workflows.execute_connection_import
+        if args.dry_run:
+            result = planner(Path(args.archive_root), **options)
+        else:
+            if not args.reviewed_by or not args.expected_plan_sha256:
+                raise ValueError("provider_import_review_required")
+            result = executor(Path(args.archive_root), reviewed_by=args.reviewed_by,
+                expected_plan_sha256=args.expected_plan_sha256, **options)
+    except (ValueError, OSError, ExactHumanApprovalWorkflowError, archive_services.ArchiveServiceError) as error:
+        result = _feedback_mode_error(error, "provider_content_import_failed")
+    print_json(result)
+    return 0 if result.get("ok") else 1
 
 
 def command_tiro_import_plan(args: argparse.Namespace) -> int:
@@ -23739,6 +23815,10 @@ def command_abstract_freshness(args: argparse.Namespace) -> int:
 
 
 def command_activity_cleanup(args: argparse.Namespace) -> int:
+    return _run_storage_command(args, command_activity_cleanup_result, print_json)
+
+
+def command_activity_cleanup_result(args: argparse.Namespace) -> dict[str, Any]:
     from . import activity_cleanup
     import time as activity_clock
     writer_entered = False
@@ -23772,14 +23852,12 @@ def command_activity_cleanup(args: argparse.Namespace) -> int:
             candidate = activity_cleanup.reconcile_plan(candidate)
         if inspect_status:
             result = activity_cleanup.status(candidate)
-            print_json(result)
-            return 0 if result["ok"] else 1
+            return result
         if getattr(args, "private_plan_output", None):
             activity_cleanup.write_private_plan(candidate, args.private_plan_output)
             candidate["public"]["private_plan_written"] = True
         if args.dry_run:
-            print_json(candidate["public"])
-            return 0 if candidate["public"]["ok"] else 1
+            return candidate["public"]
         if os.name != "nt":
             raise activity_cleanup.ActivityCleanupError("activity_cleanup_native_delete_not_supported")
         if args.expected_plan_sha256 and args.expected_plan_sha256 != candidate["public"]["plan_sha256"]:
@@ -23832,8 +23910,7 @@ def command_activity_cleanup(args: argparse.Namespace) -> int:
         else:
             writer_entered = True
             result = _execute_exact_human_approved_write(candidate["root"], context, run)
-        print_json(result)
-        return 0 if result.get("ok") else 1
+        return result
     except (activity_cleanup.ActivityCleanupError, archive_services.ArchiveServiceError, OSError, ValueError,
             ExactHumanApprovalError, ExactHumanApprovalWorkflowError, ExactHumanApprovalWindowsError) as exc:
         # Refusals before the approval broker is entered (plan mismatch, missing
@@ -23853,6 +23930,8 @@ def command_draft_revision(args: argparse.Namespace) -> int:
             raise draft_revision.DraftRevisionError("draft_revision_approve_required")
         candidate = draft_revision.plan(Path(args.archive_root), draft=args.draft, proposal=args.proposal,
             resume_plan_sha256=args.expected_plan_sha256 if getattr(args, "resume", False) else None)
+        candidate["public"] = _attach_draft_disposition_guidance(candidate["public"], args.archive_root,
+            zettel_id=candidate["material"]["zettel_id"], relative_path=args.draft)
         if not getattr(args, "approve", False):
             print_json(candidate["public"])
             return 0 if candidate["public"]["ok"] else 1
@@ -23887,6 +23966,8 @@ def command_draft_revision(args: argparse.Namespace) -> int:
                     lambda claim: all(intent.get(key) == value for key, value in candidate["material"].items()), write_revision)
         else:
             result = _execute_exact_human_approved_write(candidate["root"], context, write_revision)
+        result = _attach_draft_disposition_guidance(result, args.archive_root,
+            zettel_id=candidate["material"]["zettel_id"], relative_path=args.draft)
         print_json(result)
         return 0 if result.get("ok") else 1
     except (draft_revision.DraftRevisionError, archive_services.ArchiveServiceError, OSError, ValueError,
@@ -26605,6 +26686,7 @@ def _draft_discard_exact_approval_route(
             lifecycle_action=lifecycle_action,
             reason_code=f"{lifecycle_action}_workflow_failed_safely",
         )
+    result = _attach_draft_disposition_guidance(result, args.archive_root)
     _print_draft_discard_result(result, args.format)
     return 0 if result.get("ok") else 1
 
@@ -26661,6 +26743,8 @@ def command_discard_draft(args: argparse.Namespace) -> int:
     except Exception:
         print("discard-draft failed safely.", file=sys.stderr)
         return 1
+    result = _attach_draft_disposition_guidance(result, args.archive_root,
+        zettel_id=args.zettel_id, relative_path=args.path)
     _print_draft_discard_result(result, args.format)
     return 0 if result.get("ok") else 1
 
@@ -27624,10 +27708,9 @@ def _exact_human_approval_cli_error(
         else "exact_human_approval_state_unknown"
     )
     blockers = _bounded_preflight_blockers(preflight_blockers)
-    if getattr(args, "format", None) == "json":
+    if getattr(args, "format", None) == "json" or getattr(args, "_domain_result_only", False):
         command = str(getattr(args, "command", "") or "")
-        print_json(
-            {
+        result = {
                 "schema": "wom-kit/cli-error/v0.1",
                 "ok": False,
                 "state": "blocked",
@@ -27661,7 +27744,9 @@ def _exact_human_approval_cli_error(
                 **({"next_safe_actions": list(next_safe_actions)} if next_safe_actions else {}),
                 **({"progress_summary": dict(progress_summary)} if progress_summary else {}),
             }
-        )
+        if getattr(args, "_domain_result_only", False):
+            return result
+        print_json(result)
     elif safe_reason == "exact_human_approval_cancelled":
         print(
             "Exact human approval was cancelled; the write did not start.",
@@ -30838,6 +30923,10 @@ def command_mint_zettel(args: argparse.Namespace) -> int:
         # result, computed after the broker returned (outside the claim).
         result = archive_services.attach_inbox_attention(result, archive_root)
 
+    result = _attach_draft_disposition_guidance(result, args.archive_root,
+        zettel_id=args.zettel_id or result.get("zettel_id"),
+        relative_path=args.path if args.dry_run else None)
+
     if args.dry_run:
         if args.format == "json":
             print_json(result)
@@ -33120,19 +33209,23 @@ def command_staged_cleanup_check(args: argparse.Namespace) -> int:
 
 
 def command_objet_capture_batch(args: argparse.Namespace) -> int:
+    from . import operation_cancellation
     reporter = CommandProgressReporter(
         bool(getattr(args, "progress", True)),
         label="objet-capture-batch",
     )
     reporter.progress("objet-capture-batch-plan", "start", None, None)
+    capture: _CommandRunResultCapture | None = None
+    operation_journal: operation_control.OperationRunJournal | None = None
+    observation_context = None
 
     def batch_progress(
         event: objet_capture_batch_exact.ObjetCaptureBatchProgress,
     ) -> None:
         document = event.public_document()
-        reporter.progress(
+        operation_progress_callback(reporter, operation_journal)(
             str(document["stage"]),
-            str(document["event"]),
+            "done" if document["event"] == "complete" else str(document["event"]),
             int(document["current"]),
             int(document["total"]),
         )
@@ -33142,31 +33235,54 @@ def command_objet_capture_batch(args: argparse.Namespace) -> int:
             raise objet_capture_batch_exact.ObjetCaptureBatchExactError(
                 "objet_capture_batch_plan_blocked"
             )
+        resume = bool(getattr(args, "resume", False))
+        if resume and (not args.approve or not getattr(args, "approval_id", None)
+                       or not getattr(args, "execution_sha256", None)
+                       or args.manifest or args.expected_plan_sha256
+                       or getattr(args, "source_intake_execution_sha256", None)):
+            raise objet_capture_batch_exact.ObjetCaptureBatchExactError("objet_capture_batch_resume_inputs_invalid")
+        if not resume and (getattr(args, "approval_id", None) or getattr(args, "execution_sha256", None)):
+            raise objet_capture_batch_exact.ObjetCaptureBatchExactError("objet_capture_batch_resume_inputs_invalid")
         if args.approve and (
-            not args.reviewed_by or not args.expected_plan_sha256
+            not args.reviewed_by or (not resume and not args.expected_plan_sha256)
         ):
             raise objet_capture_batch_exact.ObjetCaptureBatchExactError(
                 "objet_capture_batch_reviewer_invalid"
             )
-        plan = objet_capture_batch_exact.plan_objet_capture_batch(
-            Path(args.archive_root),
-            Path(args.manifest) if args.manifest else None,
-            intake_execution_sha256=str(
-                getattr(args, "source_intake_execution_sha256", "") or ""
-            ),
-            progress_hook=batch_progress,
-        )
-        reporter.progress("objet-capture-batch-plan", "done", None, None)
-        result = (
-            plan.public_document()
-            if args.dry_run
-            else objet_capture_batch_exact.execute_objet_capture_batch(
-                plan,
-                expected_plan_sha256=args.expected_plan_sha256,
-                reviewer_claim=args.reviewed_by or "",
+        if args.approve or getattr(args, "output", None):
+            output = getattr(args, "output", None) or (
+                f".wom-scratch/diagnostics/capture-{secrets.token_hex(16)}.json"
+            )
+            capture = _CommandRunResultCapture.prepare(
+                output, Path(args.archive_root), command="objet-capture-batch"
+            )
+            operation_journal = prepare_operation_tracking(capture, announce=bool(getattr(args, "progress", True)))
+            observation_context = operation_cancellation.observing(operation_journal)
+            observation_context.__enter__()
+        if resume:
+            result = objet_capture_batch_exact.resume_objet_capture_batch(Path(args.archive_root),
+                reviewer_claim=args.reviewed_by, approval_id=args.approval_id,
+                execution_sha256=args.execution_sha256, progress_hook=batch_progress)
+        else:
+            plan = objet_capture_batch_exact.plan_objet_capture_batch(
+                Path(args.archive_root),
+                Path(args.manifest) if args.manifest else None,
+                intake_execution_sha256=str(
+                    getattr(args, "source_intake_execution_sha256", "") or ""
+                ),
                 progress_hook=batch_progress,
             )
-        )
+            reporter.progress("objet-capture-batch-plan", "done", None, None)
+            result = (
+                plan.public_document()
+                if args.dry_run
+                else objet_capture_batch_exact.execute_objet_capture_batch(
+                    plan,
+                    expected_plan_sha256=args.expected_plan_sha256,
+                    reviewer_claim=args.reviewed_by or "",
+                    progress_hook=batch_progress,
+                )
+            )
     except (
         objet_capture_batch_exact.ObjetCaptureBatchExactError,
         operation_approval_binding.OperationApprovalBindingError,
@@ -33174,13 +33290,37 @@ def command_objet_capture_batch(args: argparse.Namespace) -> int:
         ExactHumanApprovalWindowsError,
         ExactHumanApprovalWorkflowError,
         archive_services.ArchiveServiceError,
+        operation_control.OperationControlError,
+        operation_cancellation.OperationCancelled,
+        ValueError,
         OSError,
     ) as error:
         result = objet_capture_batch_exact.failure_document(
-            str(getattr(error, "code", "") or "")
+            str(getattr(error, "code", "") or ""), error=error,
+            resume=bool(getattr(args, "resume", False)),
         )
     finally:
+        if observation_context is not None:
+            observation_context.__exit__(None, None, None)
         reporter.close()
+    if operation_journal is not None:
+        result["operation"] = operation_journal.metadata()
+        result["operation_ref"] = operation_journal.operation_ref
+    if capture is not None:
+        result_written = False
+        try:
+            capture.write_completed(exit_code=0 if result.get("ok") else 1, result=result)
+            result_written = True
+        except (OSError, ValueError):
+            result["result_artifact_written"] = False
+            result.setdefault("warnings", []).append("capture_result_publication_failed")
+        finally:
+            complete_operation_tracking(
+                operation_journal, capture,
+                exit_code=0 if result.get("ok") else 1,
+                result_available=result_written,
+                result_ok=bool(result.get("ok")) if result_written else None,
+            )
     if args.format == "json":
         print_json(result)
     else:
@@ -33753,9 +33893,31 @@ def command_principal_unregister(args: argparse.Namespace) -> int:
 
 
 def command_relation_candidate_plan(args: argparse.Namespace) -> int:
-    if not args.dry_run:
+    if getattr(args, "semantics", False) or getattr(args, "judgment_ref", None):
+        from . import relation_batch
+        try:
+            if (not args.dry_run or args.from_zettel or args.snapshot_ref or args.cursor or args.paged):
+                raise ValueError("relation_query_modes_conflict")
+            result = (relation_batch.semantics(args.archive_root) if args.semantics else
+                      relation_batch.judgment(args.archive_root, judgment_ref=args.judgment_ref))
+        except (ValueError, OSError, archive_services.ArchiveServiceError) as error:
+            result = _feedback_mode_error(error, "relation_query_failed")
+        print_json(result)
+        return 0 if result.get("ok") else 1
+    if getattr(args, "snapshot_ref", None) or getattr(args, "cursor", None) or getattr(args, "paged", False):
+        from . import relation_batch
+        try:
+            if not args.dry_run or not args.from_zettel:
+                raise ValueError("relation_query_inputs_required")
+            result = relation_batch.query(args.archive_root, from_zettel=args.from_zettel,
+                snapshot_ref=args.snapshot_ref, page_size=args.page_size, cursor=args.cursor)
+        except (ValueError, OSError, archive_services.ArchiveServiceError) as error:
+            result = _feedback_mode_error(error, "relation_query_failed")
+        print_json(result)
+        return 0 if result.get("ok") else 1
+    if not args.dry_run or not args.from_zettel:
         print(
-            "relation-candidate-plan is read-only and requires --dry-run.",
+            "relation-candidate-plan requires --dry-run and --from-zettel (or --semantics / --judgment-ref).",
             file=sys.stderr,
         )
         return 1
@@ -33858,6 +34020,12 @@ def _relation_candidate_accept_route(args: argparse.Namespace) -> int:
 
 
 def command_relation_candidate_decide(args: argparse.Namespace) -> int:
+    if args.request or args.resume or args.revert:
+        return _command_relation_batch(args)
+    if not all((args.from_zettel, args.candidate_id, args.decision, args.reason,
+                args.confidence, args.expected_plan_sha256, args.reviewed_by)) or args.dry_run:
+        print_json({"ok": False, "blockers": ["relation_single_decision_inputs_required"]})
+        return 1
     if not args.approve:
         print("relation-candidate-decide requires --approve.", file=sys.stderr)
         return 1
@@ -35149,6 +35317,9 @@ def command_imap_mailbox_message_fetch(args: argparse.Namespace) -> int:
         since_days=args.since_days,
         max_messages=args.max_messages,
         timeout_seconds=args.timeout_seconds,
+        sync=bool(getattr(args, "sync", False)),
+        resume=bool(getattr(args, "resume", False)),
+        extract_mime=bool(getattr(args, "extract_mime", False)),
     )
 
     def printer(result: dict[str, Any]) -> None:
@@ -35165,23 +35336,41 @@ def command_imap_mailbox_message_fetch(args: argparse.Namespace) -> int:
             print(f"Next: {result['next_step']}")
         print("Headers, subjects, addresses and bodies shown: no. Server flags changed: no.")
 
+    def fetch_messages(digest, reviewer, binding, claim):
+        return imap_message_fetch.execute_fetch_approved(Path(args.archive_root),
+            reviewed_by=reviewer, exact_human_approval_claim=claim, expected_plan_sha256=digest,
+            expected_exact_approval_plan_sha256=binding.plan_sha256,
+            expected_exact_approval_target_binding_sha256=binding.target_binding_sha256, **arguments)
+
     if args.approve and not args.dry_run:
-        return _plan_digest_exact_route(
+        fetched_results: list[dict[str, Any]] = []
+        exit_code = _plan_digest_exact_route(
             args,
             lifecycle_action="imap_mailbox_message_fetch",
             operation=ExactHumanApprovalOperation.imap_mailbox_message_fetch,
             plan=lambda: imap_message_fetch.plan_fetch(Path(args.archive_root), **arguments),
-            write=lambda digest, reviewer, binding, claim: imap_message_fetch.execute_fetch_approved(
-                Path(args.archive_root),
-                reviewed_by=reviewer,
-                exact_human_approval_claim=claim,
-                expected_plan_sha256=digest,
-                expected_exact_approval_plan_sha256=binding.plan_sha256,
-                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
-                **arguments,
-            ),
-            printer=printer,
+            write=fetch_messages,
+            printer=fetched_results.append,
         )
+        if not fetched_results:
+            # The approval route already emitted its precondition/error result.
+            return exit_code
+        fetched = fetched_results[0]
+        result = fetched
+        if exit_code == 0 and fetched.get("ok") and arguments["extract_mime"]:
+            # End the fetch broker/key callback before canonical intake opens
+            # its own existing approval operations; key consumers cannot nest.
+            from . import provider_workflows
+            try:
+                result = provider_workflows.complete_imap_content(
+                    Path(args.archive_root), fetched, reviewed_by=args.reviewed_by)
+            except (ValueError, OSError, ExactHumanApprovalWorkflowError,
+                    archive_services.ArchiveServiceError) as error:
+                result = {**_feedback_mode_error(error, "imap_content_completion_failed"),
+                    "provider_fetch_completed": True, "capture_completed": False,
+                    "fetch_result": fetched, "effects_state": "partial_or_unknown"}
+        printer(result)
+        return 0 if result.get("ok") else 1
     try:
         result = imap_message_fetch.plan_fetch(Path(args.archive_root), **arguments)
     except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
@@ -35189,6 +35378,296 @@ def command_imap_mailbox_message_fetch(args: argparse.Namespace) -> int:
         result = {"ok": False, "blockers": [code if re.fullmatch(r"[a-z0-9_]+", code) else "imap_fetch_plan_failed"]}
     printer(result)
     return 0 if result.get("ok") else 1
+
+
+def command_feedback_closure_check(args: argparse.Namespace) -> int:
+    from . import feedback_closure
+    try:
+        result = feedback_closure.check(args.ledger)
+    except feedback_closure.FeedbackClosureError as error:
+        result = {"ok": False, "read_only": True, "blockers": [error.code], "private_values_echoed": False}
+    print_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def _feedback_private_request(path):
+    raw, reason = archive_services._bounded_stable_regular_file_read(Path(path), max_bytes=16 * 1024 * 1024)
+    if raw is None or reason:
+        raise ValueError("feedback_request_unreadable")
+    document = json.loads(raw.decode("utf-8-sig"))
+    if type(document) is not dict:
+        raise ValueError("feedback_request_invalid")
+    return document
+
+
+def _feedback_mode_error(error, fallback):
+    code = getattr(error, "code", fallback)
+    return {"ok": False, "blockers": [code if re.fullmatch(r"[a-z0-9_]+", str(code)) else fallback],
+            "private_values_echoed": False, "paths_echoed": False}
+
+
+def command_title_diagnostics(args: argparse.Namespace) -> int:
+    from . import title_diagnostics
+    try:
+        if args.refresh:
+            if args.cursor or args.snapshot_ref:
+                raise ValueError("refresh_and_historical_page_conflict")
+            refreshed = title_diagnostics.publish(args.archive_root)
+            args.snapshot_ref = refreshed["snapshot_ref"]
+        result = title_diagnostics.query(args.archive_root, snapshot_ref=args.snapshot_ref,
+            page_size=args.page_size, cursor=args.cursor, state=args.state)
+        result["snapshot_refreshed"] = bool(args.refresh)
+    except (ValueError, OSError, archive_services.ArchiveServiceError) as error:
+        result = _feedback_mode_error(error, "title_diagnostics_failed")
+    print_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_human_artifact_inventory(args: argparse.Namespace) -> int:
+    from . import human_artifact_inventory as inventory
+    try:
+        if args.request:
+            if args.refresh or args.cursor or args.snapshot_ref or args.state or (args.dry_run == args.approve):
+                raise ValueError("human_inventory_request_mode_invalid")
+            request = _feedback_private_request(args.request)
+            if args.dry_run:
+                if args.resume:
+                    raise ValueError("human_inventory_resume_requires_approve")
+                result = inventory.plan(args.archive_root, request)
+            else:
+                digest = args.expected_plan_sha256
+                if not digest or not args.reviewed_by:
+                    raise ValueError("human_inventory_review_required")
+                context = inventory.approval_context(args.archive_root, request,
+                    reviewer_claim=args.reviewed_by, expected_plan_sha256=digest, resume=args.resume)
+                result = _execute_exact_human_approved_write(Path(args.archive_root), context,
+                    lambda claim: inventory.apply(args.archive_root, request,
+                        expected_plan_sha256=digest, reviewer_claim=args.reviewed_by,
+                        approval_claim=claim, resume=args.resume))
+        else:
+            if args.approve or args.resume or args.expected_plan_sha256 or args.reviewed_by:
+                raise ValueError("human_inventory_request_required")
+            if args.refresh:
+                if args.dry_run or args.cursor or args.snapshot_ref:
+                    raise ValueError("human_inventory_refresh_mode_invalid")
+                args.snapshot_ref = inventory.publish(args.archive_root)["snapshot_ref"]
+            result = inventory.query(args.archive_root, snapshot_ref=args.snapshot_ref,
+                page_size=args.page_size, cursor=args.cursor, state=args.state)
+            result["snapshot_refreshed"] = bool(args.refresh)
+    except (ValueError, OSError, ExactHumanApprovalWorkflowError, archive_services.ArchiveServiceError) as error:
+        result = _feedback_mode_error(error, "human_artifact_inventory_failed")
+    print_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def _command_relation_batch(args: argparse.Namespace) -> int:
+    from . import relation_batch
+    try:
+        if not args.dry_run and not args.approve:
+            raise ValueError("relation_batch_mode_required")
+        if args.dry_run and args.approve:
+            raise ValueError("relation_batch_mode_conflict")
+        request = _feedback_private_request(args.request) if args.request else None
+        if request is not None and args.reviewed_by and request.get("reviewed_by") != args.reviewed_by:
+            raise ValueError("relation_batch_reviewer_mismatch")
+        if not args.reviewed_by and request:
+            args.reviewed_by = request.get("reviewed_by")
+        if not args.reviewed_by and not args.dry_run and not getattr(args, "work_session_ref", None):
+            raise ValueError("relation_batch_reviewer_required")
+        result, _changed = _execute_local_recovery_cli_mode(args,
+            allowed_domains={"relation_batch"},
+            plan_factory=(lambda: relation_batch.plan(args.archive_root, request)) if request else None,
+            expected_manifest_sha256=args.expected_plan_sha256 or "",
+            resume=args.resume, revert=args.revert,
+            reporter=CommandProgressReporter(False, label="relation-candidate-batch"))
+    except (ValueError, OSError, ExactHumanApprovalWorkflowError, archive_services.ArchiveServiceError) as error:
+        result = _feedback_mode_error(error, "relation_batch_failed")
+    print_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def _attach_draft_disposition_guidance(result, archive_root, *, zettel_id=None, relative_path=None):
+    from . import draft_disposition
+    summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+    identity = zettel_id or result.get("zettel_id") or summary.get("zettel_id")
+    guidance = draft_disposition.workflow_guidance(archive_root, zettel_id=identity, relative_path=relative_path)
+    return {**result, "draft_disposition": guidance}
+
+
+def command_draft_disposition(args: argparse.Namespace) -> int:
+    from . import draft_disposition
+    try:
+        root = Path(args.archive_root)
+        if args.resume and not args.approve:
+            raise ValueError("draft_disposition_resume_requires_approve")
+        if getattr(args, "history", False):
+            if args.request or args.relative_path:
+                raise ValueError("draft_disposition_history_requires_zettel_id")
+            result = draft_disposition.history(root, zettel_id=args.zettel_id)
+        elif args.inspect:
+            result = draft_disposition.inspect(root, zettel_id=args.zettel_id, relative_path=args.relative_path)
+        else:
+            if not args.request:
+                raise ValueError("draft_disposition_request_required")
+            raw, reason = archive_services._bounded_stable_regular_file_read(Path(args.request), max_bytes=1024 * 1024)
+            if raw is None or reason:
+                raise ValueError("draft_disposition_request_unreadable")
+            request = json.loads(raw.decode("utf-8-sig"))
+            if args.dry_run:
+                if args.resume:
+                    raise ValueError("draft_disposition_resume_requires_approve")
+                result = draft_disposition.plan(root, request)
+            else:
+                digest = args.expected_plan_sha256
+                if not digest or not args.reviewed_by:
+                    raise ValueError("draft_disposition_plan_or_reviewer_required")
+                context = draft_disposition.approval_context(root, request, reviewer_claim=args.reviewed_by,
+                    expected_plan_sha256=digest, resume=args.resume)
+                if context.plan_sha256 != digest:
+                    raise ValueError("draft_disposition_plan_changed")
+                result = _execute_exact_human_approved_write(root, context,
+                    lambda claim: draft_disposition.apply(root, request,
+                        expected_plan_sha256=digest, reviewer_claim=args.reviewed_by, approval_claim=claim,
+                        resume=args.resume))
+    except (ValueError, OSError, ExactHumanApprovalWorkflowError, archive_services.ArchiveServiceError) as error:
+        code = getattr(error, "code", "draft_disposition_failed")
+        result = {"ok": False, "blockers": [code if re.fullmatch(r"[a-z_]+", str(code)) else "draft_disposition_failed"], "private_values_echoed": False}
+    print_json(result)
+    return 0 if result.get("ok") else 1
+
+
+def command_object_storage_cleanup(args: argparse.Namespace) -> int:
+    from . import object_storage_cleanup as cleanup
+    root = Path(args.archive_root)
+    planner = cleanup.plan_inventory if args.inventory else cleanup.plan_cleanup
+    writer = cleanup.execute_inventory_approved if args.inventory else cleanup.execute_cleanup_approved
+    try:
+        transport = _object_storage_live_transport_factory(args,
+            invalid=lambda: cleanup.ObjectStorageCleanupError("object_storage_cleanup_connection_invalid"),
+            unavailable=lambda: cleanup.ObjectStorageCleanupError("object_storage_cleanup_credentials_unavailable"))
+        if args.dry_run:
+            result = planner(root, request_path=args.request)
+            print_json(result)
+            return 0 if result.get("ok") else 1
+        def execute():
+            reviewer = archive_services.safe_project_intake_actor_id(args.reviewed_by)
+            if reviewer is None:
+                raise cleanup.ObjectStorageCleanupError("object_storage_cleanup_reviewer_required")
+            preview = planner(root, request_path=args.request)
+            digest = preview.get("plan_sha256")
+            if not preview.get("ok") or preview.get("blockers"):
+                return preview
+            if args.expected_plan_sha256 and args.expected_plan_sha256 != digest:
+                raise cleanup.ObjectStorageCleanupError("object_storage_cleanup_plan_changed")
+            binding = operation_approval_binding.plan_digest_approval_binding(
+                ExactHumanApprovalOperation.object_storage_remote_cleanup, digest)
+            context = binding.context(archive_id=archive_services.read_archive_id(root), reviewer_claim=reviewer)
+            return _execute_exact_human_approved_write(root, context,
+                lambda claim: writer(root, request_path=args.request,
+                    expected_plan_sha256=digest, reviewed_by=reviewer,
+                    exact_human_approval_claim=claim, expected_exact_approval_plan_sha256=binding.plan_sha256,
+                    expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+                    transport_factory=transport))
+        result = _run_tracked_domain_operation(args, execute)
+        print_json(result)
+        return 0 if result.get("ok") else 1
+    except (archive_services.ArchiveServiceError, ValueError, OSError) as error:
+        code = getattr(error, "code", "object_storage_cleanup_failed")
+        print_json({"ok": False, "blockers": [code], "private_values_echoed": False})
+        return 1
+
+
+def _run_storage_command(args, execute, printer):
+    # This private result-only namespace keeps business/error results structured;
+    # no stdout interception or process-global printer replacement is involved.
+    inner = argparse.Namespace(**vars(args))
+    inner._domain_result_only = True
+    writing = bool(getattr(args, "approve", False) or getattr(args, "resume", False))
+    result = (_run_tracked_domain_operation(inner, lambda: execute(inner))
+              if writing else execute(inner))
+    if printer is print_json or getattr(args, "format", None) == "json":
+        print_json(result)
+    elif result.get("schema") == "wom-kit/cli-error/v0.1":
+        for code in result.get("reason_codes", []):
+            print(f"Blocked: {code}", file=sys.stderr)
+        if result.get("cause_code"):
+            print(f"Cause: {result['cause_code']} (stage {result.get('cause_stage') or 'unknown'})", file=sys.stderr)
+        if result.get("operation_ref"):
+            print(f"Operation: {result['operation_ref']}", file=sys.stderr)
+        print(f"Effects: {result.get('effects_state') or 'unknown'}", file=sys.stderr)
+        for action in result.get("next_safe_actions", []):
+            print(f"Next: {action}", file=sys.stderr)
+    else:
+        printer(result, getattr(args, "format", "text"))
+    return 0 if result.get("ok") else 1
+
+
+def _run_tracked_domain_operation(args: argparse.Namespace, execute: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+    """Use the existing journal from before planning through durable outcome.
+
+    Domain writers own effect reconciliation. This wrapper never turns an
+    interrupted request into permission to replay unconfirmed side effects.
+    """
+    from . import operation_cancellation
+    capture = None
+    journal = None
+    try:
+        capture = _CommandRunResultCapture.prepare(
+            getattr(args, "output", None) or f".wom-scratch/diagnostics/{secrets.token_hex(16)}.json",
+            Path(args.archive_root), command=args.command)
+        journal = prepare_operation_tracking(capture, announce=bool(getattr(args, "progress", True)))
+        with operation_cancellation.observing(journal):
+            result = execute()
+    except (ValueError, OSError, ExactHumanApprovalError, ExactHumanApprovalWindowsError,
+            ExactHumanApprovalWorkflowError, archive_services.ArchiveServiceError,
+            operation_control.OperationControlError, operation_cancellation.OperationCancelled) as error:
+        result = _feedback_mode_error(error, "operation_execution_failed")
+        for key in ("cause_code", "cause_stage"):
+            value = getattr(error, key, None)
+            if isinstance(value, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,127}", value):
+                result[key] = value
+        result.update(effects_state="unknown", outcome_requires_reconciliation=True)
+        result["next_safe_actions"] = ["Use this operation_ref to inspect the saved result and the command's original recovery record before resuming."]
+    if journal is not None:
+        result.update(operation_ref=journal.operation_ref, operation=journal.metadata())
+    if capture is not None:
+        written = False
+        try:
+            capture.write_completed(exit_code=0 if result.get("ok") else 1, result=result)
+            written = True
+        except (OSError, ValueError):
+            result["result_artifact_written"] = False
+        finally:
+            complete_operation_tracking(journal, capture, exit_code=0 if result.get("ok") else 1,
+                result_available=written, result_ok=bool(result.get("ok")) if written else None)
+    return result
+
+
+def command_object_storage_open(args: argparse.Namespace) -> int:
+    from . import object_storage_open as remote_open
+    root = Path(args.archive_root)
+    selectors = dict(object_id=args.object_id, store_ref=args.store_ref, provider_kind=args.provider_kind,
+        ttl_seconds=args.ttl_seconds, remote_binding={"service": "s3", "endpoint_host": args.endpoint_host,
+            "bucket": args.bucket, "region": args.region or "auto"})
+    try:
+        transport = _object_storage_live_transport_factory(args,
+            invalid=lambda: remote_open.ObjectStorageOpenError("object_storage_open_connection_invalid"),
+            unavailable=lambda: remote_open.ObjectStorageOpenError("object_storage_open_credentials_unavailable"))
+        if args.dry_run:
+            result = remote_open.plan_open(root, **selectors)
+            print_json(result)
+            return 0 if result.get("ok") else 1
+        return _plan_digest_exact_route(args, lifecycle_action="object_storage_open",
+            operation=ExactHumanApprovalOperation.object_storage_open,
+            plan=lambda: remote_open.plan_open(root, **selectors),
+            write=lambda digest, reviewer, binding, claim: remote_open.execute_open_approved(root, **selectors,
+                expected_plan_sha256=digest, reviewed_by=reviewer,
+                exact_human_approval_claim=claim, expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+                transport_factory=transport), printer=print_json)
+    except (archive_services.ArchiveServiceError, ValueError, OSError) as error:
+        print_json({"ok": False, "blockers": [getattr(error, "code", "object_storage_open_failed")], "private_values_echoed": False})
+        return 1
 
 
 def command_sources(args: argparse.Namespace) -> int:
@@ -37600,6 +38079,7 @@ class _CommandRunResultCapture:
 
 def prepare_operation_tracking(
     capture: _CommandRunResultCapture,
+    *, announce: bool = True,
 ) -> operation_control.OperationRunJournal:
     journal = operation_control.OperationRunJournal.prepare(
         capture.archive_root,
@@ -37608,10 +38088,11 @@ def prepare_operation_tracking(
         run_id=capture.run_id,
     )
     capture.metadata["operation"] = journal.metadata()
-    best_effort_terminal_print(
-        f"[{capture.command}] operation_ref={journal.operation_ref}",
-        file=sys.stderr,
-    )
+    if announce:
+        best_effort_terminal_print(
+            f"[{capture.command}] operation_ref={journal.operation_ref}",
+            file=sys.stderr,
+        )
     return journal
 
 
@@ -39027,6 +39508,69 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"archive {__version__}")
     subcommands = parser.add_subparsers(dest="command", required=True)
 
+    closure = subcommands.add_parser("feedback-closure-check", help="Check each original requested outcome against installed-flow, release and reply evidence.")
+    closure.add_argument("--ledger", required=True, help="Private request/evidence ledger; paths and original text are not echoed.")
+    closure.add_argument("--format", choices=["json"], default="json")
+    closure.set_defaults(func=command_feedback_closure_check)
+
+    disposition = subcommands.add_parser("draft-disposition", help="Keep a draft's hold reason, conditions and next action without publishing or deleting it.")
+    disposition.add_argument("archive_root")
+    disposition_mode = disposition.add_mutually_exclusive_group(required=True)
+    for option in ("dry-run", "approve", "inspect", "history"):
+        disposition_mode.add_argument("--" + option, action="store_true")
+    disposition.add_argument("--resume", action="store_true", help="Reconcile the same request with its original event; requires --approve.")
+    disposition.add_argument("--request", help="Private disposition request JSON.")
+    disposition.add_argument("--zettel-id")
+    disposition.add_argument("--relative-path")
+    disposition.add_argument("--reviewed-by")
+    disposition.add_argument("--expected-plan-sha256")
+    disposition.add_argument("--format", choices=["json"], default="json")
+    disposition.set_defaults(func=command_draft_disposition)
+
+    for storage_name, handler in (("object-storage-cleanup", command_object_storage_cleanup), ("object-storage-open", command_object_storage_open)):
+        storage = subcommands.add_parser(storage_name, help="Review exact remote targets and execute through the current session approval.")
+        storage.add_argument("archive_root")
+        storage_mode = storage.add_mutually_exclusive_group(required=True)
+        storage_mode.add_argument("--dry-run", action="store_true")
+        storage_mode.add_argument("--approve", action="store_true")
+        storage.add_argument("--provider-kind", choices=["cloudflare-r2", "generic-s3"], default="cloudflare-r2")
+        storage.add_argument("--endpoint-host", required=True)
+        storage.add_argument("--bucket", required=True)
+        storage.add_argument("--region", default="auto")
+        storage.add_argument("--access-key-id-ref", required=True)
+        storage.add_argument("--secret-access-key-ref", required=True)
+        storage.add_argument("--reviewed-by")
+        storage.add_argument("--expected-plan-sha256")
+        storage.add_argument("--format", choices=["json"], default="json")
+        if storage_name == "object-storage-cleanup":
+            storage.add_argument("--request", required=True, help="Private exact inventory/cleanup request, including management and classification evidence.")
+            storage.add_argument("--inventory", action="store_true", help="Read the remote list and qualify bytes before preparing disposal.")
+            storage.add_argument("--resume", action="store_true", help="Reconcile the same exact request with its saved per-key execution records.")
+        else:
+            storage.add_argument("--object-id", required=True)
+            storage.add_argument("--store-ref", required=True)
+            storage.add_argument("--ttl-seconds", type=int, default=900)
+        storage.set_defaults(func=handler)
+
+    for command_name, handler in (("title-diagnostics", command_title_diagnostics),
+                                  ("human-artifact-inventory", command_human_artifact_inventory)):
+        listing = subcommands.add_parser(command_name, help="Read every item across a retained inventory generation.")
+        listing.add_argument("archive_root")
+        listing.add_argument("--refresh", action="store_true", help="Explicitly refresh metadata; does not change source files.")
+        listing.add_argument("--snapshot-ref")
+        listing.add_argument("--page-size", type=int, default=100)
+        listing.add_argument("--cursor")
+        listing.add_argument("--state")
+        listing.add_argument("--format", choices=["json"], default="json")
+        if command_name == "human-artifact-inventory":
+            listing.add_argument("--request", help="Private reviewed batch request.")
+            listing.add_argument("--dry-run", action="store_true")
+            listing.add_argument("--approve", action="store_true")
+            listing.add_argument("--resume", action="store_true")
+            listing.add_argument("--reviewed-by")
+            listing.add_argument("--expected-plan-sha256")
+        listing.set_defaults(func=handler)
+
     find_objet_parser = subcommands.add_parser(
         "find-objet",
         add_help=False,
@@ -39720,7 +40264,7 @@ def build_parser() -> argparse.ArgumentParser:
         "operation-control",
         help=(
             "Read bounded content-free status, wait, or recovery guidance for "
-            "an output-supervised long command; cancel and resume are unsupported."
+            "an output-supervised command; supported writers stop cooperatively at safe checkpoints."
         ),
     )
     operation_control_parser.add_argument(
@@ -39749,8 +40293,10 @@ def build_parser() -> argparse.ArgumentParser:
     operation_control_mode.add_argument(
         "--approve",
         action="store_true",
-        help="Accepted for cancel, which remains unsupported and writes nothing.",
+        help="Request cooperative cancellation through the current session approval; status distinguishes request from completed stop.",
     )
+    operation_control_parser.add_argument("--reviewed-by", help="Reviewer for cancellation; never echoed.")
+    operation_control_parser.add_argument("--expected-control-digest", help="Exact digest from this operation's status.")
     operation_control_parser.add_argument(
         "--timeout-seconds",
         type=int,
@@ -42440,6 +42986,29 @@ def build_parser() -> argparse.ArgumentParser:
     )
     source_intake.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     source_intake.set_defaults(func=command_source_intake)
+
+    for command_name in ("tiro-content-import", "connection-evidence-import"):
+        provider_import = subcommands.add_parser(command_name, help="Preserve provider content and connect reviewed evidence through canonical writers.")
+        provider_import.add_argument("archive_root")
+        provider_mode = provider_import.add_mutually_exclusive_group(required=True)
+        provider_mode.add_argument("--dry-run", action="store_true")
+        provider_mode.add_argument("--approve", action="store_true")
+        provider_import.add_argument("--batch-id", required=True)
+        provider_import.add_argument("--reviewed-by")
+        provider_import.add_argument("--expected-plan-sha256")
+        provider_import.add_argument("--format", choices=["json"], default="json")
+        if command_name == "tiro-content-import":
+            provider_import.add_argument("--bundle", required=True, help="Archive-relative official Tiro bundle.")
+            provider_import.add_argument("--audio-manifest", help="Private note-ID-bound local audio list.")
+            provider_import.add_argument("--enrichment-manifest", help="Separate derived AI artifacts with model provenance.")
+        else:
+            provider_import.add_argument("--source", required=True, help="Original provider export or fetched API content receipt.")
+            provider_import.add_argument("--source-page-id", required=True)
+            provider_import.add_argument("--source-format", choices=["json", "csv", "html", "markdown"], required=True)
+            provider_import.add_argument("--relation-column", action="append", metavar="COLUMN=PROPERTY_ID", help="Repeat for each CSV relation column and its original Notion property ID.")
+            provider_import.add_argument("--judgments", help="AI-reviewed decisions; original candidates are extracted automatically.")
+            provider_import.add_argument("--bindings", help="Reviewed page-to-zet identity mapping.")
+        provider_import.set_defaults(func=command_provider_content_import)
 
     tiro_import_plan = subcommands.add_parser(
         "tiro-import-plan",
@@ -46970,8 +47539,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Discover deterministic local candidate pairs without writing edges.",
     )
     relation_candidate_plan.add_argument("archive_root", help="Archive root to inspect.")
-    relation_candidate_plan.add_argument("--from-zettel", required=True, help="Source zettel id.")
+    relation_candidate_plan.add_argument("--from-zettel", help="Source zettel id; required for candidate queries.")
+    relation_read = relation_candidate_plan.add_mutually_exclusive_group()
+    relation_read.add_argument("--semantics", action="store_true", help="Read the archive's actual relation types and their meanings.")
+    relation_read.add_argument("--judgment-ref", help="Read the private review reason, confidence and reviewer for a judgment.")
     relation_candidate_plan.add_argument("--max-candidates", type=int, default=50)
+    relation_candidate_plan.add_argument("--paged", action="store_true", help="Use the immutable relation generation published by index.")
+    relation_candidate_plan.add_argument("--snapshot-ref")
+    relation_candidate_plan.add_argument("--page-size", type=int, default=100)
+    relation_candidate_plan.add_argument("--cursor")
     relation_candidate_plan.add_argument("--include-rejected", action="store_true")
     relation_candidate_plan.add_argument("--suppress-zero-edge-advisory", action="store_true")
     relation_candidate_plan.add_argument("--dry-run", action="store_true", help="Required. Write nothing.")
@@ -46981,24 +47557,28 @@ def build_parser() -> argparse.ArgumentParser:
     relation_candidate_decide = subcommands.add_parser(
         "relation-candidate-decide",
         help=(
-            "Record one digest-bound human rejection judgment. "
-            "Accept remains fixed closed until its compound edge-and-judgment "
-            "effects have an exact approval binding."
+            "Apply a reviewed single judgment or a checkpointed batch of decisions and edges."
         ),
     )
     relation_candidate_decide.add_argument("archive_root", help="Archive root to update.")
-    relation_candidate_decide.add_argument("--from-zettel", required=True)
-    relation_candidate_decide.add_argument("--candidate-id", required=True)
-    relation_candidate_decide.add_argument("--decision", choices=completion_workflows.RELATION_DECISIONS, required=True)
+    relation_candidate_decide.add_argument("--from-zettel", required=False)
+    relation_candidate_decide.add_argument("--candidate-id", required=False)
+    relation_candidate_decide.add_argument("--decision", choices=completion_workflows.RELATION_DECISIONS, required=False)
     relation_candidate_decide.add_argument("--edge-type", help="Required only for accept; never inferred.")
     relation_candidate_decide.add_argument("--visibility", default="private")
-    relation_candidate_decide.add_argument("--reason", required=True, help="Safe human review reason.")
-    relation_candidate_decide.add_argument("--confidence", choices=["low", "medium", "high"], required=True)
-    relation_candidate_decide.add_argument("--expected-plan-sha256", required=True)
+    relation_candidate_decide.add_argument("--reason", required=False, help="Safe human review reason.")
+    relation_candidate_decide.add_argument("--confidence", choices=["low", "medium", "high"], required=False)
+    relation_candidate_decide.add_argument("--expected-plan-sha256", required=False)
     relation_candidate_decide.add_argument("--max-candidates", type=int, default=50)
     relation_candidate_decide.add_argument("--include-rejected", action="store_true")
     relation_candidate_decide.add_argument("--approve", action="store_true")
-    relation_candidate_decide.add_argument("--reviewed-by", required=True)
+    relation_candidate_decide.add_argument("--dry-run", action="store_true")
+    relation_candidate_decide.add_argument("--request", help="Private relation batch request.")
+    relation_candidate_decide.add_argument("--resume", action="store_true")
+    relation_candidate_decide.add_argument("--revert", action="store_true")
+    for name in ("client-app-ref", "task-route-ref", "work-session-ref"):
+        relation_candidate_decide.add_argument("--" + name)
+    relation_candidate_decide.add_argument("--reviewed-by", required=False)
     relation_candidate_decide.add_argument("--format", choices=["text", "json"], default="text")
     relation_candidate_decide.set_defaults(
         func=command_relation_candidate_decide,
@@ -47105,7 +47685,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     objet_capture_batch.add_argument(
         "--source-intake-execution-sha256",
-        required=True,
+        required=False,
         help=(
             "Execution SHA-256 returned by the completed source-intake-batch; "
             "WOM verifies its exact final receipt automatically."
@@ -47117,8 +47697,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Capture the reviewed local bytes and publish exact capture evidence.",
     )
+    objet_capture_batch.add_argument("--resume", action="store_true", help="Resume the authenticated original registration; do not create a fresh intake or plan.")
+    objet_capture_batch.add_argument("--approval-id", help="Original capture recovery approval id; only with --resume.")
+    objet_capture_batch.add_argument("--execution-sha256", help="Original capture recovery execution digest; only with --resume.")
     objet_capture_batch.add_argument("--expected-plan-sha256", help="Exact SHA-256 from a fresh batch dry-run.")
     objet_capture_batch.add_argument("--reviewed-by", help="Safe reviewer id required for approval.")
+    objet_capture_batch.add_argument("--output", help="Private result JSON under .wom-scratch/diagnostics/. Approved runs always keep a unique result and operation record.")
     objet_capture_batch_progress = (
         objet_capture_batch.add_mutually_exclusive_group()
     )
@@ -47760,6 +48344,9 @@ def build_parser() -> argparse.ArgumentParser:
         default="json",
         help="Output format.",
     )
+    notion_page_recovery_plan.add_argument("--include-media", action="store_true", help="Recover nested attachments, register canonical bytes and link each original page.")
+    notion_page_recovery_plan.add_argument("--include-connections", action="store_true", help="Collect provider connection evidence for reviewed relation import.")
+    notion_page_recovery_plan.add_argument("--max-provider-requests", type=int, default=20000)
     notion_page_recovery_plan.set_defaults(func=command_notion_page_recovery_plan)
 
     notion_page_recovery = subcommands.add_parser(
@@ -47812,6 +48399,9 @@ def build_parser() -> argparse.ArgumentParser:
         default="json",
         help="Output format.",
     )
+    notion_page_recovery.add_argument("--include-media", action="store_true", help="Recover nested attachments, register canonical bytes and link each original page.")
+    notion_page_recovery.add_argument("--include-connections", action="store_true", help="Collect provider connection evidence for reviewed relation import.")
+    notion_page_recovery.add_argument("--max-provider-requests", type=int, default=20000)
     notion_page_recovery.set_defaults(func=command_notion_page_recovery)
 
     notion_recover = subcommands.add_parser(
@@ -48361,6 +48951,9 @@ def build_parser() -> argparse.ArgumentParser:
     imap_mailbox_message_fetch.add_argument("--since-days", type=int, help="Window for since_days_window.")
     imap_mailbox_message_fetch.add_argument("--max-messages", type=int, default=50, help="Messages per run (1-1000).")
     imap_mailbox_message_fetch.add_argument("--timeout-seconds", type=int, default=30, help="Connection timeout (1-120).")
+    imap_mailbox_message_fetch.add_argument("--sync", action="store_true", help="Use the account/mailbox UID generation to fetch only unseen messages.")
+    imap_mailbox_message_fetch.add_argument("--resume", action="store_true", help="Reconcile this interrupted fetch before continuing the same UID generation.")
+    imap_mailbox_message_fetch.add_argument("--extract-mime", action="store_true", help="Preserve searchable body and each attachment with its original EML connection.")
     imap_mailbox_message_fetch_mode = imap_mailbox_message_fetch.add_mutually_exclusive_group(required=True)
     imap_mailbox_message_fetch_mode.add_argument("--dry-run", action="store_true", help="Plan only; no credential read.")
     imap_mailbox_message_fetch_mode.add_argument("--approve", action="store_true", help="Fetch after one exact approval.")

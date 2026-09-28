@@ -224,8 +224,10 @@ From v0.3.314, the explicit output also prints an opaque `operation_ref` early.
 If the caller times out, retain that reference and use `operation-control`
 status or bounded wait against the exact starting root instead of launching a
 duplicate updater. Output-supervised archive-root updates use a fresh
-`.wom-scratch/diagnostics/*.json` path instead. Generic operation-control cancel
-and resume remain unsupported. v0.4.15 adds only the command-specific
+`.wom-scratch/diagnostics/*.json` path instead. For project updates, operation-control cancel
+and generic resume remain unsupported. Cooperative cancellation for connected
+archive storage/cleanup commands is described in [operation control](operation-control.md);
+that support does not change the updater contract. v0.4.15 adds the command-specific
 `project-version-update --resume` path: WOM reauthenticates exactly one
 checkpoint-valid claim for the unchanged update context without requiring an
 approval id or displaying a second native decision. Status or resume still

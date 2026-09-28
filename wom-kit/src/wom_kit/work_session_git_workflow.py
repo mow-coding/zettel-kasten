@@ -128,13 +128,22 @@ def _fresh(root, *, held, client_app_ref, task_route_ref, work_session_ref,
                     "execution_sha256": established["execution_sha256"],
                     "receipt_sha256": established["receipt_sha256"]}
     generation = store.read().sha256
+    _progress(progress_hook, "git_output_scope_discovery")
+    inspection_paths = provenance._authenticated_inspection_paths_held(
+        root, held=held, selected_binding=binding, branch=options.get("branch"),
+        key_provider=key_provider,
+    )
     _progress(progress_hook, "git_receipt_snapshot")
-    snapshot = provenance._capture_git_snapshot_held(root, held=held, **options)
+    snapshot = provenance._capture_git_snapshot_held(
+        root, held=held, inspection_paths=inspection_paths, **options)
     _progress(progress_hook, "git_receipt_provenance")
     selected_receipts = provenance._select_receipt_changes_held(
         root, held=held, snapshot=snapshot, selected_binding=binding, key_provider=key_provider,
     )
     data, summary = selected_receipts._private_document(), selected_receipts.public_summary()
+    summary["uninspected_change_count"] = snapshot._document()["capture"].get("uninspected_change_count", 0)
+    summary["uninspected_contents_read"] = False
+    summary["inspection_scope"] = "authenticated_session_output_paths"
     prepared = None
     selected_count = summary.get("selected_output_count", summary["selected_receipt_count"])
     if selected_count:
@@ -146,6 +155,7 @@ def _fresh(root, *, held, client_app_ref, task_route_ref, work_session_ref,
             selected_change_count=selected_count,
             excluded_change_count=summary["excluded_change_count"], producer_proofs=data["proofs"],
             establishment_proof=origin_proof,
+            inspection_paths=list(inspection_paths),
         )
         prepared = writer._prepare_git_backup_from_selection(
             root, expected_plan_sha256=selection["expected_plan_sha256"],

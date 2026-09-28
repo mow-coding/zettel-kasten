@@ -33,6 +33,28 @@ class DeliverySourceProofTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "no_successful_exact_tree"):
                     proof.verify("example/project", "a" * 40)
 
+    def test_new_merge_visibility_rechecks_exact_proof_with_bounded_wait(self):
+        sleeps = []
+        expected = {"ok": True, "merge_commit": "a" * 40}
+        with patch.object(proof, "verify", side_effect=[
+                ValueError("no_successful_exact_tree_pr_evidence"),
+                ValueError("no_successful_exact_tree_pr_evidence"), expected]) as verifier:
+            result = proof.verify_with_retry("example/project", "a" * 40,
+                attempts=3, delay_seconds=2, sleep=sleeps.append)
+        self.assertEqual(result, expected)
+        self.assertEqual(verifier.call_count, 3)
+        self.assertEqual(sleeps, [2, 2])
+
+    def test_retry_never_promotes_missing_or_invalid_evidence(self):
+        for error, calls in [("no_successful_exact_tree_pr_evidence", 3),
+                             ("invalid_source_commit", 1)]:
+            with self.subTest(error=error), patch.object(proof, "verify",
+                    side_effect=ValueError(error)) as verifier:
+                with self.assertRaisesRegex(ValueError, error):
+                    proof.verify_with_retry("example/project", "a" * 40,
+                        attempts=3, delay_seconds=0, sleep=lambda _: None)
+                self.assertEqual(verifier.call_count, calls)
+
 
 if __name__ == "__main__":
     unittest.main()

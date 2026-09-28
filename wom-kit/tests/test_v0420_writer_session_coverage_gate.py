@@ -16,9 +16,9 @@ class WriterSessionCoverageGateTests(unittest.TestCase):
     def test_manifest_matches_parser_and_denominator_stays_honest(self):
         problems, counts = subject.check()
         self.assertEqual(problems, [])
-        self.assertEqual(sum(counts.values()), 103)  # 2026-09-26 coverage audit
+        self.assertEqual(sum(counts.values()), 110)  # 2026-09-28 additional broker-routed commands
         self.assertGreaterEqual(counts["session_integrated"], 5)
-        self.assertEqual(counts["routed"], 79)  # 2026-09-26 coverage audit
+        self.assertEqual(counts["routed"], 86)
         self.assertEqual(counts["pending"], 0)  # 2026-09-26 coverage audit: all-writer scope complete
         self.assertEqual(subject.main(["--format", "text"]), 0)
 

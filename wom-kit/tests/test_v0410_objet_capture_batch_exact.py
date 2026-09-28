@@ -610,7 +610,7 @@ class ObjetCaptureBatchExactTests(unittest.TestCase):
         self.assertEqual(native.calls, 2)
         self.assertEqual(keys.calls, 2)
 
-    def test_partial_object_bytes_require_fresh_plan_and_reapproval_then_converge(self) -> None:
+    def test_unowned_partial_bytes_can_still_use_fresh_approval_then_converge(self) -> None:
         request, execution = self._request(3, batch_id="partial-converge")
         initial = self._plan(request, execution)
         first_selection = initial.selection_document["items"][0]
@@ -624,7 +624,7 @@ class ObjetCaptureBatchExactTests(unittest.TestCase):
         summary = fresh.public_document()["summary"]
         self.assertEqual(summary["would_repair_append"], 1)
         self.assertEqual(summary["would_capture"], 2)
-        self.assertFalse(summary["same_claim_resume_supported"])
+        self.assertTrue(summary["same_claim_resume_supported"])
         self.assertFalse(summary["automatic_retry_allowed"])
 
         native = _Native(approved=True)
@@ -769,8 +769,8 @@ class ObjetCaptureBatchExactTests(unittest.TestCase):
                 )
                 self.assertFalse(pre_writer["writes_may_have_occurred"])
                 self.assertFalse(pre_writer["outcome_unverified"])
-                self.assertEqual(pre_writer["safe_recovery_actions"], [])
-                self.assertEqual(pre_writer["next_safe_actions"], [])
+                self.assertIn("preserve_prepared_intake", pre_writer["safe_recovery_actions"])
+                self.assertTrue(pre_writer["next_safe_actions"])
 
     def test_cli_dry_run_and_approve_use_one_native_batch_decision(self) -> None:
         request, execution = self._request(3, batch_id="cli-batch")
@@ -937,8 +937,8 @@ class ObjetCaptureBatchExactTests(unittest.TestCase):
         result = json.loads(stdout.getvalue())
         self.assertFalse(result["writes_may_have_occurred"])
         self.assertFalse(result["outcome_unverified"])
-        self.assertEqual(result["safe_recovery_actions"], [])
-        self.assertEqual(result["next_safe_actions"], [])
+        self.assertIn("preserve_prepared_intake", result["safe_recovery_actions"])
+        self.assertIn("same --source-intake-execution-sha256", " ".join(result["next_safe_actions"]))
 
         text_args = parser.parse_args(
             [
@@ -970,7 +970,22 @@ class ObjetCaptureBatchExactTests(unittest.TestCase):
         self.assertIn("writes may have occurred: no", text_output)
         self.assertIn("outcome unverified: no", text_output)
         self.assertIn("BLOCKED: objet_capture_batch_write_failed", text_output)
-        self.assertNotIn("NEXT:", text_output)
+        self.assertIn("NEXT: Keep the completed source-intake result", text_output)
+
+    def test_failure_preserves_safe_cause_but_not_private_exception_text(self) -> None:
+        error = ExactHumanApprovalWorkflowError(
+            "exact_human_approval_operation_failed",
+            cause_code="exact_human_approval_native_unavailable",
+            cause_stage="native_approval",
+        )
+        result = objet_capture_batch_exact.failure_document(error.code, error=error)
+        self.assertEqual(result["cause_code"], "exact_human_approval_native_unavailable")
+        self.assertEqual(result["cause_stage"], "native_approval")
+        self.assertFalse(result["writes_may_have_occurred"])
+        private_error = OSError("C:/private/customer/token-secret")
+        result = objet_capture_batch_exact.failure_document("", error=private_error)
+        self.assertIsNone(result["cause_code"])
+        self.assertNotIn("token-secret", json.dumps(result))
 
     def test_successful_three_item_text_output_reports_actual_counts(self) -> None:
         _request, execution = self._request(3, batch_id="cli-text")

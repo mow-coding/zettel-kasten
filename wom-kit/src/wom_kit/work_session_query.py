@@ -184,9 +184,12 @@ treated as an empty project, and all exceptions leave only fixed public codes.
             from .work_session_permission import _current_context
             context = _current_context()
             if context is None:
+                from .work_session_caller_status import context_diagnostic, recovery_steps
                 return {"schema": QUERY_SCHEMA, "ok": False, "read_only": True,
                         "reason_code": "work_session_caller_context_missing",
                         "next_action": "bind_this_conversations_official_session_route",
+                        "context": context_diagnostic(),
+                        "recovery_steps": recovery_steps("work_session_caller_context_missing"),
                         "query_is_write_authority": False}
             reference = context["work_session_ref"]
         snapshot = _capture(root)

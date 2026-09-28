@@ -110,6 +110,86 @@ class StartupCacheTests(unittest.TestCase):
                 cache.verify(self.root, verify_compiled=True)
             self.assertEqual(check.call_count, len(cache.MODULES) + 1)
 
+    def _retain_legacy_manifest(self):
+        manifest = self.root / cache.MANIFEST
+        document = json.loads(manifest.read_bytes())
+        document["schema"] = cache.LEGACY_SCHEMA
+        document["modules"] = {
+            name: document["modules"][name] for name in cache.LEGACY_MODULES
+        }
+        manifest.write_text(json.dumps(document), encoding="ascii")
+        for name in set(cache.MODULES) - set(cache.LEGACY_MODULES):
+            (self.root / cache._filename(name)).unlink()
+
+    def test_legacy_two_module_cache_is_still_verified_without_migration(self):
+        self._retain_legacy_manifest()
+        before = {p.relative_to(self.root): p.read_bytes()
+                  for p in self.root.rglob("*") if p.is_file()}
+        retained = cache.verify(self.root, verify_compiled=True)
+        self.assertEqual(set(retained), {"wom_kit." + n for n in cache.LEGACY_MODULES})
+        after = {p.relative_to(self.root): p.read_bytes()
+                 for p in self.root.rglob("*") if p.is_file()}
+        self.assertEqual(before, after)
+
+    def test_legacy_manifest_cannot_admit_unverified_extension_cache(self):
+        self._retain_legacy_manifest()
+        target = self.root / cache._filename("completion_workflows")
+        target.write_bytes(cache.compiled_bytes(b"answer = 99\n", "completion_workflows"))
+        with self.assertRaises(cache.StartupCacheError):
+            cache.verify(self.root)
+
+    def test_extended_source_same_size_mtime_mutation_is_detected(self):
+        source = self.root / "completion_workflows.py"
+        before = source.stat()
+        source.write_bytes(b"answer = 43\n")
+        os.utime(source, ns=(before.st_atime_ns, before.st_mtime_ns))
+        with self.assertRaises(cache.StartupCacheError):
+            cache.verify(self.root)
+
+    def test_extension_payload_forgery_requires_independent_source_match(self):
+        name = "completion_workflows"
+        target = self.root / cache._filename(name)
+        original = target.read_bytes()
+        code = marshal.loads(original[16:])
+        forged = original[:16] + marshal.dumps(code.replace(co_consts=(99, None)))
+        target.write_bytes(forged)
+        manifest = self.root / cache.MANIFEST
+        document = json.loads(manifest.read_bytes())
+        document["modules"][name]["cache_sha256"] = hashlib.sha256(forged).hexdigest()
+        document["modules"][name]["cache_size"] = len(forged)
+        manifest.write_text(json.dumps(document), encoding="ascii")
+        with self.assertRaises(cache.StartupCacheError):
+            cache.verify(self.root, verify_compiled=True)
+
+    def test_manifest_module_set_is_fixed_and_cannot_select_paths(self):
+        manifest = self.root / cache.MANIFEST
+        original = json.loads(manifest.read_bytes())
+        for mutation in ("missing", "extra", "relative_path", "non_mapping"):
+            with self.subTest(mutation=mutation):
+                document = json.loads(json.dumps(original))
+                if mutation == "missing":
+                    document["modules"].pop("completion_workflows")
+                elif mutation == "extra":
+                    document["modules"]["unexpected"] = {}
+                elif mutation == "relative_path":
+                    document["modules"]["../unexpected"] = document["modules"].pop("completion_workflows")
+                else:
+                    document = []
+                manifest.write_text(json.dumps(document), encoding="ascii")
+                with self.assertRaises(cache.StartupCacheError):
+                    cache.verify(self.root)
+
+    def test_ordinary_verification_and_retained_execution_create_no_files(self):
+        before = {p.relative_to(self.root): p.read_bytes()
+                  for p in self.root.rglob("*") if p.is_file()}
+        retained = cache.verify(self.root)
+        filename, payload = retained["wom_kit.completion_workflows"]
+        module = types.ModuleType("synthetic")
+        cache._RetainedLoader(filename, payload).exec_module(module)
+        self.assertEqual(module.answer, 42)
+        self.assertEqual(before, {p.relative_to(self.root): p.read_bytes()
+                                 for p in self.root.rglob("*") if p.is_file()})
+
 
 if __name__ == "__main__":
     unittest.main()

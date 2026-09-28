@@ -13,7 +13,7 @@ timeouts, and recovery.
 - After timeout, do not start a duplicate writer. Use exact-root
   `operation-control --action status --dry-run`, bounded `wait`, or
   `recovery-plan`; deadlines are neutral.
-- Cancel and resume are unsupported in generic `operation-control`.
+- Generic resume and project-update cancellation are unsupported. Supported archive operations expose `control.cancel_supported`; request cancellation against the exact operation/control digest. Request acceptance, checkpoint acknowledgement and terminal completion are separate facts. Resume only through the original command and its authenticated recovery identifiers.
   Identifier-free `project-version-update --resume` alone reuses pending bound
   output without `--output`; redisplay may repeat and consumed is history.
   Fresh dry-run and approval share one cleanup preflight. Exact history returns

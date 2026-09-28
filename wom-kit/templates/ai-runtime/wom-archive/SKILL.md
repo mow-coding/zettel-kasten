@@ -96,6 +96,10 @@ activities' dependencies. Full access covers child operations without extra
 approval windows. Read [storage-scope.md](references/storage-scope.md) for the
 required classification fields and evidence. Local cleanup never deletes
 already-uploaded remote temporary objects.
+For already-uploaded material, the helper AI must carry out evidence-based
+classification and the exact-key `object-storage-cleanup` flow itself. Read the
+remote section of [storage-scope.md](references/storage-scope.md). Do not make
+the user label each object; leave uncertain or still-used objects untouched.
 
 ## Universal Contract
 

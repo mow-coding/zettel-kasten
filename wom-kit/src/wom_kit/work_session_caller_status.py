@@ -3,6 +3,46 @@
 from . import work_session_permission as permission
 
 
+def context_diagnostic():
+    """Presence is diagnostic only; never echo or reconstruct private refs."""
+    import os
+    present = [bool(os.environ.get(name)) for name in permission.CONTEXT_ENV]
+    return {
+        "state": "missing" if not any(present) else (
+            "incomplete" if not all(present) else (
+                "valid_shape" if permission._current_context() is not None else "invalid_shape"
+            )
+        ),
+        "missing_fields": [name for name, exists in zip(permission.CONTEXT_ENV, present) if not exists],
+        "values_echoed": False,
+        "missing_context_proves_grant_expired": False,
+    }
+
+
+def recovery_steps(reason):
+    """Executable existing routes with explicit placeholders, not borrowed identity."""
+    inspect = ["archive", "work-session", "<archive-root>", "--action", "inspect", "--caller-status", "--format", "json"]
+    if reason in {"work_session_caller_context_missing", "work_session_caller_session_mismatch"}:
+        return [{
+            "action": "restore_own_retained_context",
+            "instruction": "Restore the three retained routing refs from this conversation's original work-session result in the calling process. Do not select another session from the registry.",
+            "required_fields": list(permission.CONTEXT_ENV),
+            "command_after_restore": inspect,
+            "if_original_context_unavailable": ["archive", "work-session", "<archive-root>", "--action", "request-init", "--client-app-ref", "<own-registered-app-ref>", "--dry-run", "--format", "json"],
+            "activates_permission": False,
+        }]
+    if reason is None:
+        return []
+    return [{
+        "action": "restore_own_presenter_or_reset_permission",
+        "instruction": "For a missing presenter, reuse only the live caller's retained presenter. If it is lost, expired, or mismatched, use the official permission action below with this conversation's own routing refs. Inspection cannot restore a lost secret.",
+        "command": ["archive", "work-session", "<archive-root>", "--action", "set-permission-mode", "--client-app-ref", "<own-client-app-ref>", "--task-route-ref", "<own-task-route-ref>", "--work-session-ref", "<own-work-session-ref>", "--request-stdin", "--approve", "--format", "json"],
+        "private_stdin_fields": ["reviewer_claim", "permission_mode", "operations"],
+        "command_after_restore": inspect,
+        "activates_permission": False,
+    }]
+
+
 def runtime_status(root):
     from .archive_services import wom_kit_version_info
 
@@ -62,6 +102,13 @@ def inspect_caller(root, *, session_ref, session_row):
             "can_use_recorded_grant": grant is not None,
             "reason_code": reason,
             "next_action": actions.get(reason, "recheck_official_session_route") if reason else None,
+            "recovery_steps": recovery_steps(reason),
+            "context": context_diagnostic(),
+            "presenter_state": "available" if grant is not None else (
+                "missing" if reason == "work_session_presenter_missing" else "not_verified"
+            ),
+            "grant_expired": permission.permission_expired(saved) if saved is not None else None,
+            "caller_process_termination": "not_established_by_missing_presenter",
             "permission_activated_by_inspection": False,
             "presenter_echoed": False,
         },

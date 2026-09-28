@@ -21,6 +21,7 @@ import time
 from typing import Any, Callable, Mapping, Protocol
 from urllib import error as urllib_error
 from urllib import request as urllib_request
+from urllib.parse import quote, unquote, urlencode
 import uuid
 
 from .credential_secure_intake import (
@@ -555,6 +556,93 @@ class _NotionHttpAdapter:
             if owned:
                 secret.close()
 
+    def retrieve_source_object(self, kind: str, object_id: str, credential: object,
+                               *, cursor: str | None = None) -> ProviderResponse:
+        """Private source data for approved media/connection import workers.
+
+        Unlike title/parent projections, this result contains customer content;
+        it must remain inside the worker and never be echoed in a CLI receipt.
+        """
+        normalized = _normalize_uuid(object_id)
+        endpoints = {"page": f"/v1/pages/{normalized}", "block": f"/v1/blocks/{normalized}", "view": f"/v1/views/{normalized}",
+                     "children": f"/v1/blocks/{normalized}/children", "comments": "/v1/comments",
+                     "database_views": "/v1/views", "data_source_views": "/v1/views"}
+        if normalized is None or kind not in endpoints:
+            return _safe_provider_error(400, "notion_source_target_invalid")
+        if cursor is not None and (not isinstance(cursor, str) or not 1 <= len(cursor) <= 512):
+            return _safe_provider_error(400, "notion_source_cursor_invalid")
+        query = {"block_id": normalized} if kind == "comments" else {}
+        if kind in {"database_views", "data_source_views"}:
+            query["database_id" if kind == "database_views" else "data_source_id"] = normalized
+        if kind in {"children", "comments", "database_views", "data_source_views"}:
+            query["page_size"] = "100"
+            if cursor is not None:
+                query["start_cursor"] = cursor
+        path = endpoints[kind] + ("?" + urlencode(query) if query else "")
+        owned = not isinstance(credential, _NotionBearerSecret)
+        secret = _coerce_secret(credential)
+        if secret is None:
+            return _safe_provider_error(401, "notion_secret_invalid")
+        try:
+            result = self._get_json(path, secret)
+            return ProviderResponse(status=result.status,
+                payload=result.payload if result.status == 200 else {"reason_code": result.reason_code or _status_reason(result.status)},
+                headers=result.headers)
+        finally:
+            if owned:
+                secret.close()
+
+    def retrieve_page_property(self, page_id: str, property_id: str, credential: object,
+                               *, cursor: str | None = None) -> ProviderResponse:
+        normalized = _normalize_uuid(page_id)
+        if (normalized is None or not isinstance(property_id, str) or not 1 <= len(property_id) <= 256
+                or any(ord(char) < 32 for char in property_id)
+                or (cursor is not None and (not isinstance(cursor, str) or not 1 <= len(cursor) <= 512))):
+            return _safe_provider_error(400, "notion_property_target_invalid")
+        query = {"page_size": 100}
+        if cursor is not None:
+            query["start_cursor"] = cursor
+        path = f"/v1/pages/{normalized}/properties/{quote(unquote(property_id), safe='')}?" + urlencode(query)
+        owned = not isinstance(credential, _NotionBearerSecret)
+        secret = _coerce_secret(credential)
+        if secret is None:
+            return _safe_provider_error(401, "notion_secret_invalid")
+        try:
+            result = self._get_json(path, secret)
+            return ProviderResponse(status=result.status, payload=result.payload if result.status == 200
+                else {"reason_code": result.reason_code or _status_reason(result.status)}, headers=result.headers)
+        finally:
+            if owned:
+                secret.close()
+
+    def query_view(self, view_id: str, credential: object, *, query_id: str | None = None,
+                   cursor: str | None = None, delete: bool = False) -> ProviderResponse:
+        """Read-capability view query lifecycle; never creates/changes a view."""
+        normalized = _normalize_uuid(view_id)
+        if (normalized is None or (query_id is not None and (not isinstance(query_id, str)
+                or re.fullmatch(r"[A-Za-z0-9_-]{1,128}", query_id) is None))
+                or (cursor is not None and (not isinstance(cursor, str) or not 1 <= len(cursor) <= 512))
+                or (delete and query_id is None)):
+            return _safe_provider_error(400, "notion_view_query_invalid")
+        path = f"/v1/views/{normalized}/queries"
+        method, body = "POST", b'{"page_size":100}'
+        if query_id is not None:
+            path += "/" + query_id
+            method, body = ("DELETE" if delete else "GET"), None
+            if cursor is not None and not delete:
+                path += "?" + urlencode({"start_cursor": cursor, "page_size": 100})
+        owned = not isinstance(credential, _NotionBearerSecret)
+        secret = _coerce_secret(credential)
+        if secret is None:
+            return _safe_provider_error(401, "notion_secret_invalid")
+        try:
+            result = self._send_json_once(method, path, secret, body=body)
+            return ProviderResponse(status=result.status, payload=result.payload if result.status == 200
+                else {"reason_code": result.reason_code or _status_reason(result.status)}, headers=result.headers)
+        finally:
+            if owned:
+                secret.close()
+
     def verify_identity(
         self,
         secret: str | _NotionBearerSecret,
@@ -797,9 +885,12 @@ class _NotionHttpAdapter:
         body: bytes | None = None,
         provider_request_observer: Callable[[], None] | None = None,
     ) -> _HttpResult:
-        # ``path`` is constructed only from fixed literals and normalized UUIDs;
-        # the only write is PATCH with the fixed in_trash body.
-        if method not in {"GET", "PATCH"} or (method == "GET") != (body is None):
+        # Only the read-capability cached view-query resource permits POST or
+        # DELETE. Content writes remain limited to the established PATCH path.
+        view_query = re.fullmatch(r"/v1/views/[0-9a-f-]{36}/queries(?:/[A-Za-z0-9_-]{1,128})?", path)
+        if (method not in {"GET", "PATCH", "POST", "DELETE"}
+                or (method in {"GET", "DELETE"}) != (body is None)
+                or (method in {"POST", "DELETE"} and not view_query)):
             return _HttpResult(400, None, {}, "notion_request_invalid")
         headers = {
             "Accept": "application/json",

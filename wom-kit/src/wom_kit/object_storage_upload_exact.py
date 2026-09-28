@@ -132,6 +132,8 @@ class ObjectStorageUploadError(RuntimeError):
         "object_storage_upload_source_drifted",
         "object_storage_upload_remote_unavailable",
         "object_storage_upload_remote_conflict",
+        "object_storage_upload_remote_disposed_or_pending",
+        "object_storage_upload_remote_disposal_state_invalid",
         "object_storage_upload_failed",
         "object_storage_upload_receipt_conflict",
         "object_storage_upload_control_invalid",
@@ -654,6 +656,7 @@ def _classify_and_build(
         if selected_id is not None and object_id != selected_id:
             counts["excluded_by_filter_count"] += 1
             continue
+        _assert_remote_key_not_disposed(root, store_ref=store_ref, remote_key=_remote_key(object_id))
         candidates.append((object_id, row, paths[0], local_path))
     if progress is not None:
         progress("upload-inventory", "done", len(unique_rows), len(unique_rows))
@@ -1833,11 +1836,18 @@ class _Writer:
             spec = self.by_target.get(target_ref)
             if spec is None or field_ref != "terminal_state_token" or value != spec.receipt_token:
                 raise ValueError("write boundary")
+            from .operation_cancellation import checkpoint
+            checkpoint()
             self._write_object(spec, heartbeat)
+            # A completed provider request is recorded in the private ledger
+            # before stopping. Formal receipts are published by the later batch.
+            checkpoint()
             return
         if target_kind == BATCH_TARGET_KIND and target_ref == MANIFEST_TARGET_REF and field_ref == "remote_locations":
             if value != _manifest_batch_token(self.plan.specs):
                 raise ValueError("write boundary")
+            from .operation_cancellation import checkpoint
+            checkpoint()
             from contextlib import nullcontext
             commit = (exact_operation_writer_lock(self.plan.archive_root, timeout_seconds=30, heartbeat=heartbeat)
                       if self.plan.target_preimages is not None else nullcontext())
@@ -1847,6 +1857,7 @@ class _Writer:
                 )
             self.manifest_update_count += changed
             self.receipts_created_count += receipts
+            checkpoint()
             return
         raise ValueError("write boundary")
 
@@ -1896,6 +1907,24 @@ def _assert_approved(
         return ExactOperationApprovalAuthority.from_reference(reference)
     except (ExactHumanApprovalError, ExactOperationManifestError):
         raise _fail("object_storage_upload_approval_required") from None
+
+
+def _assert_remote_key_not_disposed(root: Path, *, store_ref: str, remote_key: str) -> None:
+    """Refuse a pending/deleted exact key; never turn disposal into a new PUT."""
+    from . import object_storage_cleanup as cleanup
+
+    try:
+        cleanup.assert_remote_available(root, store_ref=store_ref, remote_key=remote_key)
+    except cleanup.ObjectStorageCleanupError as exc:
+        code = ("object_storage_upload_remote_disposed_or_pending"
+                if exc.code == "object_storage_remote_disposed_or_pending"
+                else "object_storage_upload_remote_disposal_state_invalid")
+        raise _fail(code) from None
+
+
+def _assert_plan_remote_keys_not_disposed(plan: ObjectStorageUploadPlan) -> None:
+    for spec in plan.specs:
+        _assert_remote_key_not_disposed(plan.archive_root, store_ref=plan.store_ref, remote_key=spec.remote_key)
 
 
 def _fresh_revalidated(
@@ -2023,16 +2052,23 @@ def _apply_with_store(
     verifier = _Verifier(plan, writer.query, writer.ledger)
     if _runner_entered is not None:
         _runner_entered[0] = True
-    core = apply_exact_operation(
-        plan.manifest,
-        payloads=_Payloads(plan),
-        writer=writer,
-        verifier=verifier,
-        checkpoint_store=checkpoints,
-        approval_authority=authority,
-        resume=resume,
-        progress_hook=progress_hook,
-    )
+    try:
+        core = apply_exact_operation(
+            plan.manifest, payloads=_Payloads(plan), writer=writer, verifier=verifier,
+            checkpoint_store=checkpoints, approval_authority=authority,
+            resume=resume, progress_hook=progress_hook,
+        )
+    except ExactOperationManifestError as error:
+        from .storage_cancellation import is_cancelled, exact_result
+        if not is_cancelled(error):
+            raise
+        result = exact_result(schema=RESULT_SCHEMA, manifest=plan.manifest, authority=authority,
+            checkpoints=checkpoints, durable_receipt_count=sum(_read_receipt(plan, spec) is not None for spec in plan.specs))
+        result.update(durable_terminal_ledger_count=sum(writer.ledger.terminal_for(spec) is not None for spec in plan.specs),
+            manifest_location_updates=writer.manifest_update_count, receipts_created_count=writer.receipts_created_count,
+            local_deletion_performed=False, remote_object_deleted=False, existing_remote_copy_overwritten=False,
+            offload_handoff=None)
+        return result
     durable = _durable_result_counts(plan, writer.ledger)
     counts = durable["classification_counts"]
     review_count = int(counts[STATUS_REVIEW_REQUIRED])
@@ -2117,6 +2153,7 @@ def _apply_core(
                 transport_factory=transport_factory, resume=resume, progress_hook=progress_hook,
                 runner_entered=runner_entered)
         with exact_operation_writer_lock(current.archive_root) as writer_lock:
+            _assert_plan_remote_keys_not_disposed(current)
             _persist_control(current)
             checkpoints = FileExactOperationCheckpointStore(current.archive_root, writer_lock=writer_lock)
             try:
@@ -2161,6 +2198,7 @@ def _apply_concurrent(plan, authority, *, reviewed_by, transport_factory, resume
         # before constructing a provider, reading bytes or making requests.
         with exact_operation_writer_lock(plan.archive_root, timeout_seconds=30, heartbeat=heartbeat):
             _assert_target_preimages(plan)
+            _assert_plan_remote_keys_not_disposed(plan)
             _persist_control(plan)
             _require_manifest_index_authority(plan)
         checkpoints = ExecutionCheckpointStore(plan.archive_root, execution_sha256=execution,
@@ -2244,6 +2282,7 @@ def resume_object_storage_upload(
         def _writer(claim: _ClaimedExactHumanApproval) -> Mapping[str, Any]:
             current = _fresh_revalidated(plan, progress_hook=progress_hook)
             authority = _assert_approved(current, claim, context)
+            _assert_plan_remote_keys_not_disposed(current)
             actual = exact_operation_execution_sha256(current.manifest, approval_authority=authority)
             if not hmac.compare_digest(actual, execution_sha256):
                 raise _fail("object_storage_upload_resume_invalid")
