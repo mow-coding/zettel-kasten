@@ -30,7 +30,7 @@ _READY = b"git-progress-ready\n"
 _PULSE = b"pulse\n"
 _STAGES = frozenset({
     "starting", "waiting_for_writer", "writer_acquired_revalidation_required",
-    "git_receipt_snapshot", "git_receipt_provenance", "preflight", "heartbeat",
+    "git_output_scope_discovery", "git_receipt_snapshot", "git_receipt_provenance", "preflight", "heartbeat",
     "item_started", "field_verified", "item_verified", "completed",
     "validating_parameters", "resolving_archive", "preflight_initial",
     "git_projection_initial", "remote_ref_initial", "receipt_inventory_initial",

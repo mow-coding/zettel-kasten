@@ -354,14 +354,18 @@ class SessionGitWorkflowTests(unittest.TestCase):
 
     def test_post_click_actor_or_source_change_never_publishes_git_claim_or_context(self):
         before = self.evidence()
-        self.native.callback = lambda: (self.root / "new-private.txt").write_text("changed after click\n")
+        selected_receipt = self.root / "receipts" / "ops" / "exact-operations" / (
+            self.original["execution_sha256"].removeprefix("sha256:") + ".json")
+        self.native.callback = lambda: selected_receipt.write_bytes(b"changed after click\n")
         self.key.create_if_missing.clear()
         with exact.ExactOperationWriterLock(self.root) as held:
             with self.assertRaises(subject.WorkSessionGitWorkflowError) as caught:
                 self.execute(held)
             self.assertEqual(caught.exception.code, "work_session_git_changed")
             self.assertIsNone(caught.exception.__context__)
-            self.assertEqual(self.evidence(), before)
+            expected = dict(before)
+            expected[str(selected_receipt.relative_to(self.root))] = b"changed after click\n"
+            self.assertEqual(self.evidence(), expected)
             self.assertNotIn(True, self.key.create_if_missing)
             self.assertEqual(self.git("rev-parse", "HEAD").stdout.strip(), self.fixture.initial_head)
 

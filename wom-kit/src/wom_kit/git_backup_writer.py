@@ -796,6 +796,8 @@ def _prepare_git_backup_core(
             raise _fail("git_backup_exact_plan_blocked") from None
         binding = _validated_work_session_binding(work_session_binding, bound_archive_id)
     capture: dict[str, Any] = {}
+    scope_paths = (session_scope.document().get("inspection_paths")
+                   if session_scope is not None else None)
     public_plan = planning.git_backup_plan(
         archive_root,
         remote_name=remote_name,
@@ -806,6 +808,7 @@ def _prepare_git_backup_core(
         dry_run=True,
         _private_capture=capture,
         progress_hook=progress_hook,
+        _inspection_paths=scope_paths,
     )
     if public_plan.get("ok") is not True or not capture:
         raise _fail("git_backup_exact_plan_blocked")
@@ -2008,6 +2011,8 @@ class _GitBackupBackend:
             branch=branch,
             preflight_verified=False,
             max_status_records=self.prepared.max_changes,
+            inspection_paths=(self.prepared.session_scope.document().get("inspection_paths")
+                              if self.prepared.session_scope is not None else None),
         )
         if snapshot is None or blockers:
             return None

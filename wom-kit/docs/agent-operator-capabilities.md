@@ -1,6 +1,7 @@
 # Agent Operator Capabilities Manifest
 
-Current release candidate: v0.4.47: activity recovery, Windows stream preservation, scoped Git backup and concurrent archive work; [release scope](releases/v0.4.47.md).
+Current v0.4.48 candidate: session backup selects authenticated activity output paths before content inspection. [Release scope](releases/v0.4.48.md). Other ongoing requests are not included.
+Current release candidate: v0.4.48: session-owned Git backup scope selected before content inspection; [release scope](releases/v0.4.48.md).
 
 Status: v0.4.36 no-dialog grants, letter-168, and writer-session coverage gate
 

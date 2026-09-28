@@ -27,7 +27,9 @@ _EVIDENCE_SCHEMA_V2 = "wom-kit/git-backup-session-scope-evidence/v2"
 # session local recoveries. It never reinterprets v1/v2 bytes or validators.
 _SCHEMA_V3 = "wom-kit/git-backup-session-scope/v3"
 _EVIDENCE_SCHEMA_V3 = "wom-kit/git-backup-session-scope-evidence/v3"
-_LEVELS = {_SCHEMA: 1, _SCHEMA_V2: 2, _SCHEMA_V3: 3}
+_SCHEMA_V4 = "wom-kit/git-backup-session-scope/v4"
+_EVIDENCE_SCHEMA_V4 = "wom-kit/git-backup-session-scope-evidence/v4"
+_LEVELS = {_SCHEMA: 1, _SCHEMA_V2: 2, _SCHEMA_V3: 3, _SCHEMA_V4: 4}
 _MAX_BYTES = 512 * 1024
 _MAX_V2_BYTES = 16 * 1024 * 1024
 _MAX_SELECTION_BYTES = 16 * 1024 * 1024
@@ -90,7 +92,7 @@ def _session_identity(binding):
 
 
 def _scope_budget(value):
-    return _MAX_V2_BYTES if type(value) is dict and value.get("schema") in (_SCHEMA_V2, _SCHEMA_V3) else _MAX_BYTES
+    return _MAX_V2_BYTES if type(value) is dict and value.get("schema") in (_SCHEMA_V2, _SCHEMA_V3, _SCHEMA_V4) else _MAX_BYTES
 
 
 def _sha_text(value):
@@ -139,10 +141,19 @@ def _proof_output_path(proof):
 
 
 def _validate_document(value):
-    if (type(value) is not dict or set(value) not in (_KEYS, _KEYS | {"establishment_proof"})
-            or value["schema"] not in _LEVELS):
+    if type(value) is not dict or value.get("schema") not in _LEVELS:
         raise GitBackupSessionScopeError()
     level = _LEVELS[value["schema"]]
+    keys = _KEYS | ({"inspection_paths"} if level == 4 else set())
+    if set(value) not in (keys, keys | {"establishment_proof"}):
+        raise GitBackupSessionScopeError()
+    if level == 4:
+        from .git_backup_plan import _decode_git_path
+        paths = value["inspection_paths"]
+        if (type(paths) is not list or not 1 <= len(paths) <= _MAX_CHANGES
+                or any(type(path) is not str or _decode_git_path(path.encode("utf-8")) != path for path in paths)
+                or paths != sorted(set(paths))):
+            raise GitBackupSessionScopeError()
     version2 = level >= 2
     if "establishment_proof" in value:
         origin = value["establishment_proof"]
@@ -262,11 +273,14 @@ class _GitBackupSessionScope:
     @classmethod
     def build(cls, *, task_route_ref, actor_sha256, registry_preimage_sha256, claim_ref,
               work_session_binding, selection_sha256, selected_change_count,
-              excluded_change_count, producer_proofs, establishment_proof=None):
+              excluded_change_count, producer_proofs, establishment_proof=None,
+              inspection_paths=None):
         try:
             if type(work_session_binding) is not WorkSessionBinding or type(producer_proofs) is not list:
                 raise GitBackupSessionScopeError()
-            if any(_is_document_proof(proof) for proof in producer_proofs):
+            if inspection_paths is not None:
+                schema = _SCHEMA_V4
+            elif any(_is_document_proof(proof) for proof in producer_proofs):
                 schema = _SCHEMA_V3
             elif any(type(proof) is dict and _intake_output_kinds(proof.get("producer")) is not None
                      for proof in producer_proofs):
@@ -283,6 +297,8 @@ class _GitBackupSessionScope:
             }
             if establishment_proof is not None:
                 basis["establishment_proof"] = establishment_proof
+            if inspection_paths is not None:
+                basis["inspection_paths"] = list(inspection_paths)
             return cls.from_document({**basis, "scope_sha256": _sha(basis, max_bytes=_scope_budget(basis))})
         except Exception:
             pass
@@ -307,7 +323,8 @@ class _GitBackupSessionScope:
     def operation_evidence(self):
         value = self.document()
         return ExactOperationEvidence(
-            schema={1: _EVIDENCE_SCHEMA, 2: _EVIDENCE_SCHEMA_V2, 3: _EVIDENCE_SCHEMA_V3}[_LEVELS[value["schema"]]],
+            schema={1: _EVIDENCE_SCHEMA, 2: _EVIDENCE_SCHEMA_V2, 3: _EVIDENCE_SCHEMA_V3,
+                    4: _EVIDENCE_SCHEMA_V4}[_LEVELS[value["schema"]]],
             counts=tuple(sorted({"selected_change_count": value["selected_change_count"],
                                  "excluded_change_count": value["excluded_change_count"],
                                  "producer_proof_count": len(value["producer_proofs"])}.items())),
@@ -347,6 +364,9 @@ class _GitBackupSessionScope:
         try:
             rows = {row["public_observation"]["change_ref"]: row for row in private_changes}
             if len(rows) != len(private_changes):
+                raise GitBackupSessionScopeError()
+            paths = self.document().get("inspection_paths")
+            if paths is not None and any(row["path"] not in paths for row in private_changes):
                 raise GitBackupSessionScopeError()
             for proof in self.document()["producer_proofs"]:
                 row = rows[proof["change_ref"]]

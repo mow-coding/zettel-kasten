@@ -1,8 +1,9 @@
 ﻿# WOM-kit Capability Matrix
 
-Version: v0.4.47 implementation and release scope
+Current v0.4.48 candidate: session backup selects authenticated activity output paths before content inspection. [Release scope](releases/v0.4.48.md). Other ongoing requests are not included.
+Version: v0.4.48 implementation and release scope
 
-Status: v0.4.47 candidate: activity recovery, Windows stream preservation, scoped Git backup and concurrent archive work; [release scope](releases/v0.4.47.md).
+Status: v0.4.48 candidate: session-owned Git backup scope selected before content inspection; [release scope](releases/v0.4.48.md).
 
 Status: v0.4.36 no-dialog grants, letter-168, and session-owned writes truth
 Date: 2026-09-04

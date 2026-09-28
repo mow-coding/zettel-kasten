@@ -251,6 +251,47 @@ def _partition(plan_sha, rows, proofs, binding):
     return partition
 
 
+def _authenticated_output_inventory_held(actual, held, binding, key_provider=None):
+    # Capture both complete fixed generations before any authentication
+    # callback. Each directory retains its existing independent budget.
+    inventories = (
+        (_PRODUCER, "batch", inventory_module._capture_source_intake_context_inventory_held(actual, held=held),
+         inventory_module._require_source_intake_context_inventory_unchanged_held),
+        (_RECORD_PRODUCER, "record", inventory_module._capture_source_intake_record_context_inventory_held(actual, held=held),
+         inventory_module._require_source_intake_record_context_inventory_unchanged_held),
+    )
+    origins, outputs, unverified = {}, {}, 0
+    for producer, family, hints, _require in inventories:
+        if type(hints) is not inventory_module._SourceIntakeContextInventory or hints._family != family:
+            raise WorkSessionIntakeGitProvenanceError()
+        codec, (read, expected) = _domain_bundle(producer), _reader_api(producer, "key")
+        for hint in hints.hints():
+            held.verify_held()
+            try:
+                _prepared, context = codec._decode_context(actual, hint.raw, hint.manifest_sha256)
+                context_sha = approval.exact_human_approval_context_sha256(context)
+                view = read(actual, held=held, manifest_sha256=hint.manifest_sha256,
+                            context_sha256=context_sha, key_provider=key_provider)
+                facts, approved, original = _origin(view, expected, producer=producer)
+                if (facts["manifest_sha256"] != hint.manifest_sha256 or facts["context_sha256"] != context_sha
+                        or original.archive_identity_sha256 != binding.archive_identity_sha256):
+                    raise WorkSessionIntakeGitProvenanceError()
+            except Exception:
+                # Preserve the original hint contract: unauthenticated or
+                # incomplete evidence is unverified, never absence/ownership.
+                unverified += 1
+                continue
+            key = (producer, facts["manifest_sha256"], facts["context_sha256"], facts["execution_sha256"])
+            origins[key] = facts
+            for path, output in approved.items():
+                if path in outputs and outputs[path][0] != key:
+                    raise WorkSessionIntakeGitProvenanceError("work_session_intake_git_proof_ambiguous")
+                outputs[path] = (key, output)
+    for _producer, _family, hints, require in inventories:
+        require(actual, inventory=hints, held=held)
+    return origins, outputs, inventories, unverified
+
+
 def _select_intake_output_changes_held(root, *, held, snapshot, selected_binding, key_provider=None):
     def select():
         if type(selected_binding) is not WorkSessionBinding:
@@ -260,41 +301,8 @@ def _select_intake_output_changes_held(root, *, held, snapshot, selected_binding
         if binding.archive_identity_sha256 != approval.exact_human_approval_archive_identity_sha256(archive_id):
             raise WorkSessionIntakeGitProvenanceError()
         plan_sha, rows = _snapshot(actual, archive_id, snapshot)
-        # Capture both complete fixed generations before any authentication
-        # callback. Each directory retains its existing independent budget.
-        inventories = (
-            (_PRODUCER, "batch", inventory_module._capture_source_intake_context_inventory_held(actual, held=held),
-             inventory_module._require_source_intake_context_inventory_unchanged_held),
-            (_RECORD_PRODUCER, "record", inventory_module._capture_source_intake_record_context_inventory_held(actual, held=held),
-             inventory_module._require_source_intake_record_context_inventory_unchanged_held),
-        )
-        origins, outputs, unverified = {}, {}, 0
-        for producer, family, hints, _require in inventories:
-            if type(hints) is not inventory_module._SourceIntakeContextInventory or hints._family != family:
-                raise WorkSessionIntakeGitProvenanceError()
-            codec, (read, expected) = _domain_bundle(producer), _reader_api(producer, "key")
-            for hint in hints.hints():
-                held.verify_held()
-                try:
-                    _prepared, context = codec._decode_context(actual, hint.raw, hint.manifest_sha256)
-                    context_sha = approval.exact_human_approval_context_sha256(context)
-                    view = read(actual, held=held, manifest_sha256=hint.manifest_sha256,
-                                context_sha256=context_sha, key_provider=key_provider)
-                    facts, approved, original = _origin(view, expected, producer=producer)
-                    if (facts["manifest_sha256"] != hint.manifest_sha256 or facts["context_sha256"] != context_sha
-                            or original.archive_identity_sha256 != binding.archive_identity_sha256):
-                        raise WorkSessionIntakeGitProvenanceError()
-                except Exception:
-                    # Preserve the original hint contract: unauthenticated or
-                    # incomplete evidence is unverified, never absence/ownership.
-                    unverified += 1
-                    continue
-                key = (producer, facts["manifest_sha256"], facts["context_sha256"], facts["execution_sha256"])
-                origins[key] = facts
-                for path, output in approved.items():
-                    if path in outputs and outputs[path][0] != key:
-                        raise WorkSessionIntakeGitProvenanceError("work_session_intake_git_proof_ambiguous")
-                    outputs[path] = (key, output)
+        origins, outputs, inventories, unverified = _authenticated_output_inventory_held(
+            actual, held, binding, key_provider)
         proofs = []
         for row in rows:
             found = outputs.get(row["path"])
