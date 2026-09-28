@@ -3,6 +3,7 @@ from contextlib import ExitStack, contextmanager
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
+import os
 import signal
 from pathlib import Path
 import tempfile
@@ -407,6 +408,7 @@ class StorageCancellationTests(unittest.TestCase):
             held[0]._mac(proof)
         self.assertEqual(self.keys.nested_calls, 0)
 
+    @unittest.skipUnless(os.name == "nt", "offload and activity cleanup use the Windows-only handle-bound delete")
     def test_activity_official_child_upload_cancel_resumes_without_duplicate_remote_put(self):
         f, _ = self.activity_fixture("preserve")
         common = dict(archive_id=services.read_archive_id(f.root), profile_id="profile:synthetic:activity",
@@ -517,6 +519,7 @@ class StorageCancellationTests(unittest.TestCase):
                     self.assertEqual(f.native.calls, 1)
                     self.assertEqual(self.keys.nested_calls, 0)
 
+    @unittest.skipUnless(os.name == "nt", "offload and activity cleanup use the Windows-only handle-bound delete")
     def test_public_offload_cli_stop_and_resume_with_terminal_artifacts(self):
         f = offload_fixtures.OffloadCliTests()
         f.setUp()
@@ -546,6 +549,7 @@ class StorageCancellationTests(unittest.TestCase):
         self.assertEqual(f.native.calls, 1)
         self.assertEqual(self.keys.nested_calls, 0)
 
+    @unittest.skipUnless(os.name == "nt", "offload and activity cleanup use the Windows-only handle-bound delete")
     def test_offload_records_native_unlink_receipt_before_stop_and_resume(self):
         root = restore_fixtures._build_root(Path(self.tmp.name))
         (root / ".gitignore").write_text("profiles/local/\n", encoding="utf-8")
@@ -612,6 +616,7 @@ class StorageCancellationTests(unittest.TestCase):
                 lambda claim: candidate["journal"].read("intent") == candidate["material"], writer)
         return broker._execute_exact_human_approved_write(f.root, context, writer)
 
+    @unittest.skipUnless(os.name == "nt", "offload and activity cleanup use the Windows-only handle-bound delete")
     def test_activity_stops_after_bound_delete_journal_and_resumes_remaining(self):
         f, candidate = self.activity_fixture("discard")
         from wom_kit import legacy_cleanup_bound_delete as native_delete
@@ -634,6 +639,7 @@ class StorageCancellationTests(unittest.TestCase):
         self.assertEqual(self.native.calls, 1)
         self.assertEqual(self.keys.nested_calls, 0)
 
+    @unittest.skipUnless(os.name == "nt", "offload and activity cleanup use the Windows-only handle-bound delete")
     def test_public_activity_cli_cancel_records_terminal_attempt_and_resumes_remaining(self):
         from contextlib import redirect_stdout, redirect_stderr
         import io
@@ -663,6 +669,7 @@ class StorageCancellationTests(unittest.TestCase):
         self.assertEqual(self.native.calls, 1)
         self.assertEqual(self.keys.nested_calls, 0)
 
+    @unittest.skipUnless(os.name == "nt", "offload and activity cleanup use the Windows-only handle-bound delete")
     def test_activity_child_cancel_does_not_continue_to_next_item_or_delete_original(self):
         f, candidate = self.activity_fixture("preserve")
         with self.observation(f.root, "activity_cleanup") as (journal, request):
@@ -681,6 +688,7 @@ class StorageCancellationTests(unittest.TestCase):
         self.assertIsNone(candidate["journal"].read("completed"))
         self.assertEqual(self.keys.nested_calls, 0)
 
+    @unittest.skipUnless(os.name == "nt", "offload and activity cleanup use the Windows-only handle-bound delete")
     def test_activity_failed_delete_receipt_is_unknown_not_retained_at_cancel(self):
         f, candidate = self.activity_fixture("discard")
         journal = candidate["journal"]
@@ -702,6 +710,7 @@ class StorageCancellationTests(unittest.TestCase):
         self.assertTrue(Path(candidate["material"]["items"][1]["path"]).exists())
         self.assertEqual(self.keys.nested_calls, 0)
 
+    @unittest.skipUnless(os.name == "nt", "offload and activity cleanup use the Windows-only handle-bound delete")
     def test_activity_restore_stops_after_child_before_external_publication_then_resumes(self):
         f, candidate = self.activity_fixture("preserve")
         item = candidate["material"]["items"][0]
@@ -731,6 +740,7 @@ class StorageCancellationTests(unittest.TestCase):
         self.assertEqual(self.native.calls, 1)
         self.assertEqual(self.keys.nested_calls, 0)
 
+    @unittest.skipUnless(os.name == "nt", "offload and activity cleanup use the Windows-only handle-bound delete")
     def test_activity_existing_local_bytes_still_finish_interrupted_child_restore(self):
         from wom_kit import exact_approval_claims as claim_listing
         f = activity_fixtures.ActivityCleanupTests()

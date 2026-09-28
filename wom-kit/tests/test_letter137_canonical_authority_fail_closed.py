@@ -830,7 +830,13 @@ class Letter137CanonicalAuthorityCliBoundaryTests(
                 progress_hook=mock.ANY,
             )
             legacy_apply.assert_not_called()
-            self.assertEqual(_snapshot(root_path), before)
+            after = _snapshot(root_path)
+            # Letter 176: an approve run keeps its operation journal and result
+            # artifact under diagnostics; nothing else in the root may change.
+            tracked = sorted(path for path in after if path.startswith(".wom-scratch/diagnostics/"))
+            self.assertEqual(len(tracked), 2, tracked)
+            self.assertTrue(any(path.endswith(".jsonl") and "/.operations/" in path for path in tracked), tracked)
+            self.assertEqual({path: digest for path, digest in after.items() if path not in tracked}, before)
 
     def test_text_blocker_says_binding_is_unimplemented_and_write_did_not_start(
         self,

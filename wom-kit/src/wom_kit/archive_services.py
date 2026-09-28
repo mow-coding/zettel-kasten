@@ -154234,14 +154234,34 @@ def index_archive(
         if result["search_snapshot"].get("ok"):
             from . import relation_batch, title_diagnostics
             source_snapshot = result["search_snapshot"]["snapshot"]
-            result["relation_snapshot"] = relation_batch.publish(root, source_snapshot=source_snapshot)
-            result["title_snapshot"] = title_diagnostics.publish(root, source_snapshot=source_snapshot)
+            result["relation_snapshot"] = _derived_snapshot_or_reason(
+                lambda: relation_batch.publish(root, source_snapshot=source_snapshot), "relation_generation_failed")
+            result["title_snapshot"] = _derived_snapshot_or_reason(
+                lambda: title_diagnostics.publish(root, source_snapshot=source_snapshot), "title_generation_failed")
     if result.get("index_rebuilt") and "title_snapshot" not in result and title_basis:
         from . import title_diagnostics
-        result["title_snapshot"] = title_diagnostics.publish(root,
-            index_rows=title_basis["rows"], index_generation=title_basis["generation"],
-            index_diagnostics=title_basis["quarantined"])
+        result["title_snapshot"] = _derived_snapshot_or_reason(
+            lambda: title_diagnostics.publish(root,
+                index_rows=title_basis["rows"], index_generation=title_basis["generation"],
+                index_diagnostics=title_basis["quarantined"]), "title_generation_failed")
     return result
+
+
+def _derived_snapshot_or_reason(publish, fallback: str) -> dict[str, Any]:
+    """Derived relation/title snapshots never invalidate the live index.
+
+    Like the search snapshot, a failed derivation (for example duplicate
+    canonical ids the doctor reports separately) is returned as a fixed
+    reason instead of failing the index rebuild that already succeeded.
+    """
+
+    try:
+        return publish()
+    except (ArchiveServiceError, OSError, ValueError) as error:
+        code = getattr(error, "code", None) or str(error)
+        if not isinstance(code, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,95}", code):
+            code = fallback
+        return {"ok": False, "reason_code": code}
 
 
 def _mark_archive_index_dirty_while_rebuild_locked(
