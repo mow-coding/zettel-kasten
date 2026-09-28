@@ -132,6 +132,8 @@ class ObjectStorageUploadError(RuntimeError):
         "object_storage_upload_source_drifted",
         "object_storage_upload_remote_unavailable",
         "object_storage_upload_remote_conflict",
+        "object_storage_upload_remote_disposed_or_pending",
+        "object_storage_upload_remote_disposal_state_invalid",
         "object_storage_upload_failed",
         "object_storage_upload_receipt_conflict",
         "object_storage_upload_control_invalid",
@@ -654,6 +656,7 @@ def _classify_and_build(
         if selected_id is not None and object_id != selected_id:
             counts["excluded_by_filter_count"] += 1
             continue
+        _assert_remote_key_not_disposed(root, store_ref=store_ref, remote_key=_remote_key(object_id))
         candidates.append((object_id, row, paths[0], local_path))
     if progress is not None:
         progress("upload-inventory", "done", len(unique_rows), len(unique_rows))
@@ -1898,6 +1901,24 @@ def _assert_approved(
         raise _fail("object_storage_upload_approval_required") from None
 
 
+def _assert_remote_key_not_disposed(root: Path, *, store_ref: str, remote_key: str) -> None:
+    """Refuse a pending/deleted exact key; never turn disposal into a new PUT."""
+    from . import object_storage_cleanup as cleanup
+
+    try:
+        cleanup.assert_remote_available(root, store_ref=store_ref, remote_key=remote_key)
+    except cleanup.ObjectStorageCleanupError as exc:
+        code = ("object_storage_upload_remote_disposed_or_pending"
+                if exc.code == "object_storage_remote_disposed_or_pending"
+                else "object_storage_upload_remote_disposal_state_invalid")
+        raise _fail(code) from None
+
+
+def _assert_plan_remote_keys_not_disposed(plan: ObjectStorageUploadPlan) -> None:
+    for spec in plan.specs:
+        _assert_remote_key_not_disposed(plan.archive_root, store_ref=plan.store_ref, remote_key=spec.remote_key)
+
+
 def _fresh_revalidated(
     plan: ObjectStorageUploadPlan, *, progress_hook: Callable[[ExactOperationProgress], None] | None
 ) -> ObjectStorageUploadPlan:
@@ -2117,6 +2138,7 @@ def _apply_core(
                 transport_factory=transport_factory, resume=resume, progress_hook=progress_hook,
                 runner_entered=runner_entered)
         with exact_operation_writer_lock(current.archive_root) as writer_lock:
+            _assert_plan_remote_keys_not_disposed(current)
             _persist_control(current)
             checkpoints = FileExactOperationCheckpointStore(current.archive_root, writer_lock=writer_lock)
             try:
@@ -2161,6 +2183,7 @@ def _apply_concurrent(plan, authority, *, reviewed_by, transport_factory, resume
         # before constructing a provider, reading bytes or making requests.
         with exact_operation_writer_lock(plan.archive_root, timeout_seconds=30, heartbeat=heartbeat):
             _assert_target_preimages(plan)
+            _assert_plan_remote_keys_not_disposed(plan)
             _persist_control(plan)
             _require_manifest_index_authority(plan)
         checkpoints = ExecutionCheckpointStore(plan.archive_root, execution_sha256=execution,
@@ -2244,6 +2267,7 @@ def resume_object_storage_upload(
         def _writer(claim: _ClaimedExactHumanApproval) -> Mapping[str, Any]:
             current = _fresh_revalidated(plan, progress_hook=progress_hook)
             authority = _assert_approved(current, claim, context)
+            _assert_plan_remote_keys_not_disposed(current)
             actual = exact_operation_execution_sha256(current.manifest, approval_authority=authority)
             if not hmac.compare_digest(actual, execution_sha256):
                 raise _fail("object_storage_upload_resume_invalid")

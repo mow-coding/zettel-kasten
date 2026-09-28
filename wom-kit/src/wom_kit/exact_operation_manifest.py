@@ -24,6 +24,7 @@ import re
 import stat
 import threading
 import time
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Iterable, Literal, Mapping, Protocol, Sequence
@@ -1068,6 +1069,20 @@ def _write_descriptor_all(
         offset += written
 
 
+_HELD_WRITER_LOCKS = ContextVar("wom_held_writer_locks", default=())
+
+
+def current_writer_lock(archive_root):
+    """Return only an OS lock held by this thread in this process/context."""
+    root = Path(archive_root).resolve()
+    for pid, thread_id, lock in reversed(_HELD_WRITER_LOCKS.get()):
+        if (type(lock) is ExactOperationWriterLock and pid == os.getpid()
+                and thread_id == threading.get_ident() and lock.archive_root == root):
+            lock.verify_held()
+            return lock
+    return None
+
+
 class ExactOperationWriterLock:
     """One fixed archive-wide OS lock shared by all exact-operation writers."""
 
@@ -1097,6 +1112,7 @@ class ExactOperationWriterLock:
         self._identity: tuple[int, int] | None = None
         self._dependent_descriptors: set[int] = set()
         self.held = False
+        self._context_token = None
 
     def _open(self) -> Any:
         flags = os.O_RDWR | getattr(os, "O_BINARY", 0)
@@ -1172,6 +1188,8 @@ class ExactOperationWriterLock:
                 raise _fail("exact_operation_writer_lock_invalid")
             self._identity = (opened.st_dev, opened.st_ino)
             self.held = True
+            self._context_token = _HELD_WRITER_LOCKS.set((*_HELD_WRITER_LOCKS.get(),
+                (os.getpid(), threading.get_ident(), self)))
             return self
         except BaseException:
             # Includes cancelled progress callbacks and failures after the OS
@@ -1236,6 +1254,9 @@ class ExactOperationWriterLock:
                 raise
 
     def __exit__(self, *_exc_info: Any) -> bool:
+        if self._context_token is not None:
+            _HELD_WRITER_LOCKS.reset(self._context_token)
+            self._context_token = None
         if self._handle is None:
             return False
         try:

@@ -17,7 +17,7 @@ from contextlib import ExitStack, redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from wom_kit import archive_cli, archive_services, command_status
+from wom_kit import archive_cli, archive_services, command_status, object_storage_cleanup as cleanup
 from wom_kit import exact_human_approval_windows as windows
 from wom_kit import exact_human_approval_workflow as broker
 from wom_kit import object_storage_preservation as preservation
@@ -111,6 +111,28 @@ class UploadPlanTests(unittest.TestCase):
     def setUp(self) -> None:
         self.archive = _Archive()
         self.addCleanup(self.archive.close)
+
+    def test_disposed_exact_remote_key_cannot_be_planned_or_reuploaded_after_plan(self) -> None:
+        raw = b"synthetic disposable upload candidate"
+        self.archive.write([self.archive.local(raw)])
+        (self.archive.root / ".gitignore").write_text("profiles/local/\n", encoding="utf-8")
+        provider = restore_fixture._KeyProvider()
+        with patch.object(broker, "_production_key_provider", return_value=provider):
+            approved_before_disposal = self.archive.plan()
+            self.assertTrue(approved_before_disposal.approveable)
+            self.assertIsNotNone(approved_before_disposal.target_preimages)
+            remote_key = _key(raw)
+            for state in ("pending", "outcome_unknown", "deleted"):
+                with self.subTest(state=state):
+                    cleanup._save_signed(self.archive.root, cleanup._state_path(STORE, remote_key),
+                                         {"state": state, "object_id": _oid(raw)}, provider)
+                    with self.assertRaisesRegex(upload.ObjectStorageUploadError, "remote_disposed_or_pending"):
+                        self.archive.plan()
+                    transport = _MemoryTransport()
+                    with self.assertRaisesRegex(upload.ObjectStorageUploadError, "remote_disposed_or_pending"):
+                        upload._apply_concurrent(approved_before_disposal, restore_fixture._authority(),
+                            reviewed_by=REVIEWER, transport_factory=lambda: transport, resume=False, progress_hook=None)
+                    self.assertFalse(getattr(transport, "calls", []))
 
     def test_kind_is_registered_grantable_and_reopened(self) -> None:
         kind = ExactHumanApprovalOperation.object_storage_bytes_upload

@@ -13103,13 +13103,25 @@ def command_operation_control(args: argparse.Namespace) -> int:
                 result["inspection_root_resolved_to_parent_project"] = True
             break
     if action not in {"status", "wait", "recovery-plan"}:
-        result = operation_control.unsupported_cancel(
-            root,
-            args.operation_ref,
-            approve=bool(args.approve),
-            reviewed_by=None,
-            expected_control_digest=None,
-        )
+        from . import operation_cancellation
+        try:
+            if not args.approve:
+                raise ValueError("operation_cancel_approval_required")
+            if (not operation_control.OPERATION_REF_RE.fullmatch(str(args.operation_ref))
+                    or not operation_control.CONTROL_DIGEST_RE.fullmatch(str(args.expected_control_digest or ""))
+                    or archive_services.safe_project_intake_actor_id(args.reviewed_by) is None):
+                raise ValueError("operation_cancel_inputs_invalid")
+            result = operation_cancellation.request_cancel(root, args.operation_ref,
+                expected_control_digest=args.expected_control_digest, reviewed_by=args.reviewed_by)
+        except (ValueError, OSError, operation_control.OperationControlError, ExactHumanApprovalWorkflowError) as error:
+            reason = getattr(error, "code", None)
+            if not isinstance(reason, str) or not re.fullmatch(r"operation_cancel_[a-z0-9_]+", reason):
+                candidate = str(error) if isinstance(error, ValueError) else ""
+                reason = candidate if re.fullmatch(r"operation_cancel_[a-z0-9_]+", candidate) else "operation_cancel_request_refused"
+            result = {"ok": False, "state": "blocked",
+                "operation_ref": args.operation_ref if operation_control.OPERATION_REF_RE.fullmatch(str(args.operation_ref)) else None,
+                "blockers": [reason],
+                "control": {"cancel_requested": False}, "private_values_echoed": False}
 
     if action != "cancel" and not bool(args.dry_run):
         result["ok"] = False
@@ -13143,7 +13155,7 @@ def command_operation_control(args: argparse.Namespace) -> int:
             print(f"BLOCKED: {blocker}")
         for next_action in result.get("next_safe_actions", []):
             print(f"NEXT: {next_action}")
-        print("Writes: none")
+        print("Writes: cancellation request recorded" if result.get("cancel_requested") else "Writes: none")
     return 0 if result.get("ok") else 1
 
 
@@ -35191,6 +35203,121 @@ def command_imap_mailbox_message_fetch(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def _feedback_mode_error(error, fallback):
+    code = getattr(error, "code", fallback)
+    return {"ok": False, "blockers": [code if re.fullmatch(r"[a-z0-9_]+", str(code)) else fallback],
+            "private_values_echoed": False, "paths_echoed": False}
+
+
+def command_object_storage_cleanup(args: argparse.Namespace) -> int:
+    from . import object_storage_cleanup as cleanup
+    root = Path(args.archive_root)
+    planner = cleanup.plan_inventory if args.inventory else cleanup.plan_cleanup
+    writer = cleanup.execute_inventory_approved if args.inventory else cleanup.execute_cleanup_approved
+    try:
+        transport = _object_storage_live_transport_factory(args,
+            invalid=lambda: cleanup.ObjectStorageCleanupError("object_storage_cleanup_connection_invalid"),
+            unavailable=lambda: cleanup.ObjectStorageCleanupError("object_storage_cleanup_credentials_unavailable"))
+        if args.dry_run:
+            result = planner(root, request_path=args.request)
+            print_json(result)
+            return 0 if result.get("ok") else 1
+        def execute():
+            reviewer = archive_services.safe_project_intake_actor_id(args.reviewed_by)
+            if reviewer is None:
+                raise cleanup.ObjectStorageCleanupError("object_storage_cleanup_reviewer_required")
+            preview = planner(root, request_path=args.request)
+            digest = preview.get("plan_sha256")
+            if not preview.get("ok") or preview.get("blockers"):
+                return preview
+            if args.expected_plan_sha256 and args.expected_plan_sha256 != digest:
+                raise cleanup.ObjectStorageCleanupError("object_storage_cleanup_plan_changed")
+            binding = operation_approval_binding.plan_digest_approval_binding(
+                ExactHumanApprovalOperation.object_storage_remote_cleanup, digest)
+            context = binding.context(archive_id=archive_services.read_archive_id(root), reviewer_claim=reviewer)
+            return _execute_exact_human_approved_write(root, context,
+                lambda claim: writer(root, request_path=args.request,
+                    expected_plan_sha256=digest, reviewed_by=reviewer,
+                    exact_human_approval_claim=claim, expected_exact_approval_plan_sha256=binding.plan_sha256,
+                    expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+                    transport_factory=transport))
+        result = _run_tracked_domain_operation(args, execute)
+        print_json(result)
+        return 0 if result.get("ok") else 1
+    except (archive_services.ArchiveServiceError, ValueError, OSError) as error:
+        code = getattr(error, "code", "object_storage_cleanup_failed")
+        print_json({"ok": False, "blockers": [code], "private_values_echoed": False})
+        return 1
+
+
+def _run_tracked_domain_operation(args: argparse.Namespace, execute: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+    """Use the existing journal from before planning through durable outcome.
+
+    Domain writers own effect reconciliation. This wrapper never turns an
+    interrupted request into permission to replay unconfirmed side effects.
+    """
+    from . import operation_cancellation
+    capture = None
+    journal = None
+    try:
+        capture = _CommandRunResultCapture.prepare(
+            getattr(args, "output", None) or f".wom-scratch/diagnostics/{secrets.token_hex(16)}.json",
+            Path(args.archive_root), command=args.command)
+        journal = prepare_operation_tracking(capture, announce=bool(getattr(args, "progress", True)))
+        with operation_cancellation.observing(journal):
+            result = execute()
+    except (ValueError, OSError, ExactHumanApprovalError, ExactHumanApprovalWindowsError,
+            ExactHumanApprovalWorkflowError, archive_services.ArchiveServiceError,
+            operation_control.OperationControlError, operation_cancellation.OperationCancelled) as error:
+        result = _feedback_mode_error(error, "operation_execution_failed")
+        for key in ("cause_code", "cause_stage"):
+            value = getattr(error, key, None)
+            if isinstance(value, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,127}", value):
+                result[key] = value
+        result.update(effects_state="unknown", outcome_requires_reconciliation=True)
+        result["next_safe_actions"] = ["Use this operation_ref to inspect the saved result and the command's original recovery record before resuming."]
+    if journal is not None:
+        result.update(operation_ref=journal.operation_ref, operation=journal.metadata())
+    if capture is not None:
+        written = False
+        try:
+            capture.write_completed(exit_code=0 if result.get("ok") else 1, result=result)
+            written = True
+        except (OSError, ValueError):
+            result["result_artifact_written"] = False
+        finally:
+            complete_operation_tracking(journal, capture, exit_code=0 if result.get("ok") else 1,
+                result_available=written, result_ok=bool(result.get("ok")) if written else None)
+    return result
+
+
+def command_object_storage_open(args: argparse.Namespace) -> int:
+    from . import object_storage_open as remote_open
+    root = Path(args.archive_root)
+    selectors = dict(object_id=args.object_id, store_ref=args.store_ref, provider_kind=args.provider_kind,
+        ttl_seconds=args.ttl_seconds, remote_binding={"service": "s3", "endpoint_host": args.endpoint_host,
+            "bucket": args.bucket, "region": args.region or "auto"})
+    try:
+        transport = _object_storage_live_transport_factory(args,
+            invalid=lambda: remote_open.ObjectStorageOpenError("object_storage_open_connection_invalid"),
+            unavailable=lambda: remote_open.ObjectStorageOpenError("object_storage_open_credentials_unavailable"))
+        if args.dry_run:
+            result = remote_open.plan_open(root, **selectors)
+            print_json(result)
+            return 0 if result.get("ok") else 1
+        return _plan_digest_exact_route(args, lifecycle_action="object_storage_open",
+            operation=ExactHumanApprovalOperation.object_storage_open,
+            plan=lambda: remote_open.plan_open(root, **selectors),
+            write=lambda digest, reviewer, binding, claim: remote_open.execute_open_approved(root, **selectors,
+                expected_plan_sha256=digest, reviewed_by=reviewer,
+                exact_human_approval_claim=claim, expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+                transport_factory=transport), printer=print_json)
+    except (archive_services.ArchiveServiceError, ValueError, OSError) as error:
+        print_json({"ok": False, "blockers": [getattr(error, "code", "object_storage_open_failed")], "private_values_echoed": False})
+        return 1
+
+
 def command_sources(args: argparse.Namespace) -> int:
     try:
         result = archive_services.list_sources(Path(args.archive_root))
@@ -37600,6 +37727,7 @@ class _CommandRunResultCapture:
 
 def prepare_operation_tracking(
     capture: _CommandRunResultCapture,
+    *, announce: bool = True,
 ) -> operation_control.OperationRunJournal:
     journal = operation_control.OperationRunJournal.prepare(
         capture.archive_root,
@@ -37608,10 +37736,11 @@ def prepare_operation_tracking(
         run_id=capture.run_id,
     )
     capture.metadata["operation"] = journal.metadata()
-    best_effort_terminal_print(
-        f"[{capture.command}] operation_ref={journal.operation_ref}",
-        file=sys.stderr,
-    )
+    if announce:
+        best_effort_terminal_print(
+            f"[{capture.command}] operation_ref={journal.operation_ref}",
+            file=sys.stderr,
+        )
     return journal
 
 
@@ -39027,6 +39156,49 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"archive {__version__}")
     subcommands = parser.add_subparsers(dest="command", required=True)
 
+    storage = subcommands.add_parser(
+        "object-storage-cleanup",
+        help="Review exact remote targets and execute through current session approval.",
+    )
+    storage.add_argument("archive_root")
+    storage_mode = storage.add_mutually_exclusive_group(required=True)
+    storage_mode.add_argument("--dry-run", action="store_true")
+    storage_mode.add_argument("--approve", action="store_true")
+    storage.add_argument("--provider-kind", choices=["cloudflare-r2", "generic-s3"], default="cloudflare-r2")
+    storage.add_argument("--endpoint-host", required=True)
+    storage.add_argument("--bucket", required=True)
+    storage.add_argument("--region", default="auto")
+    storage.add_argument("--access-key-id-ref", required=True)
+    storage.add_argument("--secret-access-key-ref", required=True)
+    storage.add_argument("--reviewed-by")
+    storage.add_argument("--expected-plan-sha256")
+    storage.add_argument("--request", required=True, help="Private exact inventory or cleanup request.")
+    storage.add_argument("--inventory", action="store_true", help="Read remote list and qualify bytes before disposal.")
+    storage.add_argument("--resume", action="store_true", help="Reconcile saved exact per-key disposal records.")
+    storage.add_argument("--format", choices=["json"], default="json")
+    storage.set_defaults(func=command_object_storage_cleanup)
+
+    remote_open = subcommands.add_parser(
+        "object-storage-open", help="Open one verified remote object with an expiring read-only link."
+    )
+    remote_open.add_argument("archive_root")
+    open_mode = remote_open.add_mutually_exclusive_group(required=True)
+    open_mode.add_argument("--dry-run", action="store_true")
+    open_mode.add_argument("--approve", action="store_true")
+    remote_open.add_argument("--provider-kind", choices=["cloudflare-r2", "generic-s3"], default="cloudflare-r2")
+    remote_open.add_argument("--endpoint-host", required=True)
+    remote_open.add_argument("--bucket", required=True)
+    remote_open.add_argument("--region", default="auto")
+    remote_open.add_argument("--access-key-id-ref", required=True)
+    remote_open.add_argument("--secret-access-key-ref", required=True)
+    remote_open.add_argument("--reviewed-by")
+    remote_open.add_argument("--expected-plan-sha256")
+    remote_open.add_argument("--object-id", required=True)
+    remote_open.add_argument("--store-ref", required=True)
+    remote_open.add_argument("--ttl-seconds", type=int, default=900)
+    remote_open.add_argument("--format", choices=["json"], default="json")
+    remote_open.set_defaults(func=command_object_storage_open)
+
     find_objet_parser = subcommands.add_parser(
         "find-objet",
         add_help=False,
@@ -39720,7 +39892,7 @@ def build_parser() -> argparse.ArgumentParser:
         "operation-control",
         help=(
             "Read bounded content-free status, wait, or recovery guidance for "
-            "an output-supervised long command; cancel and resume are unsupported."
+            "an output-supervised command; supported writers stop cooperatively at safe checkpoints."
         ),
     )
     operation_control_parser.add_argument(
@@ -39749,8 +39921,10 @@ def build_parser() -> argparse.ArgumentParser:
     operation_control_mode.add_argument(
         "--approve",
         action="store_true",
-        help="Accepted for cancel, which remains unsupported and writes nothing.",
+        help="Request cooperative cancellation through the current session approval; a request is not a completed stop.",
     )
+    operation_control_parser.add_argument("--reviewed-by", help="Reviewer for cancellation; never echoed.")
+    operation_control_parser.add_argument("--expected-control-digest", help="Exact digest from this operation's status.")
     operation_control_parser.add_argument(
         "--timeout-seconds",
         type=int,

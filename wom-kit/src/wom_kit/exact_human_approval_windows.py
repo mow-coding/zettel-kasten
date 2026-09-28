@@ -228,6 +228,9 @@ class ExactHumanApprovalOperation(Enum):
     mint_zet_batch = "mint_zet_batch"
     retire_draft_batch = "retire_draft_batch"
     draft_revision_write = "draft_revision_write"
+    object_storage_remote_cleanup = "object_storage_remote_cleanup"
+    object_storage_open = "object_storage_open"
+    operation_control_cancel = "operation_control_cancel"
     activity_cleanup = "activity_cleanup"
     zet_revision_write = "zet_revision_write"
     zet_revision_restore_write = "zet_revision_restore_write"
@@ -598,6 +601,9 @@ _OPERATION_LABELS = {
     ExactHumanApprovalOperation.mint_zet_batch: "zet 배치 발행",
     ExactHumanApprovalOperation.retire_draft_batch: "발행된 초안 배치 퇴역",
     ExactHumanApprovalOperation.draft_revision_write: "미발행 zet 의미 개정",
+    ExactHumanApprovalOperation.object_storage_remote_cleanup: "확정된 원격 임시물 정리",
+    ExactHumanApprovalOperation.object_storage_open: "원격 파일 열기",
+    ExactHumanApprovalOperation.operation_control_cancel: "진행 중인 작업 중단 요청",
     ExactHumanApprovalOperation.activity_cleanup: "활동 자료 정리",
     ExactHumanApprovalOperation.zet_revision_write: "정본 zet 의미 개정",
     ExactHumanApprovalOperation.zet_revision_restore_write: "정본 zet 개정 복원",
@@ -739,6 +745,9 @@ _OPERATION_QUESTIONS = {
         "발행을 마친 이 초안 배치 전체를 퇴역시킬까요?"
     ),
     ExactHumanApprovalOperation.draft_revision_write: "검토한 제안으로 이 미발행 zet를 개정할까요?",
+    ExactHumanApprovalOperation.object_storage_remote_cleanup: "확정한 원격 임시물 정리 계획을 실행할까요?",
+    ExactHumanApprovalOperation.object_storage_open: "이 원격 파일의 임시 읽기 링크를 발급할까요?",
+    ExactHumanApprovalOperation.operation_control_cancel: "이 실행에 안전한 중단을 요청할까요?",
     ExactHumanApprovalOperation.activity_cleanup: "검토한 제안으로 이 활동 자료를 정리할까요?",
     ExactHumanApprovalOperation.zet_revision_write: "검토한 제안으로 이 정본 zet를 개정할까요?",
     ExactHumanApprovalOperation.zet_revision_restore_write: (
@@ -1026,6 +1035,15 @@ _OPERATION_SUMMARIES = {
     ExactHumanApprovalOperation.draft_revision_write: (
         "검토한 제안으로 미발행 zet 하나를 수정하고 이전 본문과 수정 영수증을 보존합니다. 발행은 별도입니다."
     ),
+    ExactHumanApprovalOperation.object_storage_remote_cleanup: (
+        "정확한 원격 목록과 보존 근거를 확인하고 확정된 임시물만 즉시 삭제합니다. 삭제 이력과 실제 부재를 기록합니다."
+    ),
+    ExactHumanApprovalOperation.object_storage_open: (
+        "선택한 파일만 읽는 한시적 링크를 발급합니다. 링크와 비밀값은 일반 로그나 zet 본문에 남기지 않습니다."
+    ),
+    ExactHumanApprovalOperation.operation_control_cancel: (
+        "현재 처리 중인 변경 결과를 기록한 뒤 다음 단계 전에 멈추도록 요청합니다. 요청 접수와 중단 완료를 구분하며 프로세스를 강제 종료하지 않습니다."
+    ),
     ExactHumanApprovalOperation.activity_cleanup: (
         "확정 목록의 자료를 보존 검증한 뒤 정리하고 파일별 결과를 남깁니다. 변경되거나 새로 생긴 파일은 별도로 보고합니다."
     ),
@@ -1216,6 +1234,9 @@ _OPERATION_APPROVE_BUTTONS = {
     ExactHumanApprovalOperation.mint_zet_batch: "배치 발행",
     ExactHumanApprovalOperation.retire_draft_batch: "배치 퇴역",
     ExactHumanApprovalOperation.draft_revision_write: "개정 실행",
+    ExactHumanApprovalOperation.object_storage_remote_cleanup: "확정 계획 실행",
+    ExactHumanApprovalOperation.object_storage_open: "파일 열기",
+    ExactHumanApprovalOperation.operation_control_cancel: "중단 요청",
     ExactHumanApprovalOperation.activity_cleanup: "정리 실행",
     ExactHumanApprovalOperation.zet_revision_write: "개정 실행",
     ExactHumanApprovalOperation.zet_revision_restore_write: "개정 복원",

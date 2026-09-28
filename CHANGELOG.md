@@ -4,6 +4,12 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.4.49 - 2026-09-28 (candidate)
+
+- Add a reviewed, exact-key cleanup path for temporary objects already uploaded to remote storage. Remote inventory, current references, unknown outcomes and later reuploads are checked before any selected deletion is reported complete.
+- Open one verified remote object through a temporary read-only link without retaining the bearer URL in normal records.
+- Keep other historical feedback open; installing this version alone never deletes remote files.
+
 ## v0.4.48 - 2026-09-28
 
 - Select authenticated session output paths before Git content and attribute inspection, so unrelated large files no longer consume the session backup byte budget.

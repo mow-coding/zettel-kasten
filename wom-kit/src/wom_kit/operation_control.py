@@ -122,9 +122,11 @@ COMMAND_KINDS = {
     "index": "archive_index",
     "index-health": "archive_index_health",
     "staged-cleanup-check": "staged_cleanup_check",
+    "object-storage-cleanup": "object_storage_cleanup",
 }
 KIND_COMMANDS = {value: key for key, value in COMMAND_KINDS.items()}
 COMMAND_STAGES = {
+    "object-storage-cleanup": frozenset({"starting", "preparation", "approval", "remote-io", "verification", "recording", "unknown"}),
     "project-version-update": frozenset(
         {
             "starting",
@@ -1656,6 +1658,7 @@ class OperationRunJournal:
         return not self._failed
 
     def metadata(self) -> dict[str, Any]:
+        from .operation_cancellation import SUPPORTED
         return {
             "operation_ref": self.operation_ref,
             "operation_kind": self.operation_kind,
@@ -1672,7 +1675,7 @@ class OperationRunJournal:
                 f"--operation-ref {self.operation_ref} --action wait "
                 "--timeout-seconds 60 --dry-run --format json"
             ),
-            "cancel_supported": False,
+            "cancel_supported": self.operation_kind in SUPPORTED,
             "resume_supported": False,
         }
 
@@ -3433,6 +3436,14 @@ def inspect_operation(
         }
     )
     result["privacy_guards"]["writes"] = durability_flush_attempted
+    from . import operation_cancellation
+    if first["operation_kind"] in operation_cancellation.SUPPORTED:
+        try:
+            result["control"].update(operation_cancellation.state(root, candidates[0], first))
+            result["control"]["cancellation_completed"] = bool(effective_terminal and result["control"]["cancel_acknowledged"])
+        except (ValueError, OSError, KeyError):
+            result["ok"] = False
+            result["blockers"].append("operation_cancel_request_invalid")
     if durability_flush_attempted:
         result["dry_run"] = False
     if state == "running_observed":

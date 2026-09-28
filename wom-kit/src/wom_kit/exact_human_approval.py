@@ -1266,6 +1266,40 @@ class _ClaimedExactHumanApproval:
                 hashlib.sha256,
             ).hexdigest()
 
+    def _assert_operation_mac_root(self, archive_root: Path | str) -> None:
+        # Standard legacy claims do not populate _bound_archive_root. Bind
+        # those to their authenticated claim's actual, non-reparse directory;
+        # absence of the optional stronger binding does not broaden scope.
+        root, archive_id = _archive_identity(archive_root)
+        if (archive_id != self._archive_id
+                or self._path.parent != _claims_root(root, create=False)
+                or (self._bound_archive_root is not None and root != self._bound_archive_root)):
+            raise _fail("exact_human_approval_claim_state_invalid")
+
+    def operation_cancel_mac(self, archive_root: Path | str, payload: bytes) -> str:
+        """Sign only the cancellation domain while this archive's claim is active.
+
+        This keeps cooperative checkpoints inside the current key consumer;
+        neither the key nor a general-purpose signing callback is exposed.
+        """
+        if type(payload) is not bytes or not payload or len(payload) > 65536:
+            raise _fail("exact_human_approval_integrity_payload_invalid")
+        self._assert_operation_mac_root(archive_root)
+        with self._lock:
+            self._assert_current_started()
+            return hmac.new(self._key, b"wom-kit/operation-cancellation/v1\0" + payload,
+                            hashlib.sha256).hexdigest()
+
+    def remote_disposal_mac(self, archive_root: Path | str, payload: bytes) -> str:
+        """Authenticate bounded disposal evidence without reopening the key."""
+        if type(payload) is not bytes or not payload or len(payload) > 64 * 1024 * 1024:
+            raise _fail("exact_human_approval_integrity_payload_invalid")
+        self._assert_operation_mac_root(archive_root)
+        with self._lock:
+            self._assert_current_started()
+            return hmac.new(self._key, b"wom-kit/remote-disposal-journal/v1\0" + payload,
+                            hashlib.sha256).hexdigest()
+
     def approval_integrity_mac_matches(
         self,
         payload: bytes,
