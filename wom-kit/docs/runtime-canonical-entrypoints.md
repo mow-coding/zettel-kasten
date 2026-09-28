@@ -1,6 +1,7 @@
 # Runtime Canonical Entry Points
 
-Status: v0.4.47 candidate: activity recovery, Windows stream preservation, scoped Git backup and concurrent archive work; [release scope](releases/v0.4.47.md).
+Current v0.4.50 candidate: WOM can privately inspect verified remote content before selecting confirmed temporary objects. [Release scope](releases/v0.4.50.md). Other ongoing requests are not included.
+Status: v0.4.50 candidate: private content review for exact remote-key cleanup; [release scope](releases/v0.4.50.md).
 
 Status: v0.4.36 no-dialog grants, letter-168, and session-owned writes truth
 
@@ -383,17 +384,17 @@ environment:
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0447-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0450-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.47/wom_kit-0.4.47-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.50/wom_kit-0.4.50-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-Require exactly `archive 0.4.47` from a new process. This does not update the
+Require exactly `archive 0.4.50` from a new process. This does not update the
 project-local WOM-kit source mirror or change a project pin. Those effects
 require the separate reviewed `project-version-update` plan and native
 approval, or its authenticated same-context resume after interruption.

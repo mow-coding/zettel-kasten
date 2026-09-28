@@ -10,7 +10,7 @@ Synthetic archives only; keys and dialogs are injected.
 
 from __future__ import annotations
 
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import nullcontext, redirect_stderr, redirect_stdout
 from datetime import datetime, timezone
 import io
 import json

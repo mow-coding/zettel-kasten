@@ -1,15 +1,41 @@
 # Upgrade Guide
 
-## v0.4.47 activity recovery and concurrent work
+## v0.4.50 private review before remote cleanup
+
+After publication, use the official project update flow for an existing pinned installation. WOM can privately inspect verified remote content, combine it with creation purpose and current references, and select only confirmed temporary objects for exact-key cleanup. A truncated or unclear sample is held for further review. Installing the update alone does not inspect or delete a customer bucket. Other historical feedback remains open.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0450-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.50/wom_kit-0.4.50-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+## v0.4.49 exact remote cleanup and file opening
+
+After publication, use the official project update flow for an existing pinned installation. This version adds reviewed exact-key cleanup for temporary objects already uploaded to remote storage and an expiring read-only link for one verified object. No remote deletion occurs merely by installing the update. Other historical feedback remains open.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0449-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.49/wom_kit-0.4.49-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+## v0.4.48 activity recovery and concurrent work
 
 Use this candidate only after publication and public-install verification. Existing project pins require the official project update flow.
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0447-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0448-$womBootstrapNonce"
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.47/wom_kit-0.4.47-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.48/wom_kit-0.4.48-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 

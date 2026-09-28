@@ -1,6 +1,7 @@
 # Agent Operator Capabilities Manifest
 
-Current release candidate: v0.4.47: activity recovery, Windows stream preservation, scoped Git backup and concurrent archive work; [release scope](releases/v0.4.47.md).
+Current v0.4.50 candidate: WOM can privately inspect verified remote content before selecting confirmed temporary objects. [Release scope](releases/v0.4.50.md). Other ongoing requests are not included.
+Current release candidate: v0.4.50 private content review for exact remote-key cleanup; [release scope](releases/v0.4.50.md).
 
 Status: v0.4.36 no-dialog grants, letter-168, and writer-session coverage gate
 
@@ -205,26 +206,26 @@ field remain `history_not_audited`. Inventory, shared capability availability,
 and command help consume the same content-free history. Current availability
 continues to be parser-derived; history does not grant execution authority.
 
-For the current v0.4.40 working-tree parser, the inventory snapshot is:
+For the current v0.4.50 candidate parser, the inventory snapshot is:
 
 ```text
-canonical executable command paths: 301
-alias invocation paths:              248
-all invocation paths:                516
-approval_available:                   103
-approval_fixed_closed:                6
+canonical executable command paths: 303
+alias invocation paths:              215
+all invocation paths:                518
+approval_available:                   106
+approval_fixed_closed:                5
 approval_not_exposed:                192
 conditional approval paths:            10
-dry_run_exposed:                     256
+dry_run_exposed:                     258
 unmatched fixed-close entries:         0
 ```
 
-The 6 fixed-closed paths consist of 5 compound-approval migrations and
-`operation-control`, whose reason is `operation_cancel_not_supported`.
-Its retained `--approve` syntax does not implement cancellation. Status, wait,
-and recovery-plan remain available with `--dry-run`; no cancel request is
-written. This corrects current availability metadata, not the historical
-release counts below.
+The 5 fixed-closed paths are compound-approval migrations. `operation-control`
+can submit an authenticated cancellation request for a running
+`object-storage-cleanup`; other command kinds still report cancellation as
+unsupported with `operation_cancel_not_supported`. Request acceptance and a checkpoint acknowledgement are distinct
+from terminal completion. Status, wait, and recovery-plan remain available.
+This corrects current availability metadata, not historical release counts.
 
 The historical v0.4.0 release count remains 79 fixed-close command paths.
 Later releases reopen only exact, operation-specific routes while each handler

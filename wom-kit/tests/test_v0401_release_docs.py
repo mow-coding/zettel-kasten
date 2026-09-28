@@ -139,22 +139,20 @@ class V0401ReleaseDocsTests(unittest.TestCase):
         # read-only exact-approval-claims (one alias) and the always-dialog
         # exact-approval-claim-finalize writer, and makes revert-edge --approve
         # unconditional (one conditional scope fewer).
-        self.assertEqual(counts["canonical_executable_command_count"], 301)  # v0.4.40: two receipt reconcile batch commands
+        self.assertEqual(counts["canonical_executable_command_count"], 303)  # v0.4.50: remote cleanup and open
         self.assertEqual(counts["alias_invocation_path_count"], 215)  # v0.4.44: aliases of the superseded IMAP chain removed
-        self.assertEqual(counts["invocation_path_count"], 516)
+        self.assertEqual(counts["invocation_path_count"], 518)
         # v0.4.33 reopened object-storage-upload (one path moves from fixed-closed to available).
-        self.assertEqual(counts["approval_available_command_count"], 103)  # 2026-09-26 coverage audit
-        self.assertEqual(counts["approval_fixed_closed_command_count"], 6)
+        self.assertEqual(counts["approval_available_command_count"], 106)
+        self.assertEqual(counts["approval_fixed_closed_command_count"], 5)
         self.assertEqual(counts["approval_not_exposed_command_count"], 192)  # 2026-09-26 coverage audit
         self.assertEqual(counts["conditional_approval_command_count"], 10)  # v0.4.41: legacy retire in, relation accept unconditional
-        self.assertEqual(counts["dry_run_exposed_command_count"], 256)
+        self.assertEqual(counts["dry_run_exposed_command_count"], 258)
         self.assertEqual(counts["unmatched_fixed_closed_command_count"], 0)
         by_path = {
             row["canonical_path"]: row for row in inventory["commands"]
         }
-        # The current inventory includes one unsupported writer, separately
-        # from the 67 compound-approval migrations. Do not restore the old
-        # count by advertising a cancel writer that has never existed.
+        # v0.4.50 exposes signed cancellation for remote cleanup only.
         self.assertNotIn("operation-control", blocked)
         self.assertEqual(
             [
@@ -163,20 +161,17 @@ class V0401ReleaseDocsTests(unittest.TestCase):
                 if row["approval_status"] == "approval_fixed_closed"
                 and row["canonical_path"] not in blocked
             ],
-            [("operation-control", "operation_cancel_not_supported")],
+            [],
         )
         self.assertTrue(by_path["operation-control"]["dry_run_exposed"])
         self.assertEqual(
             counts["approval_fixed_closed_command_count"],
-            counts["matched_fixed_closed_command_count"] + 1,
+            counts["matched_fixed_closed_command_count"],
         )
-        unavailable = command_status.resolve_capability_availability(
+        available = command_status.resolve_capability_availability(
             inventory, "operation-control", requested_mode="approve"
         )
-        self.assertEqual(unavailable["state"], "writer_unavailable")
-        self.assertEqual(
-            unavailable["detail_reason_code"], "operation_cancel_not_supported"
-        )
+        self.assertEqual(available["state"], "available")
         self.assertEqual(
             command_status.resolve_capability_availability(
                 inventory, "operation-control", requested_mode="dry_run"

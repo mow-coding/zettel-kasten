@@ -4,6 +4,24 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.4.50 - 2026-09-28 (candidate)
+
+- Let the WOM helper privately inspect bounded content from a verified whole-object download before classifying already-uploaded temporary files. The helper prepares exact-key requests from content, purpose and references; uncertain files remain untouched.
+- Keep content out of ordinary results and retain the existing exact deletion, absence, resume and re-upload protections. A synthetic installed-command test passed on the isolated developer R2 bucket; customer use remains unverified.
+- Other historical feedback remains open. This candidate is not public until its exact CI, release asset and fresh installation pass.
+
+## v0.4.49 - 2026-09-28
+
+- Add a reviewed, exact-key cleanup path for temporary objects already uploaded to remote storage. Remote inventory, current references, unknown outcomes and later reuploads are checked before any selected deletion is reported complete.
+- Open one verified remote object through a temporary read-only link without retaining the bearer URL in normal records.
+- Keep other historical feedback open; installing this version alone never deletes remote files.
+
+## v0.4.48 - 2026-09-28
+
+- Select authenticated session output paths before Git content and attribute inspection, so unrelated large files no longer consume the session backup byte budget.
+- Bind the selected inspection paths in v4 session scope evidence while preserving older receipt validation and exact resume checks.
+- Preserve unrelated staged/working changes and existing limits for selected files. This release does not close other outstanding feedback.
+
 ## v0.4.47 - 2026-09-27
 
 - Split large Git attribute inspections into bounded UTF-8 batches and report fixed failure causes without exposing paths. Session backup keeps the specific cause and preserves checks for other activities.

@@ -13114,9 +13114,13 @@ def command_operation_control(args: argparse.Namespace) -> int:
             result = operation_cancellation.request_cancel(root, args.operation_ref,
                 expected_control_digest=args.expected_control_digest, reviewed_by=args.reviewed_by)
         except (ValueError, OSError, operation_control.OperationControlError, ExactHumanApprovalWorkflowError) as error:
+            reason = getattr(error, "code", None)
+            if not isinstance(reason, str) or not re.fullmatch(r"operation_cancel_[a-z0-9_]+", reason):
+                candidate = str(error) if isinstance(error, ValueError) else ""
+                reason = candidate if re.fullmatch(r"operation_cancel_[a-z0-9_]+", candidate) else "operation_cancel_request_refused"
             result = {"ok": False, "state": "blocked",
                 "operation_ref": args.operation_ref if operation_control.OPERATION_REF_RE.fullmatch(str(args.operation_ref)) else None,
-                "blockers": [getattr(error, "code", "operation_cancel_request_refused")],
+                "blockers": [reason],
                 "control": {"cancel_requested": False}, "private_values_echoed": False}
 
     if action != "cancel" and not bool(args.dry_run):
@@ -39508,6 +39512,48 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"archive {__version__}")
     subcommands = parser.add_subparsers(dest="command", required=True)
 
+    storage = subcommands.add_parser(
+        "object-storage-cleanup",
+        help="Review exact remote targets and execute through current session approval.",
+    )
+    storage.add_argument("archive_root")
+    storage_mode = storage.add_mutually_exclusive_group(required=True)
+    storage_mode.add_argument("--dry-run", action="store_true")
+    storage_mode.add_argument("--approve", action="store_true")
+    storage.add_argument("--provider-kind", choices=["cloudflare-r2", "generic-s3"], default="cloudflare-r2")
+    storage.add_argument("--endpoint-host", required=True)
+    storage.add_argument("--bucket", required=True)
+    storage.add_argument("--region", default="auto")
+    storage.add_argument("--access-key-id-ref", required=True)
+    storage.add_argument("--secret-access-key-ref", required=True)
+    storage.add_argument("--reviewed-by")
+    storage.add_argument("--expected-plan-sha256")
+    storage.add_argument("--request", required=True, help="Private exact inventory or cleanup request.")
+    storage.add_argument("--inventory", action="store_true", help="Read remote list and qualify bytes before disposal.")
+    storage.add_argument("--resume", action="store_true", help="Reconcile saved exact per-key disposal records.")
+    storage.add_argument("--format", choices=["json"], default="json")
+    storage.set_defaults(func=command_object_storage_cleanup)
+
+    remote_open = subcommands.add_parser(
+        "object-storage-open", help="Open one verified remote object with an expiring read-only link."
+    )
+    remote_open.add_argument("archive_root")
+    open_mode = remote_open.add_mutually_exclusive_group(required=True)
+    open_mode.add_argument("--dry-run", action="store_true")
+    open_mode.add_argument("--approve", action="store_true")
+    remote_open.add_argument("--provider-kind", choices=["cloudflare-r2", "generic-s3"], default="cloudflare-r2")
+    remote_open.add_argument("--endpoint-host", required=True)
+    remote_open.add_argument("--bucket", required=True)
+    remote_open.add_argument("--region", default="auto")
+    remote_open.add_argument("--access-key-id-ref", required=True)
+    remote_open.add_argument("--secret-access-key-ref", required=True)
+    remote_open.add_argument("--reviewed-by")
+    remote_open.add_argument("--expected-plan-sha256")
+    remote_open.add_argument("--object-id", required=True)
+    remote_open.add_argument("--store-ref", required=True)
+    remote_open.add_argument("--ttl-seconds", type=int, default=900)
+    remote_open.add_argument("--format", choices=["json"], default="json")
+    remote_open.set_defaults(func=command_object_storage_open)
     closure = subcommands.add_parser("feedback-closure-check", help="Check each original requested outcome against installed-flow, release and reply evidence.")
     closure.add_argument("--ledger", required=True, help="Private request/evidence ledger; paths and original text are not echoed.")
     closure.add_argument("--format", choices=["json"], default="json")
@@ -39526,31 +39572,6 @@ def build_parser() -> argparse.ArgumentParser:
     disposition.add_argument("--expected-plan-sha256")
     disposition.add_argument("--format", choices=["json"], default="json")
     disposition.set_defaults(func=command_draft_disposition)
-
-    for storage_name, handler in (("object-storage-cleanup", command_object_storage_cleanup), ("object-storage-open", command_object_storage_open)):
-        storage = subcommands.add_parser(storage_name, help="Review exact remote targets and execute through the current session approval.")
-        storage.add_argument("archive_root")
-        storage_mode = storage.add_mutually_exclusive_group(required=True)
-        storage_mode.add_argument("--dry-run", action="store_true")
-        storage_mode.add_argument("--approve", action="store_true")
-        storage.add_argument("--provider-kind", choices=["cloudflare-r2", "generic-s3"], default="cloudflare-r2")
-        storage.add_argument("--endpoint-host", required=True)
-        storage.add_argument("--bucket", required=True)
-        storage.add_argument("--region", default="auto")
-        storage.add_argument("--access-key-id-ref", required=True)
-        storage.add_argument("--secret-access-key-ref", required=True)
-        storage.add_argument("--reviewed-by")
-        storage.add_argument("--expected-plan-sha256")
-        storage.add_argument("--format", choices=["json"], default="json")
-        if storage_name == "object-storage-cleanup":
-            storage.add_argument("--request", required=True, help="Private exact inventory/cleanup request, including management and classification evidence.")
-            storage.add_argument("--inventory", action="store_true", help="Read the remote list and qualify bytes before preparing disposal.")
-            storage.add_argument("--resume", action="store_true", help="Reconcile the same exact request with its saved per-key execution records.")
-        else:
-            storage.add_argument("--object-id", required=True)
-            storage.add_argument("--store-ref", required=True)
-            storage.add_argument("--ttl-seconds", type=int, default=900)
-        storage.set_defaults(func=handler)
 
     for command_name, handler in (("title-diagnostics", command_title_diagnostics),
                                   ("human-artifact-inventory", command_human_artifact_inventory)):
@@ -40293,7 +40314,7 @@ def build_parser() -> argparse.ArgumentParser:
     operation_control_mode.add_argument(
         "--approve",
         action="store_true",
-        help="Request cooperative cancellation through the current session approval; status distinguishes request from completed stop.",
+        help="Request cooperative cancellation through the current session approval; a request is not a completed stop.",
     )
     operation_control_parser.add_argument("--reviewed-by", help="Reviewer for cancellation; never echoed.")
     operation_control_parser.add_argument("--expected-control-digest", help="Exact digest from this operation's status.")

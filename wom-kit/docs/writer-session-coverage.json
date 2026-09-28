@@ -689,6 +689,24 @@
       "status": "legacy_exception",
       "reason": "saved local plan; no archive domain write"
     },
+    "object-storage-cleanup": {
+      "status": "session_integrated",
+      "route": "environment",
+      "reason": "v0.4.49 exact remote-key inventory and cleanup use the exact approval broker and current session refs",
+      "evidence": ["test_object_storage_cleanup_open", "test_exact_approval_provider_lifetime"]
+    },
+    "object-storage-open": {
+      "status": "session_integrated",
+      "route": "environment",
+      "reason": "v0.4.49 temporary remote file opening uses the exact approval broker and current session refs",
+      "evidence": ["test_object_storage_cleanup_open", "test_exact_approval_provider_lifetime"]
+    },
+    "operation-control": {
+      "status": "session_integrated",
+      "route": "environment",
+      "reason": "v0.4.49 signed cancel requests for remote cleanup use the exact approval broker; other operation kinds remain unsupported",
+      "evidence": ["test_operation_cancellation"]
+    },
     "object-storage-restore": {
       "status": "session_integrated",
       "route": "environment",
