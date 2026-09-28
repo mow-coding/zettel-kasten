@@ -1,9 +1,9 @@
 ﻿# WOM-kit Capability Matrix
 
-Current v0.4.50 candidate: WOM can privately inspect verified remote content before selecting confirmed temporary objects. [Release scope](releases/v0.4.50.md). Other ongoing requests are not included.
-Version: v0.4.50 implementation and release scope
+Current v0.4.51 candidate: capture recovery with cause and resume, cooperative cancellation for long storage work, caller-status reconnect guidance, title/human-artifact/draft-hold/relation-batch review commands and PAT-only provider intake. [Release scope](releases/v0.4.51.md). Other ongoing requests are not included in this claim.
+Version: v0.4.51 implementation and release scope
 
-Status: v0.4.50 candidate: private content review for exact remote-key cleanup; [release scope](releases/v0.4.50.md).
+Status: v0.4.51 candidate: feedback-completion integration (letters 174-176); [release scope](releases/v0.4.51.md).
 
 Status: v0.4.36 no-dialog grants, letter-168, and session-owned writes truth
 Date: 2026-09-04
