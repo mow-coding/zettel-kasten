@@ -22,7 +22,7 @@ if _SOURCE_PACKAGE.is_dir():
 else:
     __path__ = _extended_path
 
-__version__ = "0.4.51"
+__version__ = "0.4.52b30"
 
 from ._unicode_runtime import register_unicode_finder as _register_unicode_finder
 
