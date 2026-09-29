@@ -32783,7 +32783,80 @@ def command_objet_rediscovery_plan(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def _private_metadata_engine_reviewer(args: argparse.Namespace) -> str | None:
+    """Return operator:<id> for a valid reviewer in either namespace, else None."""
+
+    from .private_objet_metadata_writer import _reviewed_by_valid
+
+    reviewer_id = str(args.reviewed_by or "")
+    for prefix in ("person:", "operator:"):
+        if reviewer_id.startswith(prefix):
+            reviewer_id = reviewer_id[len(prefix):]
+            break
+    engine_reviewer = "operator:" + reviewer_id
+    if (
+        not reviewer_id
+        or not _reviewed_by_valid(engine_reviewer, archive_services.safe_projection_scalar)
+        or archive_services.safe_project_intake_actor_id("person:" + reviewer_id) is None
+    ):
+        return None
+    args.reviewed_by = "person:" + reviewer_id
+    return engine_reviewer
+
+
+def _command_objet_source_metadata_write_batch(args: argparse.Namespace) -> int:
+    """A17: write every prepared private name intake of one execution under one approval."""
+
+    root = Path(args.archive_root)
+    if args.expected_intake_sha256:
+        print("--expected-intake-sha256 applies to a single --intake only.", file=sys.stderr)
+        return 1
+    if args.dry_run is args.approve:
+        print("objet-source-metadata-write requires exactly one of --dry-run and --approve.", file=sys.stderr)
+        return 1
+    plan = lambda: archive_services.private_objet_source_metadata_batch_plan(root, execution_sha256=args.intake_batch)
+    if args.dry_run:
+        try:
+            result = plan()
+        except (archive_services.ArchiveServiceError, ValueError, OSError) as error:
+            result = {"ok": False, "blockers": [getattr(error, "code", "private_objet_source_metadata_batch_failed")], "private_values_echoed": False}
+        print_json(result)
+        return 0 if result.get("ok") else 1
+    if not (args.affirm_private_metadata_reviewed and args.affirm_external_writers_quiescent):
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action="private_objet_source_metadata_write",
+            reason_code="private_objet_source_metadata_write_review_affirmation_required",
+        )
+    engine_reviewer = _private_metadata_engine_reviewer(args)
+    if engine_reviewer is None:
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action="private_objet_source_metadata_write",
+            reason_code="private_objet_source_metadata_write_reviewer_required",
+        )
+    return _plan_digest_exact_route(
+        args,
+        lifecycle_action="private_objet_source_metadata_write",
+        operation=ExactHumanApprovalOperation.private_objet_source_metadata_write,
+        plan=plan,
+        write=lambda digest, reviewer, binding, claim: archive_services.private_objet_source_metadata_batch_write(
+            root, execution_sha256=args.intake_batch, expected_plan_sha256=digest, reviewed_by=engine_reviewer,
+            exact_human_approval_claim=claim, expected_exact_approval_plan_sha256=binding.plan_sha256,
+            expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
+        ),
+        printer=print_json if args.format == "json" else (lambda result: print(
+            f"Private objet metadata batch writer: written {result.get('written_count', 0)}, "
+            f"remaining {result.get('remaining_count', 0)}"
+        )),
+        nothing_to_do=lambda preview: not preview.get("would_change"),
+    )
+
+
 def command_objet_source_metadata_write(args: argparse.Namespace) -> int:
+    if getattr(args, "intake_batch", None):
+        return _command_objet_source_metadata_write_batch(args)
+    if not args.expected_intake_sha256:
+        print("--expected-intake-sha256 is required with --intake.", file=sys.stderr)
+        return 1
     if args.approve and not args.dry_run:
         # Reopened 2026-09-24 (triage group 6): the group 3 plan-digest route.
         if not (args.affirm_private_metadata_reviewed and args.affirm_external_writers_quiescent):
@@ -47269,15 +47342,22 @@ def build_parser() -> argparse.ArgumentParser:
         "archive_root",
         help="Archive root receiving the private metadata row.",
     )
-    private_metadata_write.add_argument(
+    private_metadata_intake_mode = private_metadata_write.add_mutually_exclusive_group(required=True)
+    private_metadata_intake_mode.add_argument(
         "--intake",
-        required=True,
         help="Archive-relative private intake JSON path. Never echoed.",
+    )
+    private_metadata_intake_mode.add_argument(
+        "--intake-batch",
+        dest="intake_batch",
+        help=(
+            "Source-intake execution sha256 whose prepared private name intakes "
+            "(from --stage-external) are planned and written under one approval."
+        ),
     )
     private_metadata_write.add_argument(
         "--expected-intake-sha256",
-        required=True,
-        help="Exact sha256:<64 lowercase hex> digest of the intake bytes.",
+        help="Exact sha256:<64 lowercase hex> digest of the intake bytes (single --intake only).",
     )
     private_metadata_write.add_argument(
         "--expected-plan-sha256",

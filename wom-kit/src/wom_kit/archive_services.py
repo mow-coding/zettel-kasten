@@ -159477,6 +159477,183 @@ def private_objet_source_metadata_write(
     )
 
 
+PRIVATE_NAME_BATCH_PLAN_SCHEMA = "wom-kit/private-objet-source-metadata-batch-plan/v0.1"
+PRIVATE_NAME_BATCH_RESULT_SCHEMA = "wom-kit/private-objet-source-metadata-batch-result/v0.1"
+_PRIVATE_NAME_INTAKE_MAX_BYTES = 1024 * 1024
+_PRIVATE_NAME_BATCH_MAX_ITEMS = 10_000
+
+
+def private_objet_source_metadata_batch_plan(
+    archive_root: Path | str,
+    *,
+    execution_sha256: str,
+) -> dict[str, Any]:
+    """Plan every prepared private name intake of one source-intake execution.
+
+    A17 (letter 176): staging prepares one intake per external copy under the
+    private scratch root; this read-only plan runs the ordinary per-row writer
+    plan for each and binds all of them into one content-free batch digest.
+    Filenames never appear in the plan.
+    """
+
+    from .source_intake_batch_exact import prepared_name_intake_relative_dir
+
+    root = require_existing_archive_root(archive_root)
+    relative_dir = prepared_name_intake_relative_dir(execution_sha256)
+
+    def blocked(code: str) -> dict[str, Any]:
+        return {
+            "schema": PRIVATE_NAME_BATCH_PLAN_SCHEMA, "ok": False, "dry_run": True,
+            "blockers": [code], "items": [], "would_change": [], "private_values_echoed": False,
+        }
+
+    if relative_dir is None:
+        return blocked("private_objet_source_metadata_batch_execution_invalid")
+    directory = root.joinpath(*relative_dir.split("/"))
+    try:
+        names = sorted(
+            entry.name for entry in os.scandir(directory)
+            if entry.is_file(follow_symlinks=False) and entry.name.endswith(".json")
+        )
+    except OSError:
+        return blocked("private_objet_source_metadata_batch_intakes_missing")
+    if not names:
+        return blocked("private_objet_source_metadata_batch_intakes_missing")
+    if len(names) > _PRIVATE_NAME_BATCH_MAX_ITEMS:
+        return blocked("private_objet_source_metadata_batch_too_large")
+    items: list[dict[str, Any]] = []
+    for name in names:
+        intake_relative = f"{relative_dir}/{name}"
+        raw, reason = _bounded_stable_regular_file_read(
+            root.joinpath(*intake_relative.split("/")), max_bytes=_PRIVATE_NAME_INTAKE_MAX_BYTES,
+        )
+        if raw is None or reason:
+            return blocked("private_objet_source_metadata_batch_intake_unreadable")
+        intake_sha256 = "sha256:" + hashlib.sha256(raw).hexdigest()
+        preview = private_objet_source_metadata_write(
+            root, intake=intake_relative, expected_intake_sha256=intake_sha256,
+            dry_run=True, approve=False,
+        )
+        items.append({
+            "ordinal": name[: -len(".json")],
+            "intake_relative_path": intake_relative,
+            "intake_sha256": intake_sha256,
+            "action": preview.get("action"),
+            "reason": preview.get("reason"),
+            "plan_sha256": preview.get("plan_sha256"),
+        })
+    would_change = [item["intake_relative_path"] for item in items if item["action"] == "append"]
+    basis = json.dumps(
+        [(item["intake_relative_path"], item["intake_sha256"], item["action"], item["plan_sha256"]) for item in items],
+        ensure_ascii=True, sort_keys=True, separators=(",", ":"),
+    ).encode("ascii")
+    return {
+        "schema": PRIVATE_NAME_BATCH_PLAN_SCHEMA,
+        "ok": True,
+        "dry_run": True,
+        "execution_sha256": str(execution_sha256).strip().lower().removeprefix("sha256:"),
+        "item_count": len(items),
+        "append_count": len(would_change),
+        "skipped_count": len(items) - len(would_change),
+        "items": items,
+        "would_change": would_change,
+        "plan_sha256": hashlib.sha256(basis).hexdigest(),
+        "blockers": [],
+        "private_values_echoed": False,
+    }
+
+
+def private_objet_source_metadata_batch_write(
+    archive_root: Path | str,
+    *,
+    execution_sha256: str,
+    expected_plan_sha256: str,
+    reviewed_by: str,
+    exact_human_approval_claim: _ClaimedExactHumanApproval,
+    expected_exact_approval_plan_sha256: str,
+    expected_exact_approval_target_binding_sha256: str,
+) -> dict[str, Any]:
+    """Apply one approved batch plan: one claim, one row write per intake.
+
+    The claim is verified once against the batch plan digest; each row then
+    goes through the ordinary v0.3.296 engine with its own plan digest.
+    """
+
+    root = require_existing_archive_root(archive_root)
+    _require_exact_human_approval_inputs_before_archive_read(
+        claim=exact_human_approval_claim,
+        expected_plan_sha256=expected_exact_approval_plan_sha256,
+        expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+    )
+    reviewer = safe_project_intake_actor_id(
+        "person:" + reviewed_by.removeprefix("operator:")
+        if isinstance(reviewed_by, str) and reviewed_by.startswith("operator:")
+        else reviewed_by
+    )
+    if reviewer is None:
+        raise ArchiveServiceError("private_objet_source_metadata_reviewer_invalid")
+    try:
+        binding = plan_digest_approval_binding(
+            ExactHumanApprovalOperation.private_objet_source_metadata_write,
+            str(expected_plan_sha256 or ""),
+        )
+    except OperationApprovalBindingError as exc:
+        raise ArchiveServiceError(exc.code) from None
+    _require_exact_human_operation_approval(
+        root, binding, reviewer_claim=reviewer,
+        expected_plan_sha256=expected_exact_approval_plan_sha256,
+        expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+        claim=exact_human_approval_claim,
+    )
+    fresh = private_objet_source_metadata_batch_plan(root, execution_sha256=execution_sha256)
+    if fresh.get("ok") is not True or fresh.get("plan_sha256") != str(expected_plan_sha256):
+        raise ArchiveServiceError("private_objet_source_metadata_batch_plan_changed")
+    engine_reviewer = "operator:" + reviewer.removeprefix("person:")
+    results: list[dict[str, Any]] = []
+    written = 0
+    for item in fresh["items"]:
+        if item["action"] != "append":
+            results.append({"ordinal": item["ordinal"], "action": "skipped", "reason": item.get("reason")})
+            continue
+        # Each append changes the private manifest, so the engine digest of the
+        # next row is re-derived right before its write. The approved batch
+        # digest already bound the exact intake bytes and actions.
+        current = private_objet_source_metadata_write(
+            root, intake=item["intake_relative_path"], expected_intake_sha256=item["intake_sha256"],
+            dry_run=True, approve=False,
+        )
+        if current.get("action") != "append" or not current.get("plan_sha256"):
+            results.append({"ordinal": item["ordinal"], "action": current.get("action"), "reason": current.get("reason"), "ok": False})
+            break
+        outcome = _private_objet_source_metadata_write_legacy_core(
+            root, intake=item["intake_relative_path"], expected_intake_sha256=item["intake_sha256"],
+            expected_plan_sha256=current["plan_sha256"], dry_run=False, approve=True,
+            reviewed_by=engine_reviewer, affirm_private_metadata_reviewed=True,
+            affirm_external_writers_quiescent=True,
+        )
+        ok = outcome.get("ok") is True and outcome.get("dry_run") is False
+        results.append({"ordinal": item["ordinal"], "action": outcome.get("action"), "reason": outcome.get("reason"), "ok": ok})
+        if not ok:
+            break
+        written += 1
+    complete = written == fresh["append_count"]
+    return {
+        "schema": PRIVATE_NAME_BATCH_RESULT_SCHEMA,
+        "ok": complete,
+        "dry_run": False,
+        "execution_sha256": fresh["execution_sha256"],
+        "item_count": fresh["item_count"],
+        "written_count": written,
+        "skipped_count": fresh["skipped_count"],
+        "remaining_count": fresh["append_count"] - written,
+        "results": results,
+        "next_safe_actions": [] if complete else [
+            "Run the same --intake-batch --dry-run again; already written names are skipped and only the remaining rows are planned.",
+        ],
+        "private_values_echoed": False,
+    }
+
+
 def _private_objet_source_metadata_write_legacy_core(
     archive_root: Path | str,
     *,

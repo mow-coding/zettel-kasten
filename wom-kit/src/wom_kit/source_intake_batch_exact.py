@@ -1279,6 +1279,107 @@ def _prepared_by_target(
     return None
 
 
+
+# A17 (letter 176): the staged copy is content-addressed, so the original
+# filename survives only in the private intake request. Staging therefore
+# prepares one private-metadata intake per external copy, keyed by the
+# source-intake execution, for a later reviewed name write.
+NAME_INTAKE_ROOT = ".wom-scratch/private/objet-source-metadata"
+
+
+def _execution_hex(execution_sha256: Any) -> str | None:
+    value = str(execution_sha256 or "").strip().lower().removeprefix("sha256:")
+    return value if re.fullmatch(r"[0-9a-f]{64}", value) else None
+
+
+def _sha256_ref(value: Any) -> str:
+    """Return sha256:<hex> whether the input carried the prefix or not."""
+    text = str(value or "").strip().lower()
+    return text if text.startswith("sha256:") else "sha256:" + text
+
+
+def prepared_name_intake_relative_dir(execution_sha256: Any) -> str | None:
+    hexdigest = _execution_hex(execution_sha256)
+    return None if hexdigest is None else f"{NAME_INTAKE_ROOT}/{hexdigest}"
+
+
+def prepared_name_intake_count(archive_root: Path, execution_sha256: Any) -> int:
+    relative = prepared_name_intake_relative_dir(execution_sha256)
+    if relative is None:
+        return 0
+    directory = Path(archive_root).joinpath(*relative.split("/"))
+    try:
+        return sum(1 for entry in os.scandir(directory)
+                   if entry.is_file(follow_symlinks=False) and entry.name.endswith(".json"))
+    except OSError:
+        return 0
+
+
+def _prepare_private_name_intake(
+    plan: SourceIntakeBatchExactPlan,
+    item: SourceIntakeBatchExactItem,
+    *,
+    request_item: Mapping[str, Any] | None,
+    execution_sha256: Any,
+) -> None:
+    """Write the derived private name intake for one approved external copy.
+
+    Idempotent for resume: an identical prepared file is accepted, a different
+    one fails closed. Names stay under the private scratch root and never
+    enter receipts, the object manifest or public results.
+    """
+
+    from . import private_objet_metadata_writer_contract as contract
+    from .exact_operation_manifest import _ensure_private_directory
+
+    relative = prepared_name_intake_relative_dir(execution_sha256)
+    local_path = request_item.get("local_path") if isinstance(request_item, Mapping) else None
+    if relative is None or type(local_path) is not str or not local_path:
+        raise _fail("source_intake_batch_write_failed")
+    original_filename = Path(local_path).name
+    mime = request_item.get("mime") if isinstance(request_item.get("mime"), str) else None
+    document = {
+        "schema": contract.INTAKE_SCHEMA,
+        "object_id": _sha256_ref(item.source_bytes_sha256),
+        "privacy_class": "private_archive",
+        "name_observation": {
+            "original_filename": original_filename,
+            "name_input_profile": "literal_unicode",
+        },
+        "media_observation": (
+            {"value": mime, "basis": "source_declared"} if mime else {"value": None, "basis": "unknown"}
+        ),
+        "size_bytes_observed": int(item.source_size_bytes),
+        "size_bytes_basis": "source_observed",
+        "source_provenance": {
+            "source_system": "source-intake-external",
+            "source_record_id": None,
+            "source_attachment_id": item.request_item_id,
+            "source_snapshot_sha256": _sha256_ref(item.source_bytes_sha256),
+            "observation_evidence_sha256": _sha256_ref(_sha_bytes(item.receipt_bytes)),
+            "evidence_kind": "source_attachment_metadata",
+            "captured_at": None,
+        },
+        "review_evidence": {
+            "review_evidence_sha256": _sha256_ref(plan.manifest.manifest_sha256),
+            "review_status": "human_reviewed",
+        },
+    }
+    if contract.validate_private_metadata_intake(document).get("accepted") is not True:
+        raise _fail("source_intake_batch_write_failed")
+    raw = contract.canonical_json_bytes(document)
+    directory = _ensure_private_directory(plan.archive_root, tuple(relative.split("/")))
+    path = directory / f"{item.ordinal:04d}.json"
+    try:
+        archive_services._write_bytes_create_if_absent(path, raw)
+    except FileExistsError:
+        try:
+            existing = path.read_bytes()
+        except OSError:
+            raise _fail("source_intake_batch_write_failed") from None
+        if not hmac.compare_digest(existing, raw):
+            raise _fail("source_intake_batch_write_failed")
+
 def _request_items(plan: SourceIntakeBatchExactPlan) -> dict[str, dict[str, Any]]:
     if plan.request_bytes_sha256 is None:
         raise _fail("source_intake_batch_state_drifted")
@@ -1477,8 +1578,10 @@ class _Writer:
         plan: SourceIntakeBatchExactPlan,
         *,
         request_items: Mapping[str, Mapping[str, Any]],
+        execution_sha256: str | None = None,
     ) -> None:
         self.plan = plan
+        self.execution_sha256 = execution_sha256
         # The approved request is read, bounded, hashed, parsed, and validated
         # once at the post-decision boundary.  Per-item writes still re-hash
         # the corresponding source bytes immediately before mutation, but do
@@ -1504,6 +1607,11 @@ class _Writer:
                 raise _fail("source_intake_batch_write_failed")
             _revalidate_item(self.plan, item, request_items=self.request_items, heartbeat=heartbeat)
             external.copy_approved(self.plan, item, heartbeat=heartbeat)
+            _prepare_private_name_intake(
+                self.plan, item,
+                request_item=self.request_items.get(item.request_item_id),
+                execution_sha256=self.execution_sha256,
+            )
             return
         artifact = _prepared_by_target(self.plan, target_ref)
         if artifact is not None:
@@ -1694,7 +1802,10 @@ def _apply_with_store(
     core = apply_exact_operation(
         plan.manifest,
         payloads=_Payloads(plan),
-        writer=_Writer(plan, request_items=request_items),
+        writer=_Writer(
+            plan, request_items=request_items,
+            execution_sha256=getattr(store, "execution_sha256", None),
+        ),
         verifier=_Verifier(plan),
         checkpoint_store=store,
         approval_authority=authority,
@@ -1702,7 +1813,15 @@ def _apply_with_store(
         resume=resume,
         progress_hook=progress_hook,
     )
-    return _success_document(plan, core)
+    document = _success_document(plan, core)
+    prepared = prepared_name_intake_count(plan.archive_root, getattr(store, "execution_sha256", None))
+    if prepared:
+        document["prepared_name_intake_count"] = prepared
+        document["name_write_command"] = (
+            "archive objet-source-metadata-write <archive-root> --intake-batch "
+            "<execution_sha256> --dry-run --format json"
+        )
+    return document
 
 
 def _completion_authenticator(
@@ -1761,8 +1880,9 @@ def _run_source_intake_batch_exact_operation(
 class _SessionSourceIntakeWriter(_Writer):
     """Concrete admission with callbacks outside source-check/publication."""
 
-    def __init__(self, prepared, context, claim, held):
-        super().__init__(prepared.plan, request_items=prepared.request_items())
+    def __init__(self, prepared, context, claim, held, *, execution_sha256=None):
+        super().__init__(prepared.plan, request_items=prepared.request_items(),
+                         execution_sha256=execution_sha256)
         self.prepared, self.context, self.claim, self.held = prepared, context, claim, held
 
     def _require(self):
@@ -1805,7 +1925,8 @@ def _run_session_source_intake_batch_exact_operation(
         context=context, claim=claim, held=writer_lock)
     plan = frozen.plan
     authority = _authority(plan, claim, context, allow_resume=True)
-    writer = _SessionSourceIntakeWriter(frozen, context, claim, writer_lock)
+    writer = _SessionSourceIntakeWriter(frozen, context, claim, writer_lock,
+        execution_sha256=exact_operation_execution_sha256(plan.manifest, approval_authority=authority))
 
     def authenticate(payload):
         writer._require()
