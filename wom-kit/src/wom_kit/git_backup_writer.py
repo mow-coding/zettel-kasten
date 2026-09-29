@@ -2016,7 +2016,7 @@ class _GitBackupBackend:
         )
         if snapshot is None or blockers:
             return None
-        observations, worktree_bytes, file_blockers = planning._observe_changed_files(
+        observations, worktree_bytes, file_blockers, _change_context = planning._observe_changed_files(
             self.prepared.root,
             snapshot["status"],
             max_total_bytes=self.prepared.max_changed_bytes,

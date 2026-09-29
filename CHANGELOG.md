@@ -6,6 +6,7 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+- A blocked `git-backup-plan` no longer reports `change_summary.count 0` (letter 176): the count is null with `state: not_observed`, and a new content-free `change_observation` names the blocking item's role (objet bytes, staging copy, scratch, receipts, zettels, index db, archive root file, ...) and size bucket, the file limit and how many changed paths were not observed. No path is echoed.
 - A registered objet is found again by its original filename (letter 176): staging an external original prepares one private name intake per copy, `objet-source-metadata-write --intake-batch <execution>` writes every prepared name under one exact approval, and `index` then `find-objet` locate the objet by that name. Names stay in the private manifest and alias index; receipts, the object manifest and public results carry none. Windows-only like the single-row writer.
 
 ## v0.4.51 - 2026-09-29
