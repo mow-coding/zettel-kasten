@@ -8,6 +8,7 @@ S2-U08 stays unconfirmed: no fixture exists for it in this batch.
 """
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import os
@@ -375,6 +376,92 @@ class S2VerificationIndexEdgeTests(unittest.TestCase):
         self.assertEqual(code, 0, rebuilt)
         self.assertTrue(rebuilt["ok"])
         assert_four_everywhere()
+
+    def test_s2_u06_linked_targets_show_a_title_or_an_exact_reason(self) -> None:
+        """S2-U06: read-zettel names every linked target for a human, or says exactly why not."""
+        digest = "b" * 64
+        frontmatter = _frontmatter(
+            "zet_20260729_s2_u06_links",
+            edges=[
+                {"type": "references", "target": LUNCH},
+                {"type": "references", "target": "zet_20260729_s2_u06_missing"},
+                {"type": "references", "target": f"sha256:{digest}"},
+            ],
+        )
+        self.write_zet(frontmatter)
+        self.assertTrue(services.index_archive(self.root)["ok"])
+        code, result, _ = self.invoke(["read-zettel", str(self.root), "--zettel-id", frontmatter["id"],
+                                       "--section", "overview", "--format", "json"])
+        self.assertEqual(code, 0, result)
+        previews = result["overview"]["edges_preview"]
+        self.assertEqual([item["target_label_state"] for item in previews],
+                         ["title_from_index", "target_not_indexed", "objet_has_no_human_label"])
+        self.assertEqual(previews[0]["target_title"], "Fake thought while eating alone")
+        self.assertNotIn("target_title", previews[1])
+        self.assertNotIn("target_title", previews[2])
+        for item in previews:
+            self.assertIn(item["target_label_state"], services.EDGE_TARGET_LABEL_STATES)
+        # without an index the reason is index_missing, never a guess
+        (self.root / "db" / "archive-index.sqlite").unlink()
+        code, result, _ = self.invoke(["read-zettel", str(self.root), "--zettel-id", frontmatter["id"],
+                                       "--section", "overview", "--format", "json"])
+        self.assertEqual(code, 0, result)
+        self.assertEqual([item["target_label_state"] for item in result["overview"]["edges_preview"]],
+                         ["index_missing", "index_missing", "objet_has_no_human_label"])
+
+    def test_s2_u11_returned_reference_opens_a_unicode_spaced_local_artifact(self) -> None:
+        """S2-U11: the returned archive-relative reference resolves to the real file, not just a URL-shaped text."""
+        payload = "S2-U11 \ud55c\uae00 \ubcf8\ubb38\n".encode("utf-8")
+        digest = hashlib.sha256(payload).hexdigest()
+        relative = "objects/local/\ud68c\uc758 \uc790\ub8cc 2026/\ubcf4\uace0\uc11c \ucd5c\uc885 v2.txt"
+        target = self.root.joinpath(*relative.split("/"))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(payload)
+        manifest = self.root / "objects" / "manifests" / "files.jsonl"
+        with manifest.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps({
+                "object_id": f"sha256:{digest}", "sha256": digest, "logical_key": relative,
+                "mime": "text/plain", "size_bytes": len(payload),
+                "locations": [{"provider": "local", "path": relative, "availability": "available"}],
+                "provenance": {"source": "b4_local_objet_capture"},
+            }, ensure_ascii=False, sort_keys=True) + "\n")
+        code, result, text = self.invoke(["resolve-objet-ref", str(self.root), "--object-id", digest,
+                                          "--dry-run", "--format", "json"])
+        self.assertEqual(code, 0, result)
+        self.assertEqual(result["resolution_state"], "local_available")
+        self.assertTrue(result["local_openable"])
+        candidates = [item for item in result["local_candidates"] if item["exists"]]
+        self.assertEqual([item["archive_relative_path"] for item in candidates], [relative])
+        # the textual reference is distinguished from the resolvable target by opening it
+        opened = self.root.joinpath(*candidates[0]["archive_relative_path"].split("/"))
+        self.assertEqual(opened.read_bytes(), payload)
+        self.assertFalse(result["privacy_guards"]["absolute_local_paths_echoed"])
+        self.assertNotIn(str(self.root), text)
+
+    def test_s2_u14_hand_written_canonical_without_mint_evidence_is_reported(self) -> None:
+        """S2-U14: a draft cannot be reported canonical unless mint evidence exists; status-board counts the gaps."""
+        unofficial = _frontmatter("zet_20260729_s2_u14_unofficial")
+        self.write_zet(unofficial)
+        broken = _frontmatter(
+            "zet_20260729_s2_u14_missing_receipt",
+            mint={"receipt_path": "receipts/mints/zet_20260729_s2_u14_missing_receipt.json"},
+        )
+        self.write_zet(broken)
+        self.assertTrue(services.index_archive(self.root)["ok"])
+        code, board, _ = self.invoke(["status-board", str(self.root), "--dry-run", "--format", "json"])
+        self.assertEqual(code, 0, board)
+        counts = board["counts"]
+        missing_ids = {item["zettel_id"] for item in board["boards"]["canonical_lifecycle_metadata_missing"]}
+        self.assertIn(unofficial["id"], missing_ids)
+        self.assertNotIn(broken["id"], missing_ids)
+        gaps = {item["zettel_id"]: item["gap_code"] for item in board["boards"]["mint_receipt_gaps"]}
+        self.assertEqual(gaps.get(broken["id"]), "mint_receipt_missing")
+        self.assertGreaterEqual(counts["canonical_lifecycle_metadata_missing"], 1)
+        self.assertEqual(counts["mint_receipt_gap"], 1)
+        # the example archive's own canonical zets carry promotion metadata, so
+        # exactly the hand-written one is counted; the count is a review signal,
+        # not proof of an unofficial write (legacy imports may lack a mint block).
+        self.assertEqual(counts["canonical_lifecycle_metadata_missing"], 1)
 
 
 if __name__ == "__main__":
