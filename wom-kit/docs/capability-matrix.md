@@ -1,9 +1,9 @@
 ﻿# WOM-kit Capability Matrix
 
-Current v0.4.51 candidate: capture recovery with cause and resume, cooperative cancellation for long storage work, caller-status reconnect guidance, title/human-artifact/draft-hold/relation-batch review commands and PAT-only provider intake. [Release scope](releases/v0.4.51.md). Other ongoing requests are not included in this claim.
-Version: v0.4.51 implementation and release scope
+Current v0.4.52 candidate: index-bound commands on large archives finish in a fraction of the time (live scan without per-file opens), original-filename discovery for registered objets, installed guidance checked against the installed commands, titled edge previews, a handoff checkpoint that names unpublished drafts and twenty-five verified S2 items. [Release scope](releases/v0.4.52.md). Other ongoing requests are not included in this claim.
+Version: v0.4.52 implementation and release scope
 
-Status: v0.4.51 candidate: feedback-completion integration (letters 174-176); [release scope](releases/v0.4.51.md).
+Status: v0.4.52 candidate: large-activity performance and verification closure (letters 174-176); [release scope](releases/v0.4.52.md).
 
 Status: v0.4.36 no-dialog grants, letter-168, and session-owned writes truth
 Date: 2026-09-04

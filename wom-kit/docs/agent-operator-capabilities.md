@@ -1,7 +1,7 @@
 # Agent Operator Capabilities Manifest
 
-Current v0.4.51 candidate: capture recovery with cause and resume, cooperative cancellation for long storage work, caller-status reconnect guidance, title/human-artifact/draft-hold/relation-batch review commands and PAT-only provider intake. [Release scope](releases/v0.4.51.md). Other ongoing requests are not included in this claim.
-Current release candidate: v0.4.51 feedback-completion integration (letters 174-176); [release scope](releases/v0.4.51.md).
+Current v0.4.52 candidate: index-bound commands on large archives finish in a fraction of the time (live scan without per-file opens), original-filename discovery for registered objets, installed guidance checked against the installed commands, titled edge previews, a handoff checkpoint that names unpublished drafts and twenty-five verified S2 items. [Release scope](releases/v0.4.52.md). Other ongoing requests are not included in this claim.
+Current release candidate: v0.4.52 large-activity performance and verification closure (letters 174-176); [release scope](releases/v0.4.52.md).
 
 Status: v0.4.36 no-dialog grants, letter-168, and writer-session coverage gate
 
@@ -206,7 +206,7 @@ field remain `history_not_audited`. Inventory, shared capability availability,
 and command help consume the same content-free history. Current availability
 continues to be parser-derived; history does not grant execution authority.
 
-For the current v0.4.51 candidate parser, the inventory snapshot is:
+For the current v0.4.52 candidate parser, the inventory snapshot is:
 
 ```text
 canonical executable command paths: 309
