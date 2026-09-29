@@ -43,6 +43,7 @@ Every write below is `--dry-run` first, then the same plan with `--approve`.
 |---|---|
 | read or search | `search`, `read-zettel`, `abstract-freshness` |
 | keep a source file | `source-intake-batch` (then capture) |
+| find a file by its original name | `objet-source-metadata-write --intake-batch`, then `find-objet` |
 | draft a note | `create-draft` |
 | revise an unpublished draft | `draft-revision-write` |
 | drop an unpublished draft | `discard-draft` (check links to it first) |
@@ -113,15 +114,13 @@ yourself; leave uncertain or used ones. See
   `search` or `find-objet` with the same query/filter/limit and `--cursor` until
   done; the 100-row page size is not a total-result cap. A historical snapshot
   stays readable while another session works; do not call it current source or
-  remote-preservation evidence. `objet-rediscovery-plan` is a summary, not the
-  implemented private finder itself.
+  remote-preservation evidence.
 - Use `work-session --action inspect --caller-status` to distinguish recorded
   permission, this caller's usable grant, observed running target operations,
   and installed runtime alignment. `not_observed` does not prove idle. Host
   `Unknown process id` is not evidence that WOM failed or revoked permission.
 - `archive_index_rebuild_required` is a hard stop. Run explicit `archive index`
   then `index-health`; never trust stale rows or silently scan all bodies.
-  Legacy WAL or sidecar-bearing generated indexes require one ordinary rebuild.
 - Before a global absence claim, run `archive objet-rediscovery-plan
   <archive-root> <query> --dry-run --count-total --format json`. Index zero is
   not archive-wide absence.

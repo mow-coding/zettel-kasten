@@ -757,14 +757,14 @@
     {
       "source": "templates/ai-runtime/wom-archive/SKILL.md",
       "packaged": "templates/ai-runtime/wom-archive/SKILL.md",
-      "bytes": 11137,
-      "sha256": "95877b16963c80b63d71cb9f27d501fb63e87d79507779bea5928545a2dc03a2"
+      "bytes": 11076,
+      "sha256": "95f808b14c3f09b2cd12fb527bdab34f104e980ad8785e7dc53eedc884f12c36"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
       "packaged": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
-      "bytes": 9647,
-      "sha256": "58065931366dea89186e30e38131315d75308829e21eb5714dccd8c9d930ad6b"
+      "bytes": 9717,
+      "sha256": "9be1b9dc40a4adaab7f2566c174a73e2efb03c6836eebc029953b57e7073ea16"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/credentials-and-sessions.md",

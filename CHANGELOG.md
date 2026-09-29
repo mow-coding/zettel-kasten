@@ -4,6 +4,10 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## Unreleased
+
+- A registered objet is found again by its original filename (letter 176): staging an external original prepares one private name intake per copy, `objet-source-metadata-write --intake-batch <execution>` writes every prepared name under one exact approval, and `index` then `find-objet` locate the objet by that name. Names stay in the private manifest and alias index; receipts, the object manifest and public results carry none. Windows-only like the single-row writer.
+
 ## v0.4.51 - 2026-09-29
 
 - Registration after external staging (letter 176): a failed `objet-capture-batch` now keeps its cause, stage, approval and write state and an `operation_ref`; `--resume` with the original approval finishes only the unfinished items without a second dialog or re-copying staged bytes.

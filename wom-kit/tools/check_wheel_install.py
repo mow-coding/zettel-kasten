@@ -4818,6 +4818,7 @@ def _wheel_install_success_result(
     letter140_link_evidence: dict[str, Any],
     v049_workflow_evidence: dict[str, Any],
     v0410_batch_workflow_evidence: dict[str, Any],
+    a17_name_evidence: dict[str, Any],
     v0411_truth_evidence: dict[str, Any],
     v0414_recovery_evidence: dict[str, Any],
     wheel_filename: str,
@@ -4837,6 +4838,7 @@ def _wheel_install_success_result(
         "installed_letter140_link_workflow": letter140_link_evidence,
         "installed_v049_recovery_workflows": v049_workflow_evidence,
         "installed_v0410_batch_workflow": v0410_batch_workflow_evidence,
+        "installed_a17_name_discovery": a17_name_evidence,
         "installed_v0411_truth_contracts": v0411_truth_evidence,
         "installed_v0414_recovery_contracts": v0414_recovery_evidence,
         **({"installed_v0419_runtime_journey": v0419_runtime_evidence}
@@ -5166,6 +5168,184 @@ def _check_installed_v0410_batch_workflow(
             "Installed v0.4.10 batch workflow did not prove the exact expected "
             "three-file, derived-request, fresh-two-approval, byte-preservation, "
             "no-progress, and privacy contract."
+        )
+    return evidence
+
+
+INSTALLED_A17_NAME_SMOKE_SCHEMA = "wom-kit/installed-a17-name-discovery-smoke/v0.1"
+INSTALLED_A17_NAME_SMOKE_SCRIPT = r"""
+import io
+import json
+import os
+import shutil
+import sys
+from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
+from unittest import mock
+
+from wom_kit import archive_cli, archive_services, objet_capture_batch_exact, source_intake_batch_exact
+from wom_kit.exact_human_approval_windows import APPROVE_BUTTON_ID
+from wom_kit.exact_human_approval_workflow import _execute_exact_human_approved_write_core
+from wom_kit import exact_human_approval_workflow as workflow
+
+ROOT = Path(sys.argv[1])
+ARCHIVE_TEMPLATE = Path(sys.argv[2])
+if not ARCHIVE_TEMPLATE.is_dir():
+    raise RuntimeError("installed_a17_archive_template_missing")
+shutil.copytree(ARCHIVE_TEMPLATE, ROOT)
+manifest = ROOT / "objects" / "manifests" / "files.jsonl"
+manifest.write_bytes(b"\n".join(line for line in manifest.read_bytes().split(b"\n") if line) + b"\n")
+if archive_services.index_archive(ROOT).get("ok") is not True:
+    raise RuntimeError("installed_a17_initial_index_failed")
+REVIEWER = "person:installed-a17-name-smoke"
+NAMES = ("SYNTHETIC_PRIVATE_A17_NAME_ONE.txt", "SYNTHETIC_PRIVATE_A17_NAME_TWO.pdf", "SYNTHETIC_PRIVATE_A17_NAME_THREE.md")
+WORKSPACE = ROOT.parent / (ROOT.name + "-originals")
+WORKSPACE.mkdir()
+
+
+class _NativeApproval:
+    def __init__(self):
+        self.calls = 0
+
+    def show(self, **_kwargs):
+        self.calls += 1
+        return APPROVE_BUTTON_ID, True
+
+
+class _KeyProvider:
+    def __init__(self, create):
+        self.create = create
+
+    def use_key(self, _root, consumer, *, create_if_missing=False):
+        if create_if_missing is not self.create:
+            raise RuntimeError("installed_a17_key_contract_failed")
+        key = bytearray(range(32))
+        try:
+            return consumer(memoryview(key))
+        finally:
+            key[:] = b"\0" * len(key)
+
+
+native = _NativeApproval()
+write_keys, read_keys = _KeyProvider(True), _KeyProvider(False)
+
+
+def _approved_write(root, context, writer):
+    return _execute_exact_human_approved_write_core(root, context, writer, native=native, key_provider=write_keys)
+
+
+def _run_cli(arguments):
+    stdout, stderr = io.StringIO(), io.StringIO()
+    with redirect_stdout(stdout), redirect_stderr(stderr):
+        code = archive_cli.main(arguments)
+    if stderr.getvalue():
+        raise RuntimeError("installed_a17_stderr_failed")
+    value = json.loads(stdout.getvalue())
+    serialized = json.dumps(value, ensure_ascii=False)
+    if any(name in serialized for name in NAMES) or str(ROOT) in serialized or ROOT.as_posix() in serialized:
+        raise RuntimeError("installed_a17_privacy_failed")
+    return code, value
+
+
+items = []
+for index, name in enumerate(NAMES):
+    original = WORKSPACE / name
+    original.write_bytes(b"synthetic external " + str(index).encode("ascii"))
+    items.append({"item_id": "external-%02d" % index, "local_path": str(original), "source_role": "primary_source"})
+request = WORKSPACE / "request.json"
+request.write_text(json.dumps({"schema": source_intake_batch_exact.REQUEST_SCHEMA, "batch_id": "installed-a17", "items": items}), encoding="utf-8")
+
+common = ["source-intake-batch", str(ROOT), "--manifest", str(request), "--stage-external", "--format", "json", "--no-progress"]
+code, preview = _run_cli([*common, "--dry-run"])
+if code != 0 or preview.get("item_count") != len(NAMES):
+    raise RuntimeError("installed_a17_stage_plan_failed")
+with mock.patch.object(source_intake_batch_exact, "_execute_exact_human_approved_write", side_effect=_approved_write):
+    code, prepared = _run_cli([*common, "--approve", "--reviewed-by", REVIEWER, "--expected-plan-sha256", preview["plan_sha256"]])
+if code != 0 or prepared.get("ok") is not True or prepared.get("prepared_name_intake_count") != len(NAMES) or native.calls != 1:
+    raise RuntimeError("installed_a17_stage_failed")
+execution = prepared["execution_sha256"]
+
+plan = objet_capture_batch_exact.plan_objet_capture_batch(ROOT, intake_execution_sha256=execution, claim_key_provider=read_keys)
+if not plan.approveable:
+    raise RuntimeError("installed_a17_capture_plan_failed")
+with (mock.patch.object(workflow, "_production_key_provider", return_value=read_keys),
+      mock.patch.object(objet_capture_batch_exact, "_execute_exact_human_approved_write", side_effect=_approved_write)):
+    code, captured = _run_cli(["objet-capture-batch", str(ROOT), "--format", "json", "--no-progress", "--approve",
+        "--reviewed-by", REVIEWER, "--source-intake-execution-sha256", execution, "--expected-plan-sha256", plan.batch_plan_sha256])
+if code != 0 or captured.get("ok") is not True or native.calls != 2:
+    raise RuntimeError("installed_a17_capture_failed")
+
+batch = ["objet-source-metadata-write", str(ROOT), "--intake-batch", execution, "--format", "json"]
+code, batch_plan = _run_cli([*batch, "--dry-run"])
+if code != 0 or batch_plan.get("append_count") != len(NAMES):
+    raise RuntimeError("installed_a17_name_plan_failed")
+with mock.patch.object(archive_cli, "_execute_exact_human_approved_write", side_effect=_approved_write):
+    code, written = _run_cli([*batch, "--approve", "--reviewed-by", REVIEWER, "--affirm-private-metadata-reviewed",
+        "--affirm-external-writers-quiescent", "--expected-plan-sha256", batch_plan["plan_sha256"]])
+if code != 0 or written.get("written_count") != len(NAMES) or written.get("remaining_count") != 0 or native.calls != 3:
+    raise RuntimeError("installed_a17_name_write_failed")
+code, again = _run_cli([*batch, "--dry-run"])
+if again.get("append_count") != 0:
+    raise RuntimeError("installed_a17_name_rerun_failed")
+
+if archive_services.index_archive(ROOT).get("ok") is not True:
+    raise RuntimeError("installed_a17_index_failed")
+expected = {item["approved_object_id"] for item in plan.selection_document["items"]}
+found_ids = set()
+for name in NAMES:
+    stdout, stderr = io.StringIO(), io.StringIO()
+    with redirect_stdout(stdout), redirect_stderr(stderr):
+        code = archive_cli.main(["find-objet", str(ROOT), "--audience", "private_archive", "--query-profile", "literal_unicode", "--query", name, "--format", "json"])
+    found = json.loads(stdout.getvalue())
+    if code != 0 or found.get("status") != "found" or len(found.get("results", [])) != 1:
+        raise RuntimeError("installed_a17_find_failed")
+    found_ids.add(found["results"][0]["object_id"])
+if found_ids != expected:
+    raise RuntimeError("installed_a17_find_mismatch")
+public_text = manifest.read_text(encoding="utf-8")
+for receipt in (ROOT / "receipts" / "ops" / "source-intake-batches").rglob("*.json"):
+    public_text += receipt.read_text(encoding="utf-8")
+if any(name in public_text for name in NAMES):
+    raise RuntimeError("installed_a17_name_leaked")
+
+print(json.dumps({
+    "ok": True, "schema": "wom-kit/installed-a17-name-discovery-smoke/v0.1",
+    "entrypoint_route": "installed_archive_cli_main", "item_count": len(NAMES),
+    "prepared_name_intake_count": prepared["prepared_name_intake_count"],
+    "name_batch_written_count": written["written_count"], "name_batch_rerun_append_count": again["append_count"],
+    "native_approval_count": native.calls, "found_by_original_name_count": len(found_ids),
+    "names_in_public_records": False, "private_values_echoed": False, "absolute_paths_echoed": False,
+}, sort_keys=True))
+"""
+
+
+def _check_installed_a17_name_discovery(
+    python: Path,
+    fixture_root: Path,
+    archive_template: Path,
+    *,
+    cwd: Path,
+) -> dict[str, Any]:
+    """Stage external originals, capture, write their names once, find each by name."""
+
+    if os.name != "nt":
+        return {"ok": True, "schema": INSTALLED_A17_NAME_SMOKE_SCHEMA, "skipped": "private_metadata_writer_is_windows_only"}
+    stdout = _run_installed_entrypoint(
+        [str(python), "-I", "-c", INSTALLED_A17_NAME_SMOKE_SCRIPT, str(fixture_root), str(archive_template)],
+        cwd=cwd,
+        label="installed A17 original-name discovery workflow",
+    )
+    evidence = _parse_entrypoint_json_object(stdout, label="Installed A17 name discovery output")
+    expected = {
+        "ok": True, "schema": INSTALLED_A17_NAME_SMOKE_SCHEMA, "entrypoint_route": "installed_archive_cli_main",
+        "item_count": 3, "prepared_name_intake_count": 3, "name_batch_written_count": 3,
+        "name_batch_rerun_append_count": 0, "native_approval_count": 3, "found_by_original_name_count": 3,
+        "names_in_public_records": False, "private_values_echoed": False, "absolute_paths_echoed": False,
+    }
+    if evidence != expected:
+        raise WheelCheckError(
+            "Installed A17 name discovery did not prove the exact expected stage, capture, "
+            "one-approval name write, rerun no-op, find-by-name and privacy contract."
         )
     return evidence
 
@@ -5617,6 +5797,12 @@ def check_wheel(
                 cwd=temp_root,
             )
         )
+        a17_name_evidence = _check_installed_a17_name_discovery(
+            python,
+            temp_root / "a17-name-archive",
+            source_copy / "examples" / "fake-life-archive",
+            cwd=temp_root,
+        )
         v0411_truth_evidence = _check_installed_v0411_truth_contracts(
             python,
             temp_root / "v0411-truth-archive",
@@ -5654,6 +5840,7 @@ def check_wheel(
             letter140_link_evidence=letter140_link_evidence,
             v049_workflow_evidence=v049_workflow_evidence,
             v0410_batch_workflow_evidence=v0410_batch_workflow_evidence,
+            a17_name_evidence=a17_name_evidence,
             v0411_truth_evidence=v0411_truth_evidence,
             v0414_recovery_evidence=v0414_recovery_evidence,
             wheel_filename=wheel.name,
