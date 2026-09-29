@@ -129,7 +129,7 @@ def publish(archive_root, *, source_snapshot=None):
         folder = _directory(root, True)
         path = folder / (digest + ".json")
         try:
-            services._write_bytes_create_if_absent(path, raw)
+            services._publish_derived_generation_file(path, raw)
         except FileExistsError:
             if _read_plain_file(path, max_bytes=MAX_BYTES, heartbeat=lambda: None) != raw:
                 raise _fail("relation_generation_changed") from None

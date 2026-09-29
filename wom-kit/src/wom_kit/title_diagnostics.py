@@ -166,7 +166,7 @@ def publish(archive_root, *, rules=None, source_snapshot=None, index_diagnostics
         folder = _directory(root, create=True)
         path = folder / (digest + ".json")
         try:
-            services._write_bytes_create_if_absent(path, raw)
+            services._publish_derived_generation_file(path, raw)
         except FileExistsError:
             if _read_plain_file(path, max_bytes=MAX_BYTES, heartbeat=lambda: None) != raw:
                 raise _error("title_diagnostics_generation_changed") from None

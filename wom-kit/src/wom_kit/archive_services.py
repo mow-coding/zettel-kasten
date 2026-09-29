@@ -154247,6 +154247,36 @@ def index_archive(
     return result
 
 
+def _publish_derived_generation_file(path: Path, value: bytes) -> None:
+    """Create one content-addressed derived-cache file; never replace one.
+
+    On Windows the hard-link publication of ``_write_bytes_create_if_absent``
+    leaves the final file's link count, and so its ChangeTime, to settle only
+    when every other handle on the temporary name closes. A scanner that
+    briefly opens the new temporary file therefore changes the published file
+    moments later, which Doctor correctly reports as a stale snapshot. A
+    rename moves the complete temporary file into place without a second
+    link, and Windows refuses it when the name already exists.
+    """
+
+    if os.name != "nt":
+        _write_bytes_create_if_absent(path, value)
+        return
+    temporary = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
+    try:
+        with open(temporary, "xb") as stream:
+            stream.write(value)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.rename(temporary, path)
+    except BaseException:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+
 def _derived_snapshot_or_reason(publish, fallback: str) -> dict[str, Any]:
     """Derived relation/title snapshots never invalidate the live index.
 
