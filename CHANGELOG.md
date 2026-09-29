@@ -12,6 +12,7 @@ This project uses semantic versioning for public compatibility checkpoints.
 - The installed-wheel gate proves that every command the packaged helper-AI guidance and `ai-start-here` name exists in the installed parser and capabilities manifest of the same version (A13).
 - `read-zettel` overview edge previews carry the linked zet's title from the index or an exact reason; `session-handoff-checkpoint` reports `inbox_attention` and says when unpublished drafts were not published; `draft-disposition --approve` reaches the dialog (its approval context carried unsorted review codes); the runtime skill's `create-draft` example carries every required flag and the publish row names `zet-quality-check`.
 - The 25 additional-verification items (S2-U01..U25) have synthetic tests on the example archive; their remaining gaps are recorded in the S2 decision log. Synthetic data and an injected dialog only; customers' own runs are not confirmed.
+- `git-backup` retries a held index file longer (about 16 s in six steps instead of 3.75 s) and treats any message naming the lock file as the same transient hold; the isolated-index read-tree and write-tree steps retry the same way. Two release CI runs on shared Windows runners had failed on that hold.
 
 ## v0.4.51 - 2026-09-29
 

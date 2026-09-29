@@ -950,6 +950,18 @@ class GitBackupWriterTests(unittest.TestCase):
                 b"fatal: Unable to create 'X/.git/index.lock': File exists.\n"
             )
         )
+        # v0.4.52: a held lock file is transient whatever the OS wording.
+        self.assertTrue(
+            writer._git_index_lock_transient(
+                b"error: could not lock config file .git/config: Permission denied\n"
+            )
+        )
+        self.assertTrue(
+            writer._git_index_lock_transient(
+                b"fatal: Unable to create 'X/.git/index.lock': Permission denied\n"
+            )
+        )
+        self.assertEqual(sum(writer._GIT_INDEX_LOCK_RETRY_DELAYS), 15.75)
         for other in (b"", b"fatal: pathspec did not match any files", b"fatal: LF would be replaced by CRLF"):
             self.assertFalse(writer._git_index_lock_transient(other))
 
