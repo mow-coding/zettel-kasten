@@ -942,6 +942,36 @@ class InstalledEntrypointTests(unittest.TestCase):
             "package_version": self.PACKAGE_VERSION,
             "isolated_installed_package": True,
         }
+        a17_name_evidence = {
+            "ok": True,
+            "schema": check_wheel_install.INSTALLED_A17_NAME_SMOKE_SCHEMA,
+            "entrypoint_route": "installed_archive_cli_main",
+            "item_count": 3,
+            "prepared_name_intake_count": 3,
+            "name_batch_written_count": 3,
+            "name_batch_rerun_append_count": 0,
+            "native_approval_count": 3,
+            "found_by_original_name_count": 3,
+            "names_in_public_records": False,
+            "private_values_echoed": False,
+            "absolute_paths_echoed": False,
+        }
+        a13_guidance_evidence = {
+            "ok": True,
+            "schema": check_wheel_install.INSTALLED_A13_GUIDANCE_SMOKE_SCHEMA,
+            "entrypoint_route": "installed_archive_cli_main",
+            "package_version": self.PACKAGE_VERSION,
+            "capabilities_version_matches_package": True,
+            "source_checkout_visible": False,
+            "skill_reference_count": 11,
+            "guidance_named_command_count": 120,
+            "unknown_guidance_command_count": 0,
+            "not_runnable_guidance_command_count": 0,
+            "dry_run_available_guidance_command_count": 100,
+            "start_here_named_command_count": 6,
+            "start_here_unknown_command_count": 0,
+            "absolute_paths_echoed": False,
+        }
         result = check_wheel_install._wheel_install_success_result(
             package_version=self.PACKAGE_VERSION,
             wheel_counts=wheel_counts,
@@ -955,6 +985,8 @@ class InstalledEntrypointTests(unittest.TestCase):
             letter140_link_evidence=letter140_evidence,
             v049_workflow_evidence=v049_evidence,
             v0410_batch_workflow_evidence=v0410_batch_evidence,
+            a17_name_evidence=a17_name_evidence,
+            a13_guidance_evidence=a13_guidance_evidence,
             v0411_truth_evidence=v0411_truth_evidence,
             v0414_recovery_evidence=v0414_recovery_evidence,
             wheel_filename="wom_kit-0.3.296-py3-none-any.whl",
@@ -979,6 +1011,8 @@ class InstalledEntrypointTests(unittest.TestCase):
                 "installed_letter140_link_workflow": letter140_evidence,
                 "installed_v049_recovery_workflows": v049_evidence,
                 "installed_v0410_batch_workflow": v0410_batch_evidence,
+                "installed_a17_name_discovery": a17_name_evidence,
+                "installed_a13_guidance_flow": a13_guidance_evidence,
                 "installed_v0411_truth_contracts": v0411_truth_evidence,
                 "installed_v0414_recovery_contracts": (
                     v0414_recovery_evidence

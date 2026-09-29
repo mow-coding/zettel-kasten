@@ -4819,6 +4819,7 @@ def _wheel_install_success_result(
     v049_workflow_evidence: dict[str, Any],
     v0410_batch_workflow_evidence: dict[str, Any],
     a17_name_evidence: dict[str, Any],
+    a13_guidance_evidence: dict[str, Any],
     v0411_truth_evidence: dict[str, Any],
     v0414_recovery_evidence: dict[str, Any],
     wheel_filename: str,
@@ -4839,6 +4840,7 @@ def _wheel_install_success_result(
         "installed_v049_recovery_workflows": v049_workflow_evidence,
         "installed_v0410_batch_workflow": v0410_batch_workflow_evidence,
         "installed_a17_name_discovery": a17_name_evidence,
+        "installed_a13_guidance_flow": a13_guidance_evidence,
         "installed_v0411_truth_contracts": v0411_truth_evidence,
         "installed_v0414_recovery_contracts": v0414_recovery_evidence,
         **({"installed_v0419_runtime_journey": v0419_runtime_evidence}
@@ -5317,6 +5319,160 @@ print(json.dumps({
     "names_in_public_records": False, "private_values_echoed": False, "absolute_paths_echoed": False,
 }, sort_keys=True))
 """
+
+
+INSTALLED_A13_GUIDANCE_SMOKE_SCHEMA = "wom-kit/installed-a13-guidance-flow-smoke/v0.1"
+INSTALLED_A13_GUIDANCE_SMOKE_SCRIPT = r"""
+import argparse
+import io
+import json
+import re
+import shutil
+import sys
+from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
+
+from wom_kit import __version__, archive_cli, archive_services
+from wom_kit.resource_paths import runtime_resource_root, source_checkout_available
+
+ROOT = Path(sys.argv[1])
+ARCHIVE_TEMPLATE = Path(sys.argv[2])
+if not ARCHIVE_TEMPLATE.is_dir():
+    raise RuntimeError("installed_a13_archive_template_missing")
+if source_checkout_available():
+    raise RuntimeError("installed_a13_source_checkout_visible")
+shutil.copytree(ARCHIVE_TEMPLATE, ROOT)
+if archive_services.index_archive(ROOT).get("ok") is not True:
+    raise RuntimeError("installed_a13_index_failed")
+
+skill_root = runtime_resource_root("templates") / "ai-runtime" / "wom-archive"
+references = sorted((skill_root / "references").glob("*.md"))
+skill_text = (skill_root / "SKILL.md").read_text(encoding="utf-8")
+if not references or not skill_text:
+    raise RuntimeError("installed_a13_skill_package_missing")
+package_text = "\n".join([skill_text, *(path.read_text(encoding="utf-8") for path in references)])
+table = skill_text[skill_text.index("## Which Command For Which Intent"):skill_text.index("## Start Every Session")]
+COMMAND_RE = re.compile(r"archive ([a-z][a-z0-9-]+)")
+invocations = re.findall(r"`([^`\n]+)`", package_text)
+for block in re.findall(r"```[a-z]*\n(.*?)```", package_text, re.S):
+    invocations.extend(line.strip() for line in block.splitlines())
+named = {match.group(1) for text in invocations for match in [COMMAND_RE.match(text)] if match}
+named |= set(re.findall(r"`([a-z][a-z0-9-]+)`", table))
+
+parser = archive_cli.build_parser()
+subcommands = next(action for action in parser._actions if isinstance(action, argparse._SubParsersAction))
+choices = set(subcommands.choices)
+unknown = sorted(name for name in named if name not in choices)
+if unknown:
+    raise RuntimeError("installed_a13_guidance_names_unknown_command:" + ",".join(unknown))
+
+
+def run(argv):
+    stdout, stderr = io.StringIO(), io.StringIO()
+    with redirect_stdout(stdout), redirect_stderr(stderr):
+        code = archive_cli.main(argv)
+    return code, json.loads(stdout.getvalue()), stdout.getvalue() + stderr.getvalue()
+
+
+code, capabilities, _ = run(["capabilities", "--machine", "--format", "json"])
+if code != 0 or capabilities.get("ok") is not True:
+    raise RuntimeError("installed_a13_capabilities_failed")
+if capabilities["summary"]["version"] != __version__:
+    raise RuntimeError("installed_a13_capabilities_version_mismatch")
+canonical_of = {}
+runnable = set()
+for command in capabilities["data"]["commands"]:
+    canonical_of[command["name"]] = command["name"]
+    for alias in command["aliases"]:
+        canonical_of[alias] = command["name"]
+    if command.get("runnable") is True:
+        runnable.add(command["name"])
+rows = {row["canonical_path"]: row for row in capabilities["data"]["capability_availability"]["rows"]}
+not_runnable = sorted(name for name in named if canonical_of.get(name) not in runnable)
+if not_runnable:
+    raise RuntimeError("installed_a13_guidance_names_not_runnable_command")
+unavailable_dry_run = sorted(
+    name for name in named
+    if isinstance((rows.get(canonical_of[name]) or {}).get("dry_run"), dict)
+    and rows[canonical_of[name]]["dry_run"].get("state") == "available"
+)
+
+code, start, text = run(["ai-start-here", str(ROOT), "--dry-run", "--format", "json"])
+if code != 0 or start.get("ok") is not True:
+    raise RuntimeError("installed_a13_start_here_failed")
+if start["summary"].get("runtime_context_included") is not True or "runtime_guidance_readiness" not in start:
+    raise RuntimeError("installed_a13_start_here_guidance_missing")
+def _strings(value):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _strings(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _strings(item)
+
+
+recommended = {
+    match.group(1)
+    for text in _strings(start)
+    if ("<archive-root>" in text or " --" in text)
+    for match in [COMMAND_RE.match(text)] if match
+}
+recommended_unknown = sorted(name for name in recommended if name not in choices)
+if recommended_unknown:
+    raise RuntimeError("installed_a13_start_here_names_unknown_command:" + ",".join(recommended_unknown))
+if str(ROOT) in text or str(ARCHIVE_TEMPLATE) in text:
+    raise RuntimeError("installed_a13_path_echoed")
+
+print(json.dumps({
+    "ok": True, "schema": "wom-kit/installed-a13-guidance-flow-smoke/v0.1",
+    "entrypoint_route": "installed_archive_cli_main", "package_version": __version__,
+    "capabilities_version_matches_package": True, "source_checkout_visible": False,
+    "skill_reference_count": len(references), "guidance_named_command_count": len(named),
+    "unknown_guidance_command_count": 0, "not_runnable_guidance_command_count": 0,
+    "dry_run_available_guidance_command_count": len(unavailable_dry_run),
+    "start_here_named_command_count": len(recommended), "start_here_unknown_command_count": 0,
+    "absolute_paths_echoed": False,
+}, sort_keys=True))
+"""
+
+
+def _check_installed_a13_guidance_flow(
+    python: Path,
+    fixture_root: Path,
+    archive_template: Path,
+    *,
+    cwd: Path,
+    expected_package_version: str,
+) -> dict[str, Any]:
+    """Every command the packaged helper-AI guidance names exists in the same installed version."""
+
+    stdout = _run_installed_entrypoint(
+        [str(python), "-I", "-c", INSTALLED_A13_GUIDANCE_SMOKE_SCRIPT, str(fixture_root), str(archive_template)],
+        cwd=cwd,
+        label="installed A13 helper-AI guidance flow",
+    )
+    evidence = _parse_entrypoint_json_object(stdout, label="Installed A13 guidance flow output")
+    fixed = {
+        "ok": True, "schema": INSTALLED_A13_GUIDANCE_SMOKE_SCHEMA, "entrypoint_route": "installed_archive_cli_main",
+        "package_version": expected_package_version, "capabilities_version_matches_package": True,
+        "source_checkout_visible": False, "unknown_guidance_command_count": 0,
+        "not_runnable_guidance_command_count": 0, "start_here_unknown_command_count": 0,
+        "absolute_paths_echoed": False,
+    }
+    counted = ("skill_reference_count", "guidance_named_command_count", "start_here_named_command_count",
+               "dry_run_available_guidance_command_count")
+    if (
+        {key: evidence.get(key) for key in fixed} != fixed
+        or set(evidence) != set(fixed) | set(counted)
+        or any(type(evidence.get(key)) is not int or evidence[key] <= 0 for key in counted)
+    ):
+        raise WheelCheckError(
+            "Installed A13 guidance flow did not prove that every command the packaged "
+            "helper-AI guidance and start-here surface name exists in the same installed version."
+        )
+    return evidence
 
 
 def _check_installed_a17_name_discovery(
@@ -5803,6 +5959,13 @@ def check_wheel(
             source_copy / "examples" / "fake-life-archive",
             cwd=temp_root,
         )
+        a13_guidance_evidence = _check_installed_a13_guidance_flow(
+            python,
+            temp_root / "a13-guidance-archive",
+            source_copy / "examples" / "fake-life-archive",
+            cwd=temp_root,
+            expected_package_version=package_version,
+        )
         v0411_truth_evidence = _check_installed_v0411_truth_contracts(
             python,
             temp_root / "v0411-truth-archive",
@@ -5841,6 +6004,7 @@ def check_wheel(
             v049_workflow_evidence=v049_workflow_evidence,
             v0410_batch_workflow_evidence=v0410_batch_workflow_evidence,
             a17_name_evidence=a17_name_evidence,
+            a13_guidance_evidence=a13_guidance_evidence,
             v0411_truth_evidence=v0411_truth_evidence,
             v0414_recovery_evidence=v0414_recovery_evidence,
             wheel_filename=wheel.name,
