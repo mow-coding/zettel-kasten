@@ -277,7 +277,7 @@ def _context(material, reviewer_claim):
     return ExactHumanApprovalContext(operation=ExactHumanApprovalOperation.draft_disposition,
         archive_identity_sha256=exact_human_approval_archive_identity_sha256(material["archive_id"]),
         plan_sha256=digest, target_binding_sha256=_sha(_canonical([material["zettel_id"], material["draft_sha256"], digest])),
-        reviewer_claim=reviewer_claim, review_binding_codes=("draft_content", "previous_disposition", "disposition_only"))
+        reviewer_claim=reviewer_claim, review_binding_codes=("disposition_only", "draft_content", "previous_disposition"))
 
 
 def _resumed_material(root, value, identity, expected_plan_sha256, reviewer_claim):
