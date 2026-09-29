@@ -228,6 +228,7 @@ class ExactHumanApprovalOperation(Enum):
     mint_zet_batch = "mint_zet_batch"
     retire_draft_batch = "retire_draft_batch"
     draft_revision_write = "draft_revision_write"
+    draft_disposition = "draft_disposition"
     object_storage_remote_cleanup = "object_storage_remote_cleanup"
     object_storage_open = "object_storage_open"
     operation_control_cancel = "operation_control_cancel"
@@ -601,6 +602,7 @@ _OPERATION_LABELS = {
     ExactHumanApprovalOperation.mint_zet_batch: "zet 배치 발행",
     ExactHumanApprovalOperation.retire_draft_batch: "발행된 초안 배치 퇴역",
     ExactHumanApprovalOperation.draft_revision_write: "미발행 zet 의미 개정",
+    ExactHumanApprovalOperation.draft_disposition: "초안 보류 상태 기록",
     ExactHumanApprovalOperation.object_storage_remote_cleanup: "확정된 원격 임시물 정리",
     ExactHumanApprovalOperation.object_storage_open: "원격 파일 열기",
     ExactHumanApprovalOperation.operation_control_cancel: "진행 중인 작업 중단 요청",
@@ -745,6 +747,7 @@ _OPERATION_QUESTIONS = {
         "발행을 마친 이 초안 배치 전체를 퇴역시킬까요?"
     ),
     ExactHumanApprovalOperation.draft_revision_write: "검토한 제안으로 이 미발행 zet를 개정할까요?",
+    ExactHumanApprovalOperation.draft_disposition: "검토한 초안의 보류 이유와 조건을 기록할까요?",
     ExactHumanApprovalOperation.object_storage_remote_cleanup: "확정한 원격 임시물 정리 계획을 실행할까요?",
     ExactHumanApprovalOperation.object_storage_open: "이 원격 파일의 임시 읽기 링크를 발급할까요?",
     ExactHumanApprovalOperation.operation_control_cancel: "이 실행에 안전한 중단을 요청할까요?",
@@ -1035,6 +1038,9 @@ _OPERATION_SUMMARIES = {
     ExactHumanApprovalOperation.draft_revision_write: (
         "검토한 제안으로 미발행 zet 하나를 수정하고 이전 본문과 수정 영수증을 보존합니다. 발행은 별도입니다."
     ),
+    ExactHumanApprovalOperation.draft_disposition: (
+        "초안의 보류 이유와 충족 조건, 다음 행동을 기록합니다. 초안을 자동 발행하거나 삭제하지 않습니다."
+    ),
     ExactHumanApprovalOperation.object_storage_remote_cleanup: (
         "정확한 원격 목록과 보존 근거를 확인하고 확정된 임시물만 즉시 삭제합니다. 삭제 이력과 실제 부재를 기록합니다."
     ),
@@ -1234,6 +1240,7 @@ _OPERATION_APPROVE_BUTTONS = {
     ExactHumanApprovalOperation.mint_zet_batch: "배치 발행",
     ExactHumanApprovalOperation.retire_draft_batch: "배치 퇴역",
     ExactHumanApprovalOperation.draft_revision_write: "개정 실행",
+    ExactHumanApprovalOperation.draft_disposition: "상태 기록",
     ExactHumanApprovalOperation.object_storage_remote_cleanup: "확정 계획 실행",
     ExactHumanApprovalOperation.object_storage_open: "파일 열기",
     ExactHumanApprovalOperation.operation_control_cancel: "중단 요청",

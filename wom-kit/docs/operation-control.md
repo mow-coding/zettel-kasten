@@ -198,21 +198,37 @@ The journal hash chain detects torn records and ordinary drift. It is not a
 MAC, signature, authority receipt, or defense against a hostile process running
 as the same local user.
 
-## Deliberately unsupported in this version
+## Cooperative cancellation and command-specific recovery
+
+Read `status` for the exact operation reference first. For a supported operation,
+use its reported control digest and the current applicable approval:
 
 ```powershell
-archive operation-control <project-or-archive-root> `
+archive operation-control <archive-root> `
   --operation-ref op:sha256:<digest> `
-  --action cancel --approve --format json
+  --action cancel --approve --reviewed-by person:owner `
+  --expected-control-digest sha256:<control-digest> --format json
 ```
 
-This always returns nonzero with `operation_cancel_not_supported`,
-`cancel_supported: false`, `cancel_requested: false`, and `writes: false`.
-There is no cooperative cancel request, force kill, lock deletion, or rollback
-trigger. Generic `operation-control` `resume_supported` is always false. The
-separate `project-version-update --resume` command is the only updater-specific
-exception: it reauthenticates exact update evidence and never turns this
-read-only view into write authority.
+The request is authenticated and bound to that run. Request acceptance is not
+confirmation that the worker has stopped. `cancel_requested` and
+`cancel_acknowledged` report separate states; wait for the independently saved
+terminal result. The worker finishes and records the current safe unit before
+acknowledging cancellation. It does not kill a process, erase a lock, undo an
+effect, or assume that a timed-out remote request did nothing. Ctrl-C uses the
+same cooperative checkpoints in supported command modes.
+
+Capture and the connected storage/cleanup writers expose this support through
+`control.cancel_supported`. See [storage cancellation boundaries](storage-operation-cancellation.md)
+for the exact modes, effect boundaries and recovery requirements. Unsupported
+operation kinds still return `operation_cancel_not_supported` without a cancel
+request. In particular, storage cancellation support does not enable generic
+project-update cancellation or formal-adoption cancellation.
+
+Generic `operation-control` resume remains unavailable. Resume uses the original
+command's authenticated plan and recovery identifiers. Status is a read-only
+observation and never creates a grant, changes the original selection, or
+reuses an expired approval.
 
 There are no aliases, MCP method, daemon, queue, background launcher, or
 operation-owned process supervisor in this release.

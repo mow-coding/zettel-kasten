@@ -69,3 +69,13 @@ disposable; hold it for further supported review rather than infer from its
 name. Prepare the exact classification file yourself from evidence instead of
 asking the user to label each object. Do not assert exclusive-writer control
 without actual management evidence.
+
+Use `object-storage-open` to open a temporary read link. Keep links and credential
+values out of ordinary logs and zet bodies; opening is not a backup verification.
+
+Upload, local-only bytes preservation (`object-storage-adopt-existing
+--preserve-local-only`), offload, restore and activity cleanup retain an early
+operation reference and a complete result artifact. After interruption inspect
+that run and follow the saved plan/claim recovery route. Do not report all objects
+preserved from a partial result, or re-upload a terminally verified object merely
+because the parent command was interrupted.

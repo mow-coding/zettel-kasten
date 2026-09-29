@@ -843,11 +843,12 @@ def _field_value(
         if type(title) is not str:
             raise ValueError("title")
         return title.encode("utf-8")
-    if spec.field_ref == "frontmatter.assets":
-        assets = frontmatter.get("assets")
-        if type(assets) is not list:
-            raise ValueError("assets")
-        return _canonical_bytes(assets)
+    if spec.field_ref in {"frontmatter.assets", "frontmatter.edges"}:
+        key = spec.field_ref.split(".", 1)[1]
+        values = frontmatter.get(key)
+        if type(values) is not list:
+            raise ValueError("list field")
+        return _canonical_bytes(values)
     if spec.field_ref == _MARKER_FIELD:
         return _marker_projection_for_spec(body, spec)
     raise ValueError("field")
@@ -1203,14 +1204,15 @@ def _zettel_replacement(
         except UnicodeError:
             raise ValueError("title") from None
         return archive_services.zet_title_remap_candidate_bytes(raw, title)
-    if spec.field_ref == "frontmatter.assets":
+    if spec.field_ref in {"frontmatter.assets", "frontmatter.edges"}:
+        key = spec.field_ref.split(".", 1)[1]
         try:
             assets = json.loads(value.decode("ascii"))
         except (UnicodeError, json.JSONDecodeError):
             raise ValueError("assets") from None
         if type(assets) is not list or _canonical_bytes(assets) != value:
             raise ValueError("assets")
-        return _frontmatter_value_replacement(raw, "assets", assets)
+        return _frontmatter_value_replacement(raw, key, assets)
     if spec.field_ref == _MARKER_FIELD:
         if spec.marker_pre_body is None or spec.marker_post_body is None:
             raise ValueError("marker")
@@ -1323,6 +1325,7 @@ class _Writer(_Boundary):
     ) -> None:
         super().__init__(plan)
         self.index_lifecycle = index_lifecycle
+        self.plan_domain = plan.domain
         self.session_guard = session_guard or (lambda: None)
         self.document_images = {}
         if plan.session_context is not None:
@@ -1349,6 +1352,9 @@ class _Writer(_Boundary):
             raise ValueError("payload")
         if target_kind == "zettel":
             path, raw, _frontmatter, _body = _zettel_snapshot(self.root, spec)
+            if self.plan_domain == "relation_batch" and value == spec.post_value:
+                from .relation_batch import verify_spec_basis
+                verify_spec_basis(self.root, spec)
             replacement_bytes = _zettel_replacement(raw, spec, value)
             if target_ref in self.document_images:
                 from .local_recovery_document_images import _assert_replacement
@@ -1498,6 +1504,11 @@ def local_recovery_observe_target_binding(plan: LocalRecoveryPlan, *, mode: str,
     def observe() -> str:
         if held is not None:
             held.verify_held()
+        if mode == "apply" and plan.domain == "relation_batch":
+            from .relation_batch import verify_spec_basis
+            for spec in plan.specs:
+                if spec.field_ref == "frontmatter.edges":
+                    verify_spec_basis(plan.archive_root, spec)
         if verify_local_recovery_state(plan, state=starting_state).get("all_match") is not True:
             raise _fail("local_recovery_plan_changed")
         return _binding(plan, mode=mode).target_binding_sha256

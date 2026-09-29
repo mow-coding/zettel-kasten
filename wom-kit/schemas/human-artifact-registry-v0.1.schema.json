@@ -266,11 +266,11 @@
           "pattern": "^approval_[0-9a-f]{32}$"
         },
         "operation": {
-          "enum": ["register_project_root", "transition_artifact"]
+          "enum": ["register_project_root", "transition_artifact", "transition_batch"]
         },
         "target_id": {
           "type": "string",
-          "pattern": "^(har_root|har_artifact)_[0-9a-f]{32}$"
+          "pattern": "^((har_root|har_artifact)_[0-9a-f]{32}|har_batch_[0-9a-f]{64})$"
         },
         "context_sha256": {"$ref": "#/$defs/sha256"},
         "approval_authority_sha256": {"$ref": "#/$defs/sha256"},

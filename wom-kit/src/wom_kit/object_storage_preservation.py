@@ -2511,6 +2511,8 @@ class _Writer:
             or value != spec.receipt_token
         ):
             raise ValueError("write boundary")
+        from .operation_cancellation import checkpoint
+        checkpoint()
         # This legacy preservation core holds object leases then the archive
         # writer lock for its complete write. Never reacquire either here.
         _assert_disposal_available(self.plan, specs=(spec,))
@@ -2530,6 +2532,7 @@ class _Writer:
             if evidence.state != terminal["remote_state"]:
                 raise _fail("object_storage_preservation_remote_conflict")
             _create_terminal_receipt(self.plan, spec, self.ledger)
+            checkpoint()
             return
 
         before = self.query.query(
@@ -2650,6 +2653,9 @@ class _Writer:
         # fsync succeeds do we create the dynamic immutable receipt.  The exact
         # verifier independently re-queries the remote before checkpointing.
         _create_terminal_receipt(self.plan, spec, self.ledger)
+        # Complete the whole provider mutation (including multipart cleanup),
+        # ledger and receipt before acknowledging a cooperative stop.
+        checkpoint()
 
 
 def _approval_binding(plan: ObjectStorageBytesPreservationPlan) -> ExactOperationApprovalBinding:
@@ -3130,16 +3136,24 @@ def _apply_with_store(
         raise _fail("object_storage_preservation_no_writes")
     _assert_disposal_available(plan)
     payloads, writer, verifier, ledger = _execution_adapters(plan, transport)
-    core = apply_exact_operation(
-        plan.manifest,
-        payloads=payloads,
-        writer=writer,
-        verifier=verifier,
-        checkpoint_store=checkpoints,
-        approval_authority=authority,
-        resume=resume,
-        progress_hook=progress_hook,
-    )
+    try:
+        core = apply_exact_operation(
+            plan.manifest,
+            payloads=payloads,
+            writer=writer,
+            verifier=verifier,
+            checkpoint_store=checkpoints,
+            approval_authority=authority,
+            resume=resume,
+            progress_hook=progress_hook,
+        )
+    except ExactOperationManifestError as error:
+        from .storage_cancellation import is_cancelled, exact_result
+        if not is_cancelled(error):
+            raise
+        receipt_count = sum(_read_terminal_receipt(plan, spec, ledger) is not None for spec in plan.specs)
+        return exact_result(schema=RESULT_SCHEMA, manifest=plan.manifest, authority=authority,
+                            checkpoints=checkpoints, durable_receipt_count=receipt_count)
     durable = _durable_result_counts(plan, ledger)
     classifications = durable["classification_counts"]
     review_count = int(classifications["review_required"])

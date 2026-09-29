@@ -50,14 +50,6 @@ class _MemoryKey:
             key[:] = b"\0" * len(key)
 
 
-class _ReadyClaim:
-    def assert_ready_for_context(self, _context):
-        return {"ok": True}
-
-    def close(self):
-        return None
-
-
 def _context() -> ExactHumanApprovalContext:
     return ExactHumanApprovalContext(
         operation=ExactHumanApprovalOperation.project_version_update,
@@ -71,16 +63,28 @@ def _context() -> ExactHumanApprovalContext:
 
 
 class CausePropagationTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="wom-cause-claim-")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name) / "archive"
+        shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", self.root)
+        self.context = _context()
+        self.claim = _claim_exact_human_approval_core(
+            self.root, self.context,
+            _ExactHumanApprovalDecision(
+                approved=True, synthetic_acknowledged=False,
+                reason_code="exact_human_approval_approved",
+                plan_sha256=SHA_B, target_binding_sha256=SHA_C,
+            ), bytearray(AUTH_KEY),
+        )
+        self.addCleanup(self.claim.close)
+
     def test_writer_failure_carries_the_fixed_inner_code_into_the_cli_projection(self) -> None:
         def writer(_claim):
             raise archive_services.ArchiveServiceError("project_version_update_approved_snapshot_unavailable")
 
-        # This unit test injects a minimal claim. The production cancellation
-        # scope correctly accepts only authenticated claims; bypass that seam
-        # here to exercise the writer-error projection itself.
-        with patch("wom_kit.operation_cancellation.claim_scope", side_effect=lambda _claim: nullcontext()):
-            with self.assertRaises(workflow.ExactHumanApprovalWorkflowError) as raised:
-                workflow._run_started_claim_writer(object(), writer, _ReadyClaim())
+        with self.assertRaises(workflow.ExactHumanApprovalWorkflowError) as raised:
+            workflow._run_started_claim_writer(self.context, writer, self.claim)
         error = raised.exception
         self.assertEqual(error.code, "exact_human_approval_state_unknown")
         self.assertEqual(error.cause_code, "project_version_update_approved_snapshot_unavailable")
@@ -95,9 +99,8 @@ class CausePropagationTests(unittest.TestCase):
         def writer(_claim):
             raise archive_services.ArchiveServiceError("C:\\Users\\<user>\\private path leaked")
 
-        with patch("wom_kit.operation_cancellation.claim_scope", side_effect=lambda _claim: nullcontext()):
-            with self.assertRaises(workflow.ExactHumanApprovalWorkflowError) as raised:
-                workflow._run_started_claim_writer(object(), writer, _ReadyClaim())
+        with self.assertRaises(workflow.ExactHumanApprovalWorkflowError) as raised:
+            workflow._run_started_claim_writer(self.context, writer, self.claim)
         self.assertIsNone(raised.exception.cause_code)
         foreign = workflow.ExactHumanApprovalWorkflowError(
             "exact_human_approval_state_unknown", cause_code="some_other_family_code", cause_stage="domain_writer"

@@ -60,7 +60,7 @@ archive operation-control <exact-starting-root> --operation-ref op:sha256:<diges
 archive operation-control <exact-starting-root> --operation-ref op:sha256:<digest> --action recovery-plan --dry-run --format json
 ```
 
-A wait deadline is neutral; generic `operation-control` cancel/resume is unsupported.
+A wait deadline is neutral. Generic resume and project-update cancellation remain unsupported. Archive capture/storage operations report mode-specific cooperative cancellation through `control.cancel_supported`; follow the original command recovery route.
 Approved project-update mutation, same-version repair, and mutation-bearing resume
 are Windows-only. POSIX supports preview/read-only inspection and fails closed
 without writing. The authenticated, identifier-free `project-version-update

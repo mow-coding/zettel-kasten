@@ -52,7 +52,7 @@ class V03314ReleaseDocsTests(unittest.TestCase):
             "operation_ref",
             "operation-control --action status --dry-run",
             "bounded",
-            "Cancel and resume are unsupported",
+            "Generic resume and project-update cancellation are unsupported",  # 2026-09-29: cancel exists for supported operations
             "do not start a duplicate writer",
         ):
             with self.subTest(token=token):

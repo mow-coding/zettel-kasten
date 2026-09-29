@@ -1836,11 +1836,18 @@ class _Writer:
             spec = self.by_target.get(target_ref)
             if spec is None or field_ref != "terminal_state_token" or value != spec.receipt_token:
                 raise ValueError("write boundary")
+            from .operation_cancellation import checkpoint
+            checkpoint()
             self._write_object(spec, heartbeat)
+            # A completed provider request is recorded in the private ledger
+            # before stopping. Formal receipts are published by the later batch.
+            checkpoint()
             return
         if target_kind == BATCH_TARGET_KIND and target_ref == MANIFEST_TARGET_REF and field_ref == "remote_locations":
             if value != _manifest_batch_token(self.plan.specs):
                 raise ValueError("write boundary")
+            from .operation_cancellation import checkpoint
+            checkpoint()
             from contextlib import nullcontext
             commit = (exact_operation_writer_lock(self.plan.archive_root, timeout_seconds=30, heartbeat=heartbeat)
                       if self.plan.target_preimages is not None else nullcontext())
@@ -1850,6 +1857,7 @@ class _Writer:
                 )
             self.manifest_update_count += changed
             self.receipts_created_count += receipts
+            checkpoint()
             return
         raise ValueError("write boundary")
 
@@ -2044,16 +2052,23 @@ def _apply_with_store(
     verifier = _Verifier(plan, writer.query, writer.ledger)
     if _runner_entered is not None:
         _runner_entered[0] = True
-    core = apply_exact_operation(
-        plan.manifest,
-        payloads=_Payloads(plan),
-        writer=writer,
-        verifier=verifier,
-        checkpoint_store=checkpoints,
-        approval_authority=authority,
-        resume=resume,
-        progress_hook=progress_hook,
-    )
+    try:
+        core = apply_exact_operation(
+            plan.manifest, payloads=_Payloads(plan), writer=writer, verifier=verifier,
+            checkpoint_store=checkpoints, approval_authority=authority,
+            resume=resume, progress_hook=progress_hook,
+        )
+    except ExactOperationManifestError as error:
+        from .storage_cancellation import is_cancelled, exact_result
+        if not is_cancelled(error):
+            raise
+        result = exact_result(schema=RESULT_SCHEMA, manifest=plan.manifest, authority=authority,
+            checkpoints=checkpoints, durable_receipt_count=sum(_read_receipt(plan, spec) is not None for spec in plan.specs))
+        result.update(durable_terminal_ledger_count=sum(writer.ledger.terminal_for(spec) is not None for spec in plan.specs),
+            manifest_location_updates=writer.manifest_update_count, receipts_created_count=writer.receipts_created_count,
+            local_deletion_performed=False, remote_object_deleted=False, existing_remote_copy_overwritten=False,
+            offload_handoff=None)
+        return result
     durable = _durable_result_counts(plan, writer.ledger)
     counts = durable["classification_counts"]
     review_count = int(counts[STATUS_REVIEW_REQUIRED])

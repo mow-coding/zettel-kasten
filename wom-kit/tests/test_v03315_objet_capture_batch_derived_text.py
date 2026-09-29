@@ -43,6 +43,15 @@ class ObjetCaptureBatchDerivedTextTests(unittest.TestCase):
         self.addCleanup(derived_register.stop)
         self.addCleanup(batch_apply.stop)
 
+    def _tracked_archive_root(self) -> Path:
+        # --approve records its operation journal and result artifact in the
+        # archive (letter 176), so approve-path CLI tests need a real root.
+        temporary = tempfile.TemporaryDirectory(prefix="wom-capture-cli-")
+        self.addCleanup(temporary.cleanup)
+        target = Path(temporary.name) / "archive"
+        shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", target)
+        return target
+
     def fake_archive(self, target: Path) -> Path:
         shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", target)
         (target / ".wom-sandbox").write_text(
@@ -2327,7 +2336,7 @@ class ObjetCaptureBatchDerivedTextTests(unittest.TestCase):
             approve=True,
             reviewed_by="person:letter128",
             expected_plan_sha256="a" * 64,
-            archive_root="unused",
+            archive_root=str(self._tracked_archive_root()),
             manifest="unused.json",
             format="text",
             progress=False,
@@ -2400,7 +2409,7 @@ class ObjetCaptureBatchDerivedTextTests(unittest.TestCase):
             approve=True,
             reviewed_by="person:letter128",
             expected_plan_sha256="c" * 64,
-            archive_root="unused",
+            archive_root=str(self._tracked_archive_root()),
             manifest="unused.json",
             format="json",
             progress=False,
@@ -2421,7 +2430,7 @@ class ObjetCaptureBatchDerivedTextTests(unittest.TestCase):
             mock.patch.object(
                 archive_cli.objet_capture_batch_exact,
                 "execute_objet_capture_batch",
-                return_value=failed,
+                return_value=dict(failed),
             ) as exact_execute,
             mock.patch.object(sys, "stdout", stdout),
             mock.patch.object(sys, "stderr", stderr),
@@ -2429,7 +2438,10 @@ class ObjetCaptureBatchDerivedTextTests(unittest.TestCase):
             return_code = archive_cli.command_objet_capture_batch(args)
         self.assertEqual(return_code, 1)
         self.assertEqual(stderr.getvalue(), "")
-        self.assertEqual(json.loads(stdout.getvalue()), failed)
+        projected = json.loads(stdout.getvalue())
+        self.assertRegex(projected.pop("operation_ref"), r"^op:sha256:[0-9a-f]{64}$")
+        self.assertIsInstance(projected.pop("operation"), dict)
+        self.assertEqual(projected, failed)
         exact_plan.assert_called_once()
         exact_execute.assert_called_once_with(
             plan,

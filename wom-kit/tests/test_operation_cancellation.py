@@ -19,8 +19,8 @@ class CancellationTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.journal = control.OperationRunJournal.prepare(self.root,
-            command="object-storage-cleanup", run_id="c" * 32,
-            output_relative=".wom-scratch/diagnostics/cleanup.json")
+            command="objet-capture-batch", run_id="c" * 32,
+            output_relative=".wom-scratch/diagnostics/capture.json")
         self.addCleanup(self.journal.close)
         self.keys = Keys()
 
@@ -52,7 +52,7 @@ class CancellationTests(unittest.TestCase):
     def test_different_execution_does_not_consume_request(self):
         self.request()
         second = control.OperationRunJournal.prepare(self.root,
-            command="object-storage-cleanup", run_id="d" * 32,
+            command="objet-capture-batch", run_id="d" * 32,
             output_relative=".wom-scratch/diagnostics/second.json")
         try:
             with cancel.observing(second, provider=self.keys):

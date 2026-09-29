@@ -1130,8 +1130,10 @@ if (
     or capture_approval_count != 1
     or native.calls != 2
     or write_keys.calls != 2
-    or read_keys.calls != 3
-    or production_key_factory_calls != 3
+    # Letter 176 recovery signs capture checkpoints and results with the same
+    # approval key, so reads rise while dialogs stay one per approval.
+    or read_keys.calls != 8
+    or production_key_factory_calls != 8
     or len(claims) != 2
     or any(claim.get("status") != "succeeded" for claim in claims)
     or claim_operations != {"source_intake_batch", "objet_capture_batch"}

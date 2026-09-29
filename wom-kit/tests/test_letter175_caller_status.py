@@ -43,6 +43,9 @@ class CallerStatusTests(unittest.TestCase):
             missing = self.diagnose()["caller_status"]
             self.assertEqual(missing["caller"]["reason_code"], "work_session_presenter_missing")
             self.assertEqual(missing["recorded_permission"]["mode"], "allow_all")
+            self.assertFalse(missing["caller"]["grant_expired"])
+            self.assertEqual(missing["caller"]["presenter_state"], "missing")
+            self.assertIn("set-permission-mode", missing["caller"]["recovery_steps"][0]["command"])
         self.assertEqual(self.native.calls, dialogs)
         self.assertEqual(before, {str(p.relative_to(self.root)): p.read_bytes() for p in self.root.rglob("*") if p.is_file()})
 
@@ -50,7 +53,15 @@ class CallerStatusTests(unittest.TestCase):
         task = self.establish("context")
         self.set_mode(task, "allow_all")
         with patch.dict(os.environ, dict.fromkeys(permission.CONTEXT_ENV, "")):
-            self.assertEqual(self.diagnose(ok=False)["reason_code"], "work_session_caller_context_missing")
+            result = self.diagnose(ok=False)
+            self.assertEqual(result["reason_code"], "work_session_caller_context_missing")
+            self.assertEqual(result["context"]["state"], "missing")
+            self.assertFalse(result["context"]["missing_context_proves_grant_expired"])
+            self.assertIn("request-init", result["recovery_steps"][0]["if_original_context_unavailable"])
+        with patch.dict(os.environ, {**dict.fromkeys(permission.CONTEXT_ENV, ""), permission.CONTEXT_ENV[0]: "private-invalid-value"}):
+            result = self.diagnose(ok=False)
+            self.assertEqual(result["context"]["state"], "incomplete")
+            self.assertNotIn("private-invalid-value", json.dumps(result))
 
     def test_caller_flag_is_inspect_only(self):
         result = self.call("work-session", "--action", "list", "--caller-status", ok=False)

@@ -304,7 +304,7 @@ class Letter137AdditionalPublicCliBoundaryTests(_CliAssertions):
             "parcel": ["pack"],
         }
         alias_groups = {key: value for key, value in alias_groups.items() if key not in REMOVED_COMMANDS}  # deleted in v0.4.40 or v0.4.44
-        self.assertEqual(len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS), 5)  # 2026-09-26 coverage audit
+        self.assertEqual(len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS), 5)  # 2026-09-29 feedback integration (A03-A19 commands)
         for exact_batch_command in (
             "source-intake-batch",
             "objet-capture-batch",

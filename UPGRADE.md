@@ -1,5 +1,18 @@
 # Upgrade Guide
 
+## v0.4.51 feedback-completion integration
+
+After publication, use the official project update flow for an existing pinned installation. Capture recovery, cooperative cancellation, caller-status guidance, new review commands and PAT-only provider intake are added; no command was removed. Installing the update alone does not change a customer archive.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0451-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.51/wom_kit-0.4.51-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
 ## v0.4.50 private review before remote cleanup
 
 After publication, use the official project update flow for an existing pinned installation. WOM can privately inspect verified remote content, combine it with creation purpose and current references, and select only confirmed temporary objects for exact-key cleanup. A truncated or unclear sample is held for further review. Installing the update alone does not inspect or delete a customer bucket. Other historical feedback remains open.

@@ -147929,10 +147929,11 @@ class _S3CompatibleTransport:
         return None, None, False, None
 
     def inspect_object(self, *, key: str, max_prefix_bytes: int = 4096) -> dict[str, Any]:
-        """Verify one whole object and retain a small private content prefix.
+        """Verify one whole remote object and retain a small private content prefix.
 
-        The prefix comes from the same GET used for whole-object SHA-256
-        verification, so inspection does not download the object twice.
+        This is for an AI-assisted disposal inventory, not a public receipt or
+        log. The content prefix comes from the same GET used for whole-object
+        SHA-256 verification, so inventory does not download the object twice.
         """
         if type(max_prefix_bytes) is not int or not 0 < max_prefix_bytes <= 4096:
             raise ValueError("invalid private inspection limit")
@@ -154215,11 +154216,13 @@ def index_archive(
         rebuild_lock.__enter__()
     except OSError:
         raise ArchiveServiceError("archive_index_mutation_in_progress") from None
+    title_basis = {}
     try:
         result = _index_archive_locked(
             root,
             progress_callback=progress_callback,
             initial_progress_emitted=True,
+            _title_diagnostic_capture=title_basis,
         )
     finally:
         rebuild_lock.__exit__(None, None, None)
@@ -154228,7 +154231,67 @@ def index_archive(
         # mutation lease. Cache failure does not invalidate the live index.
         from .search_snapshots import publish
         result["search_snapshot"] = publish(root)
+        if result["search_snapshot"].get("ok"):
+            from . import relation_batch, title_diagnostics
+            source_snapshot = result["search_snapshot"]["snapshot"]
+            result["relation_snapshot"] = _derived_snapshot_or_reason(
+                lambda: relation_batch.publish(root, source_snapshot=source_snapshot), "relation_generation_failed")
+            result["title_snapshot"] = _derived_snapshot_or_reason(
+                lambda: title_diagnostics.publish(root, source_snapshot=source_snapshot), "title_generation_failed")
+    if result.get("index_rebuilt") and "title_snapshot" not in result and title_basis:
+        from . import title_diagnostics
+        result["title_snapshot"] = _derived_snapshot_or_reason(
+            lambda: title_diagnostics.publish(root,
+                index_rows=title_basis["rows"], index_generation=title_basis["generation"],
+                index_diagnostics=title_basis["quarantined"]), "title_generation_failed")
     return result
+
+
+def _publish_derived_generation_file(path: Path, value: bytes) -> None:
+    """Create one content-addressed derived-cache file; never replace one.
+
+    On Windows the hard-link publication of ``_write_bytes_create_if_absent``
+    leaves the final file's link count, and so its ChangeTime, to settle only
+    when every other handle on the temporary name closes. A scanner that
+    briefly opens the new temporary file therefore changes the published file
+    moments later, which Doctor correctly reports as a stale snapshot. A
+    rename moves the complete temporary file into place without a second
+    link, and Windows refuses it when the name already exists.
+    """
+
+    if os.name != "nt":
+        _write_bytes_create_if_absent(path, value)
+        return
+    temporary = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
+    try:
+        with open(temporary, "xb") as stream:
+            stream.write(value)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.rename(temporary, path)
+    except BaseException:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+
+def _derived_snapshot_or_reason(publish, fallback: str) -> dict[str, Any]:
+    """Derived relation/title snapshots never invalidate the live index.
+
+    Like the search snapshot, a failed derivation (for example duplicate
+    canonical ids the doctor reports separately) is returned as a fixed
+    reason instead of failing the index rebuild that already succeeded.
+    """
+
+    try:
+        return publish()
+    except (ArchiveServiceError, OSError, ValueError) as error:
+        code = getattr(error, "code", None) or str(error)
+        if not isinstance(code, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,95}", code):
+            code = fallback
+        return {"ok": False, "reason_code": code}
 
 
 def _mark_archive_index_dirty_while_rebuild_locked(
@@ -154344,6 +154407,7 @@ def _index_archive_locked(
     *,
     progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
     initial_progress_emitted: bool = False,
+    _title_diagnostic_capture: dict | None = None,
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
@@ -154983,6 +155047,11 @@ def _index_archive_locked(
             raise ArchiveServiceError(
                 "archive_index_source_changed_during_rebuild"
             )
+        if _title_diagnostic_capture is not None:
+            _title_diagnostic_capture.update(
+                rows=[dict(zip(("path", "title", "status", "frontmatter_json"), row)) for row in conn.execute(
+                    "SELECT path,title,status,frontmatter_json FROM zettels ORDER BY path")],
+                generation=index_generation, quarantined=list(quarantined_zettels))
         commit_attempted = True
         rebuild_session.validate_and_commit()
     except BaseException as exc:
@@ -165830,7 +165899,18 @@ def _objet_capture_run(
             try:
                 # Phase 1 — original halves, byte-for-byte unchanged in what they write
                 # (publish bytes -> manifest_appender record).
-                for item in items_sorted:
+                for item_index, item in enumerate(items_sorted):
+                    from .operation_cancellation import checkpoint, OperationCancelled
+                    try:
+                        checkpoint()
+                    except OperationCancelled:
+                        aborted = True
+                        for planned in preflight_items[item_index:]:
+                            deferred = copy.deepcopy(planned)
+                            deferred["action"] = "blocked"
+                            deferred["blockers"] = ["operation_cancelled_at_checkpoint"]
+                            item_results.append(deferred)
+                        break
 
                     def manifest_appender(record: dict[str, Any]) -> None:
                         pending_manifest_records.append(record)
@@ -166069,7 +166149,7 @@ def _objet_capture_run(
                 # derive-text does; it must not block unrelated original captures.
                 publication.close()
                 for item, item_result in zip(items_sorted, item_results):
-                    if manifest_index_rebuild_required:
+                    if manifest_index_rebuild_required or aborted:
                         break
                     if "derived_text" not in item:
                         continue
@@ -168071,6 +168151,7 @@ def objet_capture_apply(
     expected_exact_approval_target_binding_sha256: str | None = None,
     exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
     batch_authority: _ExactBatchItemAuthority | None = None,
+    recovery_authority=None,
 ) -> dict[str, Any]:
     try:
         if approval_operation not in (
@@ -168085,6 +168166,12 @@ def objet_capture_apply(
             or approval_operation is not ExactHumanApprovalOperation.objet_capture
         ):
             raise ArchiveServiceError("exact_batch_authority_invalid")
+        if recovery_authority is not None:
+            from .objet_capture_recovery import CaptureRecoveryAuthority
+            if (type(recovery_authority) is not CaptureRecoveryAuthority
+                    or batch_authority is not None
+                    or approval_operation is not ExactHumanApprovalOperation.objet_capture_batch):
+                raise ArchiveServiceError("objet_capture_recovery_authority_invalid")
         _require_exact_human_approval_inputs_before_archive_read(
             claim=exact_human_approval_claim,
             expected_plan_sha256=(
@@ -168125,12 +168212,14 @@ def objet_capture_apply(
                 item_identity_sha256=_objet_capture_item_identity(preview),
             )
         else:
+            binding = (recovery_authority.binding_for(
+                root, selection_path=selection_path, selection_document=selection_document,
+                preview=preview, claim=exact_human_approval_claim, reviewed_by=reviewed_by,
+            ) if recovery_authority is not None else objet_capture_approval_binding(
+                preview, operation=approval_operation))
             approval_receipt = _require_exact_human_operation_approval(
                 root,
-                objet_capture_approval_binding(
-                    preview,
-                    operation=approval_operation,
-                ),
+                binding,
                 reviewer_claim=reviewed_by,
                 expected_plan_sha256=expected_exact_approval_plan_sha256,
                 expected_target_binding_sha256=(

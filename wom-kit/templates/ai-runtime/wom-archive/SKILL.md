@@ -93,9 +93,10 @@ Discard proven disposable temporary files without intake/upload. Retain unknown
 or still-used files without upload/deletion. Names, age and ignore rules alone
 are insufficient. Record reasons in the private request; preserve other
 activities' dependencies. Full access covers child operations without extra
-approval windows. Read [storage-scope.md](references/storage-scope.md) for the
-required classification fields and evidence. Local cleanup never deletes
-already-uploaded remote temporary objects.
+approval windows. Local cleanup never deletes uploaded remote temporary
+objects: classify them from evidence and run exact-key `object-storage-cleanup`
+yourself; leave uncertain or used ones. See
+[storage-scope.md](references/storage-scope.md).
 
 ## Universal Contract
 

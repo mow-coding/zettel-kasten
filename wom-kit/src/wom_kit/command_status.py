@@ -85,6 +85,10 @@ COMPOUND_APPROVAL_FIXED_CLOSED_PLAN_WRITERS: dict[str, str] = {}
 # operator can tell a validation preview from approval authority.
 EXACT_APPROVAL_REOPENED_WRITERS = frozenset({
     "operation-control",
+    "draft-disposition",
+    "human-artifact-inventory",
+    "tiro-content-import",
+    "connection-evidence-import",
     "object-storage-cleanup",
     "object-storage-open",
     "draft-revision-write",

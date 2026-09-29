@@ -68775,6 +68775,12 @@ state:
                 snapshot = value.pop("search_snapshot")
                 self.assertTrue(snapshot["ok"])
                 self.assertRegex(snapshot["snapshot"], r"^[0-9a-f]{64}$")
+                # Relation and title snapshots are published per index generation too.
+                for key in ("relation_snapshot", "title_snapshot"):
+                    published = value.pop(key)
+                    self.assertTrue(published["ok"])
+                    self.assertRegex(published.pop("snapshot_ref"), r"^[0-9a-f]{64}$")
+                    value[key] = published
             self.assertNotEqual(first_result["search_snapshot"]["snapshot"], second_result["search_snapshot"]["snapshot"])
             self.assertEqual(second_without_generation, first_without_generation)
 

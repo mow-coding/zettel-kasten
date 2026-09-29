@@ -5,6 +5,7 @@ import argparse
 import json
 import re
 import subprocess
+import time
 from pathlib import Path
 
 
@@ -45,12 +46,32 @@ def verify(repo: str, commit: str) -> dict:
     raise ValueError("no_successful_exact_tree_pr_evidence")
 
 
+def verify_with_retry(repo: str, commit: str, *, attempts: int = 13,
+                      delay_seconds: float = 15, sleep=time.sleep) -> dict:
+    """Allow GitHub's newly merged PR association to become visible.
+
+    Each attempt repeats the full exact-tree and successful-CI proof. A missing
+    association never becomes evidence by itself, and every other error fails
+    immediately. The default wait is bounded to three minutes.
+    """
+    if attempts < 1 or delay_seconds < 0:
+        raise ValueError("invalid_retry_bounds")
+    for attempt in range(attempts):
+        try:
+            return verify(repo, commit)
+        except ValueError as exc:
+            if str(exc) != "no_successful_exact_tree_pr_evidence" or attempt == attempts - 1:
+                raise
+            sleep(delay_seconds)
+    raise AssertionError("unreachable")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", required=True)
     parser.add_argument("--commit", required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    proof = verify(args.repo, args.commit)
+    proof = verify_with_retry(args.repo, args.commit)
     args.output.write_text(json.dumps(proof, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(proof))

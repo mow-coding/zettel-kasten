@@ -1495,6 +1495,8 @@ class _Writer:
                 raise ValueError("write boundary")
             if value != spec.receipt_token:
                 raise ValueError("write boundary")
+            from .operation_cancellation import checkpoint
+            checkpoint()
             existing = _read_receipt(self.plan, spec)
             if existing is not None:
                 return
@@ -1512,6 +1514,9 @@ class _Writer:
             )
             self.receipts_created_count += 1
             self.status_counts[restore_status] += 1
+            # GET, byte verification, optional create-only promotion and the
+            # immutable receipt are all complete before stopping this attempt.
+            checkpoint()
             return
         if (
             target_kind == "object_storage_restore_manifest_batch"
@@ -1521,12 +1526,15 @@ class _Writer:
             expected = _manifest_batch_token(self.plan.batch_specs)
             if value != expected:
                 raise ValueError("write boundary")
+            from .operation_cancellation import checkpoint
+            checkpoint()
             with exact_operation_writer_lock(self.plan.archive_root, timeout_seconds=30) if self.plan.concurrent else nullcontext():
                 if self.plan.concurrent:
                     _fresh_revalidated(self.plan)
                 self.manifest_update_count += _apply_manifest_batch(
                     self.plan, lifecycle=self.manifest_index_lifecycle
                 )
+            checkpoint()
             return
         raise ValueError("write boundary")
 
@@ -1865,16 +1873,27 @@ def _apply_with_store(
     payloads = _Payloads(plan)
     writer = _Writer(plan, transport)
     verifier = _Verifier(plan)
-    core = apply_exact_operation(
-        plan.manifest,
-        payloads=payloads,
-        writer=writer,
-        verifier=verifier,
-        checkpoint_store=checkpoints,
-        approval_authority=authority,
-        resume=resume,
-        progress_hook=progress_hook,
-    )
+    try:
+        core = apply_exact_operation(
+            plan.manifest,
+            payloads=payloads,
+            writer=writer,
+            verifier=verifier,
+            checkpoint_store=checkpoints,
+            approval_authority=authority,
+            resume=resume,
+            progress_hook=progress_hook,
+        )
+    except ExactOperationManifestError as error:
+        from .storage_cancellation import is_cancelled, exact_result
+        if not is_cancelled(error):
+            raise
+        result = exact_result(schema=RESULT_SCHEMA, manifest=plan.manifest, authority=authority,
+            checkpoints=checkpoints, durable_receipt_count=sum(_read_receipt(plan, spec) is not None for spec in plan.specs))
+        result.update(mode=plan.mode, provider_get_call_count=writer.provider_get_count,
+                      manifest_location_updates=writer.manifest_update_count,
+                      remote_delete_performed=False, local_overwrite_performed=False)
+        return result
     if plan.batch_specs and core.get("status") == "completed":
         with exact_operation_writer_lock(plan.archive_root, timeout_seconds=30) if plan.concurrent else nullcontext():
             evidence = archive_services.require_current_zettel_index(plan.archive_root)

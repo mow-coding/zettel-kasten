@@ -1,7 +1,7 @@
 # Agent Operator Capabilities Manifest
 
-Current v0.4.50 candidate: WOM can privately inspect verified remote content before selecting confirmed temporary objects. [Release scope](releases/v0.4.50.md). Other ongoing requests are not included.
-Current release candidate: v0.4.50 private content review for exact remote-key cleanup; [release scope](releases/v0.4.50.md).
+Current v0.4.51 candidate: capture recovery with cause and resume, cooperative cancellation for long storage work, caller-status reconnect guidance, title/human-artifact/draft-hold/relation-batch review commands and PAT-only provider intake. [Release scope](releases/v0.4.51.md). Other ongoing requests are not included in this claim.
+Current release candidate: v0.4.51 feedback-completion integration (letters 174-176); [release scope](releases/v0.4.51.md).
 
 Status: v0.4.36 no-dialog grants, letter-168, and writer-session coverage gate
 
@@ -206,17 +206,17 @@ field remain `history_not_audited`. Inventory, shared capability availability,
 and command help consume the same content-free history. Current availability
 continues to be parser-derived; history does not grant execution authority.
 
-For the current v0.4.50 candidate parser, the inventory snapshot is:
+For the current v0.4.51 candidate parser, the inventory snapshot is:
 
 ```text
-canonical executable command paths: 303
+canonical executable command paths: 309
 alias invocation paths:              215
-all invocation paths:                518
-approval_available:                   106
+all invocation paths:                524
+approval_available:                   110
 approval_fixed_closed:                5
-approval_not_exposed:                192
+approval_not_exposed:                194
 conditional approval paths:            10
-dry_run_exposed:                     258
+dry_run_exposed:                     263
 unmatched fixed-close entries:         0
 ```
 

@@ -15,7 +15,7 @@ import threading
 
 ACTIVE = ContextVar("wom_active_operation", default=None)
 ACTIVE_CLAIM = ContextVar("wom_cancellation_claim", default=None)
-SUPPORTED = frozenset({"object_storage_cleanup"})
+SUPPORTED = frozenset({"objet_capture_batch", "object_storage_cleanup", "object_storage_restore", "object_storage_upload", "object_storage_bytes_preservation", "object_storage_offload", "activity_cleanup"})
 _DOMAIN = b"wom-kit/operation-cancellation/v1\0"
 
 

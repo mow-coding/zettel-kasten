@@ -10278,14 +10278,15 @@ def markup_style_guide() -> dict[str, Any]:
             },
             {
                 "markup": "callout_unknown_column_and_unsupported",
-                "action": "block_pending_lossless_structure_or_source_recovery",
+                "action": "normalize_balanced_content_containers_keep_unresolved_placeholders",
+                "placeholder_source_recovery_claimed": False,
                 "silent_deletion_allowed": False,
             },
             {
                 "markup": "protected_context",
-                "action": "preserve_entire_zettel_as_expected_terminal_literal",
+                "action": "preserve_literal_spans_normalize_supported_live_siblings",
                 "source_bytes_preserved": True,
-                "partial_outside_span_normalization_implemented": False,
+                "partial_outside_span_normalization_implemented": True,
             },
             {
                 "markup": "unknown_semantic_tag",
@@ -12021,7 +12022,7 @@ def _protected_markup_context_present(body: str) -> bool:
     return False
 
 
-def _normalize_markup_body(
+def _normalize_markup_body_legacy(
     body: str,
     *,
     bindings: dict[str, Any] | None = None,
@@ -12565,6 +12566,11 @@ def _normalize_markup_body(
         "unknown_tag_names": sorted(unknown_names),
         "blocker_codes": blocker_codes,
     }
+
+
+def _normalize_markup_body(body: str, *, bindings: dict[str, Any] | None = None) -> dict[str, Any]:
+    from .markup_spans import normalize
+    return normalize(body, bindings=bindings or {}, legacy=_normalize_markup_body_legacy)
 
 
 def _markup_zettel_analysis(
@@ -14038,8 +14044,8 @@ def relation_semantics_guide() -> dict[str, Any]:
                 "meaning": (
                     "The target is the next reviewed step in a generic "
                     "administrative, operational, or life-event process. It "
-                    "is active as a directed sequence edge, but only a human "
-                    "may approve one pair at a time."
+                    "is active as a directed sequence edge. Every chosen pair "
+                    "requires a reviewed judgment, including in an exact batch."
                 ),
                 "canonical_edge_type": "sequence",
                 "promoted_automatically": False,
@@ -14087,7 +14093,8 @@ def relation_semantics_guide() -> dict[str, Any]:
             "provider_or_llm_required": False,
             "same_course_next_week_edge": "continues",
             "generic_process_next_step_edge": "sequence",
-            "sequence_batch_write_allowed": False,
+            "sequence_batch_write_allowed": True,
+            "sequence_batch_requires_exact_judgments": True,
             "activity_group_requires_existing_event_anchor": True,
             "notion_private_join_authority": "facets.source_page_id",
             "notion_mirror_zettel_field_is_join_authority": False,
