@@ -1,5 +1,18 @@
 # Upgrade Guide
 
+## v0.4.52 large-activity performance and verification closure
+
+After publication, use the official project update flow for an existing pinned installation. Index-bound commands on large archives finish in a fraction of the previous time, a registered objet is found by its original filename, the handoff checkpoint names unpublished drafts, and the helper-AI guidance is checked against the installed commands. No archive changes on install.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0452-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.52/wom_kit-0.4.52-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
 ## v0.4.51 feedback-completion integration
 
 After publication, use the official project update flow for an existing pinned installation. Capture recovery, cooperative cancellation, caller-status guidance, new review commands and PAT-only provider intake are added; no command was removed. Installing the update alone does not change a customer archive.

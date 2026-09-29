@@ -638,7 +638,7 @@ a valid session grant). Do not delete a historical journal or edit affected
 zets by hand.
 
 ```bash
-archive create-draft <archive-root> --dry-run --source-intake-plan <source-intake-plan.json> --prompt-boundary-report <prompt-boundary-report.json> --expected-archive-id <id> --expected-type <type> --profile-id <profile-id> --creation-mode ai_assisted --created-by ai_runtime:codex --assisted-by ai_runtime:codex --format json
+archive create-draft <archive-root> --dry-run --source-intake-plan <source-intake-plan.json> --prompt-boundary-report <prompt-boundary-report.json> --expected-archive-id <id> --expected-type <type> --profile-id <profile-id> --creation-mode ai_assisted --created-by ai_runtime:codex --assisted-by ai_runtime:codex --abstract <reviewed-abstract> --facet <key>=<value> --source-fidelity <verbatim|faithful_summary|sanitized_derivative> --fidelity-source-object-id <manifested-objet-id> --format json
 ```
 
 For `ai_assisted` and `ai_generated`, include an explicit reviewed `--abstract`

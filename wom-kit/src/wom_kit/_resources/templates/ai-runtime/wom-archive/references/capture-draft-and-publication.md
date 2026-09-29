@@ -38,37 +38,36 @@ archive objet-capture-batch <archive-root> --source-intake-execution-sha256 <int
 archive objet-capture-batch <archive-root> --source-intake-execution-sha256 <same-intake-execution-sha256> --expected-plan-sha256 <exact-capture-plan-sha256> --approve --reviewed-by <actor> --format json
 ```
 
-It revalidates the intake claim, checkpoints, final receipt, current receipts
-and bytes, and archive identity. Capture interruption never uses same-claim or
-per-item replay: preserve the archive, rerun the capture dry-run, and obtain
-a new native approval. Neither decision authorizes providers, uploads, links, drafts, minting,
-or cleanup.
+It revalidates the intake claim, checkpoints, receipts, bytes and archive
+identity. After an interruption keep the archive, read `operation-control
+--action recovery-plan --dry-run`, then continue with `--approve --resume
+--approval-id <id> --execution-sha256 <sha>`; only `outcome_unverified` needs a
+fresh capture dry-run and a new approval. Neither decision authorizes providers,
+uploads, links, drafts, minting, or cleanup.
 
-Stage selected bytes inside the archive root, prepare one reviewed capture selection,
-and preview it. A source-intake plan does not authorize copy, capture, import, or upload.
+Staged external originals also prepare one private name intake per copy
+(`prepared_name_intake_count`). After capture, write them under one approval,
+re-index, and `find-objet` finds the objet by its original filename (Windows only):
+
+```text
+archive objet-source-metadata-write <archive-root> --intake-batch <intake-execution-sha256> --dry-run --format json
+```
 
 AI conversation JSONL and AI-generated working documents may be preserved as
-objets when they are relevant evidence. Normally keep the original objet and a
-human-readable zet as separate immutable layers. This default is not
-permission to override an explicit personal `private_self` verbatim request:
-in that case preserve the selected source in full, including names, contact
-details, chronology, whitespace, and wording, and let the source-fidelity
-verifier bind the exact source region. Credential secrets remain excluded and
-must move through a human-controlled secret store. For a client or public use,
-keep the private source unchanged and create a separately reviewed
-`sanitized_derivative`; its audience label is not access control or permission
-to share.
+objets when they are relevant evidence; keep the original objet and a
+human-readable zet as separate immutable layers. An explicit personal
+`private_self` verbatim request overrides that default: preserve the selected
+source in full (names, contacts, chronology, whitespace, wording) and let the
+source-fidelity verifier bind the exact region. Credential secrets stay excluded
+(human-controlled secret store). For client or public use keep the private source
+unchanged and create a reviewed `sanitized_derivative`; its label is not access control.
 
-Keep source text, OCR output, parser diagnostics, confidence, and human
-corrections distinguishable. Working metadata must not silently become
-canonical prose.
+Keep source text, OCR output, diagnostics and human corrections distinguishable; working metadata never silently becomes canonical prose.
 
 Before drafting, revising, or linking records, preserve the artifact's time and
 provenance. A matching name or label is not permission to reuse an identity,
 merge two records, or erase a contradiction. A canonical zet is the current
-human-reviewed archive state, not an objective-truth certificate. Use the
-reviewed revision path when the current state changes so earlier evidence and
-the chronology remain auditable.
+human-reviewed state, not a truth certificate; change it through the reviewed revision path.
 
 ## Create A Draft Through The Command Surface
 
@@ -90,7 +89,7 @@ reference.
 Use the validated source and prompt-boundary reports:
 
 ```text
-archive create-draft <archive-root> --dry-run --source-intake-plan <source-intake-plan.json> --prompt-boundary-report <prompt-boundary-report.json> --expected-archive-id <id> --expected-type <type> --profile-id <profile-id> --creation-mode ai_assisted --created-by ai_runtime:codex --assisted-by ai_runtime:codex --format json
+archive create-draft <archive-root> --dry-run --source-intake-plan <source-intake-plan.json> --prompt-boundary-report <prompt-boundary-report.json> --expected-archive-id <id> --expected-type <type> --profile-id <profile-id> --creation-mode ai_assisted --created-by ai_runtime:codex --assisted-by ai_runtime:codex --abstract <reviewed-abstract> --facet <key>=<value> --source-fidelity <verbatim|faithful_summary|sanitized_derivative> --fidelity-source-object-id <manifested-objet-id> --format json
 ```
 
 An AI-assisted or AI-generated draft must also supply a reviewed `--abstract`
@@ -140,6 +139,7 @@ Before publication, require:
 
 - an explicit, bounded, human-reviewed `frontmatter.abstract`;
 - stable title, type, provenance, and source links;
+- a `zet-quality-check --path <draft> --dry-run` with its blocker issues resolved;
 - a clean mint preview bound to the exact draft bytes;
 - separate human approval for the mint write.
 

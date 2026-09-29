@@ -60,6 +60,16 @@ class ScopeFirstPlanTests(unittest.TestCase):
             for result in (scoped, legacy):
                 self.assertFalse(result["ok"])
                 self.assertIn("changed_file_size_limit_exceeded", result["blockers"])
+                # Letter 176: a blocked plan never reads as "no changes", and the
+                # blocking item is classified by role and size only.
+                self.assertIsNone(result["change_summary"]["count"])
+                self.assertEqual(result["change_summary"]["state"], "not_observed")
+                observation = result["change_observation"]
+                self.assertEqual(observation["state"], "stopped")
+                self.assertEqual(observation["blocking_role"], "archive_root_file")
+                self.assertEqual(observation["blocking_size_bucket"], "up_to_4x_file_limit")
+                self.assertEqual(observation["file_limit_bytes"], planner.GIT_BACKUP_PLAN_MAX_FILE_BYTES)
+                self.assertNotIn("owned.bin", json.dumps(result))
 
 
 class ScopeFirstWorkflowTests(unittest.TestCase):

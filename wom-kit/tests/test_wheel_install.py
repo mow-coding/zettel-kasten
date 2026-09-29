@@ -106,7 +106,7 @@ def patch_zip_member_name_bytes(wheel: Path, old_name: str, new_name: str) -> No
 
 
 class InstalledEntrypointTests(unittest.TestCase):
-    PACKAGE_VERSION = "0.4.51"
+    PACKAGE_VERSION = "0.4.52"
     SERVER_NAME = "zettel-kasten-archive-mcp"
 
     def setUp(self) -> None:
@@ -205,7 +205,7 @@ class InstalledEntrypointTests(unittest.TestCase):
 
     def test_installed_wheel_direct_url_retains_exact_pip_hash(self) -> None:
         python = self.scripts / "python.exe"
-        wheel = self.temp_root / "wom_kit-0.4.51-py3-none-any.whl"
+        wheel = self.temp_root / "wom_kit-0.4.52-py3-none-any.whl"
         wheel.write_bytes(b"synthetic exact wheel bytes")
         expected_sha256 = hashlib.sha256(wheel.read_bytes()).hexdigest()
         with mock.patch.object(
@@ -226,7 +226,7 @@ class InstalledEntrypointTests(unittest.TestCase):
 
     def test_installed_wheel_direct_url_missing_hash_fails_closed(self) -> None:
         python = self.scripts / "python.exe"
-        wheel = self.temp_root / "wom_kit-0.4.51-py3-none-any.whl"
+        wheel = self.temp_root / "wom_kit-0.4.52-py3-none-any.whl"
         wheel.write_bytes(b"synthetic exact wheel bytes")
         with mock.patch.object(
             check_wheel_install,
@@ -942,6 +942,36 @@ class InstalledEntrypointTests(unittest.TestCase):
             "package_version": self.PACKAGE_VERSION,
             "isolated_installed_package": True,
         }
+        a17_name_evidence = {
+            "ok": True,
+            "schema": check_wheel_install.INSTALLED_A17_NAME_SMOKE_SCHEMA,
+            "entrypoint_route": "installed_archive_cli_main",
+            "item_count": 3,
+            "prepared_name_intake_count": 3,
+            "name_batch_written_count": 3,
+            "name_batch_rerun_append_count": 0,
+            "native_approval_count": 3,
+            "found_by_original_name_count": 3,
+            "names_in_public_records": False,
+            "private_values_echoed": False,
+            "absolute_paths_echoed": False,
+        }
+        a13_guidance_evidence = {
+            "ok": True,
+            "schema": check_wheel_install.INSTALLED_A13_GUIDANCE_SMOKE_SCHEMA,
+            "entrypoint_route": "installed_archive_cli_main",
+            "package_version": self.PACKAGE_VERSION,
+            "capabilities_version_matches_package": True,
+            "source_checkout_visible": False,
+            "skill_reference_count": 11,
+            "guidance_named_command_count": 120,
+            "unknown_guidance_command_count": 0,
+            "not_runnable_guidance_command_count": 0,
+            "dry_run_available_guidance_command_count": 100,
+            "start_here_named_command_count": 6,
+            "start_here_unknown_command_count": 0,
+            "absolute_paths_echoed": False,
+        }
         result = check_wheel_install._wheel_install_success_result(
             package_version=self.PACKAGE_VERSION,
             wheel_counts=wheel_counts,
@@ -955,6 +985,8 @@ class InstalledEntrypointTests(unittest.TestCase):
             letter140_link_evidence=letter140_evidence,
             v049_workflow_evidence=v049_evidence,
             v0410_batch_workflow_evidence=v0410_batch_evidence,
+            a17_name_evidence=a17_name_evidence,
+            a13_guidance_evidence=a13_guidance_evidence,
             v0411_truth_evidence=v0411_truth_evidence,
             v0414_recovery_evidence=v0414_recovery_evidence,
             wheel_filename="wom_kit-0.3.296-py3-none-any.whl",
@@ -979,6 +1011,8 @@ class InstalledEntrypointTests(unittest.TestCase):
                 "installed_letter140_link_workflow": letter140_evidence,
                 "installed_v049_recovery_workflows": v049_evidence,
                 "installed_v0410_batch_workflow": v0410_batch_evidence,
+                "installed_a17_name_discovery": a17_name_evidence,
+                "installed_a13_guidance_flow": a13_guidance_evidence,
                 "installed_v0411_truth_contracts": v0411_truth_evidence,
                 "installed_v0414_recovery_contracts": (
                     v0414_recovery_evidence
@@ -2762,7 +2796,7 @@ class InstalledRuntimeJourneyHookTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(prefix="wheel-runtime-hook-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
-        self.wheel = self.root / "wom_kit-0.4.51-py3-none-any.whl"
+        self.wheel = self.root / "wom_kit-0.4.52-py3-none-any.whl"
         self.wheel.write_bytes(b"synthetic-hook-wheel")
         self.evidence = {
             "ok": True, "schema": check_wheel_install.INSTALLED_V0419_RUNTIME_SCHEMA,
@@ -2847,11 +2881,11 @@ class InstalledRuntimeJourneyHookTests(unittest.TestCase):
                 self.invoke(evidence)
 
     def test_partial_runtime_evidence_accepts_canonical_beta_but_keeps_proof_checks(self):
-        evidence = {**self.evidence, "package_version": "0.4.51b1"}
+        evidence = {**self.evidence, "package_version": "0.4.52b1"}
         holder = check_wheel_install.WheelPartialEvidence()
         holder.record_runtime(evidence)
         self.assertEqual(holder.public_payload()["installed_v0419_runtime_journey"], evidence)
-        for version in ("0.4.51b0", "0.4.51b01", "0.4.51-beta.1", "0.4.51b1/private", "0.4.51b" + "1" * 65):
+        for version in ("0.4.52b0", "0.4.52b01", "0.4.52-beta.1", "0.4.52b1/private", "0.4.52b" + "1" * 65):
             with self.subTest(version=version), self.assertRaises(check_wheel_install.WheelCheckError):
                 holder.record_runtime({**evidence, "package_version": version})
         with self.assertRaises(check_wheel_install.WheelCheckError):

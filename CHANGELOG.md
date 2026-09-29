@@ -4,6 +4,16 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.4.52 - 2026-09-29
+
+- A blocked `git-backup-plan` no longer reports `change_summary.count 0` (letter 176): the count is null with `state: not_observed`, and a new content-free `change_observation` names the blocking item's role (objet bytes, staging copy, scratch, receipts, zettels, index db, archive root file, ...) and size bucket, the file limit and how many changed paths were not observed. No path is echoed.
+- A registered objet is found again by its original filename (letter 176): staging an external original prepares one private name intake per copy, `objet-source-metadata-write --intake-batch <execution>` writes every prepared name under one exact approval, and `index` then `find-objet` locate the objet by that name. Names stay in the private manifest and alias index; receipts, the object manifest and public results carry none. Windows-only like the single-row writer.
+- Large activities finish in realistic time (A14, letters 174/176): the live zet scan that binds the index to the files no longer opens every zet file. On the 23,000-object, 8,616-zet synthetic archive the installed launcher measured, against public v0.4.47, `zettel-edge --dry-run` repeat p95 2.524 s to 0.881 s, `zettel-objet-link --dry-run` 2.717 s to 1.212 s and `exact-approval-claims --status all` 2.335 s to 0.891 s. Windows reads each directory's file ids in one call and cross-checks a fixed sample with `os.lstat`; any difference falls back to the per-file path.
+- The installed-wheel gate proves that every command the packaged helper-AI guidance and `ai-start-here` name exists in the installed parser and capabilities manifest of the same version (A13).
+- `read-zettel` overview edge previews carry the linked zet's title from the index or an exact reason; `session-handoff-checkpoint` reports `inbox_attention` and says when unpublished drafts were not published; `draft-disposition --approve` reaches the dialog (its approval context carried unsorted review codes); the runtime skill's `create-draft` example carries every required flag and the publish row names `zet-quality-check`.
+- The 25 additional-verification items (S2-U01..U25) have synthetic tests on the example archive; their remaining gaps are recorded in the S2 decision log. Synthetic data and an injected dialog only; customers' own runs are not confirmed.
+- `git-backup` retries a held index file longer (about 16 s in six steps instead of 3.75 s) and treats any message naming the lock file as the same transient hold; the isolated-index read-tree and write-tree steps retry the same way. Two release CI runs on shared Windows runners had failed on that hold.
+
 ## v0.4.51 - 2026-09-29
 
 - Registration after external staging (letter 176): a failed `objet-capture-batch` now keeps its cause, stage, approval and write state and an `operation_ref`; `--resume` with the original approval finishes only the unfinished items without a second dialog or re-copying staged bytes.

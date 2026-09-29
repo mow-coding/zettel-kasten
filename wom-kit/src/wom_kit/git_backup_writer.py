@@ -1619,10 +1619,14 @@ def _pinned_git_runtime(prepared: PreparedGitBackup):
             raise _fail("git_backup_git_executable_drifted")
 
 
-_GIT_INDEX_LOCK_RETRY_DELAYS = (0.25, 0.5, 1.0, 2.0)
+# v0.4.52: two release runs on shared Windows runners still hit the index hold
+# after 3.75 s of retries, so the ladder now waits up to about 16 s in total
+# and any message that names the lock file counts as the same transient hold.
+_GIT_INDEX_LOCK_RETRY_DELAYS = (0.25, 0.5, 1.0, 2.0, 4.0, 8.0)
 _GIT_INDEX_LOCK_TRANSIENT_MARKERS = (
     b"unable to write new index file",
-    b"index.lock': File exists",
+    b"index.lock",
+    b"could not lock",
 )
 
 
@@ -1720,10 +1724,8 @@ class _GitBackupBackend:
             "LC_ALL": "C",
             "LANGUAGE": "C",
         }
-        result: tuple[int, bytes] | None = None
-        for delay in (*_GIT_INDEX_LOCK_RETRY_DELAYS, None):
-            errors: list[bytes] = []
-            result = self._git_raw(
+        return self._git_index_retry(
+            lambda errors: self._git_raw(
                 [
                     "-c",
                     "core.autocrlf=false",
@@ -1738,6 +1740,22 @@ class _GitBackupBackend:
                 extra_environment=environment,
                 stderr_sink=errors,
             )
+        )
+
+    def _git_index_retry(
+        self,
+        run: Callable[[list[bytes]], tuple[int, bytes] | None],
+    ) -> tuple[int, bytes] | None:
+        """Run one Git step again while its only failure is a held index file.
+
+        The step receives a fresh stderr sink each time; stderr is classified
+        and never echoed or kept. Any other failure returns unchanged.
+        """
+
+        result: tuple[int, bytes] | None = None
+        for delay in (*_GIT_INDEX_LOCK_RETRY_DELAYS, None):
+            errors: list[bytes] = []
+            result = run(errors)
             if (
                 result is None
                 or result[0] == 0
@@ -2016,7 +2034,7 @@ class _GitBackupBackend:
         )
         if snapshot is None or blockers:
             return None
-        observations, worktree_bytes, file_blockers = planning._observe_changed_files(
+        observations, worktree_bytes, file_blockers, _change_context = planning._observe_changed_files(
             self.prepared.root,
             snapshot["status"],
             max_total_bytes=self.prepared.max_changed_bytes,
@@ -2396,26 +2414,33 @@ class _GitBackupBackend:
         try:
             os.unlink(index_name)
             environment = {"GIT_INDEX_FILE": index_name}
-            initialized = self._git_raw(
-                ["read-tree", "HEAD"],
-                max_output_bytes=64 * 1024,
-                extra_environment=environment,
+            initialized = self._git_index_retry(
+                lambda errors: self._git_raw(
+                    ["read-tree", "HEAD"],
+                    max_output_bytes=64 * 1024,
+                    extra_environment=environment,
+                    stderr_sink=errors,
+                )
             )
             if initialized is None or initialized[0] != 0:
                 raise _fail("git_backup_exact_add_failed")
             result = self._git_index_add(group.paths, extra_environment=environment)
             if result is None or result[0] != 0:
                 raise _fail("git_backup_exact_add_failed")
-            written = self._git_text_with_environment(
-                ["write-tree"],
-                extra_environment=environment,
-                max_output_bytes=128,
+            written_raw = self._git_index_retry(
+                lambda errors: self._git_raw(
+                    ["write-tree"],
+                    max_output_bytes=128,
+                    extra_environment=environment,
+                    stderr_sink=errors,
+                )
             )
-            tree_oid = (
-                written[1].lower()
-                if written is not None and written[0] == 0
-                else ""
-            )
+            tree_oid = ""
+            if written_raw is not None and written_raw[0] == 0:
+                try:
+                    tree_oid = written_raw[1].decode("ascii").strip().lower()
+                except UnicodeDecodeError:
+                    tree_oid = ""
             if _OID_RE.fullmatch(tree_oid) is None:
                 raise _fail("git_backup_exact_add_failed")
             delta = self._git_raw(

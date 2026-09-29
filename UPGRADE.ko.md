@@ -1,5 +1,18 @@
 # 업그레이드 가이드
 
+## v0.4.52 큰 활동 성능과 검증 마무리
+
+공개된 뒤 기존 프로젝트는 공식 업데이트 절차를 쓰세요. 큰 archive에서 index를 확인하는 명령이 이전보다 훨씬 빨리 끝나고, 등록한 파일을 원래 파일명으로 찾을 수 있으며, 세션 마무리 점검이 미발행 초안을 알려 주고, 도우미 AI 안내가 설치된 명령과 맞는지 검사합니다. 설치만으로 archive는 바뀌지 않습니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0452-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.52/wom_kit-0.4.52-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
 ## v0.4.51 피드백 완결 통합
 
 공개된 뒤 기존 프로젝트는 공식 업데이트 절차를 쓰세요. 등록 실패 복구, 오래 걸리는 작업의 취소, 세션 호출자 상태 안내, 새 검토 명령, Notion PAT 전용 반입이 추가됐고 없어진 명령은 없습니다. 설치만으로 고객 아카이브는 바뀌지 않습니다.

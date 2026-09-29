@@ -7381,6 +7381,80 @@ def safe_overview_edge_preview(edge: dict[str, Any], warnings: list[str], index:
     return drop_none_values({"type": edge_type, "target": target, "target_kind": target_kind})
 
 
+EDGE_TARGET_LABEL_STATES = (
+    "title_from_index",
+    "title_unavailable",
+    "target_not_indexed",
+    "target_redacted",
+    "index_missing",
+    "index_unavailable",
+    "objet_has_no_human_label",
+    "target_kind_unknown",
+)
+
+
+def annotate_edge_preview_targets(root: Path, previews: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """S2-U06 (letters 174-176): every linked target shows a human title or says exactly why not.
+
+    A zet target's ``target_title`` comes from the archive index projection
+    (never from opening the target file); an objet has no reviewed human label,
+    so the fixed reason ``objet_has_no_human_label`` is stated instead of an
+    invented one. ``target_label_state`` is always one of
+    ``EDGE_TARGET_LABEL_STATES``. Never raises and never echoes paths.
+    """
+
+    zet_ids = sorted(
+        {
+            str(preview.get("target"))
+            for preview in previews
+            if preview.get("target_kind") == "zettel" and isinstance(preview.get("target"), str)
+        }
+    )
+    titles: dict[str, tuple[Any, Any]] = {}
+    index_state = "index_missing"
+    db_path = root / INDEX_RELATIVE_PATH
+    if zet_ids and db_path.is_file():
+        try:
+            conn = connect_archive_index(db_path, row_factory=True)
+            try:
+                placeholders = ",".join("?" for _ in zet_ids)
+                for row in conn.execute(
+                    f"SELECT zettel_id, title, status FROM zettels WHERE zettel_id IN ({placeholders})",
+                    zet_ids,
+                ).fetchall():
+                    titles[str(row["zettel_id"])] = (row["title"], row["status"])
+            finally:
+                conn.close()
+            index_state = "indexed"
+        except (sqlite3.Error, OSError, ValueError):
+            index_state = "index_unavailable"
+    annotated: list[dict[str, Any]] = []
+    for preview in previews:
+        item = dict(preview)
+        kind = item.get("target_kind")
+        if kind == "zettel":
+            entry = titles.get(str(item.get("target")))
+            if index_state != "indexed":
+                item["target_label_state"] = index_state
+            elif entry is None:
+                item["target_label_state"] = "target_not_indexed"
+            elif (entry[1] or "") not in ZETTEL_QUERYABLE_STATUSES:
+                item["target_label_state"] = "target_redacted"
+            else:
+                title = safe_zettel_overview_string(entry[0], [], "$.overview.edges_preview[].target_title")
+                if title:
+                    item["target_title"] = title
+                    item["target_label_state"] = "title_from_index"
+                else:
+                    item["target_label_state"] = "title_unavailable"
+        elif kind == "objet":
+            item["target_label_state"] = "objet_has_no_human_label"
+        else:
+            item["target_label_state"] = "target_kind_unknown"
+        annotated.append(item)
+    return annotated
+
+
 def zettel_first_read_summary(frontmatter: dict[str, Any], body: str, *, redacted: bool = False) -> tuple[dict[str, Any], list[str]]:
     warnings: list[str] = []
     zettel_id = frontmatter.get("id")
@@ -7541,6 +7615,9 @@ def read_zettel(
             "warnings": overview_warnings,
         }
     overview, overview_warnings = zettel_first_read_summary(frontmatter, body)
+    overview["edges_preview"] = annotate_edge_preview_targets(
+        root, list(overview.get("edges_preview") or [])
+    )
     include_body = section in {"body", "document", "all"}
     include_full_frontmatter = section in {"body", "details", "all"}
     body_sha256 = "sha256:" + hashlib.sha256(body.encode("utf-8")).hexdigest()
@@ -56915,6 +56992,90 @@ if hasattr(os, "register_at_fork"):
     )
 
 
+# A14: on Windows the live scan takes file ids from one directory listing call
+# instead of opening every Zet file; a per-directory sample is cross-checked
+# against os.lstat and any difference falls back to the per-file path.
+_LIVE_SCAN_DIRECTORY_FILE_IDS = os.name == "nt"
+_LIVE_SCAN_SAMPLE_PER_DIRECTORY = 8
+_LIVE_SCAN_DIRECTORY_BUFFER_BYTES = 256 * 1024
+_FILE_ID_BOTH_DIR_INFO = 10
+_FILE_ID_BOTH_DIR_RESTART_INFO = 11
+_ERROR_NO_MORE_FILES = 18
+_windows_directory_listing_api: tuple[Any, Any] | None = None
+
+
+class _LiveScanFastPathMismatch(Exception):
+    """The listing-derived generation differed from os.lstat; use the slow path."""
+
+
+def _windows_directory_listing() -> tuple[Any, Any]:
+    global _windows_directory_listing_api
+    if _windows_directory_listing_api is None:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateFileW.restype = ctypes.c_void_p
+        kernel32.CreateFileW.argtypes = [
+            ctypes.c_wchar_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p,
+            ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p,
+        ]
+        kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+        kernel32.GetFileInformationByHandleEx.restype = ctypes.c_int
+        kernel32.GetFileInformationByHandleEx.argtypes = [
+            ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32,
+        ]
+        _windows_directory_listing_api = (kernel32, ctypes.c_void_p(-1).value)
+    return _windows_directory_listing_api
+
+
+def _windows_directory_file_ids(directory: str) -> dict[str, int]:
+    """Map every entry name of one directory to its 64-bit file id (one handle)."""
+
+    import struct
+
+    kernel32, invalid_handle = _windows_directory_listing()
+    handle = kernel32.CreateFileW(
+        directory,
+        0x0001,  # FILE_LIST_DIRECTORY
+        0x0007,  # share read, write, delete
+        None,
+        3,  # OPEN_EXISTING
+        0x02000000 | 0x00200000,  # BACKUP_SEMANTICS | OPEN_REPARSE_POINT
+        None,
+    )
+    if handle is None or handle == invalid_handle:
+        raise OSError(ctypes.get_last_error(), "directory_listing_open_failed")
+    try:
+        buffer = ctypes.create_string_buffer(_LIVE_SCAN_DIRECTORY_BUFFER_BYTES)
+        head = struct.Struct("<IIqqqqqqIII")
+        ids: dict[str, int] = {}
+        info_class = _FILE_ID_BOTH_DIR_RESTART_INFO
+        while True:
+            if not kernel32.GetFileInformationByHandleEx(handle, info_class, buffer, len(buffer)):
+                error = ctypes.get_last_error()
+                if error == _ERROR_NO_MORE_FILES:
+                    return ids
+                raise OSError(error, "directory_listing_read_failed")
+            info_class = _FILE_ID_BOTH_DIR_INFO
+            raw = buffer.raw
+            offset = 0
+            while True:
+                fields = head.unpack_from(raw, offset)
+                next_offset = fields[0]
+                name_length = fields[9]
+                (file_id,) = struct.unpack_from("<q", raw, offset + 96)
+                name = raw[offset + 104 : offset + 104 + name_length].decode(
+                    "utf-16-le", "surrogatepass"
+                )
+                if name not in (".", ".."):
+                    if name in ids:
+                        raise OSError(0, "directory_listing_duplicate_name")
+                    ids[name] = file_id & 0xFFFFFFFFFFFFFFFF
+                if not next_offset:
+                    break
+                offset += next_offset
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def _strict_live_zettel_stat_scan(
     archive_root: Path,
     *,
@@ -56923,13 +57084,49 @@ def _strict_live_zettel_stat_scan(
 ) -> tuple[dict[str, dict[str, int]], dict[str, dict[str, int]], bool]:
     """Collect one strict stat-only Zet-tree generation."""
 
+    if _LIVE_SCAN_DIRECTORY_FILE_IDS:
+        try:
+            return _strict_live_zettel_stat_scan_impl(
+                archive_root,
+                progress_callback=progress_callback,
+                progress_state=progress_state,
+                directory_file_ids=True,
+            )
+        except _LiveScanFastPathMismatch:
+            pass
+    return _strict_live_zettel_stat_scan_impl(
+        archive_root,
+        progress_callback=progress_callback,
+        progress_state=progress_state,
+        directory_file_ids=False,
+    )
+
+
+def _strict_live_zettel_stat_scan_impl(
+    archive_root: Path,
+    *,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None,
+    progress_state: str,
+    directory_file_ids: bool,
+) -> tuple[dict[str, dict[str, int]], dict[str, dict[str, int]], bool]:
+    """One scan; ``directory_file_ids`` selects the A14 Windows listing path.
+
+    Every entry yields the same five strong generation fields as the per-file
+    ``os.lstat`` path.  With ``directory_file_ids`` the size, times and
+    attributes come from the directory listing (``DirEntry.stat``) and the file
+    id from one ``FileIdBothDirectoryInfo`` read per directory; a fixed sample
+    of entries per directory is re-observed with ``os.lstat`` and must match
+    exactly, otherwise ``_LiveScanFastPathMismatch`` restarts the slow path.
+    """
+
     live_by_path: dict[str, dict[str, int]] = {}
     directories_by_path: dict[str, dict[str, int]] = {}
     stat_failed = False
     inspected = 0
     reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    root_text = os.fspath(archive_root)
     for folder in ("zettels", "inbox"):
-        folder_root = archive_root / folder
+        folder_root = os.path.join(root_text, folder)
         try:
             folder_stat = os.lstat(folder_root)
         except FileNotFoundError:
@@ -56948,23 +57145,34 @@ def _strict_live_zettel_stat_scan(
             stat_failed = True
             continue
         directories_by_path[folder] = archive_index_file_generation(folder_stat)
+        volume_dev = int(folder_stat.st_dev)
 
-        pending = [folder_root]
+        pending: list[tuple[str, str]] = [(folder_root, folder)]
         while pending:
-            current = pending.pop()
+            current, relative_directory = pending.pop()
             try:
                 with os.scandir(current) as entries:
                     current_entries = list(entries)
             except OSError:
                 stat_failed = True
                 continue
-            for entry in current_entries:
-                path = Path(entry.path)
+            file_ids: dict[str, int] | None = None
+            if directory_file_ids:
                 try:
-                    # CPython's Windows DirEntry cache can expose zeroed
-                    # st_dev/st_ino values.  A path lstat supplies the exact
-                    # strong generation fields persisted by index v0.4.
-                    entry_stat = os.lstat(path)
+                    file_ids = _windows_directory_file_ids(current)
+                except OSError:
+                    file_ids = None
+            listed_files: list[tuple[str, dict[str, int]]] = []
+            for entry in current_entries:
+                path = entry.path
+                name = entry.name
+                listed = file_ids is not None and name in file_ids
+                try:
+                    if listed:
+                        listing_stat = entry.stat(follow_symlinks=False)
+                        entry_stat = listing_stat
+                    else:
+                        entry_stat = os.lstat(path)
                 except OSError:
                     stat_failed = True
                     continue
@@ -56977,28 +57185,36 @@ def _strict_live_zettel_stat_scan(
                 ):
                     stat_failed = True
                     continue
+                if listed:
+                    assert file_ids is not None
+                    generation = {
+                        "file_dev": volume_dev,
+                        "file_ino": file_ids[name],
+                        "file_ctime_ns": int(entry_stat.st_ctime_ns),
+                        "file_size": int(entry_stat.st_size),
+                        "file_mtime_ns": int(entry_stat.st_mtime_ns),
+                    }
+                else:
+                    generation = archive_index_file_generation(entry_stat)
+                relative = relative_directory + "/" + name
                 if stat.S_ISDIR(entry_stat.st_mode):
-                    relative_directory = PurePosixPath(
-                        *path.relative_to(archive_root).parts
-                    ).as_posix()
-                    if relative_directory in directories_by_path:
+                    if relative in directories_by_path:
                         stat_failed = True
                         continue
-                    directories_by_path[relative_directory] = (
-                        archive_index_file_generation(entry_stat)
-                    )
-                    pending.append(path)
+                    directories_by_path[relative] = generation
+                    pending.append((path, relative))
                     continue
-                if not entry.name.casefold().endswith(".md"):
+                if not name.casefold().endswith(".md"):
                     continue
                 if not stat.S_ISREG(entry_stat.st_mode):
                     stat_failed = True
                     continue
-                relative = PurePosixPath(*path.relative_to(archive_root).parts).as_posix()
                 if relative in live_by_path:
                     stat_failed = True
                     continue
-                live_by_path[relative] = archive_index_file_generation(entry_stat)
+                live_by_path[relative] = generation
+                if listed:
+                    listed_files.append((path, generation))
                 inspected += 1
                 if inspected == 1 or inspected % 250 == 0:
                     _emit_mint_progress(
@@ -57008,6 +57224,21 @@ def _strict_live_zettel_stat_scan(
                         inspected,
                         None,
                     )
+            if listed_files:
+                count = len(listed_files)
+                sample = min(count, _LIVE_SCAN_SAMPLE_PER_DIRECTORY)
+                positions = sorted({
+                    (index * (count - 1)) // max(1, sample - 1) if sample > 1 else 0
+                    for index in range(sample)
+                })
+                for position in positions:
+                    sample_path, listed_generation = listed_files[position]
+                    try:
+                        observed = archive_index_file_generation(os.lstat(sample_path))
+                    except OSError as exc:
+                        raise _LiveScanFastPathMismatch() from exc
+                    if observed != listed_generation:
+                        raise _LiveScanFastPathMismatch()
 
     return live_by_path, directories_by_path, stat_failed
 
@@ -112871,6 +113102,15 @@ def session_handoff_checkpoint(
         next_safe_actions = ["Resolve blockers and rerun the dry-run before approval."]
 
     ready_for_context_reset = bool(current_checkpoint_verified and not durable_gaps and not blockers)
+    # S2-U15 (letters 174-176): unpublished inbox drafts are named in the
+    # checkpoint so a handoff never reads as complete while drafts still wait.
+    inbox_attention = write_result_inbox_attention(root)
+    if inbox_attention.get("unpublished_draft_count"):
+        next_safe_actions.append(
+            f"{inbox_attention['unpublished_draft_count']} unpublished inbox draft(s) remain and this "
+            "checkpoint does not publish them: continue with mint-zet --dry-run per draft, or leave "
+            "them explicitly for the next session."
+        )
     if activity_scope is None and inventory_snapshot.get("truncated"):
         next_safe_actions.append(
             "More than one page of AI artifacts exists; rerun with --activity-root <archive-relative folder> "
@@ -112882,6 +113122,7 @@ def session_handoff_checkpoint(
         "lifecycle_action": "session_handoff_checkpoint",
         "archive_id": archive_id,
         "status": status,
+        "inbox_attention": inbox_attention,
         "state_digest": state_digest,
         "expected_state_digest": expected_state_digest,
         "diagnostic_state_digest": diagnostic_state_digest,
@@ -159475,6 +159716,183 @@ def private_objet_source_metadata_write(
             affirm_external_writers_quiescent
         ),
     )
+
+
+PRIVATE_NAME_BATCH_PLAN_SCHEMA = "wom-kit/private-objet-source-metadata-batch-plan/v0.1"
+PRIVATE_NAME_BATCH_RESULT_SCHEMA = "wom-kit/private-objet-source-metadata-batch-result/v0.1"
+_PRIVATE_NAME_INTAKE_MAX_BYTES = 1024 * 1024
+_PRIVATE_NAME_BATCH_MAX_ITEMS = 10_000
+
+
+def private_objet_source_metadata_batch_plan(
+    archive_root: Path | str,
+    *,
+    execution_sha256: str,
+) -> dict[str, Any]:
+    """Plan every prepared private name intake of one source-intake execution.
+
+    A17 (letter 176): staging prepares one intake per external copy under the
+    private scratch root; this read-only plan runs the ordinary per-row writer
+    plan for each and binds all of them into one content-free batch digest.
+    Filenames never appear in the plan.
+    """
+
+    from .source_intake_batch_exact import prepared_name_intake_relative_dir
+
+    root = require_existing_archive_root(archive_root)
+    relative_dir = prepared_name_intake_relative_dir(execution_sha256)
+
+    def blocked(code: str) -> dict[str, Any]:
+        return {
+            "schema": PRIVATE_NAME_BATCH_PLAN_SCHEMA, "ok": False, "dry_run": True,
+            "blockers": [code], "items": [], "would_change": [], "private_values_echoed": False,
+        }
+
+    if relative_dir is None:
+        return blocked("private_objet_source_metadata_batch_execution_invalid")
+    directory = root.joinpath(*relative_dir.split("/"))
+    try:
+        names = sorted(
+            entry.name for entry in os.scandir(directory)
+            if entry.is_file(follow_symlinks=False) and entry.name.endswith(".json")
+        )
+    except OSError:
+        return blocked("private_objet_source_metadata_batch_intakes_missing")
+    if not names:
+        return blocked("private_objet_source_metadata_batch_intakes_missing")
+    if len(names) > _PRIVATE_NAME_BATCH_MAX_ITEMS:
+        return blocked("private_objet_source_metadata_batch_too_large")
+    items: list[dict[str, Any]] = []
+    for name in names:
+        intake_relative = f"{relative_dir}/{name}"
+        raw, reason = _bounded_stable_regular_file_read(
+            root.joinpath(*intake_relative.split("/")), max_bytes=_PRIVATE_NAME_INTAKE_MAX_BYTES,
+        )
+        if raw is None or reason:
+            return blocked("private_objet_source_metadata_batch_intake_unreadable")
+        intake_sha256 = "sha256:" + hashlib.sha256(raw).hexdigest()
+        preview = private_objet_source_metadata_write(
+            root, intake=intake_relative, expected_intake_sha256=intake_sha256,
+            dry_run=True, approve=False,
+        )
+        items.append({
+            "ordinal": name[: -len(".json")],
+            "intake_relative_path": intake_relative,
+            "intake_sha256": intake_sha256,
+            "action": preview.get("action"),
+            "reason": preview.get("reason"),
+            "plan_sha256": preview.get("plan_sha256"),
+        })
+    would_change = [item["intake_relative_path"] for item in items if item["action"] == "append"]
+    basis = json.dumps(
+        [(item["intake_relative_path"], item["intake_sha256"], item["action"], item["plan_sha256"]) for item in items],
+        ensure_ascii=True, sort_keys=True, separators=(",", ":"),
+    ).encode("ascii")
+    return {
+        "schema": PRIVATE_NAME_BATCH_PLAN_SCHEMA,
+        "ok": True,
+        "dry_run": True,
+        "execution_sha256": str(execution_sha256).strip().lower().removeprefix("sha256:"),
+        "item_count": len(items),
+        "append_count": len(would_change),
+        "skipped_count": len(items) - len(would_change),
+        "items": items,
+        "would_change": would_change,
+        "plan_sha256": hashlib.sha256(basis).hexdigest(),
+        "blockers": [],
+        "private_values_echoed": False,
+    }
+
+
+def private_objet_source_metadata_batch_write(
+    archive_root: Path | str,
+    *,
+    execution_sha256: str,
+    expected_plan_sha256: str,
+    reviewed_by: str,
+    exact_human_approval_claim: _ClaimedExactHumanApproval,
+    expected_exact_approval_plan_sha256: str,
+    expected_exact_approval_target_binding_sha256: str,
+) -> dict[str, Any]:
+    """Apply one approved batch plan: one claim, one row write per intake.
+
+    The claim is verified once against the batch plan digest; each row then
+    goes through the ordinary v0.3.296 engine with its own plan digest.
+    """
+
+    root = require_existing_archive_root(archive_root)
+    _require_exact_human_approval_inputs_before_archive_read(
+        claim=exact_human_approval_claim,
+        expected_plan_sha256=expected_exact_approval_plan_sha256,
+        expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+    )
+    reviewer = safe_project_intake_actor_id(
+        "person:" + reviewed_by.removeprefix("operator:")
+        if isinstance(reviewed_by, str) and reviewed_by.startswith("operator:")
+        else reviewed_by
+    )
+    if reviewer is None:
+        raise ArchiveServiceError("private_objet_source_metadata_reviewer_invalid")
+    try:
+        binding = plan_digest_approval_binding(
+            ExactHumanApprovalOperation.private_objet_source_metadata_write,
+            str(expected_plan_sha256 or ""),
+        )
+    except OperationApprovalBindingError as exc:
+        raise ArchiveServiceError(exc.code) from None
+    _require_exact_human_operation_approval(
+        root, binding, reviewer_claim=reviewer,
+        expected_plan_sha256=expected_exact_approval_plan_sha256,
+        expected_target_binding_sha256=expected_exact_approval_target_binding_sha256,
+        claim=exact_human_approval_claim,
+    )
+    fresh = private_objet_source_metadata_batch_plan(root, execution_sha256=execution_sha256)
+    if fresh.get("ok") is not True or fresh.get("plan_sha256") != str(expected_plan_sha256):
+        raise ArchiveServiceError("private_objet_source_metadata_batch_plan_changed")
+    engine_reviewer = "operator:" + reviewer.removeprefix("person:")
+    results: list[dict[str, Any]] = []
+    written = 0
+    for item in fresh["items"]:
+        if item["action"] != "append":
+            results.append({"ordinal": item["ordinal"], "action": "skipped", "reason": item.get("reason")})
+            continue
+        # Each append changes the private manifest, so the engine digest of the
+        # next row is re-derived right before its write. The approved batch
+        # digest already bound the exact intake bytes and actions.
+        current = private_objet_source_metadata_write(
+            root, intake=item["intake_relative_path"], expected_intake_sha256=item["intake_sha256"],
+            dry_run=True, approve=False,
+        )
+        if current.get("action") != "append" or not current.get("plan_sha256"):
+            results.append({"ordinal": item["ordinal"], "action": current.get("action"), "reason": current.get("reason"), "ok": False})
+            break
+        outcome = _private_objet_source_metadata_write_legacy_core(
+            root, intake=item["intake_relative_path"], expected_intake_sha256=item["intake_sha256"],
+            expected_plan_sha256=current["plan_sha256"], dry_run=False, approve=True,
+            reviewed_by=engine_reviewer, affirm_private_metadata_reviewed=True,
+            affirm_external_writers_quiescent=True,
+        )
+        ok = outcome.get("ok") is True and outcome.get("dry_run") is False
+        results.append({"ordinal": item["ordinal"], "action": outcome.get("action"), "reason": outcome.get("reason"), "ok": ok})
+        if not ok:
+            break
+        written += 1
+    complete = written == fresh["append_count"]
+    return {
+        "schema": PRIVATE_NAME_BATCH_RESULT_SCHEMA,
+        "ok": complete,
+        "dry_run": False,
+        "execution_sha256": fresh["execution_sha256"],
+        "item_count": fresh["item_count"],
+        "written_count": written,
+        "skipped_count": fresh["skipped_count"],
+        "remaining_count": fresh["append_count"] - written,
+        "results": results,
+        "next_safe_actions": [] if complete else [
+            "Run the same --intake-batch --dry-run again; already written names are skipped and only the remaining rows are planned.",
+        ],
+        "private_values_echoed": False,
+    }
 
 
 def _private_objet_source_metadata_write_legacy_core(

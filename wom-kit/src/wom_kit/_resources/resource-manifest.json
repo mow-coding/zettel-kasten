@@ -1,6 +1,6 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.4.51",
+  "version": "0.4.52",
   "source_of_truth": "wom-kit source resource directories",
   "file_count": 180,
   "files": [
@@ -757,14 +757,14 @@
     {
       "source": "templates/ai-runtime/wom-archive/SKILL.md",
       "packaged": "templates/ai-runtime/wom-archive/SKILL.md",
-      "bytes": 11137,
-      "sha256": "95877b16963c80b63d71cb9f27d501fb63e87d79507779bea5928545a2dc03a2"
+      "bytes": 11109,
+      "sha256": "d5d05506e0676cae52eed418142df2bb654ebd8d017c299cbe6cf8417dd319c5"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
       "packaged": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
-      "bytes": 9647,
-      "sha256": "58065931366dea89186e30e38131315d75308829e21eb5714dccd8c9d930ad6b"
+      "bytes": 9920,
+      "sha256": "596412d4c62d00bc65e3457dfebfb6c4399a4e9f83b71ab5510e0df4e3d98c80"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/credentials-and-sessions.md",
@@ -799,8 +799,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/operator-contract.md",
       "packaged": "templates/ai-runtime/wom-archive/references/operator-contract.md",
-      "bytes": 77133,
-      "sha256": "60797d16c83ece37d32b7470f628a94b6ca794d7d3f0e158cf41b07ad4728340"
+      "bytes": 77303,
+      "sha256": "99ddda85cef01f7a90159d4aa17763323463013a3d2d855890738016030b4609"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/reading-memory-and-revision.md",
@@ -1079,10 +1079,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.4.51.md",
-      "packaged": "release-notes/v0.4.51.md",
-      "bytes": 3230,
-      "sha256": "5a8e8104cd7bf5bd4b37b7cfab0a9b55e3e2bf163e5133db313e3d7b1e15b09c"
+      "source": "docs/releases/v0.4.52.md",
+      "packaged": "release-notes/v0.4.52.md",
+      "bytes": 4004,
+      "sha256": "e334ed6206f59e5e2f31a5be1f98bcf5b73f92e628aaef2d256ad87b35230ea6"
     }
   ]
 }

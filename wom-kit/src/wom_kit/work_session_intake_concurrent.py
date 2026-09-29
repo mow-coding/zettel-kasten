@@ -47,8 +47,9 @@ def _preimage(prepared, lane):
 
 
 class Writer(intake._Writer):
-    def __init__(self, prepared, context, claim, lane):
-        super().__init__(prepared.plan, request_items=prepared.request_items())
+    def __init__(self, prepared, context, claim, lane, *, execution_sha256=None):
+        super().__init__(prepared.plan, request_items=prepared.request_items(),
+                         execution_sha256=execution_sha256)
         self.prepared, self.context, self.claim, self.lane = prepared, context, claim, lane
 
     def require(self):
@@ -174,7 +175,7 @@ def run(prepared, context, claim, lane, *, resume):
     targets = [("execution", execution), *(("file", item.target_ref) for item in plan.manifest.items)]
     with TargetLeases(plan.archive_root, targets, heartbeat=lane.heartbeat,
             session_ref=plan.manifest.work_session_binding.work_session_ref) as leases:
-        writer = Writer(frozen, context, claim, lane)
+        writer = Writer(frozen, context, claim, lane, execution_sha256=execution)
         writer.require()
         def authenticate(payload):
             writer.require()

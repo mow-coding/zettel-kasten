@@ -2252,12 +2252,55 @@ def _status_records_are_supported(records: list[_StatusRecord]) -> bool:
     return True
 
 
+_CHANGE_ROLE_BY_TOP_SEGMENT = {
+    "objects": "objet_bytes",
+    "staging": "staging_copy",
+    ".wom-scratch": "scratch",
+    "receipts": "receipts",
+    "zettels": "zettels",
+    "inbox": "inbox_drafts",
+    "db": "index_db",
+    "workbench": "workbench",
+    "views": "views",
+    "workpacks": "workpacks",
+}
+_SIZE_BUCKETS = (
+    (GIT_BACKUP_PLAN_MAX_FILE_BYTES, "within_file_limit"),
+    (4 * GIT_BACKUP_PLAN_MAX_FILE_BYTES, "up_to_4x_file_limit"),
+    (16 * GIT_BACKUP_PLAN_MAX_FILE_BYTES, "up_to_16x_file_limit"),
+)
+
+
+def _change_role_category(relative_path: str) -> str:
+    """Fixed role label from the archive-relative top segment; never the path."""
+
+    parts = PurePosixPath(relative_path).parts
+    if len(parts) < 2:
+        return "archive_root_file"
+    return _CHANGE_ROLE_BY_TOP_SEGMENT.get(parts[0], "other")
+
+
+def _size_bucket(size: int | None) -> str:
+    if size is None:
+        return "unknown"
+    for limit, label in _SIZE_BUCKETS:
+        if size <= limit:
+            return label
+    return "over_16x_file_limit"
+
+
 def _observe_changed_files(
     root: Path,
     records: list[_StatusRecord],
     *,
     max_total_bytes: int,
-) -> tuple[dict[str, _FileObservation], int, list[str]]:
+) -> tuple[dict[str, _FileObservation], int, list[str], dict[str, Any]]:
+    """Hash the changed files; on a blocker, also say what stopped it, content-free.
+
+    Letter 176: a blocked plan's change count must read as not observed, and the
+    blocking item is classified by role and size bucket only.
+    """
+
     paths = {
         path
         for record in records
@@ -2267,10 +2310,30 @@ def _observe_changed_files(
     observations: dict[str, _FileObservation] = {}
     total_bytes = 0
     blockers: list[str] = []
-    for relative_path in sorted(paths):
+    ordered = sorted(paths)
+    context: dict[str, Any] = {
+        "state": "complete",
+        "changed_path_count": len(ordered),
+        "observed_count": 0,
+        "unobserved_count": 0,
+        "file_limit_bytes": GIT_BACKUP_PLAN_MAX_FILE_BYTES,
+        "requested_total_limit_bytes": max_total_bytes,
+    }
+
+    def stop(code: str, relative_path: str, size: int | None) -> None:
+        blockers.append(code)
+        context.update(
+            state="stopped",
+            observed_count=len(observations),
+            unobserved_count=max(0, len(ordered) - len(observations)),
+            blocking_role=_change_role_category(relative_path),
+            blocking_size_bucket=_size_bucket(size),
+        )
+
+    for relative_path in ordered:
         remaining = max_total_bytes - total_bytes
         if remaining < 0:
-            blockers.append("requested_changed_bytes_limit_exceeded")
+            stop("requested_changed_bytes_limit_exceeded", relative_path, None)
             break
         observation = _hash_stable_plain_file(
             root,
@@ -2284,19 +2347,23 @@ def _observe_changed_files(
         elif observation.state == "missing":
             continue
         elif observation.state == "too_large":
-            blockers.append(
+            stop(
                 "changed_file_size_limit_exceeded"
                 if (observation.size or 0) > GIT_BACKUP_PLAN_MAX_FILE_BYTES
-                else "requested_changed_bytes_limit_exceeded"
+                else "requested_changed_bytes_limit_exceeded",
+                relative_path,
+                observation.size,
             )
             break
         elif observation.state == "hardlinked":
-            blockers.append("changed_file_hardlink_not_supported")
+            stop("changed_file_hardlink_not_supported", relative_path, observation.size)
             break
         else:
-            blockers.append("changed_path_not_plain_or_stable_file")
+            stop("changed_path_not_plain_or_stable_file", relative_path, observation.size)
             break
-    return observations, total_bytes, _unique(blockers)
+    if context["state"] == "complete":
+        context["observed_count"] = len(observations)
+    return observations, total_bytes, _unique(blockers), context
 
 
 def _git_blob_inventory(
@@ -2644,9 +2711,13 @@ def _repository_relation(
     }, []
 
 
-def _empty_plan_result(*, blockers: Iterable[str]) -> dict[str, Any]:
+def _empty_plan_result(
+    *, blockers: Iterable[str], change_context: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     blocker_list = _unique(blockers)
+    context = dict(change_context) if change_context else {"state": "not_observed"}
     return {
+        "change_observation": context,
         "schema": GIT_BACKUP_PLAN_SCHEMA,
         "ok": False,
         "dry_run": True,
@@ -2676,10 +2747,13 @@ def _empty_plan_result(*, blockers: Iterable[str]) -> dict[str, Any]:
             "provider_confirmed": False,
         },
         "change_summary": {
-            "count": 0,
+            # Letter 176: a blocked plan did not count the changes; 0 would
+            # read as "nothing changed".
+            "count": None,
+            "state": "not_observed",
             "worktree_bytes_observed": 0,
             "git_blob_bytes_observed": 0,
-            "human_review_required_count": 0,
+            "human_review_required_count": None,
         },
         "changes": [],
         "ignored_inventory": {
@@ -2884,14 +2958,14 @@ def _git_backup_plan_with_pinned_git(
         blockers.append("session_handoff_context_unavailable")
 
     progress.status("changed_content_observation")
-    files_before, worktree_bytes, file_blockers = _observe_changed_files(
+    files_before, worktree_bytes, file_blockers, change_context = _observe_changed_files(
         root,
         snapshot_before["status"],
         max_total_bytes=max_changed_bytes,
     )
     blockers.extend(file_blockers)
     if file_blockers:
-        return _empty_plan_result(blockers=blockers)
+        return _empty_plan_result(blockers=blockers, change_context=change_context)
     progress.status("git_blob_observation")
     blobs, git_blob_bytes, blob_blockers = _git_blob_inventory(
         root,
@@ -2913,7 +2987,7 @@ def _git_backup_plan_with_pinned_git(
     # Observe the same evidence a second time after hashing every changed file.
     # No lock is created: drift is reported, never papered over.
     progress.status("drift_reobservation")
-    files_after, worktree_bytes_after, file_after_blockers = _observe_changed_files(
+    files_after, worktree_bytes_after, file_after_blockers, _change_context_after = _observe_changed_files(
         root,
         snapshot_before["status"],
         max_total_bytes=max_changed_bytes,

@@ -61,6 +61,11 @@ archive session-handoff-checkpoint <archive-root> `
 Approval writes one content-addressed receipt under
 `receipts/session-handoffs/`. It does not write or rewrite a zet.
 
+Since v0.4.52 every result carries `inbox_attention`, the same content-free
+inbox block that `ai-start-here` shows. When unpublished inbox drafts exist,
+`next_safe_actions` says that the checkpoint did not publish them, so a handoff
+never reads as complete while drafts still wait for `mint-zet`.
+
 ## What Makes A Checkpoint Stale
 
 A checkpoint stops being current when:
