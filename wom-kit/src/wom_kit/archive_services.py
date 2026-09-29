@@ -56915,6 +56915,90 @@ if hasattr(os, "register_at_fork"):
     )
 
 
+# A14: on Windows the live scan takes file ids from one directory listing call
+# instead of opening every Zet file; a per-directory sample is cross-checked
+# against os.lstat and any difference falls back to the per-file path.
+_LIVE_SCAN_DIRECTORY_FILE_IDS = os.name == "nt"
+_LIVE_SCAN_SAMPLE_PER_DIRECTORY = 8
+_LIVE_SCAN_DIRECTORY_BUFFER_BYTES = 256 * 1024
+_FILE_ID_BOTH_DIR_INFO = 10
+_FILE_ID_BOTH_DIR_RESTART_INFO = 11
+_ERROR_NO_MORE_FILES = 18
+_windows_directory_listing_api: tuple[Any, Any] | None = None
+
+
+class _LiveScanFastPathMismatch(Exception):
+    """The listing-derived generation differed from os.lstat; use the slow path."""
+
+
+def _windows_directory_listing() -> tuple[Any, Any]:
+    global _windows_directory_listing_api
+    if _windows_directory_listing_api is None:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateFileW.restype = ctypes.c_void_p
+        kernel32.CreateFileW.argtypes = [
+            ctypes.c_wchar_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p,
+            ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p,
+        ]
+        kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+        kernel32.GetFileInformationByHandleEx.restype = ctypes.c_int
+        kernel32.GetFileInformationByHandleEx.argtypes = [
+            ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32,
+        ]
+        _windows_directory_listing_api = (kernel32, ctypes.c_void_p(-1).value)
+    return _windows_directory_listing_api
+
+
+def _windows_directory_file_ids(directory: str) -> dict[str, int]:
+    """Map every entry name of one directory to its 64-bit file id (one handle)."""
+
+    import struct
+
+    kernel32, invalid_handle = _windows_directory_listing()
+    handle = kernel32.CreateFileW(
+        directory,
+        0x0001,  # FILE_LIST_DIRECTORY
+        0x0007,  # share read, write, delete
+        None,
+        3,  # OPEN_EXISTING
+        0x02000000 | 0x00200000,  # BACKUP_SEMANTICS | OPEN_REPARSE_POINT
+        None,
+    )
+    if handle is None or handle == invalid_handle:
+        raise OSError(ctypes.get_last_error(), "directory_listing_open_failed")
+    try:
+        buffer = ctypes.create_string_buffer(_LIVE_SCAN_DIRECTORY_BUFFER_BYTES)
+        head = struct.Struct("<IIqqqqqqIII")
+        ids: dict[str, int] = {}
+        info_class = _FILE_ID_BOTH_DIR_RESTART_INFO
+        while True:
+            if not kernel32.GetFileInformationByHandleEx(handle, info_class, buffer, len(buffer)):
+                error = ctypes.get_last_error()
+                if error == _ERROR_NO_MORE_FILES:
+                    return ids
+                raise OSError(error, "directory_listing_read_failed")
+            info_class = _FILE_ID_BOTH_DIR_INFO
+            raw = buffer.raw
+            offset = 0
+            while True:
+                fields = head.unpack_from(raw, offset)
+                next_offset = fields[0]
+                name_length = fields[9]
+                (file_id,) = struct.unpack_from("<q", raw, offset + 96)
+                name = raw[offset + 104 : offset + 104 + name_length].decode(
+                    "utf-16-le", "surrogatepass"
+                )
+                if name not in (".", ".."):
+                    if name in ids:
+                        raise OSError(0, "directory_listing_duplicate_name")
+                    ids[name] = file_id & 0xFFFFFFFFFFFFFFFF
+                if not next_offset:
+                    break
+                offset += next_offset
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def _strict_live_zettel_stat_scan(
     archive_root: Path,
     *,
@@ -56923,13 +57007,49 @@ def _strict_live_zettel_stat_scan(
 ) -> tuple[dict[str, dict[str, int]], dict[str, dict[str, int]], bool]:
     """Collect one strict stat-only Zet-tree generation."""
 
+    if _LIVE_SCAN_DIRECTORY_FILE_IDS:
+        try:
+            return _strict_live_zettel_stat_scan_impl(
+                archive_root,
+                progress_callback=progress_callback,
+                progress_state=progress_state,
+                directory_file_ids=True,
+            )
+        except _LiveScanFastPathMismatch:
+            pass
+    return _strict_live_zettel_stat_scan_impl(
+        archive_root,
+        progress_callback=progress_callback,
+        progress_state=progress_state,
+        directory_file_ids=False,
+    )
+
+
+def _strict_live_zettel_stat_scan_impl(
+    archive_root: Path,
+    *,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None,
+    progress_state: str,
+    directory_file_ids: bool,
+) -> tuple[dict[str, dict[str, int]], dict[str, dict[str, int]], bool]:
+    """One scan; ``directory_file_ids`` selects the A14 Windows listing path.
+
+    Every entry yields the same five strong generation fields as the per-file
+    ``os.lstat`` path.  With ``directory_file_ids`` the size, times and
+    attributes come from the directory listing (``DirEntry.stat``) and the file
+    id from one ``FileIdBothDirectoryInfo`` read per directory; a fixed sample
+    of entries per directory is re-observed with ``os.lstat`` and must match
+    exactly, otherwise ``_LiveScanFastPathMismatch`` restarts the slow path.
+    """
+
     live_by_path: dict[str, dict[str, int]] = {}
     directories_by_path: dict[str, dict[str, int]] = {}
     stat_failed = False
     inspected = 0
     reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    root_text = os.fspath(archive_root)
     for folder in ("zettels", "inbox"):
-        folder_root = archive_root / folder
+        folder_root = os.path.join(root_text, folder)
         try:
             folder_stat = os.lstat(folder_root)
         except FileNotFoundError:
@@ -56948,23 +57068,34 @@ def _strict_live_zettel_stat_scan(
             stat_failed = True
             continue
         directories_by_path[folder] = archive_index_file_generation(folder_stat)
+        volume_dev = int(folder_stat.st_dev)
 
-        pending = [folder_root]
+        pending: list[tuple[str, str]] = [(folder_root, folder)]
         while pending:
-            current = pending.pop()
+            current, relative_directory = pending.pop()
             try:
                 with os.scandir(current) as entries:
                     current_entries = list(entries)
             except OSError:
                 stat_failed = True
                 continue
-            for entry in current_entries:
-                path = Path(entry.path)
+            file_ids: dict[str, int] | None = None
+            if directory_file_ids:
                 try:
-                    # CPython's Windows DirEntry cache can expose zeroed
-                    # st_dev/st_ino values.  A path lstat supplies the exact
-                    # strong generation fields persisted by index v0.4.
-                    entry_stat = os.lstat(path)
+                    file_ids = _windows_directory_file_ids(current)
+                except OSError:
+                    file_ids = None
+            listed_files: list[tuple[str, dict[str, int]]] = []
+            for entry in current_entries:
+                path = entry.path
+                name = entry.name
+                listed = file_ids is not None and name in file_ids
+                try:
+                    if listed:
+                        listing_stat = entry.stat(follow_symlinks=False)
+                        entry_stat = listing_stat
+                    else:
+                        entry_stat = os.lstat(path)
                 except OSError:
                     stat_failed = True
                     continue
@@ -56977,28 +57108,36 @@ def _strict_live_zettel_stat_scan(
                 ):
                     stat_failed = True
                     continue
+                if listed:
+                    assert file_ids is not None
+                    generation = {
+                        "file_dev": volume_dev,
+                        "file_ino": file_ids[name],
+                        "file_ctime_ns": int(entry_stat.st_ctime_ns),
+                        "file_size": int(entry_stat.st_size),
+                        "file_mtime_ns": int(entry_stat.st_mtime_ns),
+                    }
+                else:
+                    generation = archive_index_file_generation(entry_stat)
+                relative = relative_directory + "/" + name
                 if stat.S_ISDIR(entry_stat.st_mode):
-                    relative_directory = PurePosixPath(
-                        *path.relative_to(archive_root).parts
-                    ).as_posix()
-                    if relative_directory in directories_by_path:
+                    if relative in directories_by_path:
                         stat_failed = True
                         continue
-                    directories_by_path[relative_directory] = (
-                        archive_index_file_generation(entry_stat)
-                    )
-                    pending.append(path)
+                    directories_by_path[relative] = generation
+                    pending.append((path, relative))
                     continue
-                if not entry.name.casefold().endswith(".md"):
+                if not name.casefold().endswith(".md"):
                     continue
                 if not stat.S_ISREG(entry_stat.st_mode):
                     stat_failed = True
                     continue
-                relative = PurePosixPath(*path.relative_to(archive_root).parts).as_posix()
                 if relative in live_by_path:
                     stat_failed = True
                     continue
-                live_by_path[relative] = archive_index_file_generation(entry_stat)
+                live_by_path[relative] = generation
+                if listed:
+                    listed_files.append((path, generation))
                 inspected += 1
                 if inspected == 1 or inspected % 250 == 0:
                     _emit_mint_progress(
@@ -57008,6 +57147,21 @@ def _strict_live_zettel_stat_scan(
                         inspected,
                         None,
                     )
+            if listed_files:
+                count = len(listed_files)
+                sample = min(count, _LIVE_SCAN_SAMPLE_PER_DIRECTORY)
+                positions = sorted({
+                    (index * (count - 1)) // max(1, sample - 1) if sample > 1 else 0
+                    for index in range(sample)
+                })
+                for position in positions:
+                    sample_path, listed_generation = listed_files[position]
+                    try:
+                        observed = archive_index_file_generation(os.lstat(sample_path))
+                    except OSError as exc:
+                        raise _LiveScanFastPathMismatch() from exc
+                    if observed != listed_generation:
+                        raise _LiveScanFastPathMismatch()
 
     return live_by_path, directories_by_path, stat_failed
 
