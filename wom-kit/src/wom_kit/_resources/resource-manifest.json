@@ -757,14 +757,14 @@
     {
       "source": "templates/ai-runtime/wom-archive/SKILL.md",
       "packaged": "templates/ai-runtime/wom-archive/SKILL.md",
-      "bytes": 11076,
-      "sha256": "95f808b14c3f09b2cd12fb527bdab34f104e980ad8785e7dc53eedc884f12c36"
+      "bytes": 11109,
+      "sha256": "d5d05506e0676cae52eed418142df2bb654ebd8d017c299cbe6cf8417dd319c5"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
       "packaged": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
-      "bytes": 9717,
-      "sha256": "9be1b9dc40a4adaab7f2566c174a73e2efb03c6836eebc029953b57e7073ea16"
+      "bytes": 9910,
+      "sha256": "077127b9c0b8c83427fcd1130af15e64b1721b8a9a5cf0546c5aaeb297c9671e"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/credentials-and-sessions.md",
@@ -799,8 +799,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/operator-contract.md",
       "packaged": "templates/ai-runtime/wom-archive/references/operator-contract.md",
-      "bytes": 77133,
-      "sha256": "60797d16c83ece37d32b7470f628a94b6ca794d7d3f0e158cf41b07ad4728340"
+      "bytes": 77303,
+      "sha256": "99ddda85cef01f7a90159d4aa17763323463013a3d2d855890738016030b4609"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/reading-memory-and-revision.md",

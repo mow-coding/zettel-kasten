@@ -65,10 +65,9 @@ unchanged and create a reviewed `sanitized_derivative`; its label is not access 
 Keep source text, OCR output, diagnostics and human corrections distinguishable; working metadata never silently becomes canonical prose.
 
 Before drafting, revising, or linking records, preserve the artifact's time and
-provenance. A matching name or label never permits reusing an identity, merging
-two records, or erasing a contradiction. A canonical zet is the current
-human-reviewed state, not an objective-truth certificate; change it through the
-reviewed revision path so earlier evidence and chronology stay auditable.
+provenance. A matching name or label is not permission to reuse an identity,
+merge two records, or erase a contradiction. A canonical zet is the current
+human-reviewed state, not a truth certificate; change it through the reviewed revision path.
 
 ## Create A Draft Through The Command Surface
 
@@ -90,7 +89,7 @@ reference.
 Use the validated source and prompt-boundary reports:
 
 ```text
-archive create-draft <archive-root> --dry-run --source-intake-plan <source-intake-plan.json> --prompt-boundary-report <prompt-boundary-report.json> --expected-archive-id <id> --expected-type <type> --profile-id <profile-id> --creation-mode ai_assisted --created-by ai_runtime:codex --assisted-by ai_runtime:codex --format json
+archive create-draft <archive-root> --dry-run --source-intake-plan <source-intake-plan.json> --prompt-boundary-report <prompt-boundary-report.json> --expected-archive-id <id> --expected-type <type> --profile-id <profile-id> --creation-mode ai_assisted --created-by ai_runtime:codex --assisted-by ai_runtime:codex --abstract <reviewed-abstract> --facet <key>=<value> --source-fidelity <verbatim|faithful_summary|sanitized_derivative> --fidelity-source-object-id <manifested-objet-id> --format json
 ```
 
 An AI-assisted or AI-generated draft must also supply a reviewed `--abstract`
@@ -140,6 +139,7 @@ Before publication, require:
 
 - an explicit, bounded, human-reviewed `frontmatter.abstract`;
 - stable title, type, provenance, and source links;
+- a `zet-quality-check --path <draft> --dry-run` with its blocker issues resolved;
 - a clean mint preview bound to the exact draft bytes;
 - separate human approval for the mint write.
 

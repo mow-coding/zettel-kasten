@@ -47,7 +47,7 @@ Every write below is `--dry-run` first, then the same plan with `--approve`.
 | draft a note | `create-draft` |
 | revise an unpublished draft | `draft-revision-write` |
 | drop an unpublished draft | `discard-draft` (check links to it first) |
-| publish | `mint-zet`, then `retire-draft` for the inbox copy |
+| check, then publish | `zet-quality-check`, `mint-zet`, then `retire-draft` for the inbox copy |
 | change a published note | `zet-revision-plan`, then `zet-revision-write` |
 | link notes or files | `zettel-edge`, `zettel-objet-link` |
 | keep whole mail | `imap-mailbox-message-fetch`, then `source-intake-batch` |
