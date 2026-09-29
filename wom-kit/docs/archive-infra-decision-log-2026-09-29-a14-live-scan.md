@@ -1,4 +1,4 @@
-# Decision log: the live Zet scan stops opening every file (A14, 2026-09-29)
+# Decision log: the live zet scan stops opening every file (A14, 2026-09-29)
 
 ## Context
 
@@ -16,7 +16,7 @@ measured in the same release.
 
 - Profiling the installed edge command (candidate with the startup cache) put
   4.2 s of a 4.7 s instrumented run in `strict_live_zettel_stat_snapshot`: the
-  two scans of the Zet tree that bind the index to the live files. Only 1.1 s of
+  two scans of the zet tree that bind the index to the live files. Only 1.1 s of
   that was the per-file `os.lstat`; the rest was pathlib bookkeeping per entry
   (`Path`, `relative_to`, `PurePosixPath`).
 - On Windows the `os.lstat` of one file opens a handle; 8,616 files twice cost
@@ -37,7 +37,7 @@ measured in the same release.
 2. **Directory file ids on Windows.** Size, times and attributes come from
    `DirEntry.stat(follow_symlinks=False)` (the listing) and the file id from one
    `FileIdBothDirectoryInfo` read per directory; the volume serial is the
-   folder's `st_dev`. No Zet file is opened during the scan.
+   folder's `st_dev`. No zet file is opened during the scan.
 3. **Sample cross-check with fallback.** Eight evenly spaced listed files per
    directory (always the first and the last) are re-observed with `os.lstat`
    and must equal the listing-derived generation exactly. Any mismatch, any
