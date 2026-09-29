@@ -763,8 +763,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
       "packaged": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
-      "bytes": 9910,
-      "sha256": "077127b9c0b8c83427fcd1130af15e64b1721b8a9a5cf0546c5aaeb297c9671e"
+      "bytes": 9920,
+      "sha256": "596412d4c62d00bc65e3457dfebfb6c4399a4e9f83b71ab5510e0df4e3d98c80"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/credentials-and-sessions.md",

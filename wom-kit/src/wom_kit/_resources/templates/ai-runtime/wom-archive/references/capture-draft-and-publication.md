@@ -42,8 +42,8 @@ It revalidates the intake claim, checkpoints, receipts, bytes and archive
 identity. After an interruption keep the archive, read `operation-control
 --action recovery-plan --dry-run`, then continue with `--approve --resume
 --approval-id <id> --execution-sha256 <sha>`; only `outcome_unverified` needs a
-fresh dry-run and new approval. Neither decision authorizes providers, uploads,
-links, drafts, minting, or cleanup.
+fresh capture dry-run and a new approval. Neither decision authorizes providers,
+uploads, links, drafts, minting, or cleanup.
 
 Staged external originals also prepare one private name intake per copy
 (`prepared_name_intake_count`). After capture, write them under one approval,
