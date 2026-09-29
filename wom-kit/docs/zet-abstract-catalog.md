@@ -45,6 +45,13 @@ The one-zet `read-zettel --section overview` compatibility surface may still
 derive a gist from the first safe body paragraph. The archive-wide catalog does
 not use that fallback because its contract is frontmatter-only enumeration.
 
+Since v0.4.52 each `read-zettel` overview `edges_preview` item names its target
+for a human: a zet target carries `target_title` read from the archive index
+(never from the target file) with `target_label_state: title_from_index`;
+otherwise the state says exactly why no title is shown (`target_not_indexed`,
+`target_redacted`, `title_unavailable`, `index_missing`, `index_unavailable`,
+`objet_has_no_human_label` for an objet, `target_kind_unknown`).
+
 Since v0.3.218, a selected `missing` item can enter the read-only
 [`zet Abstract Backfill Plan`](zet-abstract-backfill-plan.md). The host reads
 that one canonical body, binds a private candidate to the exact file SHA-256,

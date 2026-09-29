@@ -7381,6 +7381,80 @@ def safe_overview_edge_preview(edge: dict[str, Any], warnings: list[str], index:
     return drop_none_values({"type": edge_type, "target": target, "target_kind": target_kind})
 
 
+EDGE_TARGET_LABEL_STATES = (
+    "title_from_index",
+    "title_unavailable",
+    "target_not_indexed",
+    "target_redacted",
+    "index_missing",
+    "index_unavailable",
+    "objet_has_no_human_label",
+    "target_kind_unknown",
+)
+
+
+def annotate_edge_preview_targets(root: Path, previews: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """S2-U06 (letters 174-176): every linked target shows a human title or says exactly why not.
+
+    A zet target's ``target_title`` comes from the archive index projection
+    (never from opening the target file); an objet has no reviewed human label,
+    so the fixed reason ``objet_has_no_human_label`` is stated instead of an
+    invented one. ``target_label_state`` is always one of
+    ``EDGE_TARGET_LABEL_STATES``. Never raises and never echoes paths.
+    """
+
+    zet_ids = sorted(
+        {
+            str(preview.get("target"))
+            for preview in previews
+            if preview.get("target_kind") == "zettel" and isinstance(preview.get("target"), str)
+        }
+    )
+    titles: dict[str, tuple[Any, Any]] = {}
+    index_state = "index_missing"
+    db_path = root / INDEX_RELATIVE_PATH
+    if zet_ids and db_path.is_file():
+        try:
+            conn = connect_archive_index(db_path, row_factory=True)
+            try:
+                placeholders = ",".join("?" for _ in zet_ids)
+                for row in conn.execute(
+                    f"SELECT zettel_id, title, status FROM zettels WHERE zettel_id IN ({placeholders})",
+                    zet_ids,
+                ).fetchall():
+                    titles[str(row["zettel_id"])] = (row["title"], row["status"])
+            finally:
+                conn.close()
+            index_state = "indexed"
+        except (sqlite3.Error, OSError, ValueError):
+            index_state = "index_unavailable"
+    annotated: list[dict[str, Any]] = []
+    for preview in previews:
+        item = dict(preview)
+        kind = item.get("target_kind")
+        if kind == "zettel":
+            entry = titles.get(str(item.get("target")))
+            if index_state != "indexed":
+                item["target_label_state"] = index_state
+            elif entry is None:
+                item["target_label_state"] = "target_not_indexed"
+            elif (entry[1] or "") not in ZETTEL_QUERYABLE_STATUSES:
+                item["target_label_state"] = "target_redacted"
+            else:
+                title = safe_zettel_overview_string(entry[0], [], "$.overview.edges_preview[].target_title")
+                if title:
+                    item["target_title"] = title
+                    item["target_label_state"] = "title_from_index"
+                else:
+                    item["target_label_state"] = "title_unavailable"
+        elif kind == "objet":
+            item["target_label_state"] = "objet_has_no_human_label"
+        else:
+            item["target_label_state"] = "target_kind_unknown"
+        annotated.append(item)
+    return annotated
+
+
 def zettel_first_read_summary(frontmatter: dict[str, Any], body: str, *, redacted: bool = False) -> tuple[dict[str, Any], list[str]]:
     warnings: list[str] = []
     zettel_id = frontmatter.get("id")
@@ -7541,6 +7615,9 @@ def read_zettel(
             "warnings": overview_warnings,
         }
     overview, overview_warnings = zettel_first_read_summary(frontmatter, body)
+    overview["edges_preview"] = annotate_edge_preview_targets(
+        root, list(overview.get("edges_preview") or [])
+    )
     include_body = section in {"body", "document", "all"}
     include_full_frontmatter = section in {"body", "details", "all"}
     body_sha256 = "sha256:" + hashlib.sha256(body.encode("utf-8")).hexdigest()
@@ -113025,6 +113102,15 @@ def session_handoff_checkpoint(
         next_safe_actions = ["Resolve blockers and rerun the dry-run before approval."]
 
     ready_for_context_reset = bool(current_checkpoint_verified and not durable_gaps and not blockers)
+    # S2-U15 (letters 174-176): unpublished inbox drafts are named in the
+    # checkpoint so a handoff never reads as complete while drafts still wait.
+    inbox_attention = write_result_inbox_attention(root)
+    if inbox_attention.get("unpublished_draft_count"):
+        next_safe_actions.append(
+            f"{inbox_attention['unpublished_draft_count']} unpublished inbox draft(s) remain and this "
+            "checkpoint does not publish them: continue with mint-zet --dry-run per draft, or leave "
+            "them explicitly for the next session."
+        )
     if activity_scope is None and inventory_snapshot.get("truncated"):
         next_safe_actions.append(
             "More than one page of AI artifacts exists; rerun with --activity-root <archive-relative folder> "
@@ -113036,6 +113122,7 @@ def session_handoff_checkpoint(
         "lifecycle_action": "session_handoff_checkpoint",
         "archive_id": archive_id,
         "status": status,
+        "inbox_attention": inbox_attention,
         "state_digest": state_digest,
         "expected_state_digest": expected_state_digest,
         "diagnostic_state_digest": diagnostic_state_digest,
