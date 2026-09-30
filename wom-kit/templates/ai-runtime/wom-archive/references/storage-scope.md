@@ -13,6 +13,16 @@
   receipts. Start a fresh scoped plan afterwards; do not claim remote success
   or rollback from abandonment. Generic claim finalize is not this procedure.
 
+- Object-storage keys belong in the Windows Credential Manager, like the
+  desktop apps' keychain: the human adds two generic credentials (access key,
+  secret key) in 자격 증명 관리자 and the request names them exactly as
+  `credential-manager:<target>`. An `env:` ref ends with its process. If a
+  preview reports `credential_refs_state: unresolved`, stop; for an unfinished
+  `activity-cleanup`, rerun `--reconcile --dry-run` with
+  `--rebind-access-key-id-ref` and `--rebind-secret-access-key-ref`, then the
+  matching `--approve`. Completed items are not reprocessed; never put a key in
+  chat, a file, or a command line.
+
 ## Classify before upload
 
 The helper AI owns classification when the user delegates cleanup. Inspect

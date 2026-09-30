@@ -18335,10 +18335,12 @@ def _object_storage_live_transport_factory(
             access_value, _ = archive_services._resolve_credential_value(
                 access_ref,
                 archive_services.credential_ref_store(access_ref),
+                exact_only=True,
             )
             secret_value, _ = archive_services._resolve_credential_value(
                 secret_ref,
                 archive_services.credential_ref_store(secret_ref),
+                exact_only=True,
             )
             if not access_value or not secret_value:
                 raise ValueError("unresolved")
@@ -18360,6 +18362,26 @@ def _object_storage_live_transport_factory(
             raise unavailable() from None
 
     return resolve
+
+
+def _object_storage_credential_refs_state(storage: Mapping[str, Any]) -> str:
+    """v0.4.53 (letter 177): can this process read both refs right now?
+
+    ``resolvable`` / ``unresolved``. The check builds the transport through the
+    same factory the approved write uses (values stay in memory, never
+    echoed, no network request). An ``env:`` ref is unresolved in a new process
+    that lacks the variable; a ``credential-manager:`` ref (the OS keychain,
+    like the desktop apps) survives restarts and updates.
+    """
+    class _Refused(Exception):
+        pass
+
+    try:
+        _object_storage_live_transport_factory(
+            argparse.Namespace(**dict(storage)), invalid=_Refused, unavailable=_Refused)()
+        return "resolvable"
+    except Exception:
+        return "unresolved"
 
 
 def _command_object_storage_preserve_local_only(args: argparse.Namespace) -> int:
@@ -23847,19 +23869,38 @@ def command_activity_cleanup_result(args: argparse.Namespace) -> dict[str, Any]:
             raise activity_cleanup.ActivityCleanupError("activity_cleanup_restore_arguments_invalid")
         if reconcile and (args.resume or inspect_status):
             raise activity_cleanup.ActivityCleanupError("activity_cleanup_reconcile_requires_preview_or_approve")
+        rebind_access = getattr(args, "rebind_access_key_id_ref", None)
+        rebind_secret = getattr(args, "rebind_secret_access_key_ref", None)
+        if (rebind_access is None) != (rebind_secret is None):
+            raise activity_cleanup.ActivityCleanupError("activity_cleanup_credential_rebind_pair_required")
+        if rebind_access is not None and not reconcile:
+            raise activity_cleanup.ActivityCleanupError("activity_cleanup_credential_rebind_requires_reconcile")
         candidate = activity_cleanup.plan(Path(args.archive_root), args.request,
             resume=args.resume or inspect_status or reconcile or restore_number is not None, progress=reporter.progress)
         if restore_number is not None:
             candidate = activity_cleanup.restore_plan(candidate, number=restore_number, destination=args.destination, resume=args.resume)
             candidate["public"] = candidate["restore_public"]
         if reconcile:
-            candidate = activity_cleanup.reconcile_plan(candidate)
+            candidate = activity_cleanup.reconcile_plan(
+                candidate,
+                credential_refs=None if rebind_access is None else {
+                    "access_key_id_ref": rebind_access, "secret_access_key_ref": rebind_secret})
         if inspect_status:
             result = activity_cleanup.status(candidate)
             return result
         if getattr(args, "private_plan_output", None):
             activity_cleanup.write_private_plan(candidate, args.private_plan_output)
             candidate["public"]["private_plan_written"] = True
+        needs_remote = any(i["disposition"] == "preserve" for i in candidate["material"]["items"])
+        refs_state = (_object_storage_credential_refs_state(candidate["material"]["storage"])
+                      if needs_remote else "not_needed")
+        candidate["public"]["credential_refs_state"] = refs_state
+        if refs_state == "unresolved":
+            candidate["public"]["credential_refs_next_action"] = (
+                "The storage credential refs cannot be read in this process. Keep the two keys in the Windows "
+                "Credential Manager (exact generic targets) and rerun --reconcile with --rebind-access-key-id-ref "
+                "credential-manager:<name> --rebind-secret-access-key-ref credential-manager:<name>; completed "
+                "items are not reprocessed.")
         if args.dry_run:
             return candidate["public"]
         if os.name != "nt":
@@ -23869,6 +23910,9 @@ def command_activity_cleanup_result(args: argparse.Namespace) -> dict[str, Any]:
         reviewer = archive_services.safe_foreign_quarantine_actor_id(args.reviewed_by)
         if reviewer is None:
             raise activity_cleanup.ActivityCleanupError("activity_cleanup_reviewer_required")
+        if refs_state == "unresolved":
+            # Refused before the dialog, like object-storage-upload since v0.4.36.
+            raise activity_cleanup.ActivityCleanupError("activity_cleanup_credential_ref_unresolved")
         binding = (activity_cleanup.restore_binding(candidate) if restore_number is not None
                    else activity_cleanup.approval_binding(candidate))
         context = binding.context(archive_id=archive_services.read_archive_id(candidate["root"]), reviewer_claim=reviewer)
@@ -41953,6 +41997,8 @@ def build_parser() -> argparse.ArgumentParser:
     activity_cleanup_modes.add_argument("--resume", action="store_true")
     activity_cleanup_modes.add_argument("--status", action="store_true", help="Read saved intent and item evidence without repeating writes or asserting fresh remote verification.")
     activity_cleanup_parser.add_argument("--reconcile", action="store_true", help="Preview or approve recovery of unfinished items from authenticated original evidence.")
+    activity_cleanup_parser.add_argument("--rebind-access-key-id-ref", help="With --reconcile only: replace the original access-key ref, e.g. credential-manager:<exact target>; provider, store, endpoint, bucket and region stay the original's.")
+    activity_cleanup_parser.add_argument("--rebind-secret-access-key-ref", help="With --reconcile only: replace the original secret-key ref (pair with --rebind-access-key-id-ref).")
     activity_cleanup_parser.add_argument("--restore-item", type=int, help="Restore this saved item number, including its preserved Windows streams, into a new external file.")
     activity_cleanup_parser.add_argument("--destination", help="Absolute new-file destination for --restore-item; existing files are never replaced.")
     activity_cleanup_parser.add_argument("--expected-plan-sha256")

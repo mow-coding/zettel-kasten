@@ -332,6 +332,24 @@ the grant. Claims written before v0.4.34 stay immutable and count as
 granting conversation; another conversation continues a task through
 handoff / accept, never by reusing them.
 
+Since v0.4.53 (beta letter 177; the owner's 2026-09-25 decision, modelled on
+the Codex and Claude desktop apps) the presenter secret is no longer a
+condition. The desktop apps keep an "allow" decision as a durable record in the
+user's account, keyed to the project or conversation, and a restart or update
+never resets it; the process that runs a command holds no authority. A WOM
+grant is likewise the record on this conversation's claimed work session: any
+new process of the same conversation that presents the three session refs uses
+it, also after an app restart or a WOM update, until `set-permission-mode
+manual`, `recover`, pause, handoff or completion ends it. The approve no longer
+returns `presenter_token` (`grant_survives_process_restart: true`,
+`presenter_token_required: false`); `work_session_presenter_missing` and
+`work_session_presenter_mismatch` are no longer produced. The row keeps its
+`presenter_sha256` shape, another conversation's route still does not resolve
+to the session, and each grant claim still records `session_presenter` and
+`work_session_second_presenter_observed` as evidence. The helper AI keeps this
+conversation's three refs and exports them in every new process; it never
+writes them into shared files or gives them to another conversation.
+
 Since v0.4.36 (beta letter 168 ⑥; the 2026-09-17 decision restored) a grant
 means what the desktop apps mean by it: `allow_all` covers every operation
 kind — project update, remote storage, recovery, deletion, session control,
