@@ -27,6 +27,7 @@ def valid_request() -> dict[str, object]:
         "schema": body_module.REQUEST_SCHEMA,
         "feedback_id": FEEDBACK_ID,
         "title": "Operator feedback body preservation",
+        "author": {"ai_product": "Synthetic test agent", "model": "synthetic-model", "reasoning_level": "high", "source": "confirmed_by_user"},
         "sections": {
             "environment": "wom-kit 0.3.312 local archive",
             "task": "Preserve a reviewed feedback body exactly.",

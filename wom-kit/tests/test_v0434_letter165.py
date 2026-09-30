@@ -466,6 +466,7 @@ class FeedbackComposeExactApprovalTests(unittest.TestCase):
         self.request = {
             "schema": body_module.REQUEST_SCHEMA, "feedback_id": "synthetic-letter-165",
             "title": "Synthetic compose under exact approval",
+            "author": {"ai_product": "Synthetic test agent", "model": "synthetic-model", "reasoning_level": "high", "source": "confirmed_by_user"},
             "sections": {"environment": "synthetic", "task": "compose", "observed_failure": "none",
                          "suspected_cause": "none", "requested_resolution": "dialog", "reproduction": "run it"},
         }

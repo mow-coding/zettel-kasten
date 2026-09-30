@@ -7,6 +7,9 @@ Load this reference when the human asks to write to the WOM developers.
    next standard id (`wom-feedback-YYYYMMDD-NNN`). Never invent or reuse one.
 3. Approve the same plan once. Then run `operator-feedback-body-check` and tell
    the human the letter is "전달 전". Do not create review copies.
+   The human sees exactly two states, "전달 전" and "전달 완료". An approved
+   compose IS the letter: there is no further registration step, so never
+   describe one and never ask again for an instruction already given.
 4. An undelivered letter is revised through compose's revise path, not by a
    new number and not by editing the file.
 5. When the human says it was delivered, run `operator-feedback-mark-delivered
@@ -17,6 +20,12 @@ Load this reference when the human asks to write to the WOM developers.
    It cannot be undone; letters not yet delivered stay. If the plan reports
    `moved_letter_needs_moved_folder`, ask the human for the folder an older
    WOM moved letters to and add `--moved-folder <that folder>`.
+
+Author block (required, v0.4.54): fill `author.ai_product`, `author.model`
+and `author.reasoning_level` with what this conversation actually uses. If
+you cannot read them yourself, ask the human (the app shows them) and set
+`author.source` to `confirmed_by_user`. Only if the human cannot tell either,
+set `user_could_not_tell`. Never write `미수집`/`unknown` on your own.
 
 Content rules:
 

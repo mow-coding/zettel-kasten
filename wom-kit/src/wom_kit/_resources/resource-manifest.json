@@ -775,8 +775,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/developer-letters.md",
       "packaged": "templates/ai-runtime/wom-archive/references/developer-letters.md",
-      "bytes": 1479,
-      "sha256": "78e8ffd47b85a418060178975f23d2c6e3806014457517a29b8828de17c8cfc2"
+      "bytes": 2084,
+      "sha256": "3cae410b9e6aff7d9fa0d13a473635466e9451648f5798d4d843b635f50104fd"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/foreign-sharing-and-trust.md",

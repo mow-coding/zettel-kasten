@@ -5803,6 +5803,7 @@ class ArchiveCliTests(unittest.TestCase):
                 "schema": operator_feedback_body.REQUEST_SCHEMA,
                 "feedback_id": feedback_id,
                 "title": "Synthetic draft revision",
+                "author": {"ai_product": "Synthetic test agent", "model": "synthetic-model", "reasoning_level": "high", "source": "confirmed_by_user"},
                 "sections": {
                     "environment": "Synthetic v0.4.3 acceptance fixture.",
                     "task": "Preserve a draft correction under the same id.",
@@ -20355,6 +20356,7 @@ if __name__ == "__main__":
                         "schema": operator_feedback_body.REQUEST_SCHEMA,
                         "feedback_id": feedback_id,
                         "title": "Synthetic interrupted update report",
+                        "author": {"ai_product": "Synthetic test agent", "model": "synthetic-model", "reasoning_level": "high", "source": "confirmed_by_user"},
                         "sections": {
                             "environment": "Synthetic recovery fixture.",
                             "task": "Preserve a new report while update recovery is required.",
@@ -21176,6 +21178,7 @@ if __name__ == "__main__":
                         "schema": operator_feedback_body.REQUEST_SCHEMA,
                         "feedback_id": feedback_id,
                         "title": "Synthetic runtime mismatch report",
+                        "author": {"ai_product": "Synthetic test agent", "model": "synthetic-model", "reasoning_level": "high", "source": "confirmed_by_user"},
                         "sections": {
                             "environment": "Synthetic mismatch fixture.",
                             "task": "Preserve one new report body.",

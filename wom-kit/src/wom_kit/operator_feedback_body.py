@@ -71,7 +71,26 @@ REQUIRED_SECTIONS = (
     "requested_resolution",
     "reproduction",
 )
-REQUEST_KEYS = {"schema", "feedback_id", "title", "sections"}
+REQUEST_KEYS = {"schema", "feedback_id", "title", "author", "sections"}
+# v0.4.54 (letter 178): who wrote the letter is a required, checked field.
+# A helper AI wrote "not collected" for the model although the person could
+# see it in the app; the structure check let it through.
+AUTHOR_KEYS = {"ai_product", "model", "reasoning_level", "source"}
+AUTHOR_SOURCES = {
+    "confirmed_by_user": "사용자 확인",
+    "read_from_runtime": "실행 결과에서 읽음",
+    "user_could_not_tell": "사용자도 확인하지 못함",
+}
+AUTHOR_PLACEHOLDERS = frozenset({
+    "", "?", "-", "미수집", "미확인", "모름", "알수없음", "알 수 없음", "확인불가", "확인 불가",
+    "unknown", "n/a", "na", "none", "null", "not collected", "unconfirmed", "unavailable",
+})
+AUTHOR_NEXT_SAFE_ACTION = (
+    "Ask the person which app, model and reasoning level this conversation uses (they can see it in the "
+    "app's model picker), put them in author.ai_product / author.model / author.reasoning_level and set "
+    "author.source to confirmed_by_user. Only if the person cannot tell either, set author.source to "
+    "user_could_not_tell; never write a placeholder such as 미수집 or unknown on your own."
+)
 SECTION_KEYS = set(REQUIRED_SECTIONS)
 RECEIPT_KEYS = {
     "schema",
@@ -629,6 +648,38 @@ def _section_summary(sections: Any) -> dict[str, dict[str, Any]]:
     }
 
 
+def _author_line(value: Any) -> tuple[str | None, list[str]]:
+    """The checked author line placed first in the environment section, or blocker codes."""
+
+    if not isinstance(value, Mapping) or set(value) != AUTHOR_KEYS:
+        return None, ["feedback_body_author_missing"]
+    fields: dict[str, str] = {}
+    for key in ("ai_product", "model", "reasoning_level", "source"):
+        item = value.get(key)
+        if not isinstance(item, str) or len(item) > 120 or "\n" in item or "\r" in item or "\x00" in item:
+            return None, ["feedback_body_author_missing"]
+        fields[key] = item.strip()
+    if fields["source"] not in AUTHOR_SOURCES:
+        return None, ["feedback_body_author_source_invalid"]
+    if any(_contains_private_or_secret_value(fields[key]) for key in ("ai_product", "model", "reasoning_level")):
+        return None, ["feedback_body_author_private_value"]
+    if fields["ai_product"].casefold() in AUTHOR_PLACEHOLDERS:
+        return None, ["feedback_body_author_unconfirmed"]
+    unknown = [key for key in ("model", "reasoning_level") if fields[key].casefold() in AUTHOR_PLACEHOLDERS]
+    if unknown and fields["source"] != "user_could_not_tell":
+        return None, ["feedback_body_author_unconfirmed"]
+    if not unknown and fields["source"] == "user_could_not_tell":
+        return None, ["feedback_body_author_source_invalid"]
+    model = fields["model"] if fields["model"].casefold() not in AUTHOR_PLACEHOLDERS else "확인 불가"
+    reasoning = (fields["reasoning_level"] if fields["reasoning_level"].casefold() not in AUTHOR_PLACEHOLDERS
+                 else "확인 불가")
+    return (
+        f"작성 AI: {fields['ai_product']} · 모델: {model} · 추론 수준: {reasoning} · "
+        f"출처: {AUTHOR_SOURCES[fields['source']]}",
+        [],
+    )
+
+
 def _render_markdown(title: str, feedback_id: str, sections: Mapping[str, str]) -> bytes:
     text = (
         f"# {title}\n\n"
@@ -862,6 +913,9 @@ def _prepare_plan(
     if title is None or "\n" in title:
         blockers.append("feedback_body_title_invalid")
 
+    author_line, author_blockers = _author_line(document.get("author"))
+    blockers.extend(author_blockers)
+
     sections_value = document.get("sections")
     summary = _section_summary(sections_value)
     result["section_summary"] = summary
@@ -880,6 +934,8 @@ def _prepare_plan(
                 blockers.append("feedback_body_sections_structurally_ambiguous")
                 continue
             normalized_sections[name] = value
+    if author_line is not None and "environment" in normalized_sections:
+        normalized_sections["environment"] = f"{author_line}\n\n{normalized_sections['environment']}"
 
     body_bytes = b""
     if safe_id is not None and title is not None and len(normalized_sections) == len(REQUIRED_SECTIONS):
@@ -891,6 +947,8 @@ def _prepare_plan(
     blockers = list(dict.fromkeys(blockers))
     if blockers:
         result["blockers"] = blockers
+        if any(code.startswith("feedback_body_author_") for code in blockers):
+            result["next_safe_actions"] = [AUTHOR_NEXT_SAFE_ACTION]
         return result, None
 
     body_digest = hashlib.sha256(body_bytes).hexdigest()
