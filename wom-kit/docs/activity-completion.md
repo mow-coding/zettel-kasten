@@ -58,7 +58,7 @@ Windows의 ADS 부가 데이터도 본문과 연결된 별도 객체로 보존·
 
 ### 재시작 뒤 남은 항목 이어서 끝내기 (v0.4.53)
 
-원래 요청이 `env:` 자격증명 참조를 썼다면 그 값은 실행한 프로세스가 끝나면서 사라진다. 데스크톱 앱이 키를 OS 키체인에 두듯, 원격 저장소 키 두 개를 Windows 자격 증명 관리자의 일반 자격 증명으로 추가하고 `--reconcile --dry-run --rebind-access-key-id-ref credential-manager:<이름> --rebind-secret-access-key-ref credential-manager:<이름>`으로 미리 본 뒤 같은 옵션으로 `--approve`한다. 바뀌는 것은 두 참조뿐이며 저장소·엔드포인트·버킷·지역은 원래 것과 같아야 하고, 그 교체는 새 승인 계획에 기록된다. 완료된 항목은 다시 처리하지 않는다. 미리보기의 `credential_refs_state`가 `unresolved`이면 이 프로세스에서 키를 읽을 수 없다는 뜻이며, 승인 실행은 승인창을 띄우기 전에 `activity_cleanup_credential_ref_unresolved`로 멈춘다. 원격 저장소 키는 이름이 정확히 일치하는 자격 증명만 읽는다.
+원래 요청이 `env:` 자격증명 참조를 썼다면 그 값은 실행한 프로세스가 끝나면서 사라진다. 데스크톱 앱이 키를 OS 키체인에 두듯, `object-storage-credential-store <archive-root> --store-slug <이름> --dry-run` 뒤 `--approve --expected-request-sha256 <값>`을 실행하면 WOM의 가려진 입력 창 두 개에서 접근 키 ID와 비밀 키를 받아 Windows 자격 증명 관리자에 저장하고 쓸 참조 두 개를 알려 준다. 그 참조로 `--reconcile --dry-run --rebind-access-key-id-ref credential-manager:<이름> --rebind-secret-access-key-ref credential-manager:<이름>`으로 미리 본 뒤 같은 옵션으로 `--approve`한다. 바뀌는 것은 두 참조뿐이며 저장소·엔드포인트·버킷·지역은 원래 것과 같아야 하고, 그 교체는 새 승인 계획에 기록된다. 완료된 항목은 다시 처리하지 않는다. 미리보기의 `credential_refs_state`가 `unresolved`이면 이 프로세스에서 키를 읽을 수 없다는 뜻이며, 승인 실행은 승인창을 띄우기 전에 `activity_cleanup_credential_ref_unresolved`로 멈춘다. 원격 저장소 키는 이름이 정확히 일치하는 자격 증명만 읽는다.
 
 ### 다른 세션과 함께 작업하기
 

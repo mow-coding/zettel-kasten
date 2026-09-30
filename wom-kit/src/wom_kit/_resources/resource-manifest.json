@@ -823,8 +823,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/storage-scope.md",
       "packaged": "templates/ai-runtime/wom-archive/references/storage-scope.md",
-      "bytes": 5758,
-      "sha256": "6c65292790671445b436ffe0b9c9240963277e95ac0ff234e9702edadbf1e54d"
+      "bytes": 5848,
+      "sha256": "afbb50e380d1ef7bd174b556d0729562a636c6a0d298b81ba907f13d1bf3a66d"
     },
     {
       "source": "templates/company/AGENTS.md",

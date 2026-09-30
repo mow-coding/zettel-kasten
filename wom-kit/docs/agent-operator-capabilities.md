@@ -209,14 +209,14 @@ continues to be parser-derived; history does not grant execution authority.
 For the current v0.4.52 candidate parser, the inventory snapshot is:
 
 ```text
-canonical executable command paths: 309
+canonical executable command paths: 310
 alias invocation paths:              215
-all invocation paths:                524
-approval_available:                   110
+all invocation paths:                525
+approval_available:                   111
 approval_fixed_closed:                5
 approval_not_exposed:                194
 conditional approval paths:            10
-dry_run_exposed:                     263
+dry_run_exposed:                     264
 unmatched fixed-close entries:         0
 ```
 

@@ -65,12 +65,19 @@ Codex and Claude desktop apps.
    auto-detection kept for Tiro is not used there. `object-storage-cleanup`
    already takes its refs per run, so the same keychain refs finish the remote
    temporary-object cleanup.
-4. **Next in this release: a WOM-owned enrollment window for storage keys.**
-   Until it lands the human adds the two generic credentials in 자격 증명
-   관리자; `credential-adopt` still enrolls Notion only. Following the owner's
-   rule not to defer customer friction, v0.4.53 continues with a WOM popup that
-   stores object-storage keys in the Credential Manager under exact targets and
-   returns the `credential-manager:` refs to use.
+4. **A WOM-owned enrollment window for storage keys (implemented).**
+   Following the owner's rule not to defer customer friction,
+   `object-storage-credential-store <archive-root> --store-slug <slug>`
+   previews the two exact targets (`wom-object-storage.<slug>.access-key-id` /
+   `.secret-access-key`) and a request digest; `--approve` runs WOM's native
+   masked popup (the Notion one, now also for object storage) twice in an
+   isolated spawned child, checks each key's shape, writes both generic
+   credentials, removes a half pair on any failure, and returns only the two
+   `credential-manager:` refs. Existing keys need `--replace-existing`. A
+   content-free record lists the refs in `credential-secure-list`
+   (`object_storage_credentials`); it is never authority. Like
+   `credential-adopt`, the window is secret entry and always opens (coverage
+   manifest `legacy_exception`).
 
 ## Boundaries
 

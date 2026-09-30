@@ -593,6 +593,10 @@
       "status": "legacy_exception",
       "reason": "the secure window is where the person enters the provider secret itself; no grant can supply a secret, so it always opens (2026-09-26 coverage audit). It is secret entry, not an approval dialog."
     },
+    "object-storage-credential-store": {
+      "status": "legacy_exception",
+      "reason": "the masked WOM window is where the person enters the object-storage keys themselves; no grant can supply a secret, so it always opens (v0.4.53, letter 177). It is secret entry, not an approval dialog."
+    },
     "object-storage": {
       "status": "session_integrated",
       "route": "environment",

@@ -144,7 +144,7 @@ class V0433ReleaseDocsTests(unittest.TestCase):
         self.assertIn("`writer_state`", contract)
         self.assertIn("`local_bytes_missing`", contract)
         approval = (KIT / "docs" / "exact-human-approval-contract.md").read_text(encoding="utf-8")
-        self.assertIn("110 approval-available, 5 fixed-closed", " ".join(approval.split()))  # current parser inventory
+        self.assertIn("111 approval-available, 5 fixed-closed", " ".join(approval.split()))  # current parser inventory
         matrix = (KIT / "docs" / "capability-matrix.md").read_text(encoding="utf-8")
         self.assertIn("upload reopened in v0.4.33 as preservation PUT + adoption projection", matrix)
         register = (KIT / "docs" / "recovery-operations-acceptance.md").read_text(encoding="utf-8")
@@ -175,11 +175,11 @@ class V0433ReleaseDocsTests(unittest.TestCase):
         routed = sum(1 for row in manifest["paths"].values() if row.get("route"))
         # v0.4.23 integrated create-draft (LR-06a); v0.4.24 through v0.4.27, v0.4.31 and v0.4.32 change no writer;
         # v0.4.28 restore, v0.4.29 offload, v0.4.30 claim finalize and v0.4.33 upload are pending (target v0.4.34).
-        self.assertEqual(len(statuses), 110)  # 2026-09-29 feedback integration (A03-A19 commands)
+        self.assertEqual(len(statuses), 111)  # 2026-09-30 letter 177 object-storage-credential-store
         self.assertEqual(statuses.count("session_integrated") - routed, 6)
-        self.assertEqual(routed, 86)  # 2026-09-29 feedback integration (A03-A19 commands)
+        self.assertEqual(routed, 86)  # 2026-09-30 letter 177 object-storage-credential-store
         self.assertEqual(statuses.count("pending"), 0)  # 2026-09-26 coverage audit
-        self.assertEqual(statuses.count("legacy_exception"), 18)  # 2026-09-29 feedback integration (A03-A19 commands)
+        self.assertEqual(statuses.count("legacy_exception"), 19)  # 2026-09-30 letter 177 object-storage-credential-store
         self.assertEqual(manifest["paths"]["create-draft"]["status"], "session_integrated")
 
     def test_current_docs_are_private_safe(self) -> None:

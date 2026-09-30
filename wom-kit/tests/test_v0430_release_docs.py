@@ -163,11 +163,11 @@ class V0430ReleaseDocsTests(unittest.TestCase):
         routed = sum(1 for row in manifest["paths"].values() if row.get("route"))
         # v0.4.23 integrated create-draft (LR-06a); v0.4.24 through v0.4.27 change no writer;
         # v0.4.29 adds object-storage-restore and v0.4.30 object-storage-offload (both pending, target v0.4.30).
-        self.assertEqual(len(statuses), 110)  # 2026-09-29 feedback integration (A03-A19 commands)
+        self.assertEqual(len(statuses), 111)  # 2026-09-30 letter 177 object-storage-credential-store
         self.assertEqual(statuses.count("session_integrated") - routed, 6)
-        self.assertEqual(routed, 86)  # 2026-09-29 feedback integration (A03-A19 commands)
+        self.assertEqual(routed, 86)  # 2026-09-30 letter 177 object-storage-credential-store
         self.assertEqual(statuses.count("pending"), 0)  # 2026-09-26 coverage audit
-        self.assertEqual(statuses.count("legacy_exception"), 18)  # 2026-09-29 feedback integration (A03-A19 commands)
+        self.assertEqual(statuses.count("legacy_exception"), 19)  # 2026-09-30 letter 177 object-storage-credential-store
         self.assertEqual(manifest["paths"]["create-draft"]["status"], "session_integrated")
 
     def test_current_docs_are_private_safe(self) -> None:

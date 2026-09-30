@@ -14,9 +14,10 @@
   or rollback from abandonment. Generic claim finalize is not this procedure.
 
 - Object-storage keys belong in the Windows Credential Manager, like the
-  desktop apps' keychain: the human adds two generic credentials (access key,
-  secret key) in 자격 증명 관리자 and the request names them exactly as
-  `credential-manager:<target>`. An `env:` ref ends with its process. If a
+  desktop apps' keychain: run `object-storage-credential-store <archive-root>
+  --store-slug <slug> --dry-run`, then its `--approve --expected-request-sha256`;
+  the human types each key into WOM's masked window and the result returns the
+  two `credential-manager:` refs to use. An `env:` ref ends with its process. If a
   preview reports `credential_refs_state: unresolved`, stop; for an unfinished
   `activity-cleanup`, rerun `--reconcile --dry-run` with
   `--rebind-access-key-id-ref` and `--rebind-secret-access-key-ref`, then the

@@ -19431,6 +19431,11 @@ def command_credential_secure_list(args: argparse.Namespace) -> int:
             result["receipt_authentication_requested"] = False
         if not isinstance(result, dict):
             raise ValueError("credential_secure_list_result_invalid")
+        # v0.4.53 (letter 177): object-storage keys stored through
+        # object-storage-credential-store; content-free, never authority.
+        from .object_storage_credential_store import list_records
+
+        result = {**result, "object_storage_credentials": list_records(root)}
     except (archive_services.ArchiveServiceError, OSError, ValueError):
         result = _credential_cli_blocked(action, "credential_secure_list_unavailable")
     except Exception:
@@ -23838,6 +23843,44 @@ def command_abstract_freshness(args: argparse.Namespace) -> int:
                 print(f"- {warning}")
         print("Writes: none")
     return 0 if result.get("ok") else 1
+
+
+def command_object_storage_credential_store(args: argparse.Namespace) -> int:
+    """v0.4.53 (letter 177): object-storage keys into the Windows Credential Manager."""
+    from . import object_storage_credential_store as store
+
+    root = Path(args.archive_root)
+    try:
+        archive_id = archive_services.read_archive_id(archive_services.require_existing_archive_root(root))
+        preview = store.plan(archive_id=archive_id, slug=args.store_slug, replace_existing=args.replace_existing)
+        if args.dry_run:
+            print_json(preview)
+            return 0
+        if args.expected_request_sha256 != preview["request_sha256"]:
+            raise store.ObjectStorageCredentialStoreError("object_storage_credential_request_changed")
+        if os.name != "nt":
+            raise store.ObjectStorageCredentialStoreError("object_storage_credential_windows_required")
+        label = args.store_label or args.store_slug
+        status = store.run_isolated(slug=args.store_slug, store_label=label, replace_existing=args.replace_existing)
+        if status.get("ok") is not True:
+            raise store.ObjectStorageCredentialStoreError(str(status.get("code") or ""))
+        record = store.write_record(root, slug=args.store_slug, replaced_existing=bool(status.get("replaced_existing")))
+        result = {**preview, "dry_run": False, "stored": True, "record_path": record,
+                  "replaced_existing": bool(status.get("replaced_existing")),
+                  "next_safe_actions": [
+                      "Use credential_refs as the --access-key-id-ref / --secret-access-key-ref of object-storage "
+                      "commands, or as --rebind-... on activity-cleanup --reconcile. They survive restarts and updates."]}
+        print_json(result)
+        return 0
+    except store.ObjectStorageCredentialStoreError as exc:
+        print_json({"schema": store.SCHEMA, "ok": False, "reason_code": exc.code,
+                    "key_values_echoed": False,
+                    "effects_state": "none" if exc.code != "object_storage_credential_worker_failed" else "unknown"})
+        return 1
+    except (archive_services.ArchiveServiceError, OSError, ValueError):
+        print_json({"schema": store.SCHEMA, "ok": False, "reason_code": "object_storage_credential_worker_failed",
+                    "key_values_echoed": False, "effects_state": "none"})
+        return 1
 
 
 def command_activity_cleanup(args: argparse.Namespace) -> int:
@@ -41986,6 +42029,22 @@ def build_parser() -> argparse.ArgumentParser:
     object_storage_upload_verify.add_argument("--dry-run", action="store_true", help="Required. Verify local bytes only; never calls providers or writes files.")
     object_storage_upload_verify.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     object_storage_upload_verify.set_defaults(func=command_object_storage_upload_verify)
+
+    credential_store_parser = subcommands.add_parser(
+        "object-storage-credential-store",
+        help="Store object-storage keys in the Windows Credential Manager through two masked WOM windows (v0.4.53).")
+    credential_store_parser.add_argument("archive_root")
+    credential_store_parser.add_argument("--store-slug", required=True,
+        help="Lowercase name for this store, e.g. r2-main; targets become wom-object-storage.<slug>.<key>.")
+    credential_store_parser.add_argument("--store-label", help="Label shown in the window (defaults to the slug).")
+    credential_store_modes = credential_store_parser.add_mutually_exclusive_group(required=True)
+    credential_store_modes.add_argument("--dry-run", action="store_true")
+    credential_store_modes.add_argument("--approve", action="store_true")
+    credential_store_parser.add_argument("--expected-request-sha256")
+    credential_store_parser.add_argument("--replace-existing", action="store_true",
+        help="Overwrite keys already stored under this slug.")
+    credential_store_parser.add_argument("--format", choices=["json"], default="json")
+    credential_store_parser.set_defaults(func=command_object_storage_credential_store)
 
     activity_cleanup_parser = subcommands.add_parser("activity-cleanup", help="Plan or resume exact activity files through preservation and native cleanup.")
     activity_cleanup_parser.add_argument("archive_root")
