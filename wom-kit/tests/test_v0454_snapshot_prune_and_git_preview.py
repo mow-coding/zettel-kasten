@@ -43,11 +43,14 @@ class SnapshotPruneTests(unittest.TestCase):
         return root
 
     def age_generations(self, root, seconds=7200):
-        past = time.time() - seconds
+        # Shift every generation back by the same amount so their order stays
+        # as written; equal timestamps would make "newest" depend on the file
+        # system's listing order (it differs between Windows and Linux).
         for folder in ("search-snapshots", "relation-snapshots", "title-snapshots"):
             for path in (root / "db" / folder).glob("*"):
                 if path.name not in {".gitignore", "latest.json"}:
-                    os.utime(path, (past, past))
+                    mtime = path.stat().st_mtime - seconds
+                    os.utime(path, (mtime, mtime))
 
     def edit_a_zettel(self, root, run):
         zettel = sorted((root / "zettels").rglob("*.md"))[0]
