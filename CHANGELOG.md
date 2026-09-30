@@ -4,6 +4,14 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.4.53 - 2026-09-30
+
+- A session grant survives restarts, like the desktop apps (letter 177): it is the record on this conversation's work session, so a new process of the same conversation that presents the three session refs uses it without a window, also after an app restart or a WOM update, until it is released. It no longer depends on a secret held by the approving process; `set-permission-mode` no longer returns a token. Another conversation's route still cannot use it.
+- The session Git backup proves only this session's receipts; other activities' receipts no longer exhaust its budget (`work_session_git_receipt_limit`) and are counted as `other_session_hint_receipt_count`.
+- Index snapshots (search, relation, title, finder) ignore themselves in Git, so a large archive's general Git backup no longer stops on a snapshot; the init template and doctor's recommended patterns list them and WOM's local lock files.
+- `object-storage-credential-store` stores object-storage keys in the Windows Credential Manager through WOM's masked window and returns `credential-manager:` refs; `activity-cleanup --reconcile --rebind-access-key-id-ref/--rebind-secret-access-key-ref` finishes remaining items with them without reprocessing completed ones; previews report `credential_refs_state` and unreadable refs are refused before the window; object-storage reads accept the exact Credential Manager target only.
+- Synthetic archives, an injected window and a credential-store double only; the customer's own run is not confirmed.
+
 ## v0.4.52 - 2026-09-29
 
 - A blocked `git-backup-plan` no longer reports `change_summary.count 0` (letter 176): the count is null with `state: not_observed`, and a new content-free `change_observation` names the blocking item's role (objet bytes, staging copy, scratch, receipts, zettels, index db, archive root file, ...) and size bucket, the file limit and how many changed paths were not observed. No path is echoed.
