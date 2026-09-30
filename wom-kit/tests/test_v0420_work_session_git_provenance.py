@@ -140,7 +140,7 @@ class ReceiptGitProvenanceTests(unittest.TestCase):
             snapshot, selection = self.classify(binding=current)
         partition = self.assert_partition(snapshot, selection)
         self.assertEqual(selection.public_summary()["selected_receipt_count"], 1)
-        # v0.4.53 (letter 177): the other session's receipt names another
+        # v0.4.54 (letter 177): the other session's receipt names another
         # session in its own decision, so it is excluded without the expensive
         # proof, as ownership-unverified, and counted as a hint.
         self.assertEqual(selection.public_summary()["other_session_receipt_count"], 0)

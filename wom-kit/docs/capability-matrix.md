@@ -1,9 +1,9 @@
 ﻿# WOM-kit Capability Matrix
 
-Current v0.4.53 candidate: session grants that survive restarts like the desktop apps, a session Git backup that ignores other activities' receipts, index snapshots kept out of Git, and object-storage keys in the Windows Credential Manager with a reconcile rebind for remaining cleanup. [Release scope](releases/v0.4.53.md). Other ongoing requests are not included in this claim.
-Version: v0.4.53 implementation and release scope
+Current v0.4.54 candidate: delivered feedback letters deleted instead of moved, a general Git backup preview that reads private remotes with the saved Git login, and old index snapshot copies deleted after each run. [Release scope](releases/v0.4.54.md). Other ongoing requests are not included in this claim.
+Version: v0.4.54 implementation and release scope
 
-Status: v0.4.53 candidate: session grants, backups and remaining cleanup after restarts (letter 177); [release scope](releases/v0.4.53.md).
+Status: v0.4.54 candidate: delivered letters deleted, private Git remotes read, old index copies removed; [release scope](releases/v0.4.54.md).
 
 Status: v0.4.36 no-dialog grants, letter-168, and session-owned writes truth
 Date: 2026-09-04

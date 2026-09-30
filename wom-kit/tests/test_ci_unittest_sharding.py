@@ -183,7 +183,7 @@ class CiUnittestShardingTests(unittest.TestCase):
             expected_timeout = (
                 "120"
                 if windows and row["shard_index_zero"] == "1"
-                # v0.4.53: the third Windows shard reached 71-75 minutes on
+                # v0.4.54: the third Windows shard reached 71-75 minutes on
                 # shared runners and was cancelled once at 75; it gets 90.
                 else "90"
                 if windows and row["shard_index_zero"] in {"0", "2"}

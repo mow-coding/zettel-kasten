@@ -4,6 +4,13 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.4.54 - 2026-09-30
+
+- Delivered letters are deleted, not moved (owner correction 2026-09-30 of letters 164/168): `operator-feedback-delete` permanently deletes delivered, acknowledged and resolved letters with their body receipts and revision snapshots in one approval, keeps only a one-line `deleted` record (number, status, date), and with `--moved-folder` also deletes the copies an older WOM moved out. `operator-feedback-archive` is removed.
+- `git-backup-plan` reads the remote with the Git login already saved on the PC by default (`--credential-mode stored`); the anonymous default reported every private backup remote as not observable (letter 177). An unreadable remote now names the next step.
+- Old index snapshot copies (search, relation, title, finder) are deleted after each index run; the current one, the newest other one and anything younger than an hour stay.
+- Synthetic archives and an injected window only; the customer's own run is not confirmed.
+
 ## v0.4.53 - 2026-09-30
 
 - A session grant survives restarts, like the desktop apps (letter 177): it is the record on this conversation's work session, so a new process of the same conversation that presents the three session refs uses it without a window, also after an app restart or a WOM update, until it is released. It no longer depends on a secret held by the approving process; `set-permission-mode` no longer returns a token. Another conversation's route still cannot use it.
