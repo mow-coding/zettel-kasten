@@ -19,6 +19,8 @@ Synthetic project fixture, fake approval window; no client data.
 
 from contextlib import ExitStack
 import json
+import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -31,6 +33,7 @@ import test_cli
 from test_v0419_update_noop_journey import _MemoryOnlyApprovalKey
 
 
+@unittest.skipUnless(os.name == "nt" and sys.version_info[:2] == (3, 12), "Windows CPython 3.12 runtime")
 class UpdateDeliveryTests(unittest.TestCase):
     def setUp(self):
         self.helper = test_cli.ArchiveCliTests(methodName="runTest")

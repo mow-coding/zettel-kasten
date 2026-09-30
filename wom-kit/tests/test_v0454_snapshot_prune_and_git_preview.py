@@ -106,9 +106,13 @@ class SnapshotPruneTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, folder, True)
         past = time.time() - 90000
         names = [("%064x" % index) + ".sqlite" for index in range(4)]
-        for name in [*names, "notes.txt", "latest.json", ".gitignore", ("b" * 32) + ".building"]:
+        for name in ["notes.txt", "latest.json", ".gitignore", ("b" * 32) + ".building"]:
             (folder / name).write_bytes(b"x")
             os.utime(folder / name, (past, past))
+        for index, name in enumerate(names):
+            # distinct ages: names[0] is the newest old generation
+            (folder / name).write_bytes(b"x")
+            os.utime(folder / name, (past - index * 60, past - index * 60))
         removed = services.prune_derived_generations(folder, keep_digest="%064x" % 3)
         self.assertEqual(removed, 3)  # two old generations and the abandoned partial file
         self.assertEqual(sorted(path.name for path in folder.iterdir()),
