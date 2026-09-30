@@ -21,7 +21,9 @@ def directory(root, *, create=False):
     from .exact_operation_manifest import _ensure_private_directory
     from .source_intake_batch_exact import _reject_link_or_reparse_chain
     if create:
-        return _ensure_private_directory(root, ("db", "finder-snapshots"))
+        from . import archive_services as _services
+        return _services.ensure_derived_directory_ignored(
+            _ensure_private_directory(root, ("db", "finder-snapshots")))
     result = root / "db/finder-snapshots"
     _reject_link_or_reparse_chain(result, code="search_snapshot_invalid")
     return result

@@ -79,6 +79,19 @@ Codex and Claude desktop apps.
    `credential-adopt`, the window is secret entry and always opens (coverage
    manifest `legacy_exception`).
 
+5. **Index snapshots stay out of Git (implemented; found while checking
+   this letter).** Since the search, relation and title snapshots were added
+   (v0.4.47-v0.4.51), every index run wrote new files under `db/`, and a
+   search snapshot is a full copy of the archive index. Archive root
+   `.gitignore` files did not list those folders, so they became untracked
+   changes, and a large archive's general Git backup stopped at the file size
+   limit on one. This is the most likely cause of the letter's "large index
+   file". Each snapshot folder (search, relation, title, finder) now gets a
+   self-ignoring `.gitignore` (`*`) when it is created, which also covers
+   archives created earlier. The init template and the recommended patterns
+   (so doctor reports them missing in older archives) list the four folders
+   plus WOM's local lock files.
+
 ## Boundaries
 
 - All checks are synthetic, reproducing the customer's conditions in tests

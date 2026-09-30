@@ -154500,6 +154500,31 @@ def index_archive(
     return result
 
 
+DERIVED_DIRECTORY_GITIGNORE = b"# WOM: rebuildable index snapshots; never back up\n*\n"
+
+
+def ensure_derived_directory_ignored(directory: Path) -> Path:
+    """v0.4.53 (beta letter 177): keep a rebuildable snapshot folder out of Git.
+
+    Search, relation, title and finder snapshots are regenerated from the
+    archive index, and a search snapshot is a full copy of it. Without this a
+    large archive's general Git backup stopped at the file size limit on a
+    snapshot. A self-ignoring ``.gitignore`` (``*``) inside the folder works in
+    archives created before the template knew these folders. An existing file
+    is left as it is.
+    """
+
+    marker = Path(directory) / ".gitignore"
+    try:
+        with open(marker, "xb") as handle:
+            handle.write(DERIVED_DIRECTORY_GITIGNORE)
+    except FileExistsError:
+        pass
+    except OSError:
+        pass
+    return Path(directory)
+
+
 def _publish_derived_generation_file(path: Path, value: bytes) -> None:
     """Create one content-addressed derived-cache file; never replace one.
 

@@ -979,6 +979,13 @@ RECOMMENDED_GITIGNORE_PATTERNS = [
     "objects/sha256/",
     "objects/derived-text/sha256/",
     "/objets/",
+    # v0.4.53 (letter 177): rebuildable index snapshots and local lock files.
+    "**/db/search-snapshots/",
+    "**/db/relation-snapshots/",
+    "**/db/title-snapshots/",
+    "**/db/finder-snapshots/",
+    "**/db/.archive-index-mutation.lock",
+    "objects/manifests/.*.lock",
 ]
 SECRET_FILENAME_EXACT = {
     ".env",
@@ -37577,6 +37584,14 @@ def _write_safe_gitignore(target: Path) -> None:
                 "**/db/archive-index.sqlite-wal",
                 "**/db/archive-index.sqlite-shm",
                 "**/db/archive-index.sqlite-journal",
+                "",
+                "# Rebuildable index snapshots and local lock files (v0.4.53)",
+                "**/db/search-snapshots/",
+                "**/db/relation-snapshots/",
+                "**/db/title-snapshots/",
+                "**/db/finder-snapshots/",
+                "**/db/.archive-index-mutation.lock",
+                "objects/manifests/.*.lock",
                 "",
                 "# Local content-addressed objet byte store (manifests/receipts stay tracked)",
                 "objects/sha256/",
