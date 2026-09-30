@@ -10,14 +10,22 @@ explaining a work-session permission grant.
   an approval window. Since v0.4.44 it lasts until `set-permission-mode
   manual`, `recover`, or the session is paused, handed off, or completed;
   a request may still name `grant_hours` for a time-boxed grant.
-- The approve result returns `presenter_token` once. Keep it only in this
-  conversation's process (`WOM_WORK_SESSION_PRESENTER`); never write it or the
-  session refs into memory files, notes, letters, or another conversation.
+- Since v0.4.53 the grant belongs to this conversation's work session, like the
+  desktop apps' full-access setting: a new process, an app restart or a WOM
+  update does not reset it, and no secret token is needed. Keep this
+  conversation's three refs (`WOM_CLIENT_APP_REF`, `WOM_TASK_ROUTE_REF`,
+  `WOM_WORK_SESSION_REF`, from the original `work-session` result) and export
+  them in every new process of this conversation. If
+  `work-session --action inspect --caller-status` reports
+  `work_session_caller_context_missing`, restore those refs; do not ask for a
+  new grant. Never write the refs into memory files, notes, letters, or
+  another conversation.
 - Another conversation that finds session refs must not reuse them. It asks the
   human, or continues through `work-session` handoff/accept.
 - Do not tell the human a window will appear or not appear; the result states
   what happened (`session_permission_refused` names why a window opened).
-- "Carry established state" never covers grants, tokens, or session refs.
+- "Carry established state" never carries grants or session refs into
+  another conversation; inside this conversation keep and re-export them.
 
 ## Provider Credentials
 

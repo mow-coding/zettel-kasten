@@ -29,12 +29,14 @@ from .work_session_binding import WorkSessionBinding
 
 
 _RECEIPT_PATH = re.compile(r"receipts/ops/exact-operations/([0-9a-f]{64})\.json")
-# Bound the initial adapter's potentially expensive authenticated claim scans.
-# Count every matching changed path, including invalid/legacy receipts, before
-# reading proof bodies. Exceeding this budget fails the whole classification;
-# it is not truncation, pagination, or evidence that unvisited files are absent.
-# A larger/streamed proof budget needs a separate bounded implementation.
-_MAX_RECEIPT_CANDIDATES = 128
+# Bound the expensive authenticated claim scans. v0.4.53 (beta letter 177): the
+# budget counts only receipts whose own original decision names the selected
+# session (a cheap, unauthenticated read of the receipt and its manifest). A
+# large archive's receipts from other activities and sessions are excluded as
+# ownership-unverified without the expensive proof and never consume the
+# budget; they could not be selected anyway. Exceeding the budget still fails
+# the whole classification; it is not truncation.
+_MAX_RECEIPT_CANDIDATES = 512
 
 
 class WorkSessionGitProvenanceError(RuntimeError):
@@ -97,6 +99,9 @@ class _ReceiptSelection:
             "other_session_receipt_count": sum(row["scope"] == "other_session" for row in exclusions),
             "ownership_unverified_count": sum(row["scope"] == "unknown" for row in exclusions),
             "unverified_receipt_candidate_count": data["unverified_receipt_candidates"],
+            # v0.4.53: receipts whose original decision names another session;
+            # excluded without the expensive proof (ownership not verified).
+            "other_session_hint_receipt_count": data.get("other_session_hint_receipts", 0),
             "snapshot_partition_complete": True,
             "receipt_only": True,
             "document_provenance_evaluated": False,
@@ -279,6 +284,30 @@ def _session_identity(binding):
             binding.workstream_ref, binding.work_session_ref)
 
 
+def _receipt_session_hint(store, held, execution_sha):
+    """The session a completion receipt's original decision names, or None.
+
+    Unauthenticated and read-only: it only narrows which receipts receive the
+    expensive proof. It never selects a change and never establishes
+    ownership; a receipt whose hint names another session is excluded as
+    ownership-unverified. The full proof reads the same original binding, so
+    a receipt the proof would attribute to this session always has a matching
+    hint.
+    """
+    try:
+        receipt = exact.load_exact_operation_final_receipt_read_only(
+            store.root, execution_sha, heartbeat=held.verify_held,
+        )
+        if receipt is None:
+            return None
+        bound = bundle.load_context_bound_session_decision(
+            store, manifest_sha256=receipt["result"]["manifest_sha256"])
+        binding = bound.prepared.manifest.work_session_binding
+        return None if binding is None else _session_identity(binding)
+    except Exception:
+        return None
+
+
 def _authenticated_inspection_paths_held(archive_root, *, held, selected_binding,
                                        branch=None, key_provider=None):
     """Discover owned output paths before observing changed file bodies.
@@ -322,8 +351,15 @@ def _authenticated_inspection_paths_held(archive_root, *, held, selected_binding
             if state is None or blockers:
                 raise WorkSessionGitProvenanceError("work_session_git_snapshot_unavailable",
                     cause_code=next(iter(blockers), "git_metadata_snapshot_unavailable"))
-            paths = {row.path for row in state["all_status"]
-                     if _RECEIPT_PATH.fullmatch(row.path) and row.path not in producer_paths}
+            wanted = _session_identity(selected_binding)
+            paths = set()
+            for candidate in sorted(row.path for row in state["all_status"]
+                                    if _RECEIPT_PATH.fullmatch(row.path) and row.path not in producer_paths):
+                held.verify_held()
+                hint = _receipt_session_hint(
+                    store, held, "sha256:" + _RECEIPT_PATH.fullmatch(candidate)[1])
+                if hint == wanted:
+                    paths.add(candidate)
             if len(paths) > _MAX_RECEIPT_CANDIDATES:
                 raise WorkSessionGitProvenanceError("work_session_git_receipt_limit")
             for path in sorted(paths):
@@ -396,10 +432,20 @@ def _select_receipt_changes_held(
         # Intake outputs and recovery documents are authenticated once per
         # original, not once per changed output or by falling through the
         # human-decision parser.
-        candidates = sum(_RECEIPT_PATH.fullmatch(row["path"]) is not None
-                         and row["public_observation"]["change_ref"] not in intake_proofs
-                         and row["public_observation"]["change_ref"] not in document_proofs for row in rows)
-        if candidates > _MAX_RECEIPT_CANDIDATES:
+        wanted = _session_identity(binding)
+        own_receipt_refs, other_hint_refs = set(), set()
+        for row in rows:
+            change_ref = row["public_observation"]["change_ref"]
+            match = _RECEIPT_PATH.fullmatch(row["path"])
+            if match is None or change_ref in intake_proofs or change_ref in document_proofs:
+                continue
+            store._require_held_lock(held)
+            hint = _receipt_session_hint(store, held, "sha256:" + match[1])
+            if hint == wanted:
+                own_receipt_refs.add(change_ref)
+            elif hint is not None:
+                other_hint_refs.add(change_ref)
+        if len(own_receipt_refs) > _MAX_RECEIPT_CANDIDATES:
             raise WorkSessionGitProvenanceError("work_session_git_receipt_limit")
         selected, excluded, proofs, unverified = [], [], [], 0
         for row in rows:
@@ -407,7 +453,8 @@ def _select_receipt_changes_held(
             change_ref = row["public_observation"]["change_ref"]
             match = _RECEIPT_PATH.fullmatch(row["path"])
             proof = intake_proofs.get(change_ref) or document_proofs.get(change_ref)
-            if proof is None and match is not None and _new_whole_receipt(row):
+            if (proof is None and match is not None and change_ref in own_receipt_refs
+                    and _new_whole_receipt(row)):
                 try:
                     proof = _authenticated_receipt(
                         store, held, row, "sha256:" + match[1], key_provider=key_provider,
@@ -471,6 +518,7 @@ def _select_receipt_changes_held(
             "selection": partition, "proofs": proofs,
             "selected_identity_binding": binding.document(),
             "unverified_receipt_candidates": unverified,
+            "other_session_hint_receipts": len(other_hint_refs),
         }
         if intake_data["hint_inventory_state"] == "present":
             result["intake_provenance_summary"] = intake_selection.public_summary()

@@ -75965,7 +75965,11 @@ def tiro_token_from_credential_value(value: str) -> str:
 
 def _tiro_windows_credential_manager_read_secret(
     target_label: str,
+    *,
+    exact_only: bool = False,
 ) -> tuple[str, dict[str, Any]]:
+    """Read one generic credential. ``exact_only`` (object storage, v0.4.53)
+    skips the substring auto-detection: only the exact target name counts."""
     label = str(target_label or "").strip()
     if os.name != "nt":
         raise ArchiveServiceError("Tiro OS credential read currently supports Windows Credential Manager only.")
@@ -76030,6 +76034,8 @@ def _tiro_windows_credential_manager_read_secret(
     last_error = ctypes.get_last_error()
     if last_error != ERROR_NOT_FOUND:
         raise ArchiveServiceError("Tiro OS credential read failed; raw OS credential error is not echoed.")
+    if exact_only:
+        raise ArchiveServiceError("No OS credential entry has exactly this target name.")
 
     count = wintypes.DWORD(0)
     credentials = ctypes.POINTER(PCREDENTIALW)()
@@ -76070,6 +76076,8 @@ def _tiro_windows_credential_manager_read_secret(
 def _tiro_read_credential_value(
     credential_ref: str,
     credential_store: str | None,
+    *,
+    exact_only: bool = False,
 ) -> tuple[str | None, dict[str, Any]]:
     if credential_store == "env":
         env_name = tiro_env_ref_name(credential_ref)
@@ -76087,7 +76095,7 @@ def _tiro_read_credential_value(
         label = tiro_credential_ref_label(credential_ref)
         if not label:
             raise ArchiveServiceError("Tiro OS credential ref label was not safe.")
-        secret, keyring_summary = _tiro_windows_credential_manager_read_secret(label)
+        secret, keyring_summary = _tiro_windows_credential_manager_read_secret(label, exact_only=exact_only)
         keyring_summary.update(
             {
                 "read_source": "os_keyring",
@@ -144467,10 +144475,11 @@ def write_result_git_backup_attention(archive_root: Path | str) -> dict[str, Any
 
 SESSION_PERMISSION_ATTENTION_SCHEMA = "wom-kit/session-permission-attention/v1"
 SESSION_PERMISSION_GUIDANCE = (
-    "The three work-session refs and the presenter token stay in the granting "
-    "conversation's process; never store them in cross-conversation memory or "
-    "files. Another conversation continues a task through work-session "
-    "handoff/accept (one human decision), never by reusing the refs."
+    "The three work-session refs identify the granting conversation and keep "
+    "its grant across new processes and restarts; never store them in "
+    "cross-conversation memory or files. Another conversation continues a task "
+    "through work-session handoff/accept (one human decision), never by reusing "
+    "the refs."
 )
 SESSION_PERMISSION_ATTENTION_NEXT_COMMAND = (
     "archive work-session <archive-root> --action list --kind session --format json"
@@ -148803,13 +148812,16 @@ def safe_object_storage_execution_receipt_relative(value: Any) -> bool:
 def _resolve_credential_value(
     credential_ref: str,
     credential_store: str | None,
+    *,
+    exact_only: bool = False,
 ) -> tuple[str | None, dict[str, Any]]:
     """Shared ref->value resolver (generalization of _tiro_read_credential_value).
 
     Dispatch is inherited verbatim: env: -> os.environ; keyring/credential-manager
-    -> OS credential store; secret/wallet -> unsupported (blocks).
+    -> OS credential store; secret/wallet -> unsupported (blocks). ``exact_only``
+    (object storage since v0.4.53) reads only the exact OS credential target.
     """
-    return _tiro_read_credential_value(credential_ref, credential_store)
+    return _tiro_read_credential_value(credential_ref, credential_store, exact_only=exact_only)
 
 
 def assert_no_secret_or_location_leak(serialized: str, *, key_values: list[str]) -> list[str]:
@@ -154486,6 +154498,31 @@ def index_archive(
                 index_rows=title_basis["rows"], index_generation=title_basis["generation"],
                 index_diagnostics=title_basis["quarantined"]), "title_generation_failed")
     return result
+
+
+DERIVED_DIRECTORY_GITIGNORE = b"# WOM: rebuildable index snapshots; never back up\n*\n"
+
+
+def ensure_derived_directory_ignored(directory: Path) -> Path:
+    """v0.4.53 (beta letter 177): keep a rebuildable snapshot folder out of Git.
+
+    Search, relation, title and finder snapshots are regenerated from the
+    archive index, and a search snapshot is a full copy of it. Without this a
+    large archive's general Git backup stopped at the file size limit on a
+    snapshot. A self-ignoring ``.gitignore`` (``*``) inside the folder works in
+    archives created before the template knew these folders. An existing file
+    is left as it is.
+    """
+
+    marker = Path(directory) / ".gitignore"
+    try:
+        with open(marker, "xb") as handle:
+            handle.write(DERIVED_DIRECTORY_GITIGNORE)
+    except FileExistsError:
+        pass
+    except OSError:
+        pass
+    return Path(directory)
 
 
 def _publish_derived_generation_file(path: Path, value: bytes) -> None:

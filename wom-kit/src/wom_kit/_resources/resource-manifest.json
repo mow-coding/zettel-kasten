@@ -1,6 +1,6 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.4.52",
+  "version": "0.4.53",
   "source_of_truth": "wom-kit source resource directories",
   "file_count": 180,
   "files": [
@@ -757,8 +757,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/SKILL.md",
       "packaged": "templates/ai-runtime/wom-archive/SKILL.md",
-      "bytes": 11109,
-      "sha256": "d5d05506e0676cae52eed418142df2bb654ebd8d017c299cbe6cf8417dd319c5"
+      "bytes": 11106,
+      "sha256": "14745df7bee7c5ebd3c9777f174ec1b2208e0a4a2c99ba3fe3dbba7ccc0e8e6d"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
@@ -769,8 +769,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/credentials-and-sessions.md",
       "packaged": "templates/ai-runtime/wom-archive/references/credentials-and-sessions.md",
-      "bytes": 3812,
-      "sha256": "bd133406cf1fd7b741e5b13efcc8d2d698ef78bf20613f2bf46de709657e05b1"
+      "bytes": 4315,
+      "sha256": "140d342a6d228c732779a6db15d4410edc5e513a483001373aaaf883296fbd88"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/developer-letters.md",
@@ -823,8 +823,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/storage-scope.md",
       "packaged": "templates/ai-runtime/wom-archive/references/storage-scope.md",
-      "bytes": 5123,
-      "sha256": "81ae46cfb1ce3257539a4e72cff81ffa8f96cf456d1e77b4e1eb829b5950c745"
+      "bytes": 5848,
+      "sha256": "afbb50e380d1ef7bd174b556d0729562a636c6a0d298b81ba907f13d1bf3a66d"
     },
     {
       "source": "templates/company/AGENTS.md",
@@ -1079,10 +1079,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.4.52.md",
-      "packaged": "release-notes/v0.4.52.md",
-      "bytes": 4004,
-      "sha256": "e334ed6206f59e5e2f31a5be1f98bcf5b73f92e628aaef2d256ad87b35230ea6"
+      "source": "docs/releases/v0.4.53.md",
+      "packaged": "release-notes/v0.4.53.md",
+      "bytes": 4008,
+      "sha256": "7b0d4c18e3035ad80f58b78b5b86e34e1e19cfb5b77f00d015a8a305d48aaa66"
     }
   ]
 }

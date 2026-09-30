@@ -16,9 +16,9 @@ class WriterSessionCoverageGateTests(unittest.TestCase):
     def test_manifest_matches_parser_and_denominator_stays_honest(self):
         problems, counts = subject.check()
         self.assertEqual(problems, [])
-        self.assertEqual(sum(counts.values()), 110)  # 2026-09-29 feedback integration (A03-A19 commands)
+        self.assertEqual(sum(counts.values()), 111)  # 2026-09-30 letter 177 object-storage-credential-store
         self.assertGreaterEqual(counts["session_integrated"], 5)
-        self.assertEqual(counts["routed"], 86)  # 2026-09-29 feedback integration (A03-A19 commands)
+        self.assertEqual(counts["routed"], 86)  # 2026-09-30 letter 177 object-storage-credential-store
         self.assertEqual(counts["pending"], 0)  # 2026-09-26 coverage audit: all-writer scope complete
         self.assertEqual(subject.main(["--format", "text"]), 0)
 

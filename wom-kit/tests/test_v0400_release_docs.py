@@ -202,7 +202,7 @@ class V0400ReleaseDocsTests(unittest.TestCase):
                 "notion-recover",  # revived in v0.4.44
             }
         )
-        self.assertEqual(len(current_blocked), 5)  # 2026-09-29 feedback integration (A03-A19 commands)
+        self.assertEqual(len(current_blocked), 5)  # 2026-09-30 letter 177 object-storage-credential-store
         self.assertEqual(len(historical_blocked), 79)
         self.assertNotIn("migrate", current_blocked)
         self.assertNotIn("zettel-objet-link", current_blocked)

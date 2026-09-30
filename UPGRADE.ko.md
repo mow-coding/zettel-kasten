@@ -1,5 +1,18 @@
 # 업그레이드 가이드
 
+## v0.4.53 재시작 뒤에도 이어지는 세션 승인·백업·남은 정리
+
+공개된 뒤 기존 프로젝트는 공식 업데이트 절차를 쓰세요. 같은 대화의 전체 허용 승인이 재시작·업데이트 뒤에도 유지되고, 세션 Git 백업과 일반 백업이 다른 활동의 영수증이나 색인 스냅샷 때문에 멈추지 않으며, 원격 저장소 키를 Windows 자격 증명 관리자에 저장해 남은 정리를 끝낼 수 있습니다. 설치만으로 archive는 바뀌지 않습니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0453-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.53/wom_kit-0.4.53-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
 ## v0.4.52 큰 활동 성능과 검증 마무리
 
 공개된 뒤 기존 프로젝트는 공식 업데이트 절차를 쓰세요. 큰 archive에서 index를 확인하는 명령이 이전보다 훨씬 빨리 끝나고, 등록한 파일을 원래 파일명으로 찾을 수 있으며, 세션 마무리 점검이 미발행 초안을 알려 주고, 도우미 AI 안내가 설치된 명령과 맞는지 검사합니다. 설치만으로 archive는 바뀌지 않습니다.

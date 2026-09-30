@@ -21,9 +21,9 @@ description: Inspect/update WOM archives for context recovery, zet reading, capt
    before saying what changed or did not change.
 6. `--reviewed-by person:<id>` names the human who reviewed this exact plan.
    Never promise that an approval window will or will not appear.
-7. A session grant and its presenter token belong to the conversation that
-   received them. Never store, share, or reuse session refs or tokens; another
-   conversation continues through `work-session` handoff/accept.
+7. A session grant belongs to this conversation's session until released,
+   across restarts. Export its three refs in every new process; never share
+   them. Another conversation uses `work-session` handoff/accept.
 8. Touch only this conversation's work. Scope uploads, offloads, discards,
    cleanup, and Git commits to this session or an explicit list; ask before
    choosing "all".

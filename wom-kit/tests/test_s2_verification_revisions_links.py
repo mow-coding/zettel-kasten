@@ -388,7 +388,7 @@ class S2VerificationRevisionsLinksTests(unittest.TestCase):
         code, plan = self.run_cli("draft-disposition", str(self.root), "--request", str(request_path), "--dry-run")
         self.assertEqual(code, 0, plan)
         self.assertEqual(plan["state"], "held_pending_review")
-        # v0.4.52: the official --approve path reaches the dialog (its approval
+        # v0.4.53: the official --approve path reaches the dialog (its approval
         # context once carried unsorted review_binding_codes and raised first).
         draft_bytes = (self.root / "inbox" / f"{INBOX_DRAFT}.md").read_bytes()
         code, held_cli = self.run_cli("draft-disposition", str(self.root), "--request", str(request_path), "--approve",

@@ -979,6 +979,13 @@ RECOMMENDED_GITIGNORE_PATTERNS = [
     "objects/sha256/",
     "objects/derived-text/sha256/",
     "/objets/",
+    # v0.4.53 (letter 177): rebuildable index snapshots and local lock files.
+    "**/db/search-snapshots/",
+    "**/db/relation-snapshots/",
+    "**/db/title-snapshots/",
+    "**/db/finder-snapshots/",
+    "**/db/.archive-index-mutation.lock",
+    "objects/manifests/.*.lock",
 ]
 SECRET_FILENAME_EXACT = {
     ".env",
@@ -18335,10 +18342,12 @@ def _object_storage_live_transport_factory(
             access_value, _ = archive_services._resolve_credential_value(
                 access_ref,
                 archive_services.credential_ref_store(access_ref),
+                exact_only=True,
             )
             secret_value, _ = archive_services._resolve_credential_value(
                 secret_ref,
                 archive_services.credential_ref_store(secret_ref),
+                exact_only=True,
             )
             if not access_value or not secret_value:
                 raise ValueError("unresolved")
@@ -18360,6 +18369,26 @@ def _object_storage_live_transport_factory(
             raise unavailable() from None
 
     return resolve
+
+
+def _object_storage_credential_refs_state(storage: Mapping[str, Any]) -> str:
+    """v0.4.53 (letter 177): can this process read both refs right now?
+
+    ``resolvable`` / ``unresolved``. The check builds the transport through the
+    same factory the approved write uses (values stay in memory, never
+    echoed, no network request). An ``env:`` ref is unresolved in a new process
+    that lacks the variable; a ``credential-manager:`` ref (the OS keychain,
+    like the desktop apps) survives restarts and updates.
+    """
+    class _Refused(Exception):
+        pass
+
+    try:
+        _object_storage_live_transport_factory(
+            argparse.Namespace(**dict(storage)), invalid=_Refused, unavailable=_Refused)()
+        return "resolvable"
+    except Exception:
+        return "unresolved"
 
 
 def _command_object_storage_preserve_local_only(args: argparse.Namespace) -> int:
@@ -19409,6 +19438,11 @@ def command_credential_secure_list(args: argparse.Namespace) -> int:
             result["receipt_authentication_requested"] = False
         if not isinstance(result, dict):
             raise ValueError("credential_secure_list_result_invalid")
+        # v0.4.53 (letter 177): object-storage keys stored through
+        # object-storage-credential-store; content-free, never authority.
+        from .object_storage_credential_store import list_records
+
+        result = {**result, "object_storage_credentials": list_records(root)}
     except (archive_services.ArchiveServiceError, OSError, ValueError):
         result = _credential_cli_blocked(action, "credential_secure_list_unavailable")
     except Exception:
@@ -23818,6 +23852,44 @@ def command_abstract_freshness(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def command_object_storage_credential_store(args: argparse.Namespace) -> int:
+    """v0.4.53 (letter 177): object-storage keys into the Windows Credential Manager."""
+    from . import object_storage_credential_store as store
+
+    root = Path(args.archive_root)
+    try:
+        archive_id = archive_services.read_archive_id(archive_services.require_existing_archive_root(root))
+        preview = store.plan(archive_id=archive_id, slug=args.store_slug, replace_existing=args.replace_existing)
+        if args.dry_run:
+            print_json(preview)
+            return 0
+        if args.expected_request_sha256 != preview["request_sha256"]:
+            raise store.ObjectStorageCredentialStoreError("object_storage_credential_request_changed")
+        if not store.windows_available():
+            raise store.ObjectStorageCredentialStoreError("object_storage_credential_windows_required")
+        label = args.store_label or args.store_slug
+        status = store.run_isolated(slug=args.store_slug, store_label=label, replace_existing=args.replace_existing)
+        if status.get("ok") is not True:
+            raise store.ObjectStorageCredentialStoreError(str(status.get("code") or ""))
+        record = store.write_record(root, slug=args.store_slug, replaced_existing=bool(status.get("replaced_existing")))
+        result = {**preview, "dry_run": False, "stored": True, "record_path": record,
+                  "replaced_existing": bool(status.get("replaced_existing")),
+                  "next_safe_actions": [
+                      "Use credential_refs as the --access-key-id-ref / --secret-access-key-ref of object-storage "
+                      "commands, or as --rebind-... on activity-cleanup --reconcile. They survive restarts and updates."]}
+        print_json(result)
+        return 0
+    except store.ObjectStorageCredentialStoreError as exc:
+        print_json({"schema": store.SCHEMA, "ok": False, "reason_code": exc.code,
+                    "key_values_echoed": False,
+                    "effects_state": "none" if exc.code != "object_storage_credential_worker_failed" else "unknown"})
+        return 1
+    except (archive_services.ArchiveServiceError, OSError, ValueError):
+        print_json({"schema": store.SCHEMA, "ok": False, "reason_code": "object_storage_credential_worker_failed",
+                    "key_values_echoed": False, "effects_state": "none"})
+        return 1
+
+
 def command_activity_cleanup(args: argparse.Namespace) -> int:
     return _run_storage_command(args, command_activity_cleanup_result, print_json)
 
@@ -23847,19 +23919,38 @@ def command_activity_cleanup_result(args: argparse.Namespace) -> dict[str, Any]:
             raise activity_cleanup.ActivityCleanupError("activity_cleanup_restore_arguments_invalid")
         if reconcile and (args.resume or inspect_status):
             raise activity_cleanup.ActivityCleanupError("activity_cleanup_reconcile_requires_preview_or_approve")
+        rebind_access = getattr(args, "rebind_access_key_id_ref", None)
+        rebind_secret = getattr(args, "rebind_secret_access_key_ref", None)
+        if (rebind_access is None) != (rebind_secret is None):
+            raise activity_cleanup.ActivityCleanupError("activity_cleanup_credential_rebind_pair_required")
+        if rebind_access is not None and not reconcile:
+            raise activity_cleanup.ActivityCleanupError("activity_cleanup_credential_rebind_requires_reconcile")
         candidate = activity_cleanup.plan(Path(args.archive_root), args.request,
             resume=args.resume or inspect_status or reconcile or restore_number is not None, progress=reporter.progress)
         if restore_number is not None:
             candidate = activity_cleanup.restore_plan(candidate, number=restore_number, destination=args.destination, resume=args.resume)
             candidate["public"] = candidate["restore_public"]
         if reconcile:
-            candidate = activity_cleanup.reconcile_plan(candidate)
+            candidate = activity_cleanup.reconcile_plan(
+                candidate,
+                credential_refs=None if rebind_access is None else {
+                    "access_key_id_ref": rebind_access, "secret_access_key_ref": rebind_secret})
         if inspect_status:
             result = activity_cleanup.status(candidate)
             return result
         if getattr(args, "private_plan_output", None):
             activity_cleanup.write_private_plan(candidate, args.private_plan_output)
             candidate["public"]["private_plan_written"] = True
+        needs_remote = any(i["disposition"] == "preserve" for i in candidate["material"]["items"])
+        refs_state = (_object_storage_credential_refs_state(candidate["material"]["storage"])
+                      if needs_remote else "not_needed")
+        candidate["public"]["credential_refs_state"] = refs_state
+        if refs_state == "unresolved":
+            candidate["public"]["credential_refs_next_action"] = (
+                "The storage credential refs cannot be read in this process. Keep the two keys in the Windows "
+                "Credential Manager (exact generic targets) and rerun --reconcile with --rebind-access-key-id-ref "
+                "credential-manager:<name> --rebind-secret-access-key-ref credential-manager:<name>; completed "
+                "items are not reprocessed.")
         if args.dry_run:
             return candidate["public"]
         if os.name != "nt":
@@ -23869,6 +23960,9 @@ def command_activity_cleanup_result(args: argparse.Namespace) -> dict[str, Any]:
         reviewer = archive_services.safe_foreign_quarantine_actor_id(args.reviewed_by)
         if reviewer is None:
             raise activity_cleanup.ActivityCleanupError("activity_cleanup_reviewer_required")
+        if refs_state == "unresolved":
+            # Refused before the dialog, like object-storage-upload since v0.4.36.
+            raise activity_cleanup.ActivityCleanupError("activity_cleanup_credential_ref_unresolved")
         binding = (activity_cleanup.restore_binding(candidate) if restore_number is not None
                    else activity_cleanup.approval_binding(candidate))
         context = binding.context(archive_id=archive_services.read_archive_id(candidate["root"]), reviewer_claim=reviewer)
@@ -37491,6 +37585,14 @@ def _write_safe_gitignore(target: Path) -> None:
                 "**/db/archive-index.sqlite-shm",
                 "**/db/archive-index.sqlite-journal",
                 "",
+                "# Rebuildable index snapshots and local lock files (v0.4.53)",
+                "**/db/search-snapshots/",
+                "**/db/relation-snapshots/",
+                "**/db/title-snapshots/",
+                "**/db/finder-snapshots/",
+                "**/db/.archive-index-mutation.lock",
+                "objects/manifests/.*.lock",
+                "",
                 "# Local content-addressed objet byte store (manifests/receipts stay tracked)",
                 "objects/sha256/",
                 "objects/derived-text/sha256/",
@@ -41943,6 +42045,22 @@ def build_parser() -> argparse.ArgumentParser:
     object_storage_upload_verify.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     object_storage_upload_verify.set_defaults(func=command_object_storage_upload_verify)
 
+    credential_store_parser = subcommands.add_parser(
+        "object-storage-credential-store",
+        help="Store object-storage keys in the Windows Credential Manager through two masked WOM windows (v0.4.53).")
+    credential_store_parser.add_argument("archive_root")
+    credential_store_parser.add_argument("--store-slug", required=True,
+        help="Lowercase name for this store, e.g. r2-main; targets become wom-object-storage.<slug>.<key>.")
+    credential_store_parser.add_argument("--store-label", help="Label shown in the window (defaults to the slug).")
+    credential_store_modes = credential_store_parser.add_mutually_exclusive_group(required=True)
+    credential_store_modes.add_argument("--dry-run", action="store_true")
+    credential_store_modes.add_argument("--approve", action="store_true")
+    credential_store_parser.add_argument("--expected-request-sha256")
+    credential_store_parser.add_argument("--replace-existing", action="store_true",
+        help="Overwrite keys already stored under this slug.")
+    credential_store_parser.add_argument("--format", choices=["json"], default="json")
+    credential_store_parser.set_defaults(func=command_object_storage_credential_store)
+
     activity_cleanup_parser = subcommands.add_parser("activity-cleanup", help="Plan or resume exact activity files through preservation and native cleanup.")
     activity_cleanup_parser.add_argument("archive_root")
     activity_cleanup_parser.add_argument("--request", required=True, help="Private JSON request with exact files and classification reasons.")
@@ -41953,6 +42071,8 @@ def build_parser() -> argparse.ArgumentParser:
     activity_cleanup_modes.add_argument("--resume", action="store_true")
     activity_cleanup_modes.add_argument("--status", action="store_true", help="Read saved intent and item evidence without repeating writes or asserting fresh remote verification.")
     activity_cleanup_parser.add_argument("--reconcile", action="store_true", help="Preview or approve recovery of unfinished items from authenticated original evidence.")
+    activity_cleanup_parser.add_argument("--rebind-access-key-id-ref", help="With --reconcile only: replace the original access-key ref, e.g. credential-manager:<exact target>; provider, store, endpoint, bucket and region stay the original's.")
+    activity_cleanup_parser.add_argument("--rebind-secret-access-key-ref", help="With --reconcile only: replace the original secret-key ref (pair with --rebind-access-key-id-ref).")
     activity_cleanup_parser.add_argument("--restore-item", type=int, help="Restore this saved item number, including its preserved Windows streams, into a new external file.")
     activity_cleanup_parser.add_argument("--destination", help="Absolute new-file destination for --restore-item; existing files are never replaced.")
     activity_cleanup_parser.add_argument("--expected-plan-sha256")
@@ -49465,12 +49585,12 @@ def build_parser() -> argparse.ArgumentParser:
                      "completed; since v0.4.36 every operation kind is grantable and only the grant itself opens a dialog "
                      "(credential secrets are still typed by a person in their own window). Each write still publishes "
                      "its own one-use claim, and that claim records the permission mechanism. "
-                     "v0.4.34: a limited/allow_all grant is presenter-bound; since v0.4.44 it lasts until "
-                     "released (set-permission-mode manual, recover, or pause/handoff/complete) unless the request "
-                     "names grant_hours 1..24: the approve result returns presenter_token exactly once; "
-                     "keep it only in this conversation's process (WOM_WORK_SESSION_PRESENTER), never in memory "
-                     "files or another conversation. A write that presents the refs without the token, after "
-                     "expires_at, or under a grant made before v0.4.34 gets the dialog and a session_permission_refused "
+                     "Since v0.4.44 a limited/allow_all grant lasts until released (set-permission-mode manual, "
+                     "recover, or pause/handoff/complete) unless the request names grant_hours 1..24. Since v0.4.53 "
+                     "(letter 177) it belongs to this conversation's work session like the desktop apps' full-access "
+                     "setting: any new process of the same conversation that exports the three refs uses it, also "
+                     "after an app restart or update; no secret token is needed or returned. A write after "
+                     "expires_at or under a grant made before v0.4.34 gets the dialog and a session_permission_refused "
                      "code. Each grant claim records a presenter fingerprint digest and how many other presenters "
                      "used the session before it (work_session_second_presenter_observed). Another conversation "
                      "continues a task through handoff/accept; the operator revokes a grant with set-permission-mode "

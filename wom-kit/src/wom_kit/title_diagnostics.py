@@ -29,7 +29,8 @@ def _error(code):
 
 def _directory(root, create=False):
     if create:
-        return _ensure_private_directory(root, ("db", "title-snapshots"))
+        return services.ensure_derived_directory_ignored(
+            _ensure_private_directory(root, ("db", "title-snapshots")))
     from .source_intake_batch_exact import _reject_link_or_reparse_chain
     path = root / "db/title-snapshots"
     if not path.exists():

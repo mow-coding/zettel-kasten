@@ -13,9 +13,9 @@ ROOT = Path(__file__).resolve().parents[2]
 KIT = ROOT / "wom-kit"
 RESOURCE_ROOT = KIT / "src" / "wom_kit" / "_resources"
 RELEASE = KIT / "docs" / "releases" / "v0.4.33.md"
-CURRENT_RELEASE = KIT / "docs" / "releases" / "v0.4.52.md"
-PACKAGED_RELEASE = RESOURCE_ROOT / "release-notes" / "v0.4.52.md"
-LOCK = KIT / "project-runtime-supply-lock-v0.4.52.json"
+CURRENT_RELEASE = KIT / "docs" / "releases" / "v0.4.53.md"
+PACKAGED_RELEASE = RESOURCE_ROOT / "release-notes" / "v0.4.53.md"
+LOCK = KIT / "project-runtime-supply-lock-v0.4.53.json"
 BOOTSTRAP_DOCUMENTS = (
     ROOT / "README.md",
     ROOT / "README.ko.md",
@@ -54,34 +54,34 @@ CURRENT_PUBLIC_DOCUMENTS = (
 
 class V0433ReleaseDocsTests(unittest.TestCase):
     def test_current_version_surfaces_are_exact(self) -> None:
-        self.assertEqual(__version__, "0.4.52")
-        self.assertIn('version = "0.4.52"', (KIT / "pyproject.toml").read_text(encoding="utf-8"))
+        self.assertEqual(__version__, "0.4.53")
+        self.assertIn('version = "0.4.53"', (KIT / "pyproject.toml").read_text(encoding="utf-8"))
         for shim in (KIT / "src" / "wom_kit" / "__init__.py", ROOT / "wom_kit" / "__init__.py"):
-            self.assertIn('__version__ = "0.4.52"', shim.read_text(encoding="utf-8"))
+            self.assertIn('__version__ = "0.4.53"', shim.read_text(encoding="utf-8"))
         citation = (ROOT / "CITATION.cff").read_text(encoding="utf-8")
-        self.assertIn('version: "0.4.52"', citation)
+        self.assertIn('version: "0.4.53"', citation)
         self.assertRegex(citation, r'date-released: "2026-09-(2[0-9])"')
         versioning = (ROOT / "VERSIONING.md").read_text(encoding="utf-8")
-        self.assertIn("Current public baseline:\n\n```text\nv0.4.52", versioning)
-        self.assertIn("Previous public baseline:\n\n```text\nv0.4.51", versioning)
-        self.assertIn("Previous public baseline: v0.4.51.", (ROOT / "README.md").read_text(encoding="utf-8"))
-        self.assertIn("v0.4.52", (ROOT / "README.ko.md").read_text(encoding="utf-8"))
+        self.assertIn("Current public baseline:\n\n```text\nv0.4.53", versioning)
+        self.assertIn("Previous public baseline:\n\n```text\nv0.4.52", versioning)
+        self.assertIn("Previous public baseline: v0.4.52.", (ROOT / "README.md").read_text(encoding="utf-8"))
+        self.assertIn("v0.4.53", (ROOT / "README.ko.md").read_text(encoding="utf-8"))
 
     def test_supply_lock_and_policy_are_exact(self) -> None:
         current = LOCK.read_bytes()
         previous = (KIT / "project-runtime-supply-lock-v0.4.33.json").read_bytes()
-        self.assertEqual(previous.replace(b'"target_tag": "v0.4.33"', b'"target_tag": "v0.4.52"'), current)
+        self.assertEqual(previous.replace(b'"target_tag": "v0.4.33"', b'"target_tag": "v0.4.53"'), current)
         policy = json.loads((KIT / "project-runtime-policy.json").read_text(encoding="utf-8"))
-        self.assertEqual(policy["supply_lock"], "wom-kit/project-runtime-supply-lock-v0.4.52.json")
+        self.assertEqual(policy["supply_lock"], "wom-kit/project-runtime-supply-lock-v0.4.53.json")
         self.assertEqual(policy["supply_lock_sha256"], "sha256:" + hashlib.sha256(current).hexdigest())
 
     def test_current_release_is_the_only_packaged_note(self) -> None:
         self.assertEqual(CURRENT_RELEASE.read_bytes(), PACKAGED_RELEASE.read_bytes())
-        self.assertEqual(sorted(path.name for path in PACKAGED_RELEASE.parent.iterdir()), ["v0.4.52.md"])
+        self.assertEqual(sorted(path.name for path in PACKAGED_RELEASE.parent.iterdir()), ["v0.4.53.md"])
         manifest = json.loads((RESOURCE_ROOT / "resource-manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(manifest["version"], "0.4.52")
+        self.assertEqual(manifest["version"], "0.4.53")
         packaged_paths = {row["packaged"] for row in manifest["files"]}
-        self.assertIn("release-notes/v0.4.52.md", packaged_paths)
+        self.assertIn("release-notes/v0.4.53.md", packaged_paths)
         self.assertNotIn("release-notes/v0.4.33.md", packaged_paths)
         self.assertTrue((KIT / "docs" / "releases" / "v0.4.33.md").is_file())
 
@@ -90,9 +90,9 @@ class V0433ReleaseDocsTests(unittest.TestCase):
             document = path.read_text(encoding="utf-8")
             with self.subTest(path=path):
                 self.assertIn('$womBootstrapNonce = [guid]::NewGuid().ToString("N")', document)
-                self.assertIn('$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\\bootstrap-v0452-$womBootstrapNonce"', document)
+                self.assertIn('$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\\bootstrap-v0453-$womBootstrapNonce"', document)
                 self.assertRegex(document, re.escape("& $womBootstrapPython") + r"\s+-m\s+pip\s+install\b")
-                self.assertIn("wom_kit-0.4.52-py3-none-any.whl", document)
+                self.assertIn("wom_kit-0.4.53-py3-none-any.whl", document)
                 if path.name.startswith("UPGRADE"):
                     continue  # upgrade guides keep every historical section
                 self.assertNotIn("bootstrap-v0433-", document)
@@ -144,7 +144,7 @@ class V0433ReleaseDocsTests(unittest.TestCase):
         self.assertIn("`writer_state`", contract)
         self.assertIn("`local_bytes_missing`", contract)
         approval = (KIT / "docs" / "exact-human-approval-contract.md").read_text(encoding="utf-8")
-        self.assertIn("110 approval-available, 5 fixed-closed", " ".join(approval.split()))  # current parser inventory
+        self.assertIn("111 approval-available, 5 fixed-closed", " ".join(approval.split()))  # current parser inventory
         matrix = (KIT / "docs" / "capability-matrix.md").read_text(encoding="utf-8")
         self.assertIn("upload reopened in v0.4.33 as preservation PUT + adoption projection", matrix)
         register = (KIT / "docs" / "recovery-operations-acceptance.md").read_text(encoding="utf-8")
@@ -175,11 +175,11 @@ class V0433ReleaseDocsTests(unittest.TestCase):
         routed = sum(1 for row in manifest["paths"].values() if row.get("route"))
         # v0.4.23 integrated create-draft (LR-06a); v0.4.24 through v0.4.27, v0.4.31 and v0.4.32 change no writer;
         # v0.4.28 restore, v0.4.29 offload, v0.4.30 claim finalize and v0.4.33 upload are pending (target v0.4.34).
-        self.assertEqual(len(statuses), 110)  # 2026-09-29 feedback integration (A03-A19 commands)
+        self.assertEqual(len(statuses), 111)  # 2026-09-30 letter 177 object-storage-credential-store
         self.assertEqual(statuses.count("session_integrated") - routed, 6)
-        self.assertEqual(routed, 86)  # 2026-09-29 feedback integration (A03-A19 commands)
+        self.assertEqual(routed, 86)  # 2026-09-30 letter 177 object-storage-credential-store
         self.assertEqual(statuses.count("pending"), 0)  # 2026-09-26 coverage audit
-        self.assertEqual(statuses.count("legacy_exception"), 18)  # 2026-09-29 feedback integration (A03-A19 commands)
+        self.assertEqual(statuses.count("legacy_exception"), 19)  # 2026-09-30 letter 177 object-storage-credential-store
         self.assertEqual(manifest["paths"]["create-draft"]["status"], "session_integrated")
 
     def test_current_docs_are_private_safe(self) -> None:

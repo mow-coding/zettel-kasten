@@ -30,6 +30,20 @@ written before v0.4.34 (the two-key shape) are refused the same way until the
 grant is set again. The token binds the grant to whoever received the approve
 result; the claim's presenter fingerprint, the expiry and the operator's
 recover route are the guards against reuse by another conversation.
+
+v0.4.53 (beta letter 177; the owner's 2026-09-25 decision, modelled on the
+Codex and Claude desktop apps): a grant is a durable record on this
+conversation's claimed work session and needs no secret from the process that
+approved it. The desktop apps keep "allow" decisions in the user's account,
+keyed to the project or conversation, and a restart or update never resets
+them; the process that runs a command holds no authority. Here the three
+session refs (app, this conversation's task route, the claimed session) are
+that key: a new process of the same conversation that presents them uses the
+grant until the operator releases it. Another conversation's route does not
+resolve to this session. The row still carries ``presenter_sha256`` (its
+shape is unchanged) and every grant claim still records the presenter
+fingerprint and ``work_session_second_presenter_observed`` as evidence of who
+used the grant; the secret is no longer a condition.
 """
 
 from __future__ import annotations
@@ -326,7 +340,9 @@ def preview_items(*, archive_identity_sha256: str, permission: dict[str, Any] | 
             identity_sha256=registry._digest({"archive": archive_identity_sha256, "kind": "grant_box",
                                               "presenter_sha256": permission["presenter_sha256"],
                                               "expires_at": permission["expires_at"]}),
-            kind="grant_box", title=f"{box} · 이 대화(제시 토큰)에만 적용",
+            # v0.4.53 (letter 177): the grant belongs to this conversation's
+            # session and outlives the process, like the desktop apps' setting.
+            kind="grant_box", title=f"{box} · 이 대화의 작업 세션에만 적용 · 프로그램을 다시 시작해도 유지",
         ))
     return items
 
@@ -361,13 +377,13 @@ _UNSET_PRESENTER = object()
 def resolve_grant_outcome(archive_root, *, client_app_ref, task_route_ref, work_session_ref,
                           presenter: Any = _UNSET_PRESENTER) -> tuple[SessionPermissionGrant | None, str | None]:
     """Read-only: (grant, None) when the caller's route retains this claimed session
-    AND presents the grant's secret before its expiry; (None, reason) otherwise.
+    and the grant has not expired or been released; (None, reason) otherwise.
 
     The reason is one fixed code from GRANT_REFUSAL_CODES, or None when the
     session simply carries no permission (manual). Any doubt (unregistered
     app, unknown route, foreign session, no claim, unreadable registry)
-    resolves to the dialog. v0.4.34: ``presenter`` unset means the process
-    holder or WOM_WORK_SESSION_PRESENTER; None means "no secret presented".
+    resolves to the dialog. v0.4.53 (letter 177): ``presenter`` is accepted
+    for compatibility and ignored; the grant survives the approving process.
     """
 
     try:
@@ -400,11 +416,6 @@ def resolve_grant_outcome(archive_root, *, client_app_ref, task_route_ref, work_
         expired = permission_expired(permission)
         if expired is None or expired:
             return None, "work_session_grant_expired"
-        token = _process_presenter(work_session_ref) if presenter is _UNSET_PRESENTER else presenter
-        if type(token) is not str or _TOKEN_RE.fullmatch(token) is None:
-            return None, "work_session_presenter_missing"
-        if not hmac.compare_digest(presenter_sha256(token), permission["presenter_sha256"]):
-            return None, "work_session_presenter_mismatch"
         return SessionPermissionGrant(
             client_app_ref=client_app_ref, task_route_ref=task_route_ref,
             work_session_ref=work_session_ref, claim_ref=row["claim_ref"],

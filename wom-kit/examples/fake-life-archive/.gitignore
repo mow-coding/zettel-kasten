@@ -36,6 +36,14 @@ node_modules/
 **/db/archive-index.sqlite-shm
 **/db/archive-index.sqlite-journal
 
+# Rebuildable index snapshots and local lock files (v0.4.53)
+**/db/search-snapshots/
+**/db/relation-snapshots/
+**/db/title-snapshots/
+**/db/finder-snapshots/
+**/db/.archive-index-mutation.lock
+objects/manifests/.*.lock
+
 # Local content-addressed stores
 objects/sha256/
 objects/derived-text/sha256/

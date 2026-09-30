@@ -362,10 +362,13 @@ def popup_instruction_text(
         raise _error(input_observed=False, complete=False)
     provider = _safe_label(context.provider).lower()
     purpose = _safe_label(context.purpose).lower().replace("-", "_")
-    if provider != "notion" or purpose not in {
-        "notion_page_recovery",
-        "source_recovery",
-    }:
+    # v0.4.53 (letter 177): object-storage keys use the same masked window.
+    target_names = {"notion": "Notion", "object_storage": "오브젝트 스토리지"}
+    allowed_purposes = {
+        "notion": {"notion_page_recovery", "source_recovery"},
+        "object_storage": {"object_storage_access_key_id", "object_storage_secret_access_key"},
+    }
+    if purpose not in allowed_purposes.get(provider, set()):
         raise _error(input_observed=False, complete=False)
     account = _safe_label(context.account_label)
     workspace = _safe_label(context.workspace_label)
@@ -386,7 +389,7 @@ def popup_instruction_text(
         f"{safety_copy}\r\n\r\n"
         f"현재 작업: {task}\r\n"
         f"연결 이유: {reason}\r\n"
-        f"연결 대상: Notion / {account} / {workspace}"
+        f"연결 대상: {target_names[provider]} / {account} / {workspace}"
     )
 
 

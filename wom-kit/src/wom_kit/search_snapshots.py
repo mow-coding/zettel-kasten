@@ -45,7 +45,9 @@ def _directory(root, *, create=False):
     from .exact_operation_manifest import _ensure_private_directory
     from .source_intake_batch_exact import _reject_link_or_reparse_chain
     if create:
-        return _ensure_private_directory(root, ("db", "search-snapshots"))
+        from . import archive_services as _services
+        return _services.ensure_derived_directory_ignored(
+            _ensure_private_directory(root, ("db", "search-snapshots")))
     path = root / "db/search-snapshots"
     _reject_link_or_reparse_chain(path, code="search_snapshot_invalid")
     return path

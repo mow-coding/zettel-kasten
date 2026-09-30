@@ -454,7 +454,7 @@ class ReconciliationJournal:
         return self.original.write(self._name(name), document)
 
 
-def reconcile_plan(candidate):
+def reconcile_plan(candidate, *, credential_refs=None):
     """Reconcile authenticated old intent with live unfinished files only.
 
     Never reinterpret a missing item as unexecuted. Completed files are neither
@@ -468,6 +468,30 @@ def reconcile_plan(candidate):
     if journal.read("intent") != original:
         raise ActivityCleanupError("activity_cleanup_reconcile_original_invalid")
     material = copy.deepcopy(original)
+    rebind = None
+    if credential_refs is not None:
+        # v0.4.53 (beta letter 177): only the two credential refs may change,
+        # e.g. from env: refs bound to an ended process to OS-keychain refs.
+        # Provider, store, endpoint, bucket and region stay the original's, so
+        # the preserved remote identity and every child proof still match.
+        storage = material.get("storage") or {}
+        if (type(credential_refs) is not dict
+                or set(credential_refs) != {"access_key_id_ref", "secret_access_key_ref"}
+                or not storage.get("access_key_id_ref") or not storage.get("secret_access_key_ref")):
+            raise ActivityCleanupError("activity_cleanup_credential_rebind_invalid")
+        blockers = []
+        services._object_storage_validate_credential_refs(
+            access_key_id_ref=credential_refs["access_key_id_ref"],
+            secret_access_key_ref=credential_refs["secret_access_key_ref"], blockers=blockers)
+        if blockers:
+            raise ActivityCleanupError("activity_cleanup_credential_rebind_invalid")
+        rebind = {"original_refs_sha256": digest([storage["access_key_id_ref"], storage["secret_access_key_ref"]]),
+                  "rebound_refs_sha256": digest([credential_refs["access_key_id_ref"],
+                                                 credential_refs["secret_access_key_ref"]]),
+                  "remote_identity_unchanged": True}
+        storage["access_key_id_ref"] = credential_refs["access_key_id_ref"]
+        storage["secret_access_key_ref"] = credential_refs["secret_access_key_ref"]
+        material["storage"] = storage
     observations, held = [], []
     for item in material["items"]:
         name, path = "item-" + str(item["number"]), Path(item["path"])
@@ -498,7 +522,8 @@ def reconcile_plan(candidate):
             observations.append({"number": item["number"], "state": "changed_or_unavailable_retained"})
     material.update(schema="wom-kit/activity-cleanup-intent/v2",
         reconciliation={"original_intent_sha256": digest(original), "observations": observations,
-                        "retained_item_numbers": held, "original_item_receipts_reused": True})
+                        "retained_item_numbers": held, "original_item_receipts_reused": True,
+                        **({"credential_rebind": rebind} if rebind is not None else {})})
     identity = digest(material)[7:]
     public = public_plan(material)
     public["reconciliation"] = material["reconciliation"]

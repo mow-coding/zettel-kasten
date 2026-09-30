@@ -140,9 +140,13 @@ class ReceiptGitProvenanceTests(unittest.TestCase):
             snapshot, selection = self.classify(binding=current)
         partition = self.assert_partition(snapshot, selection)
         self.assertEqual(selection.public_summary()["selected_receipt_count"], 1)
-        self.assertEqual(selection.public_summary()["other_session_receipt_count"], 1)
+        # v0.4.53 (letter 177): the other session's receipt names another
+        # session in its own decision, so it is excluded without the expensive
+        # proof, as ownership-unverified, and counted as a hint.
+        self.assertEqual(selection.public_summary()["other_session_receipt_count"], 0)
+        self.assertEqual(selection.public_summary()["other_session_hint_receipt_count"], 1)
         captured_rows = snapshot._document()["capture"]["private_changes"]
-        self.assertEqual(selection.public_summary()["ownership_unverified_count"], len(captured_rows) - 2)
+        self.assertEqual(selection.public_summary()["ownership_unverified_count"], len(captured_rows) - 1)
         by_path = {row["path"]: row["public_observation"]["change_ref"] for row in captured_rows}
         unknown_refs = {row["change_ref"] for row in partition["excluded_changes"] if row["scope"] == "unknown"}
         self.assertTrue({by_path["tracked.txt"], by_path["new-private.txt"]}.issubset(unknown_refs))
@@ -152,7 +156,7 @@ class ReceiptGitProvenanceTests(unittest.TestCase):
                      if row["execution_sha256"] == self.owner_result["execution_sha256"])
         self.assertEqual(proof["original_work_session_binding"], self.owner.document())
         self.assertNotEqual(proof["original_work_session_binding"], current.document())
-        self.assertEqual(len(selection._private_document()["proofs"]), 2)
+        self.assertEqual(len(selection._private_document()["proofs"]), 1)
         self.assertFalse(selection.public_summary()["current_claim_authority_evaluated"])
         for marker in (str(self.root), "Synthetic private", "tracked.txt", "new-private.txt",
                        self.app, other_result["work_session_binding"]["work_session_ref"]):
@@ -160,6 +164,26 @@ class ReceiptGitProvenanceTests(unittest.TestCase):
         # Frozen values do not retain document aliases returned to internal callers.
         partition["selected_groups"].clear()
         self.assertEqual(selection.public_summary()["selected_receipt_count"], 1)
+
+    def test_other_sessions_receipts_never_consume_the_receipt_budget(self):
+        """Letter 177: a large archive's other-activity receipts made the session backup fail.
+
+        With a budget of one, the owner's single receipt plus another session's
+        receipt used to raise work_session_git_receipt_limit; only this
+        session's receipts count now. Two of this session's own receipts still
+        exceed a budget of one and fail closed.
+        """
+        self.create_session("Synthetic private other activity")
+        with patch.object(provenance, "_MAX_RECEIPT_CANDIDATES", 1):
+            snapshot, selection = self.classify()
+            self.assert_partition(snapshot, selection)
+            summary = selection.public_summary()
+            self.assertEqual(summary["selected_receipt_count"], 1)
+            self.assertEqual(summary["other_session_hint_receipt_count"], 1)
+        with patch.object(provenance, "_MAX_RECEIPT_CANDIDATES", 0):
+            with self.assertRaises(provenance.WorkSessionGitProvenanceError) as caught:
+                self.classify()
+            self.assertEqual(caught.exception.code, "work_session_git_receipt_limit")
 
     def test_index_same_canonical_bytes_is_eligible(self):
         self.git("add", "--", self.receipt_path().relative_to(self.root).as_posix())

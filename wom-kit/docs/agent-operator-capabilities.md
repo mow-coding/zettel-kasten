@@ -1,7 +1,7 @@
 # Agent Operator Capabilities Manifest
 
-Current v0.4.52 candidate: index-bound commands on large archives finish in a fraction of the time (live scan without per-file opens), original-filename discovery for registered objets, installed guidance checked against the installed commands, titled edge previews, a handoff checkpoint that names unpublished drafts and twenty-five verified S2 items. [Release scope](releases/v0.4.52.md). Other ongoing requests are not included in this claim.
-Current release candidate: v0.4.52 large-activity performance and verification closure (letters 174-176); [release scope](releases/v0.4.52.md).
+Current v0.4.53 candidate: session grants that survive restarts like the desktop apps, a session Git backup that ignores other activities' receipts, index snapshots kept out of Git, and object-storage keys in the Windows Credential Manager with a reconcile rebind for remaining cleanup. [Release scope](releases/v0.4.53.md). Other ongoing requests are not included in this claim.
+Current release candidate: v0.4.53 session grants, backups and remaining cleanup after restarts (letter 177); [release scope](releases/v0.4.53.md).
 
 Status: v0.4.36 no-dialog grants, letter-168, and writer-session coverage gate
 
@@ -206,17 +206,17 @@ field remain `history_not_audited`. Inventory, shared capability availability,
 and command help consume the same content-free history. Current availability
 continues to be parser-derived; history does not grant execution authority.
 
-For the current v0.4.52 candidate parser, the inventory snapshot is:
+For the current v0.4.53 candidate parser, the inventory snapshot is:
 
 ```text
-canonical executable command paths: 309
+canonical executable command paths: 310
 alias invocation paths:              215
-all invocation paths:                524
-approval_available:                   110
+all invocation paths:                525
+approval_available:                   111
 approval_fixed_closed:                5
 approval_not_exposed:                194
 conditional approval paths:            10
-dry_run_exposed:                     263
+dry_run_exposed:                     264
 unmatched fixed-close entries:         0
 ```
 
