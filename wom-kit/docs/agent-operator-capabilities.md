@@ -5,6 +5,12 @@ Current release candidate: v0.4.53 session grants, backups and remaining cleanup
 
 Status: v0.4.36 no-dialog grants, letter-168, and writer-session coverage gate
 
+v0.4.54 replaces one command path and moves no count: `operator-feedback-delete`
+(approval-available, grantable) permanently deletes delivered / acknowledged /
+resolved letters and their body receipts and keeps a one-line `deleted` record;
+it replaces the v0.4.36 move `operator-feedback-archive`, which is removed
+(owner decision 2026-09-30).
+
 v0.4.36 adds one command path: `operator-feedback-archive` (approval-available,
 grantable) moves delivered / acknowledged / resolved feedback letters and
 their body receipts to an operator-designated folder outside the archive and

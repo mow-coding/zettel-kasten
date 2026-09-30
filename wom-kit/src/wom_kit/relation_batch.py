@@ -144,7 +144,10 @@ def publish(archive_root, *, source_snapshot=None):
         finally:
             if pending.exists():
                 pending.unlink()
-    return {"ok": True, "snapshot_ref": digest, "zettel_count": len(entries), "not_judged_count": rejected}
+        # v0.4.54: old generations no longer pile up on the disk.
+        pruned = services.prune_derived_generations(folder, keep_digest=digest)
+    return {"ok": True, "snapshot_ref": digest, "zettel_count": len(entries), "not_judged_count": rejected,
+            "pruned_generations": pruned}
 
 
 def _read(archive_root, snapshot_ref=None):

@@ -69,9 +69,9 @@ EMPTY_ALLOWLIST_SHA256 = (
 )
 
 # v0.4.36 adds only operator-feedback-archive to the previous pinned CLI paths.
-CLI_COUNT = 526  # 2026-09-30: object-storage-credential-store (letter 177)
+CLI_COUNT = 526  # v0.4.54: operator-feedback-delete replaces operator-feedback-archive
 CLI_CANONICAL_SHA256 = (
-    "060c96e858e7f3bfe17f8442808b5b1181dfdcdd79242625a41db333990dbcb3"
+    "3c9d6bafc985615394f1959c12a3bb507246326d11ae18669cdc05e78d2248d1"
 )
 MCP_COUNT = 129  # v0.4.44: seven IMAP planning previews removed
 MCP_CANONICAL_SHA256 = (
@@ -1165,7 +1165,8 @@ class PrivateObjetMetadataIndexPrivacyGateTests(unittest.TestCase):
         self.assertEqual(len(cli), CLI_COUNT)
         self.assertEqual(_canonical_sha256(cli), CLI_CANONICAL_SHA256)
         self.assertIn(["objet-source-metadata-write"], cli)
-        self.assertIn(["operator-feedback-archive"], cli)
+        self.assertIn(["operator-feedback-delete"], cli)
+        self.assertNotIn(["operator-feedback-archive"], cli)
 
         mcp = _current_mcp_rows()
         self.assertEqual(len(mcp), MCP_COUNT)

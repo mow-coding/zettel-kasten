@@ -56,7 +56,7 @@ Every write below is `--dry-run` first, then the same plan with `--approve`.
 | back up | `git-backup-plan`, `backup-evidence` |
 | update WOM | `project-version-update` |
 | skip windows for this session | `work-session --action set-permission-mode` |
-| write to the developers | `operator-feedback-compose` |
+| write / delete developer letters | `operator-feedback-compose` / `operator-feedback-delete` |
 
 Model and reasoning-level guidance:
 [models-and-reasoning.md](references/models-and-reasoning.md).

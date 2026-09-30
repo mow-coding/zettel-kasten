@@ -161,7 +161,7 @@ class V0436ReleaseDocsTests(unittest.TestCase):
         self.assertIn("## Root cause of the upload failure", decision_log)
         coverage = json.loads((KIT / "docs" / "writer-session-coverage.json").read_text(encoding="utf-8"))
         for row in ("operator-feedback-compose", "object-storage-restore", "object-storage-offload",
-                    "exact-approval-claim-finalize", "object-storage-upload", "operator-feedback-archive"):
+                    "exact-approval-claim-finalize", "object-storage-upload", "operator-feedback-delete"):
             self.assertEqual(coverage["paths"][row]["status"], "session_integrated")
             self.assertEqual(coverage["paths"][row]["route"], "environment")
         for guide_path in (ROOT / "UPGRADE.md", ROOT / "UPGRADE.ko.md"):

@@ -889,6 +889,32 @@ def _query_remote_ref_with_stored_credentials(
     return "present", fields[0].lower()
 
 
+def _remote_blocker_guidance(blockers: Iterable[str], credential_mode: str) -> list[str]:
+    """v0.4.54 (letter 177): say why the remote could not be read and what to run next."""
+
+    present = set(blockers)
+    guidance: list[str] = []
+    if "git_transport_ref_observation_unavailable" in present:
+        if credential_mode == "anonymous":
+            guidance.append(
+                "The remote was read without a login (--credential-mode anonymous), which cannot see a private "
+                "repository. Rerun with --credential-mode stored (the default since v0.4.54): it uses the Git login "
+                "already saved on this PC without asking for or showing it."
+            )
+        else:
+            guidance.append(
+                "Git could not read the remote branch with the login saved on this PC (network, expired login, or no "
+                "access). Sign in once with the normal Git tools on this PC (for example a plain git fetch in a "
+                "terminal), then rerun this plan; WOM never asks for or stores the login."
+            )
+    if "configured_remote_unavailable_or_unsafe" in present:
+        guidance.append(
+            "The remote must be exactly one https:// URL without a user name or token in it; SSH remotes are not "
+            "supported. Check it with git remote -v and fix it with git remote set-url."
+        )
+    return guidance
+
+
 def _decode_git_path(raw: bytes, *, directory_summary: bool = False) -> str | None:
     try:
         value = raw.decode("utf-8", errors="strict")
@@ -3234,7 +3260,7 @@ def _git_backup_plan_with_pinned_git(
             "context_only_not_file_provenance": True,
         },
         "next_safe_actions": (
-            ["Resolve every blocker and rerun this read-only plan."]
+            ["Resolve every blocker and rerun this read-only plan.", *_remote_blocker_guidance(blockers, credential_mode)]
             if blockers
             else [
                 "Review each ordinal change against local private evidence.",

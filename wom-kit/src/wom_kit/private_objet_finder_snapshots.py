@@ -81,7 +81,9 @@ def publish(root, archive_id):
                 os.fsync(stream.fileno())
             os.replace(pointer, folder / "latest.json")
             pointer = None
-            return {"ok": True, "snapshot": digest}
+            # v0.4.54: old generations no longer pile up on the disk.
+            pruned = services.prune_derived_generations(folder, keep_digest=digest)
+            return {"ok": True, "snapshot": digest, "pruned_generations": pruned}
     except Exception:
         return {"ok": False, "decision": health.unavailable_private_objet_metadata_index_health()}
     finally:

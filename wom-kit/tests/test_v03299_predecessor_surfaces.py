@@ -100,7 +100,7 @@ CLI_ADDITIONS = {
     ("notion-reviewed-page-recovery",),
     ("notion-reviewed-page-recovery-plan",),
     ("objet-capture-batch",),
-    ("operator-feedback-archive",),  # v0.4.36 (letters 164 ⑧ / 168 request 8)
+    ("operator-feedback-delete",),  # v0.4.54: replaces v0.4.36 operator-feedback-archive
     ("operator-feedback-body-check",),
     ("operator-feedback-compose",),
     ("operation-control",),
@@ -239,9 +239,9 @@ MCP_REMOVALS = {
     "imap_mailbox_adapter_manifest_plan",
     "imap_mailbox_adapter_preflight_plan",
 }
-CURRENT_CLI_COUNT = 526  # 2026-09-30: object-storage-credential-store (letter 177)
+CURRENT_CLI_COUNT = 526  # v0.4.54: operator-feedback-delete replaces operator-feedback-archive
 CURRENT_CLI_CANONICAL_SHA256 = (
-    "060c96e858e7f3bfe17f8442808b5b1181dfdcdd79242625a41db333990dbcb3"
+    "3c9d6bafc985615394f1959c12a3bb507246326d11ae18669cdc05e78d2248d1"
 )
 CURRENT_MCP_COUNT = 129  # v0.4.44: seven IMAP planning previews removed
 CURRENT_MCP_CANONICAL_SHA256 = (

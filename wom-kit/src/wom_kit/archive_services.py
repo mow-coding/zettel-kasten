@@ -1204,6 +1204,8 @@ OPERATOR_FEEDBACK_DELIVERY_RECEIPT_SCHEMA = "wom-kit/operator-feedback-delivery-
 OPERATOR_FEEDBACK_DIR = "ops/feedback"
 OPERATOR_FEEDBACK_RECEIPTS_DIR = "receipts/operator-feedback"
 OPERATOR_FEEDBACK_STATUSES = ("draft", "delivered", "acknowledged", "resolved", "archived")
+# v0.4.54: written only by operator-feedback-delete (never by operator-feedback-record).
+OPERATOR_FEEDBACK_DELETED_STATUS = "deleted"
 OPERATOR_FEEDBACK_RECORD_INTENTS = ("create", "update")
 # Not-yet-delivered lifecycle state: the only status mark-delivered may transition from.
 OPERATOR_FEEDBACK_PENDING_STATUS = "draft"
@@ -6014,6 +6016,8 @@ def operator_feedback_ledger(archive_root: Path | str, *, dry_run: bool = True) 
         blockers.append("operator-feedback-ledger is read-only and requires --dry-run.")
 
     counts = {status: 0 for status in OPERATOR_FEEDBACK_STATUSES}
+    # v0.4.54: operator-feedback-delete leaves a one-line record with status deleted.
+    counts[OPERATOR_FEEDBACK_DELETED_STATUS] = 0
     counts["unknown_status"] = 0
     unreadable = 0
     total = 0
@@ -6057,7 +6061,9 @@ def operator_feedback_ledger(archive_root: Path | str, *, dry_run: bool = True) 
         "user_view": {
             "labels": dict(OPERATOR_FEEDBACK_USER_LABELS),
             "before_delivery_count": counts["draft"],
-            "delivered_count": sum(counts[status] for status in OPERATOR_FEEDBACK_STATUSES if status != "draft"),
+            "delivered_count": sum(counts[status] for status in OPERATOR_FEEDBACK_STATUSES if status != "draft")
+            + counts[OPERATOR_FEEDBACK_DELETED_STATUS],
+            "deleted_count": counts[OPERATOR_FEEDBACK_DELETED_STATUS],
             "developer_acknowledged_count": counts["acknowledged"] + counts["resolved"],
             "next_feedback_id": operator_feedback_body.next_feedback_id(root),
         },
@@ -154523,6 +154529,74 @@ def ensure_derived_directory_ignored(directory: Path) -> Path:
     except OSError:
         pass
     return Path(directory)
+
+
+DERIVED_GENERATION_KEEP_NEWEST = 2
+DERIVED_GENERATION_MIN_AGE_SECONDS = 3600
+DERIVED_PARTIAL_MIN_AGE_SECONDS = 86400
+_DERIVED_GENERATION_NAME_RE = re.compile(r"^[0-9a-f]{64}\.(?:sqlite|json)$")
+_DERIVED_PARTIAL_NAME_RE = re.compile(r"^(?:[0-9a-f]{32}\.(?:building|pending|pointer)|\.[0-9a-f]{64}\.(?:sqlite|json)\.[0-9a-f]{16}\.tmp)$")
+
+
+def prune_derived_generations(
+    directory: Path,
+    *,
+    keep_digest: str | None,
+    keep_newest: int = DERIVED_GENERATION_KEEP_NEWEST,
+    min_age_seconds: float = DERIVED_GENERATION_MIN_AGE_SECONDS,
+    now: float | None = None,
+) -> int:
+    """v0.4.54: delete old generations of a rebuildable snapshot folder.
+
+    Every index run published a new content-addressed generation (a search
+    generation is a full copy of the index) and nothing ever removed the old
+    ones, so the folder grew on the operator's disk without bound. The current
+    generation, the ``keep_newest`` most recent ones and anything younger than
+    ``min_age_seconds`` (a search cursor or a reviewed plan may still read it)
+    stay; older generations and abandoned partial files are deleted. Only
+    WOM-named regular files are touched; a file that cannot be removed (for
+    example one a reader still has open on Windows) is left for the next run.
+    Returns the number of files deleted.
+    """
+
+    folder = Path(directory)
+    current = time.time() if now is None else now
+    generations: list[tuple[float, Path]] = []
+    removed = 0
+    try:
+        entries = list(os.scandir(folder))
+    except OSError:
+        return 0
+    for entry in entries:
+        name = entry.name
+        try:
+            info = entry.stat(follow_symlinks=False)
+        except OSError:
+            continue
+        if not stat.S_ISREG(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
+            continue
+        if _DERIVED_GENERATION_NAME_RE.fullmatch(name):
+            if keep_digest is not None and name.split(".", 1)[0] == keep_digest:
+                continue
+            generations.append((info.st_mtime, Path(entry.path)))
+        elif _DERIVED_PARTIAL_NAME_RE.fullmatch(name) and current - info.st_mtime > DERIVED_PARTIAL_MIN_AGE_SECONDS:
+            try:
+                os.unlink(entry.path)
+                removed += 1
+            except OSError:
+                pass
+    generations.sort(key=lambda item: item[0], reverse=True)
+    kept = 1 if keep_digest is not None else 0
+    for mtime, path in generations:
+        if kept < keep_newest or current - mtime <= min_age_seconds:
+            kept += 1
+            continue
+        try:
+            os.unlink(path)
+            removed += 1
+        except OSError:
+            pass
+    return removed
 
 
 def _publish_derived_generation_file(path: Path, value: bytes) -> None:

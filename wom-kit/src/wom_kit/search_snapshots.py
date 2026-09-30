@@ -101,9 +101,11 @@ def publish(root, *, timeout_seconds=5):
             previous = _latest(root)
             if previous:
                 with open_snapshot(root, previous) as (old, old_meta):
-                    if old_meta["index_metadata_sha256"] == identity:
-                        return {"ok": True, "snapshot": previous, "reused": True,
-                                "live_source_freshness_checked": False}
+                    reusable = old_meta["index_metadata_sha256"] == identity
+                if reusable:
+                    pruned = services.prune_derived_generations(_directory(root), keep_digest=previous)
+                    return {"ok": True, "snapshot": previous, "reused": True,
+                            "live_source_freshness_checked": False, "pruned_generations": pruned}
             evidence = services.require_current_zettel_index(root, connection=source)
             if evidence.get("ok") is not True:
                 return {"ok": False, "reason": "search_live_index_not_ready"}
@@ -146,7 +148,9 @@ def publish(root, *, timeout_seconds=5):
                 os.fsync(stream.fileno())
             os.replace(pointer_partial, directory / "latest.json")
             pointer_partial = None
-            return {"ok": True, "snapshot": digest, "reused": False}
+            # v0.4.54: old full-index copies no longer pile up on the disk.
+            pruned = services.prune_derived_generations(directory, keep_digest=digest)
+            return {"ok": True, "snapshot": digest, "reused": False, "pruned_generations": pruned}
     except Exception:
         # Fixed reason: never expose SQLite paths or a rejected private value.
         return {"ok": False, "reason": "search_snapshot_refresh_unavailable"}

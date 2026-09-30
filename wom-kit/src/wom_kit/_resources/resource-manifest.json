@@ -757,8 +757,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/SKILL.md",
       "packaged": "templates/ai-runtime/wom-archive/SKILL.md",
-      "bytes": 11106,
-      "sha256": "14745df7bee7c5ebd3c9777f174ec1b2208e0a4a2c99ba3fe3dbba7ccc0e8e6d"
+      "bytes": 11144,
+      "sha256": "1e11dd7eb136ca1449971c208852ab71875901610375b00ff6118d98ed5eb88e"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
@@ -775,8 +775,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/developer-letters.md",
       "packaged": "templates/ai-runtime/wom-archive/references/developer-letters.md",
-      "bytes": 1024,
-      "sha256": "3f8f2d5ff1e0f23ab95bc123dbfe0b3930ffc3698e27d769243c84298d19111e"
+      "bytes": 1479,
+      "sha256": "78e8ffd47b85a418060178975f23d2c6e3806014457517a29b8828de17c8cfc2"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/foreign-sharing-and-trust.md",

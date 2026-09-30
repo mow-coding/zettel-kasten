@@ -2296,11 +2296,23 @@ def check_operator_feedback_body(
         )
     except _BodyContractError as exc:
         if exc.code == "feedback_body_missing":
-            # v0.4.36 (letters 164 ⑧ / 168 request 8): an archived record keeps
-            # a content-free stub; the check recognises it instead of failing.
-            from . import operator_feedback_archive as _archive
+            # v0.4.54: a deleted letter keeps only a one-line record; the check
+            # recognises it instead of failing.
+            from . import operator_feedback_delete as _deletion
 
-            stub = _archive.archived_stub(root, feedback_id)
+            gone = _deletion.deleted_record(root, feedback_id)
+            if gone is not None:
+                result.update({
+                    "ok": True, "state": "deleted_record",
+                    "feedback_ref": None, "body_utf8_bytes": 0, "body_persisted": False,
+                    "receipt_persisted": False,
+                    "record_binding": {"record_present": True, "feedback_ref_bound": False, "deleted_record": True},
+                    "deleted": dict(gone), "blockers": [], "next_safe_actions": [],
+                })
+                return result
+            # v0.4.36 (letters 164 ⑧ / 168 request 8): a record moved out by the
+            # retired operator-feedback-archive keeps a content-free stub.
+            stub = _deletion.archived_stub(root, feedback_id)
             if stub is not None:
                 result.update({
                     "ok": True, "state": "archived_stub",

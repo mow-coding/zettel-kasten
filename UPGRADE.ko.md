@@ -283,7 +283,8 @@ dry-run은 이제 approve에 넣는 요청을 그대로 받습니다.
 --destination <아카이브의 부모>/ops-feedback-archive --dry-run --format json` 뒤 같은 명령에
 `--approve --reviewed-by <person:...> --expected-plan-sha256 <plan_sha256>`을 붙입니다. 레코드마다
 내용 없는 `archived` 흔적이 남고, `operator-feedback-body-check`는 그것을 `archived_stub`로
-보고합니다.
+보고합니다. (v0.4.54에서 폐지: 전달 완료 편지는 이제 `operator-feedback-delete`로 삭제하며,
+`--moved-folder`를 주면 이렇게 옮겨 둔 사본도 함께 삭제합니다.)
 
 검토한 project update 한 번 뒤에는 새 process에서 project launcher를 시작해 pin,
 source, launcher, runtime 근거를 확인하세요. 그 client 실행 결과만이 project가

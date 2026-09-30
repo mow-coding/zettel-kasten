@@ -310,7 +310,9 @@ To move delivered letters out of the archive:
 archive>/ops-feedback-archive --dry-run --format json`, then the same with
 `--approve --reviewed-by <person:...> --expected-plan-sha256 <plan_sha256>`.
 Each record keeps a content-free `archived` stub; `operator-feedback-body-check`
-reports it as `archived_stub`.
+reports it as `archived_stub`. (Retired in v0.4.54: delivered letters are now
+deleted with `operator-feedback-delete`, which also deletes these moved copies
+when given `--moved-folder`.)
 
 After one reviewed project update, start the project launcher in a new process
 and verify its pin, source, launcher, and runtime evidence. Only that client-run
