@@ -23865,7 +23865,7 @@ def command_object_storage_credential_store(args: argparse.Namespace) -> int:
             return 0
         if args.expected_request_sha256 != preview["request_sha256"]:
             raise store.ObjectStorageCredentialStoreError("object_storage_credential_request_changed")
-        if os.name != "nt":
+        if not store.windows_available():
             raise store.ObjectStorageCredentialStoreError("object_storage_credential_windows_required")
         label = args.store_label or args.store_slug
         status = store.run_isolated(slug=args.store_slug, store_label=label, replace_existing=args.replace_existing)

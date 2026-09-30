@@ -84,6 +84,8 @@ class CleanupCredentialRebindTests(unittest.TestCase):
         self.assertTrue(rebind["remote_identity_unchanged"])
         self.assertNotIn("credential-manager", json.dumps(rebound["public"]))
         self.assertNotIn("WOM_SYNTHETIC_R2", json.dumps(rebound["public"]))
+        if os.name != "nt":
+            return  # the native delete step is Windows-only (activity_cleanup_native_delete_not_supported)
         result = fixture.ActivityCleanupTests.execute(self, rebound)
         self.assertTrue(result["ok"], result)
         self.assertEqual(sum(row["state"] == "already_deleted" for row in result["items"]), 1017)

@@ -96,6 +96,11 @@ def plan(*, archive_id: str, slug: str, replace_existing: bool) -> dict[str, Any
     }
 
 
+def windows_available() -> bool:
+    """The masked window and the Credential Manager exist on Windows only."""
+    return os.name == "nt"
+
+
 def _wipe(buffer: Any) -> None:
     if isinstance(buffer, bytearray):
         for index in range(len(buffer)):

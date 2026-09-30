@@ -138,7 +138,7 @@ class ObjectStorageCredentialStoreTests(unittest.TestCase):
         self.assertEqual(refused["reason_code"], "object_storage_credential_request_changed")
         with patch.object(store, "run_isolated", return_value={"ok": True, "code": None, "writes_performed": True,
                                                                  "replaced_existing": False}) as worker, \
-                patch.object(os, "name", "nt"):
+                patch.object(store, "windows_available", return_value=True):
             code, stored = self.call("--approve", "--expected-request-sha256", preview["request_sha256"])
         self.assertEqual(code, 0, stored)
         self.assertTrue(stored["stored"])
@@ -147,11 +147,14 @@ class ObjectStorageCredentialStoreTests(unittest.TestCase):
         self.assertFalse(json.loads(record.read_text(encoding="utf-8"))["key_values_recorded"])
         self.assertEqual(store.list_records(self.root)[0]["credential_refs"], store.refs("r2-main"))
         with patch.object(store, "run_isolated", return_value={"ok": False, "code": "object_storage_credential_cancelled"}), \
-                patch.object(os, "name", "nt"):
+                patch.object(store, "windows_available", return_value=True):
             code, cancelled = self.call("--approve", "--expected-request-sha256", preview["request_sha256"])
         self.assertEqual(code, 1)
         self.assertEqual(cancelled["reason_code"], "object_storage_credential_cancelled")
         self.assertEqual(cancelled["effects_state"], "none")
+        with patch.object(store, "windows_available", return_value=False):
+            code, elsewhere = self.call("--approve", "--expected-request-sha256", preview["request_sha256"])
+        self.assertEqual(elsewhere["reason_code"], "object_storage_credential_windows_required")
 
 
 if __name__ == "__main__":
