@@ -2,7 +2,7 @@
 
 ## v0.4.54 delivered letters deleted, private Git remotes read, old index copies removed
 
-After publication, use the official project update flow. To free the space of delivered or resolved feedback letters, preview `archive operator-feedback-delete <root> --dry-run --format json` and approve the same plan once with `--approve --reviewed-by <person:...> --expected-plan-sha256 <plan_sha256>`; deletion is permanent and only a one-line record per letter stays. If an older WOM moved letters out with `operator-feedback-archive` (now removed), add `--moved-folder <that folder>`. `git-backup-plan` now reads the remote with the saved Git login by default, and old index snapshot copies are deleted after each index run. No archive changes on install.
+After publication, use the official project update flow. If the previous update's result showed `post_update_attention_required: true`, first run `archive project-version-update <archive-root> --resume --affirm-external-writers-quiescent --format json` once with the project's current launcher, then preview the update again (letter 178). To free the space of delivered or resolved feedback letters, preview `archive operator-feedback-delete <root> --dry-run --format json` and approve the same plan once with `--approve --reviewed-by <person:...> --expected-plan-sha256 <plan_sha256>`; deletion is permanent and only a one-line record per letter stays. If an older WOM moved letters out with `operator-feedback-archive` (now removed), add `--moved-folder <that folder>`. `git-backup-plan` now reads the remote with the saved Git login by default, and old index snapshot copies are deleted after each index run. No archive changes on install.
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")

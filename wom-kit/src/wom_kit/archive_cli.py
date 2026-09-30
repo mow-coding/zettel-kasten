@@ -11881,6 +11881,8 @@ def _command_project_version_update_core(
             ),
         )
         delivery_acknowledged = False
+        # v0.4.54 (letter 178): a fixed, content-free reason when delivery is not acknowledged.
+        delivery_failure_code: str | None = None
         if (
             journal_terminal_published
             and terminal_delivery is not None
@@ -11909,6 +11911,7 @@ def _command_project_version_update_core(
                 # already durable. Keep the handoff for deterministic resume
                 # instead of turning delivery bookkeeping into total failure.
                 delivery_acknowledged = False
+                delivery_failure_code = "acknowledge_failed"
             # A new output and journal are now either durably bound to the
             # exact capsule or safely incomplete. Release the outer command
             # serialization before read-only pending discovery/final display;
@@ -11920,6 +11923,7 @@ def _command_project_version_update_core(
             )
             if not boundary_released:
                 delivery_acknowledged = False
+                delivery_failure_code = "delivery_boundary_not_released"
             if delivery_acknowledged and terminal_delivery_authority is not None:
                 try:
                     delivery_candidate = (
@@ -11944,6 +11948,7 @@ def _command_project_version_update_core(
                     )
                     if verified_delivery_candidate is None:
                         delivery_acknowledged = False
+                        delivery_failure_code = "delivery_candidate_not_verified"
                     else:
                         terminal_display_candidate = (
                             verified_delivery_candidate
@@ -11953,6 +11958,7 @@ def _command_project_version_update_core(
                         )
                 except Exception:
                     delivery_acknowledged = False
+                    delivery_failure_code = "delivery_discovery_failed"
         terminal = display_result.get("terminal_finalization")
         if (
             isinstance(terminal, dict)
@@ -11961,6 +11967,24 @@ def _command_project_version_update_core(
             terminal["durable_result_delivery_acknowledged"] = bool(
                 delivery_acknowledged
             )
+            if not delivery_acknowledged:
+                terminal["result_delivery_failure_code"] = (
+                    delivery_failure_code or "delivery_not_attempted"
+                )
+                if not cancellation_terminal:
+                    # v0.4.54 (letter 178): say what to run, not only that
+                    # attention is required.
+                    for key, text in (
+                        ("warnings", archive_services._PROJECT_UPDATE_TERMINAL_DELIVERY_WARNING),
+                        ("next_safe_actions", archive_services._PROJECT_UPDATE_TERMINAL_DELIVERY_ACTION),
+                    ):
+                        existing = display_result.get(key)
+                        if not isinstance(existing, list):
+                            existing = []
+                        if text not in existing:
+                            display_result[key] = (
+                                [text, *existing] if key == "next_safe_actions" else [*existing, text]
+                            )
             if not cancellation_terminal:
                 terminal["attention_required"] = not (
                     terminal.get("transaction_cleanup_completed") is True

@@ -10268,10 +10268,13 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
                             "client_archive_domain_content_accessed": False,
                             "project_domain_files_written": [],
                             "files_written": [],
-                            "next_safe_actions": [
-                                "Stop without deleting private update metadata, changing the project pin, or retrying approval.",
-                                "Send the content-free result to the WOM maintainer for forensic review.",
-                            ],
+                            # v0.4.54 (letter 178): the unknown result names its branch.
+                            "cause_code": "unclassified",
+                            "residue_inventory": None,
+                            "next_safe_actions": archive_services._project_update_terminal_cleanup_outcome_unknown_result(
+                                operator_resume_identifiers_supplied=False,
+                                archive_identity_metadata_read=False,
+                            )["next_safe_actions"],
                             },
                         )
                     self.assertEqual(executor_calls, [])
