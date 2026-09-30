@@ -144467,10 +144467,11 @@ def write_result_git_backup_attention(archive_root: Path | str) -> dict[str, Any
 
 SESSION_PERMISSION_ATTENTION_SCHEMA = "wom-kit/session-permission-attention/v1"
 SESSION_PERMISSION_GUIDANCE = (
-    "The three work-session refs and the presenter token stay in the granting "
-    "conversation's process; never store them in cross-conversation memory or "
-    "files. Another conversation continues a task through work-session "
-    "handoff/accept (one human decision), never by reusing the refs."
+    "The three work-session refs identify the granting conversation and keep "
+    "its grant across new processes and restarts; never store them in "
+    "cross-conversation memory or files. Another conversation continues a task "
+    "through work-session handoff/accept (one human decision), never by reusing "
+    "the refs."
 )
 SESSION_PERMISSION_ATTENTION_NEXT_COMMAND = (
     "archive work-session <archive-root> --action list --kind session --format json"

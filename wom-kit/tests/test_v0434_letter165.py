@@ -68,7 +68,7 @@ class PresenterBoundGrantTests(_permission_fixture.SessionPermissionModeTests):
                             request={"permission_mode": "limited", "operations": ["create_draft"], "grant_hours": 2})
         self.assertEqual(preview["result"]["would_box"],
                          {"grant_hours": 2, "until_released": False, "expires_at_relative": True,
-                          "presenter_token_returned_once": True})
+                          "grant_survives_process_restart": True})
         self.assertTrue(preview["result"]["presenter_bound"])
         refused = self.call("work-session", "--action", "set-permission-mode", "--dry-run", "--request-stdin",
                             *task["refs"], "--work-session-ref", task["session"],
@@ -78,17 +78,18 @@ class PresenterBoundGrantTests(_permission_fixture.SessionPermissionModeTests):
         result = self.set_mode(task, "limited", ["create_draft"])
         self.assertEqual(self.native.calls, dialogs + 1)
         inner = result["result"]
-        self.assertTrue(inner["presenter_token_returned_once"])
-        self.assertTrue(inner["presenter_token_is_secret"])
+        # v0.4.53 (letter 177): no secret is returned; the grant is this
+        # conversation's session record and survives the process.
+        self.assertNotIn("presenter_token", inner)
+        self.assertNotIn("presenter_token_field", result)
+        self.assertFalse(inner["presenter_token_required"])
+        self.assertTrue(inner["grant_survives_process_restart"])
+        self.assertEqual(inner["grant_scope"], "this_conversation_work_session")
         self.assertTrue(inner["presenter_bound"])
-        self.assertEqual(result["presenter_token_field"], "result.presenter_token")
-        token = inner["presenter_token"]
-        self.assertRegex(token, r"^[A-Za-z0-9_-]{43}$")
-        self.assertTrue(any("WOM_WORK_SESSION_PRESENTER" in line for line in inner["next_safe_actions"]))
+        self.assertTrue(any("WOM_WORK_SESSION_REF" in line for line in inner["next_safe_actions"]))
         row = self.store.read()._document["sessions"][task["session"]]
         self.assertEqual(set(row["permission"]), permission.PERMISSION_V2_KEYS)
-        self.assertEqual(row["permission"]["presenter_sha256"], permission.presenter_sha256(token))
-        self.assertNotIn(token, json.dumps(row))
+        self.assertRegex(row["permission"]["presenter_sha256"], r"^sha256:[0-9a-f]{64}$")
         # v0.4.44 (owner decision 2026-09-25): no grant_hours means no time limit.
         datetime.strptime(row["permission"]["granted_at"], "%Y-%m-%dT%H:%M:%SZ")
         self.assertIsNone(row["permission"]["expires_at"])
@@ -96,6 +97,7 @@ class PresenterBoundGrantTests(_permission_fixture.SessionPermissionModeTests):
         items = permission.preview_items(archive_identity_sha256="sha256:" + "a" * 64, permission=row["permission"])
         self.assertEqual(items[-1].kind, "grant_box")
         self.assertIn("해제할 때까지 유지", items[-1].title)
+        self.assertIn("다시 시작해도 유지", items[-1].title)
         # inspect / list show the box, never the hash
         item = self.inspect(task)
         self.assertTrue(item["presenter_bound"])
@@ -115,10 +117,9 @@ class PresenterBoundGrantTests(_permission_fixture.SessionPermissionModeTests):
                                "--cursor", first["pagination"]["next_cursor"])
             # v0.4.44: a grant without grant_hours never expires by time.
             self.assertEqual(second["counts"]["expired_grant_count"], 0)
-        # resuming the original decision never re-issues the secret
+        # resuming the original decision returns no secret either
         resumed = self.call("work-session", "--action", "set-permission-mode", "--resume",
                             *task["refs"], "--work-session-ref", task["session"], request=None)
-        self.assertFalse(resumed["result"]["presenter_token_available"])
         self.assertNotIn("presenter_token", resumed["result"])
 
     def test_registry_accepts_both_shapes_and_refuses_broken_boxes(self) -> None:
@@ -144,16 +145,18 @@ class PresenterBoundGrantTests(_permission_fixture.SessionPermissionModeTests):
             permission.normalize_grant_hours(True)
 
     # ------------------------------------------------------------ refusals
-    def test_missing_wrong_expired_and_legacy_presenters_get_the_dialog_and_a_code(self) -> None:
+    def test_expired_and_legacy_grants_get_the_dialog_and_a_code(self) -> None:
         task = self.establish("refusals")
         self.set_mode(task, "allow_all")
         token = task["presenter"]
         refs = dict(client_app_ref=task["app"], task_route_ref=task["route"], work_session_ref=task["session"])
-        self.assertIsNotNone(permission.resolve_grant(self.root, presenter=token, **refs))
-        self.assertEqual(permission.resolve_grant_outcome(self.root, presenter=None, **refs),
-                         (None, "work_session_presenter_missing"))
-        self.assertEqual(permission.resolve_grant_outcome(self.root, presenter="x" * 43, **refs),
-                         (None, "work_session_presenter_mismatch"))
+        # v0.4.53 (letter 177): the grant is this conversation's session record;
+        # no presenter secret is required, whatever a process presents.
+        self.assertIsNone(token)
+        for presented in (None, "x" * 43):
+            grant, reason = permission.resolve_grant_outcome(self.root, presenter=presented, **refs)
+            self.assertIsNotNone(grant)
+            self.assertIsNone(reason)
         # v0.4.44 (owner decision 2026-09-25): a grant without grant_hours has no
         # time limit; it lasts until released or the session ends.
         with patch.object(permission, "_clock", lambda: datetime.now(timezone.utc) + timedelta(hours=9)):
@@ -173,22 +176,7 @@ class PresenterBoundGrantTests(_permission_fixture.SessionPermissionModeTests):
         with patch.dict(os.environ, {**self.env(task), "WOM_TASK_ROUTE_REF": "task_route_" + "0" * 32}):
             self.assertEqual(permission.resolve_grant_outcome_from_environment(self.root)[1],
                              "work_session_grant_unavailable")
-        # a write that presents the refs without the token opens the dialog and says why
-        object_id = self.manifested_source(b"presenter refusal source\n")
-        self.index()
-        flags = self.draft_flags(object_id, "Draft without the presenter token")
-        preview = self.draft_call(*flags, "--dry-run")
-        dialogs = self.native.calls
-        env = {name: value for name, value in self.env(task).items() if name != permission.PRESENTER_ENV}
-        with patch.dict(os.environ, env):
-            written = self.draft_call(*flags, *self.approve_flags(preview))
-        self.assertEqual(self.native.calls, dialogs + 1)
-        self.assertEqual(written["session_permission_refused"],
-                         {"reason_code": "work_session_presenter_missing", "dialog_shown": True,
-                          "private_values_echoed": False})
-        self.assertTrue(written["exact_human_approval"]["live_dialog_shown"])
-        self.assertNotIn("presenter", written["exact_human_approval"])
-        # with the token: no dialog, and the claim names the presenter
+        # with the refs only: no dialog, and the claim names the presenter
         second = self.draft_flags(self.manifested_source(b"presenter ok source\n"), "Draft with the presenter token")
         self.index()
         preview2 = self.draft_call(*second, "--dry-run")
@@ -206,22 +194,21 @@ class PresenterBoundGrantTests(_permission_fixture.SessionPermissionModeTests):
         presenter = claim["session_presenter"]
         self.assertEqual(presenter["schema"], approval.SESSION_PRESENTER_SCHEMA)
         self.assertEqual(presenter["work_session_ref"], task["session"])
-        self.assertEqual(presenter["presenter_sha256"], permission.presenter_sha256(token))
+        self.assertRegex(presenter["presenter_sha256"], r"^sha256:[0-9a-f]{64}$")
         self.assertRegex(presenter["process_fingerprint_sha256"], r"^sha256:[0-9a-f]{64}$")
         self.assertEqual(claim["status"], "succeeded")
         self.assertFalse(presenter["scan_truncated"])
         self.assertNotIn("synthetic.exe", json.dumps(claim))
-        self.assertNotIn(token, json.dumps(claim))
-        # the explicit-refs (session) route says why too
-        third = self.draft_flags(self.manifested_source(b"session route refusal source\n"), "Session route without the token")
+        # the explicit-refs (session) route uses the same grant, whatever token a process presents
+        third = self.draft_flags(self.manifested_source(b"session route source\n"), "Session route with the refs")
         self.index()
         refs_flags = (*task["refs"], "--work-session-ref", task["session"])
         preview3 = self.draft_call(*refs_flags, *third, "--dry-run")
         dialogs = self.native.calls
         with patch.dict(os.environ, {permission.PRESENTER_ENV: "x" * 43}):
             session_route = self.draft_call(*refs_flags, *third, *self.approve_flags(preview3))
-        self.assertEqual(self.native.calls, dialogs + 1)
-        self.assertEqual(session_route["session_permission_refused"]["reason_code"], "work_session_presenter_mismatch")
+        self.assertEqual(self.native.calls, dialogs)
+        self.assertNotIn("session_permission_refused", session_route)
 
     def test_second_presenter_is_recorded_and_warned(self) -> None:
         task = self.establish("second")
@@ -357,7 +344,7 @@ class PresenterBoundGrantTests(_permission_fixture.SessionPermissionModeTests):
         self.assertEqual(block["legacy_grant_count"], 0)
         self.assertTrue(block["review_recommended"])
         self.assertIn("handoff/accept", block["guidance"])
-        self.assertNotIn(task["presenter"], json.dumps(block))
+        self.assertIsNone(task["presenter"])
         missing = archive_services.write_result_session_permission_attention(Path(self.root) / "missing")
         self.assertEqual(missing["state"], "unavailable")
         # the MCP host keeps the secret in its process and strips it from the model's view
@@ -377,16 +364,14 @@ class PresenterBoundGrantTests(_permission_fixture.SessionPermissionModeTests):
             "client_app_ref": task["app"], "task_route_ref": route_ref, "work_session_ref": session,
             "request": {"reviewer_claim": REVIEWER, "permission_mode": "allow_all", "operations": [], "grant_hours": 1}})
         inner = granted["structuredContent"]["result"]
-        self.assertRegex(inner["presenter_token"], r"^[A-Za-z0-9_-]{43}$")
-        self.assertTrue(inner["presenter_token_held_in_process"])
-        self.assertTrue(inner["presenter_token_returned_once"])
-        held = permission._process_presenter(session)
-        self.assertEqual(held, inner["presenter_token"])
+        # v0.4.53 (letter 177): no secret is returned; the grant survives the process.
+        self.assertNotIn("presenter_token", inner)
+        self.assertTrue(inner["grant_survives_process_restart"])
         self.assertIsNotNone(permission.resolve_grant(self.root, client_app_ref=task["app"], task_route_ref=route_ref,
                                                       work_session_ref=session))
         permission.release_presenter(session)
-        self.assertIsNone(permission.resolve_grant(self.root, client_app_ref=task["app"], task_route_ref=route_ref,
-                                                   work_session_ref=session, presenter=None))
+        self.assertIsNotNone(permission.resolve_grant(self.root, client_app_ref=task["app"], task_route_ref=route_ref,
+                                                      work_session_ref=session, presenter=None))
         # inventory: the feedback body write is grantable and the reopened writer set names compose
         self.assertIn(ExactHumanApprovalOperation.operator_feedback_body_write, GRANTABLE_OPERATIONS)
         self.assertNotIn(ExactHumanApprovalOperation.operator_feedback_body_write, ALWAYS_DIALOG_OPERATIONS)
@@ -399,7 +384,7 @@ class PresenterBoundGrantTests(_permission_fixture.SessionPermissionModeTests):
                 cli.main(["work-session", "--help"])
             except SystemExit:
                 pass
-        self.assertIn("presenter_token", help_output.getvalue())
+        self.assertIn("no secret token is needed", help_output.getvalue())
         self.assertIn("handoff/accept", help_output.getvalue())
 
 

@@ -140,7 +140,8 @@ class SessionPermissionModeTests(unittest.TestCase):
         self.assertEqual(result["result"]["permitted_operations"], ["create_draft", "mint_zet"])
         self.assertTrue(result["result"]["current_claim_ownership_verified"])
         self.assertNotIn("SYNTHETIC_PRIVATE", json.dumps(result))
-        self.assertTrue(result["result"]["presenter_token_returned_once"])
+        # v0.4.53 (letter 177): no secret token; the grant survives the process.
+        self.assertTrue(result["result"]["grant_survives_process_restart"])
         self.assertTrue(result["result"]["presenter_bound"])
         row = self.inspect(task)
         self.assertEqual(row["permission_mode"], "limited")
