@@ -325,7 +325,7 @@ class NotionPropertyBackfillCliTests(unittest.TestCase):
         # the Notion recovery chain and trash, and seven more writers.
         self.assertEqual(
             inventory["counts"]["approval_available_command_count"],
-            111,  # v0.4.50: cleanup, open and scoped operation control
+            112,  # v0.4.50: cleanup, open and scoped operation control
         )
         self.assertEqual(
             by_path["operator-feedback-delete"]["approval_status"],

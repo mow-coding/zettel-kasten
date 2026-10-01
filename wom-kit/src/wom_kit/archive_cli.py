@@ -12056,6 +12056,25 @@ def _command_project_version_update_core(
                         ._PROJECT_UPDATE_TERMINAL_DELIVERY_ACTION
                     ]
 
+    # v0.4.55 (owner request 2026-10-01): WOM's own superseded runtimes and
+    # finished update records do not pile up; only after a successful update
+    # whose result delivery was acknowledged.
+    final_terminal = display_result.get("terminal_finalization")
+    if (
+        not cancellation_terminal
+        and exit_code == 0
+        and display_result.get("ok") is True
+        and isinstance(final_terminal, dict)
+        and final_terminal.get("durable_result_delivery_acknowledged") is True
+    ):
+        from . import system_cleanup
+
+        pruned = system_cleanup.auto_prune_after_update(
+            archive_services._project_update_resume_project_root_read_only(inspection_root)
+        )
+        if pruned.get("deleted_count") or pruned.get("skipped_count"):
+            display_result["system_cleanup"] = pruned
+
     terminal_output_observed = True
     if args.format == "json":
         terminal_output_observed = best_effort_terminal_json(display_result)
@@ -12924,6 +12943,105 @@ def command_operator_feedback_delete(args: argparse.Namespace) -> int:
     else:
         print("Operator feedback deletion.")
         print(f"State: {result.get('state')}; deleted {result.get('deleted_count', 0)} of {result.get('planned_count', 0)}; "
+              f"{result.get('bytes_freed', 0)} bytes freed")
+    return 0 if result.get("ok") else 1
+
+
+_SYSTEM_CLEANUP_REVIEW_CODES = ("cleanup_items_reviewed", "plan_digest_reviewed")
+
+
+def _system_cleanup_error(args: argparse.Namespace, reason_code: str, *, next_safe_actions=None) -> int:
+    if getattr(args, "format", None) == "json":
+        payload = {
+            "schema": "wom-kit/cli-error/v0.1", "ok": False, "state": "blocked",
+            "command": "system-cleanup", "lifecycle_action": "system_cleanup",
+            "reason_codes": [reason_code], "blockers": [reason_code], "effects_state": "none",
+            "private_values_echoed": False, "local_paths_echoed": False,
+        }
+        if next_safe_actions:
+            payload["next_safe_actions"] = list(next_safe_actions)
+        print_json(payload)
+    else:
+        print(f"system-cleanup blocked: {reason_code}", file=sys.stderr)
+    return 1
+
+
+def command_system_cleanup(args: argparse.Namespace) -> int:
+    """v0.4.55 (owner request 2026-10-01): delete WOM's own byproducts.
+
+    Dry-run lists kinds, counts and bytes (never paths). Approve runs under the
+    exact approval broker as the grantable kind ``system_cleanup``.
+    """
+
+    from . import system_cleanup as cleanup
+
+    if bool(args.dry_run) == bool(args.approve):
+        return _system_cleanup_error(args, "system_cleanup_exactly_one_action_required")
+    archive_root = Path(args.archive_root)
+    try:
+        plan = cleanup.plan_system_cleanup(archive_root)
+    except (archive_services.ArchiveServiceError, OSError, ValueError):
+        return _system_cleanup_error(args, "system_cleanup_plan_failed")
+    if args.dry_run:
+        if args.format == "json":
+            print_json(plan)
+        else:
+            print("WOM system cleanup plan.")
+            print(f"State: {plan.get('state')}")
+            for name, row in plan.get("categories", {}).items():
+                if row.get("count"):
+                    print(f"- {name}: {row['count']} ({row['bytes']} bytes)")
+            print(f"Bytes freed: {plan.get('bytes_freed_total', 0)}")
+            print(f"Plan sha256: {plan.get('plan_sha256')}")
+        return 0 if plan.get("ok") else 1
+    reviewer = str(getattr(args, "reviewed_by", None) or "").strip()
+    if _windows_reviewer_claim_re().fullmatch(reviewer) is None:
+        return _system_cleanup_error(args, "system_cleanup_reviewer_claim_invalid")
+    expected = str(getattr(args, "expected_plan_sha256", None) or "").strip().lower()
+    if not plan.get("ok"):
+        return _system_cleanup_error(args, str((plan.get("blockers") or ["system_cleanup_plan_failed"])[0]),
+                                     next_safe_actions=plan.get("next_safe_actions"))
+    if not SHA256_RE.fullmatch(expected) or not secrets.compare_digest(str(plan["plan_sha256"]), expected):
+        return _system_cleanup_error(
+            args, "system_cleanup_plan_changed",
+            next_safe_actions=["Rerun --dry-run and pass its plan_sha256 as --expected-plan-sha256."],
+        )
+    context = _exact_human_approval_context(
+        archive_root,
+        operation=ExactHumanApprovalOperation.system_cleanup,
+        plan_sha256=plan["plan_sha256"],
+        target_binding_sha256=plan["items_sha256"],
+        reviewer_claim=reviewer,
+        review_binding_codes=_SYSTEM_CLEANUP_REVIEW_CODES,
+        warnings=[],
+    )
+
+    def _write(approval_claim) -> dict[str, Any]:
+        return cleanup.approve_system_cleanup(
+            archive_root, expected_plan_sha256=expected, reviewed_by=reviewer,
+            exact_human_approval_claim=approval_claim,
+        )
+
+    try:
+        result = _execute_exact_human_approved_write(archive_root, context, _write)
+    except (ExactHumanApprovalError, ExactHumanApprovalWindowsError, ExactHumanApprovalWorkflowError) as exc:
+        code = str(getattr(exc, "code", "exact_human_approval_state_unknown"))
+        cause_code = getattr(exc, "cause_code", None)
+        cause = (
+            {"cause_code": cause_code, "cause_stage": getattr(exc, "cause_stage", None)}
+            if type(cause_code) is str and cause_code.startswith(("system_cleanup_", "exact_human_approval_"))
+            else None
+        )
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action="system_cleanup", reason_code=code, cause=cause,
+            effects_state=("refused_before_effects" if code == "exact_human_approval_writer_refused"
+                           else "unknown" if code == "exact_human_approval_state_unknown" else None),
+        )
+    if args.format == "json":
+        print_json(result)
+    else:
+        print("WOM system cleanup.")
+        print(f"State: {result.get('state')}; deleted {result.get('deleted_count', 0)}; "
               f"{result.get('bytes_freed', 0)} bytes freed")
     return 0 if result.get("ok") else 1
 
@@ -40381,6 +40499,19 @@ def build_parser() -> argparse.ArgumentParser:
         func=command_operator_feedback_compose,
         _wom_project_runtime_effect="append_only_emergency_feedback",
     )
+
+    system_cleanup_parser = subcommands.add_parser(
+        "system-cleanup",
+        help="v0.4.55: delete WOM's own byproducts (old project runtimes beyond the previous one, bootstrap environments, finished update results, handoff capsules and journals, temporary files, abandoned restore downloads); receipts, approval claims and locks are never deleted.",
+    )
+    system_cleanup_parser.add_argument("archive_root", help="Archive root whose project and WOM byproducts are cleaned.")
+    system_cleanup_action = system_cleanup_parser.add_mutually_exclusive_group(required=True)
+    system_cleanup_action.add_argument("--dry-run", action="store_true", help="Plan only; write nothing.")
+    system_cleanup_action.add_argument("--approve", action="store_true", help="Approve the exact reviewed plan (one dialog, or the session grant).")
+    system_cleanup_parser.add_argument("--expected-plan-sha256", help="Exact plan digest from --dry-run, required for approval.")
+    system_cleanup_parser.add_argument("--reviewed-by", help="Reviewer id required for approval (person:<id> or human:<id>).")
+    system_cleanup_parser.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    system_cleanup_parser.set_defaults(func=command_system_cleanup)
 
     operator_feedback_delete = subcommands.add_parser(
         "operator-feedback-delete",

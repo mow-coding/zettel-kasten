@@ -269,6 +269,7 @@ def _content_free_cause_code(cause: BaseException | None) -> str | None:
             "ExactOperationManifestError",
             # v0.4.54: the feedback deletion writer uses the same fixed codes.
             "OperatorFeedbackDeleteError",
+            "SystemCleanupError",
         }
         or len(cause.args) != 1
         or type(cause.args[0]) is not str

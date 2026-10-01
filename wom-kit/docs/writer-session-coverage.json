@@ -747,6 +747,14 @@
         "test_v0436_letter168"
       ]
     },
+    "system-cleanup": {
+      "status": "session_integrated",
+      "route": "environment",
+      "reason": "v0.4.55 (owner request 2026-10-01): deletion of WOM's own byproducts under the exact approval broker (system_cleanup, grantable; grant resolved from the environment refs)",
+      "evidence": [
+        "test_v0455_system_cleanup"
+      ]
+    },
     "operator-feedback-delete": {
       "status": "session_integrated",
       "route": "environment",

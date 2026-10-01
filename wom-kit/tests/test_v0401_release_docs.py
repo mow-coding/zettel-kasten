@@ -104,7 +104,7 @@ class V0401ReleaseDocsTests(unittest.TestCase):
 
     def test_current_parser_combines_all_released_writers(self) -> None:
         blocked = archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS
-        self.assertEqual(len(blocked), 5)  # 2026-09-30 letter 177 object-storage-credential-store
+        self.assertEqual(len(blocked), 5)  # v0.4.55: system-cleanup
         self.assertNotIn("object-storage-upload", blocked)  # v0.4.33
         self.assertNotIn("migrate", blocked)
         self.assertNotIn("discard-draft", blocked)
@@ -139,15 +139,15 @@ class V0401ReleaseDocsTests(unittest.TestCase):
         # read-only exact-approval-claims (one alias) and the always-dialog
         # exact-approval-claim-finalize writer, and makes revert-edge --approve
         # unconditional (one conditional scope fewer).
-        self.assertEqual(counts["canonical_executable_command_count"], 310)  # v0.4.50: remote cleanup and open
+        self.assertEqual(counts["canonical_executable_command_count"], 311)  # v0.4.50: remote cleanup and open
         self.assertEqual(counts["alias_invocation_path_count"], 215)  # v0.4.44: aliases of the superseded IMAP chain removed
-        self.assertEqual(counts["invocation_path_count"], 525)
+        self.assertEqual(counts["invocation_path_count"], 526)
         # v0.4.33 reopened object-storage-upload (one path moves from fixed-closed to available).
-        self.assertEqual(counts["approval_available_command_count"], 111)  # 2026-09-30 letter 177 object-storage-credential-store
+        self.assertEqual(counts["approval_available_command_count"], 112)  # v0.4.55: system-cleanup
         self.assertEqual(counts["approval_fixed_closed_command_count"], 5)
-        self.assertEqual(counts["approval_not_exposed_command_count"], 194)  # 2026-09-30 letter 177 object-storage-credential-store
+        self.assertEqual(counts["approval_not_exposed_command_count"], 194)  # v0.4.55: system-cleanup
         self.assertEqual(counts["conditional_approval_command_count"], 10)  # v0.4.41: legacy retire in, relation accept unconditional
-        self.assertEqual(counts["dry_run_exposed_command_count"], 264)
+        self.assertEqual(counts["dry_run_exposed_command_count"], 265)
         self.assertEqual(counts["unmatched_fixed_closed_command_count"], 0)
         by_path = {
             row["canonical_path"]: row for row in inventory["commands"]

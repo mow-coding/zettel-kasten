@@ -817,8 +817,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/startup-and-update.md",
       "packaged": "templates/ai-runtime/wom-archive/references/startup-and-update.md",
-      "bytes": 9507,
-      "sha256": "964377f12e549134da12dd0c316eeba2f0e787bdf28709edda63260abf30c25f"
+      "bytes": 10075,
+      "sha256": "eaba447d5ac3e8c847d738adf644e743dc1bbec61c09658f5008b62d76cbf603"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/storage-scope.md",

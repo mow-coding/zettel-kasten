@@ -145,7 +145,7 @@ class V0434ReleaseDocsTests(unittest.TestCase):
     def test_release_surfaces_are_documented(self) -> None:
         approval = " ".join((KIT / "docs" / "exact-human-approval-contract.md").read_text(encoding="utf-8").split())
         for phrase in ("presenter-bound and time-boxed", "`presenter_token`", "work_session_presenter_mismatch",
-                       "`session_presenter`", "work_session_second_presenter_observed", "111 approval-available, 5 fixed-closed"):
+                       "`session_presenter`", "work_session_second_presenter_observed", "112 approval-available, 5 fixed-closed"):
             self.assertIn(phrase, approval)
         start_here = (KIT / "docs" / "ai-start-here.md").read_text(encoding="utf-8")
         self.assertIn("`session_permission_attention`", start_here)
@@ -182,11 +182,11 @@ class V0434ReleaseDocsTests(unittest.TestCase):
         routed = sum(1 for row in manifest["paths"].values() if row.get("route"))
         # v0.4.23 integrated create-draft (LR-06a); v0.4.24 through v0.4.27, v0.4.31 and v0.4.33 change no writer;
         # v0.4.28 restore, v0.4.29 offload, v0.4.30 claim finalize and v0.4.34 upload are pending (target v0.4.34).
-        self.assertEqual(len(statuses), 111)  # 2026-09-30 letter 177 object-storage-credential-store
+        self.assertEqual(len(statuses), 112)  # v0.4.55: system-cleanup
         self.assertEqual(statuses.count("session_integrated") - routed, 6)
-        self.assertEqual(routed, 86)  # 2026-09-30 letter 177 object-storage-credential-store
+        self.assertEqual(routed, 87)  # v0.4.55: system-cleanup
         self.assertEqual(statuses.count("pending"), 0)  # 2026-09-26 coverage audit
-        self.assertEqual(statuses.count("legacy_exception"), 19)  # 2026-09-30 letter 177 object-storage-credential-store
+        self.assertEqual(statuses.count("legacy_exception"), 19)  # v0.4.55: system-cleanup
         self.assertEqual(manifest["paths"]["create-draft"]["status"], "session_integrated")
 
     def test_current_docs_are_private_safe(self) -> None:

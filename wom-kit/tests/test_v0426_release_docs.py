@@ -142,11 +142,11 @@ class V0426ReleaseDocsTests(unittest.TestCase):
         statuses = [row["status"] for row in manifest["paths"].values()]
         routed = sum(1 for row in manifest["paths"].values() if row.get("route"))
         # v0.4.23 integrated create-draft (LR-06a); v0.4.24 through v0.4.26 change no writer.
-        self.assertEqual(len(statuses), 111)  # 2026-09-30 letter 177 object-storage-credential-store
+        self.assertEqual(len(statuses), 112)  # v0.4.55: system-cleanup
         self.assertEqual(statuses.count("session_integrated") - routed, 6)
-        self.assertEqual(routed, 86)  # 2026-09-30 letter 177 object-storage-credential-store
+        self.assertEqual(routed, 87)  # v0.4.55: system-cleanup
         self.assertEqual(statuses.count("pending"), 0)  # 2026-09-26 coverage audit
-        self.assertEqual(statuses.count("legacy_exception"), 19)  # 2026-09-30 letter 177 object-storage-credential-store
+        self.assertEqual(statuses.count("legacy_exception"), 19)  # v0.4.55: system-cleanup
         self.assertEqual(manifest["paths"]["create-draft"]["status"], "session_integrated")
 
     def test_current_docs_are_private_safe(self) -> None:

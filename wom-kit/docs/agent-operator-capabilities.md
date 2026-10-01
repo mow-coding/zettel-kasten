@@ -5,6 +5,12 @@ Current release candidate: v0.4.54 delivered letters deleted, private Git remote
 
 Status: v0.4.36 no-dialog grants, letter-168, and writer-session coverage gate
 
+v0.4.55 adds one command path: `system-cleanup` (approval-available,
+grantable) deletes WOM's own byproducts (old project runtimes beyond the
+previous one, bootstrap environments, finished update results, handoff
+capsules and journals, temporary files, abandoned restore downloads); a
+successful, delivered update prunes the project-internal ones by itself.
+
 v0.4.54 replaces one command path and moves no count: `operator-feedback-delete`
 (approval-available, grantable) permanently deletes delivered / acknowledged /
 resolved letters and their body receipts and keeps a one-line `deleted` record;
@@ -215,14 +221,14 @@ continues to be parser-derived; history does not grant execution authority.
 For the current v0.4.54 candidate parser, the inventory snapshot is:
 
 ```text
-canonical executable command paths: 310
+canonical executable command paths: 311
 alias invocation paths:              215
-all invocation paths:                525
-approval_available:                   111
+all invocation paths:                526
+approval_available:                   112
 approval_fixed_closed:                5
 approval_not_exposed:                194
 conditional approval paths:            10
-dry_run_exposed:                     264
+dry_run_exposed:                     265
 unmatched fixed-close entries:         0
 ```
 

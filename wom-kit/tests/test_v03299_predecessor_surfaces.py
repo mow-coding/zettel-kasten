@@ -101,6 +101,7 @@ CLI_ADDITIONS = {
     ("notion-reviewed-page-recovery-plan",),
     ("objet-capture-batch",),
     ("operator-feedback-delete",),  # v0.4.54: replaces v0.4.36 operator-feedback-archive
+    ("system-cleanup",),  # v0.4.55: WOM's own byproducts
     ("operator-feedback-body-check",),
     ("operator-feedback-compose",),
     ("operation-control",),
@@ -239,9 +240,9 @@ MCP_REMOVALS = {
     "imap_mailbox_adapter_manifest_plan",
     "imap_mailbox_adapter_preflight_plan",
 }
-CURRENT_CLI_COUNT = 526  # v0.4.54: operator-feedback-delete replaces operator-feedback-archive
+CURRENT_CLI_COUNT = 527  # v0.4.55: system-cleanup
 CURRENT_CLI_CANONICAL_SHA256 = (
-    "3c9d6bafc985615394f1959c12a3bb507246326d11ae18669cdc05e78d2248d1"
+    "ba3618ef18f54e7f6ed98701c7f72c1c761a4e568688565744bd17e7c7b197ab"
 )
 CURRENT_MCP_COUNT = 129  # v0.4.44: seven IMAP planning previews removed
 CURRENT_MCP_CANONICAL_SHA256 = (
