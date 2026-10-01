@@ -146,8 +146,16 @@ failed = threading.Event()
 writer_done = threading.Event()
 pending_output = queue.Queue(maxsize=128)
 state = {"stage": "starting"}
+clock = {"started": time.monotonic(), "stage": "starting", "stage_started": time.monotonic()}
 def emit(event):
+    now = time.monotonic()
+    if state.get("stage") != clock["stage"]:
+        clock["stage"], clock["stage_started"] = state.get("stage"), now
+    # v0.4.56 (letter 179): the observer's own clock; elapsed_seconds is only
+    # the last value a stage reported and repeated on every heartbeat.
     value = {"schema": SCHEMA, **state, "event": event,
+             "observer_elapsed_seconds": round(now - clock["started"], 1),
+             "stage_elapsed_seconds": round(now - clock["stage_started"], 1),
              "observer_mode": "unavailable" if event == "observation_unavailable" else "live",
              "heartbeat_available": event != "observation_unavailable",
              "completion_verified": False, "private_values_echoed": False}

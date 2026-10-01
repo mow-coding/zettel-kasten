@@ -1979,14 +1979,107 @@ def _private_path_token(root: Path, path: Path) -> str:
 
 
 def _receipt_stat_identity(info: os.stat_result) -> tuple[int, int, int, int, int, int]:
+    """Identity of one receipt entry for the before/after recheck.
+
+    v0.4.56 (beta letter 179): on Windows a directory's ``st_size`` flips
+    between 0 and its real size with no activity at all (Python 3.12's lstat
+    uses GetFileInformationByName), so a several-minute preview on a large
+    archive almost always ended with receipt_inventory_drifted. Directory size
+    is NTFS bookkeeping, not membership: it is left out, like
+    project_runtime._stat_identity has done since v0.4.19. Only the file type
+    is kept from st_mode (a read-only toggle changes no content). A directory's
+    mtime still catches an added or removed receipt; a file's id, size, mtime,
+    creation time and link count still catch a replaced or rewritten one.
+    """
+
+    is_directory = stat.S_ISDIR(info.st_mode)
+    created = getattr(info, "st_birthtime_ns", None) if os.name == "nt" else None
     return (
         int(info.st_dev),
         int(info.st_ino),
-        int(info.st_mode),
-        int(info.st_size),
+        int(stat.S_IFMT(info.st_mode)),
+        0 if is_directory else int(info.st_size),
         int(info.st_mtime_ns),
-        int(info.st_ctime_ns),
+        int(created if created is not None else info.st_ctime_ns),
     )
+
+
+_RECEIPT_ROLE_RE = re.compile(r"[a-z0-9][a-z0-9._-]{0,47}")
+
+
+def _receipt_drift_role(relative: str, entry_kind: str = "file") -> str:
+    parts = PurePosixPath(relative).parts
+    if len(parts) >= 2 and parts[0] == "receipts" and _RECEIPT_ROLE_RE.fullmatch(parts[1]):
+        return parts[1] if len(parts) > 2 or entry_kind == "directory" else "receipts"
+    return "receipts" if parts in (("receipts",),) else "other"
+
+
+def _receipt_inventory_drift(root: Path, cache: _ReceiptInventoryCache, *, limit: int = 100_000) -> dict[str, Any]:
+    """v0.4.56 (letter 179): which kind of change, in which WOM receipt category; never a path."""
+
+    by_class: dict[str, int] = {}
+    by_role: dict[str, int] = {}
+    checked = 0
+
+    def note(kind: str, relative: str, entry_kind: str = "file") -> None:
+        by_class[kind] = by_class.get(kind, 0) + 1
+        role = _receipt_drift_role(relative, entry_kind)
+        by_role[role] = by_role.get(role, 0) + 1
+
+    if cache.state == "absent":
+        if archive_services.wom_kit_real_path_kind(root, root / "receipts") != "missing":
+            note("new_entry", "receipts")
+    else:
+        reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        for relative, entry_kind, expected in cache.entries[:limit]:
+            checked += 1
+            path = root.joinpath(*PurePosixPath(relative).parts)
+            try:
+                current = os.lstat(path)
+            except OSError:
+                note("entry_missing", relative)
+                continue
+            if stat.S_ISLNK(current.st_mode) or (reparse_flag and getattr(current, "st_file_attributes", 0) & reparse_flag):
+                note("link_or_reparse", relative)
+                continue
+            if (entry_kind == "directory") != stat.S_ISDIR(current.st_mode) or (
+                    entry_kind == "file" and not stat.S_ISREG(current.st_mode)):
+                note("kind_changed", relative)
+                continue
+            if entry_kind == "file" and current.st_nlink != 1:
+                note("file_link_count", relative)
+                continue
+            observed = _receipt_stat_identity(current)
+            if observed == expected:
+                continue
+            if observed[:2] != expected[:2] or observed[5] != expected[5]:
+                note("identity_replaced", relative)
+            elif entry_kind == "directory":
+                note("directory_entries_changed", relative, "directory")
+            elif observed[3] != expected[3]:
+                note("file_size_changed", relative)
+            else:
+                note("file_mtime_changed", relative)
+    count = sum(by_class.values())
+    return {
+        "stage": "receipt_inventory_cas_recheck",
+        "drifted_entry_count": count,
+        "checked_entry_count": checked,
+        "by_class": dict(sorted(by_class.items())),
+        "by_role": dict(sorted(by_role.items())),
+        "content_change_possible": any(kind in by_class for kind in (
+            "file_size_changed", "file_mtime_changed", "identity_replaced", "entry_missing", "kind_changed")),
+        "membership_change_possible": any(kind in by_class for kind in (
+            "directory_entries_changed", "entry_missing", "new_entry")),
+        "effects_state": "none",
+        "resumable": True,
+        "next_action": (
+            "Another program changed receipts while the preview ran (by_role says which WOM category). "
+            "Wait for other WOM writers to finish, then rerun the preview; nothing was written."
+            if count else None
+        ),
+        "paths_echoed": False,
+    }
 
 
 def _receipt_inventory(
@@ -2180,33 +2273,8 @@ def _receipt_inventory_recheck(
 ) -> list[str]:
     """CAS-check the one-pass inventory with lstat only; never reopen bodies."""
 
-    if cache.state == "absent":
-        return (
-            []
-            if archive_services.wom_kit_real_path_kind(root, root / "receipts")
-            == "missing"
-            else ["receipt_inventory_drifted"]
-        )
-    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
-    for relative, entry_kind, expected_identity in cache.entries:
-        path = root.joinpath(*PurePosixPath(relative).parts)
-        try:
-            current = os.lstat(path)
-        except OSError:
-            return ["receipt_inventory_drifted"]
-        if (
-            stat.S_ISLNK(current.st_mode)
-            or (
-                reparse_flag
-                and getattr(current, "st_file_attributes", 0) & reparse_flag
-            )
-            or (entry_kind == "directory" and not stat.S_ISDIR(current.st_mode))
-            or (entry_kind == "file" and not stat.S_ISREG(current.st_mode))
-            or (entry_kind == "file" and current.st_nlink != 1)
-            or _receipt_stat_identity(current) != expected_identity
-        ):
-            return ["receipt_inventory_drifted"]
-    return []
+    drift = _receipt_inventory_drift(root, cache)
+    return ["receipt_inventory_drifted"] if drift["drifted_entry_count"] else []
 
 
 def _handoff_observation(root: Path) -> dict[str, Any] | None:
@@ -3021,10 +3089,13 @@ def _git_backup_plan_with_pinned_git(
     blockers.extend(file_after_blockers)
     progress.status("receipt_inventory_cas_recheck")
     receipts_after = receipts_before
+    receipt_drift: dict[str, Any] | None = None
     if receipt_cache is None:
         blockers.append("receipt_inventory_recheck_unavailable")
     else:
-        blockers.extend(_receipt_inventory_recheck(root, receipt_cache))
+        receipt_drift = _receipt_inventory_drift(root, receipt_cache)
+        if receipt_drift["drifted_entry_count"]:
+            blockers.append("receipt_inventory_drifted")
     progress.status("handoff_scope_final")
     handoff_after = handoff_before
     if handoff_after is None:
@@ -3250,6 +3321,8 @@ def _git_backup_plan_with_pinned_git(
             "inventory_basis": "path_size_and_filesystem_identity_metadata",
             "historical_receipt_bodies_read": False,
             "generic_provenance_matching_performed": False,
+            # v0.4.56 (letter 179): what drifted, by kind and WOM category, never a path.
+            "drift": receipt_drift if receipt_drift and receipt_drift.get("drifted_entry_count") else None,
         },
         "session_handoff_context": {
             "state": handoff_after["status"] if handoff_after is not None else "unavailable",
