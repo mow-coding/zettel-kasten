@@ -2052,14 +2052,17 @@ def _receipt_inventory_drift(root: Path, cache: _ReceiptInventoryCache, *, limit
             observed = _receipt_stat_identity(current)
             if observed == expected:
                 continue
-            if observed[:2] != expected[:2] or observed[5] != expected[5]:
-                note("identity_replaced", relative)
+            if observed[:2] != expected[:2]:
+                note("identity_replaced", relative, entry_kind)
             elif entry_kind == "directory":
                 note("directory_entries_changed", relative, "directory")
             elif observed[3] != expected[3]:
                 note("file_size_changed", relative)
-            else:
+            elif observed[4] != expected[4]:
                 note("file_mtime_changed", relative)
+            else:
+                # creation time on Windows; inode change time elsewhere
+                note("file_metadata_changed", relative)
     count = sum(by_class.values())
     return {
         "stage": "receipt_inventory_cas_recheck",
