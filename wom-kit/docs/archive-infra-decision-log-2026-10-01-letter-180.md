@@ -124,7 +124,10 @@ logs and reproduced locally. It is two product defects:
    no stat cache, stages with `update-index --add --remove -z --stdin`
    (identical tree, about 10x faster); the real-index add batches use the
    120 s commit deadline. `update-index` is not used on the real index
-   because it trusts the same stat cache.
+   because it trusts the same stat cache. The first PR CI run of this fix
+   (36901371101) showed that one unbatched `update-index` of all 11,132
+   paths also passes 120 s on a hosted runner (126 s), so the proof index
+   is staged in the same 1024-path / 256 KB batches as the real index.
 
 Executing models: the investigation was a read-only subagent (Opus 5.5);
 the fix, tests and documents from this point were made by Claude Fable 5.1
