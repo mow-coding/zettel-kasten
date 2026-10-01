@@ -5,13 +5,17 @@ Current release candidate: v0.4.56 reuse an existing R2 key file, Git backup and
 
 Status: v0.4.36 no-dialog grants, letter-168, and writer-session coverage gate
 
-v0.4.56 adds one command path: `system-cleanup` (approval-available,
+v0.4.57 adds one command path: `mail-threads` (read-and-derive, no approval)
+rebuilds archived mail as thread text records per mailbox account under
+`db/mail-threads/`; mail objets are not changed.
+
+v0.4.55 adds one command path: `system-cleanup` (approval-available,
 grantable) deletes WOM's own byproducts (old project runtimes beyond the
 previous one, bootstrap environments, finished update results, handoff
 capsules and journals, temporary files, abandoned restore downloads); a
 successful, delivered update prunes the project-internal ones by itself.
 
-v0.4.56 replaces one command path and moves no count: `operator-feedback-delete`
+v0.4.54 replaces one command path and moves no count: `operator-feedback-delete`
 (approval-available, grantable) permanently deletes delivered / acknowledged /
 resolved letters and their body receipts and keeps a one-line `deleted` record;
 it replaces the v0.4.36 move `operator-feedback-archive`, which is removed
@@ -221,14 +225,14 @@ continues to be parser-derived; history does not grant execution authority.
 For the current v0.4.56 candidate parser, the inventory snapshot is:
 
 ```text
-canonical executable command paths: 311
+canonical executable command paths: 312
 alias invocation paths:              215
-all invocation paths:                526
+all invocation paths:                527
 approval_available:                   112
 approval_fixed_closed:                5
-approval_not_exposed:                194
+approval_not_exposed:                195
 conditional approval paths:            10
-dry_run_exposed:                     265
+dry_run_exposed:                     266
 unmatched fixed-close entries:         0
 ```
 

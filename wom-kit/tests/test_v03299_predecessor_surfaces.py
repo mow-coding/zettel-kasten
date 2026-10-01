@@ -102,6 +102,7 @@ CLI_ADDITIONS = {
     ("objet-capture-batch",),
     ("operator-feedback-delete",),  # v0.4.56: replaces v0.4.36 operator-feedback-archive
     ("system-cleanup",),  # v0.4.56: WOM's own byproducts
+    ("mail-threads",),  # v0.4.57: mail as thread text records
     ("operator-feedback-body-check",),
     ("operator-feedback-compose",),
     ("operation-control",),
@@ -240,9 +241,9 @@ MCP_REMOVALS = {
     "imap_mailbox_adapter_manifest_plan",
     "imap_mailbox_adapter_preflight_plan",
 }
-CURRENT_CLI_COUNT = 527  # v0.4.56: system-cleanup
+CURRENT_CLI_COUNT = 528  # v0.4.57: mail-threads
 CURRENT_CLI_CANONICAL_SHA256 = (
-    "ba3618ef18f54e7f6ed98701c7f72c1c761a4e568688565744bd17e7c7b197ab"
+    "580ea627d2c610fb597d699aa09c89ac96c5240ddfdad37540f76925235319fb"
 )
 CURRENT_MCP_COUNT = 129  # v0.4.44: seven IMAP planning previews removed
 CURRENT_MCP_CANONICAL_SHA256 = (

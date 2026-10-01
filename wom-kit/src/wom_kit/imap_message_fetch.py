@@ -219,6 +219,14 @@ def execute_fetch(
     if not username or not password:
         return {**plan, "dry_run": False, "ok": False, "credential_reads": 2,
                 "blockers": ["imap_fetch_credential_unavailable"]}
+    # v0.4.57 (owner decision 2026-10-01): remember which mailbox account this
+    # source reads, privately, so mail threads group per account.
+    try:
+        from . import mail_threads
+
+        mail_threads.record_mail_account(root, source_id=source_id, account_address=username, mailbox=mailbox)
+    except OSError:
+        pass
     if sync or resume or extract_mime:
         from . import provider_imap
         return provider_imap.execute(root, arguments=arguments, plan=plan, username=username,

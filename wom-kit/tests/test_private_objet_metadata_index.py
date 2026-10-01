@@ -69,9 +69,9 @@ EMPTY_ALLOWLIST_SHA256 = (
 )
 
 # v0.4.36 adds only operator-feedback-archive to the previous pinned CLI paths.
-CLI_COUNT = 527  # v0.4.56: system-cleanup
+CLI_COUNT = 528  # v0.4.57: mail-threads
 CLI_CANONICAL_SHA256 = (
-    "ba3618ef18f54e7f6ed98701c7f72c1c761a4e568688565744bd17e7c7b197ab"
+    "580ea627d2c610fb597d699aa09c89ac96c5240ddfdad37540f76925235319fb"
 )
 MCP_COUNT = 129  # v0.4.44: seven IMAP planning previews removed
 MCP_CANONICAL_SHA256 = (

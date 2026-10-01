@@ -13071,6 +13071,36 @@ def command_system_cleanup(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+def command_mail_threads(args: argparse.Namespace) -> int:
+    """v0.4.57 (owner idea 2026-10-01): archived mail as thread text records per mailbox account.
+
+    A derived snapshot rebuilt from the mail objets (like the search
+    snapshots): no approval, no objet change, counts only on screen.
+    """
+
+    from . import mail_threads
+
+    if bool(args.dry_run) == bool(args.build):
+        print_json({"schema": mail_threads.RESULT_SCHEMA, "ok": False,
+                    "reason_codes": ["mail_threads_exactly_one_action_required"]})
+        return 1
+    try:
+        result = (mail_threads.plan_mail_threads(Path(args.archive_root)) if args.dry_run
+                  else mail_threads.build_mail_threads(Path(args.archive_root)))
+    except (archive_services.ArchiveServiceError, OSError, ValueError):
+        print_json({"schema": mail_threads.RESULT_SCHEMA, "ok": False, "reason_codes": ["mail_threads_unavailable"],
+                    "local_paths_echoed": False})
+        return 1
+    if args.format == "json":
+        print_json(result)
+    else:
+        print("Mail threads." if args.build else "Mail threads plan.")
+        print(f"Accounts: {result['account_count']}; threads: {result['thread_count']} "
+              f"({result['multi_message_thread_count']} with replies); messages: {result['message_count']}")
+        print(f"Location: {result['location']}")
+    return 0
+
+
 def command_operator_feedback_body_check(args: argparse.Namespace) -> int:
     if not args.dry_run:
         return _operator_feedback_body_error(
@@ -40604,6 +40634,17 @@ def build_parser() -> argparse.ArgumentParser:
         func=command_operator_feedback_compose,
         _wom_project_runtime_effect="append_only_emergency_feedback",
     )
+
+    mail_threads_parser = subcommands.add_parser(
+        "mail-threads",
+        help="v0.4.57: rebuild archived mail as thread text records per mailbox account (a derived snapshot from the mail objets; Message-ID / In-Reply-To / References threading).",
+    )
+    mail_threads_parser.add_argument("archive_root", help="Archive root whose mail objets are threaded.")
+    mail_threads_action = mail_threads_parser.add_mutually_exclusive_group(required=True)
+    mail_threads_action.add_argument("--dry-run", action="store_true", help="Counts only; write nothing.")
+    mail_threads_action.add_argument("--build", action="store_true", help="Write the snapshot under db/mail-threads.")
+    mail_threads_parser.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+    mail_threads_parser.set_defaults(func=command_mail_threads)
 
     system_cleanup_parser = subcommands.add_parser(
         "system-cleanup",
