@@ -87,6 +87,14 @@ class ActivityCleanupTests(unittest.TestCase):
         self.assertFalse(result["remote_bytes_verified_now"])
         self.assertNotIn("PRIVATE_SYNTHETIC", json.dumps(result))
         candidate["journal"].write.assert_not_called()
+        # v0.4.56 (letter 179): each part of the task reports its own boundary
+        boundaries = result["completion_boundaries"]
+        self.assertEqual(boundaries["original_cleanup"], {"state": "partial", "completed": 1017, "remaining": 53,
+                                                          "held": 0, "missing_without_evidence": 0})
+        self.assertFalse(boundaries["remote_verification"]["remote_bytes_verified_now"])
+        self.assertEqual(boundaries["git_backup"]["state"], "not_covered_by_this_command")
+        self.assertEqual(boundaries["closure"]["state"], "open")
+        self.assertGreater(boundaries["local_space"]["bytes_freed_by_completed_items"], 0)
 
     def test_status_missing_without_receipt_is_not_completed(self):
         candidate = self.plan()
