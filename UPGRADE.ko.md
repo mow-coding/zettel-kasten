@@ -1,5 +1,18 @@
 # 업그레이드 가이드
 
+## v0.4.58 끝나지 않던 정리 항목 두 개
+
+공개된 뒤 기존 프로젝트는 공식 업데이트 절차를 쓰세요. 이전 activity-cleanup이 partial로 끝났다면 같은 요청으로 `--reconcile --dry-run`을 실행하세요. `pending_item_diagnosis`가 남은 항목마다 어디서 멈췄는지와 승인 후 무엇을 할지 보여 줍니다. 이미 끝난 항목은 다시 처리하지 않습니다. 설치만으로 archive는 바뀌지 않습니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0458-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.58/wom_kit-0.4.58-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
 ## v0.4.57 보관한 메일을 쓰레드로 보기
 
 공개된 뒤 기존 프로젝트는 공식 업데이트 절차를 쓰세요. 보관한 메일을 메일함 계정별 쓰레드로 볼 수 있습니다. `archive mail-threads <archive-root> --build`를 실행하면 `db/mail-threads/` 아래에 쓰레드 글 문서가 생기며, 원본 메일 오브제는 바뀌지 않습니다. 설치만으로 archive는 바뀌지 않습니다.

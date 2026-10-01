@@ -1,7 +1,7 @@
 # Agent Operator Capabilities Manifest
 
-Current v0.4.57 candidate: archived mail as threads: archived mail readable as thread text records per mailbox account, rebuilt from the mail objets as a derived snapshot. [Release scope](releases/v0.4.57.md). Other ongoing requests are not included in this claim.
-Current release candidate: v0.4.57 archived mail as threads; [release scope](releases/v0.4.57.md).
+Current v0.4.58 candidate: the two cleanup items that never finished (letter 180): activity-cleanup reconcile that finishes an upload whose remote bytes are verified and an offload whose control file was never written, a read-only per-item diagnosis, activity-cleanup recovery guidance, a heartbeat that survives bad progress values and no per-item capacity scan. [Release scope](releases/v0.4.58.md). Other ongoing requests are not included in this claim.
+Current release candidate: v0.4.58 the two cleanup items that never finished (letter 180); [release scope](releases/v0.4.58.md).
 
 Status: v0.4.36 no-dialog grants, letter-168, and writer-session coverage gate
 
@@ -222,7 +222,7 @@ field remain `history_not_audited`. Inventory, shared capability availability,
 and command help consume the same content-free history. Current availability
 continues to be parser-derived; history does not grant execution authority.
 
-For the current v0.4.57 candidate parser, the inventory snapshot is:
+For the current v0.4.58 candidate parser, the inventory snapshot is:
 
 ```text
 canonical executable command paths: 312

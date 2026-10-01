@@ -23,6 +23,11 @@
   `--rebind-access-key-id-ref` and `--rebind-secret-access-key-ref`, then the
   matching `--approve`. Completed items are not reprocessed; never put a key in
   chat, a file, or a command line.
+- If an `activity-cleanup` ends partial, change nothing by hand and do not
+  start it again: read `pending_item_diagnosis` in the `--reconcile --dry-run`
+  result (each unfinished item's step and route) and approve that exact plan
+  once. An item routed `offload_effects_unproven_file_kept` stays by design;
+  report it to the human instead of deleting it.
 - If the human already connected the store through a key file (an earlier
   script read it), do not ask them to type the keys again: add `--from-file
   <that file> --access-key-field <name> --secret-access-key-field <name>` (the
