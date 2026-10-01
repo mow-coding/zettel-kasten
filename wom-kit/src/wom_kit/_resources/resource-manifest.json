@@ -1,6 +1,6 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.4.54",
+  "version": "0.4.55",
   "source_of_truth": "wom-kit source resource directories",
   "file_count": 180,
   "files": [
@@ -787,8 +787,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/long-operations-and-updates.md",
       "packaged": "templates/ai-runtime/wom-archive/references/long-operations-and-updates.md",
-      "bytes": 2934,
-      "sha256": "b753ebcc37a2d387f271b3432e5eba8e8ee5df74235ee477567c4f4bfb22a040"
+      "bytes": 3545,
+      "sha256": "7ec958076be88077ee9f45e08eba8c335061cbdd24eb6ed1160e190b29a4d6a3"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/models-and-reasoning.md",
@@ -1079,10 +1079,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.4.54.md",
-      "packaged": "release-notes/v0.4.54.md",
-      "bytes": 5296,
-      "sha256": "f134ec5bae70727624031c85bc910c2dffb1120b01851bb57fd6ea1b880b171a"
+      "source": "docs/releases/v0.4.55.md",
+      "packaged": "release-notes/v0.4.55.md",
+      "bytes": 3024,
+      "sha256": "079322d42089e953f0d35087257e334d80e4087983a8a1c7976149a1ba9ea902"
     }
   ]
 }

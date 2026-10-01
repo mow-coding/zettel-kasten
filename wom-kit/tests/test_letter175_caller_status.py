@@ -35,11 +35,11 @@ class CallerStatusTests(unittest.TestCase):
             self.assertTrue(result["caller"]["can_use_recorded_grant"])
             self.assertEqual(result["recorded_permission"]["mode"], "allow_all")
             self.assertEqual(result["execution"]["state"], "not_observed")
-            self.assertIsNone(first["presenter"])  # v0.4.54: no secret is returned
+            self.assertIsNone(first["presenter"])  # v0.4.55: no secret is returned
             other = self.diagnose(ref=second["session"])["caller_status"]
             self.assertFalse(other["caller"]["can_use_recorded_grant"])
             self.assertEqual(other["caller"]["reason_code"], "work_session_caller_session_mismatch")
-        # v0.4.54 (letter 177): a new process of the same conversation without
+        # v0.4.55 (letter 177): a new process of the same conversation without
         # any presenter secret still uses the recorded grant.
         with patch.dict(os.environ, {**self.env(first), permission.PRESENTER_ENV: ""}):
             restarted = self.diagnose()["caller_status"]

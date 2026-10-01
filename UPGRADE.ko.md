@@ -1,5 +1,18 @@
 # 업그레이드 가이드
 
+## v0.4.55 WOM이 스스로 남긴 부산물 삭제
+
+공개된 뒤 기존 프로젝트는 공식 업데이트 절차를 쓰세요. 업데이트가 성공하면 이제 WOM이 예전 버전 실행 환경과 오래된 업데이트 기록을 스스로 지웁니다. 예전 설치 때 남은 설치용 환경과 다른 WOM 부산물의 용량을 비우려면 `archive system-cleanup <archive-root> --dry-run --format json`으로 미리 보고 같은 계획을 `--approve --reviewed-by <person:...> --expected-plan-sha256 <plan_sha256>`로 한 번 승인합니다. 영수증, 승인 기록, 잠금 파일은 지우지 않습니다. 설치만으로 archive는 바뀌지 않습니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0455-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.55/wom_kit-0.4.55-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
 ## v0.4.54 전달 끝난 편지 삭제·비공개 Git 원격 읽기·오래된 색인 사본 삭제
 
 공개된 뒤 기존 프로젝트는 공식 업데이트 절차를 쓰세요. 이전 업데이트 결과에 `post_update_attention_required: true`가 있었다면 먼저 프로젝트의 현재 실행기로 `archive project-version-update <archive-root> --resume --affirm-external-writers-quiescent --format json`를 한 번 실행한 뒤 업데이트 미리보기를 다시 하세요(편지 178). 전달이 끝났거나 해결된 피드백 편지의 용량을 비우려면 `archive operator-feedback-delete <root> --dry-run --format json`으로 미리 보고 같은 계획을 `--approve --reviewed-by <person:...> --expected-plan-sha256 <plan_sha256>`로 한 번 승인합니다. 삭제는 되돌릴 수 없고 편지마다 한 줄 기록만 남습니다. 예전 WOM이 `operator-feedback-archive`(이제 삭제됨)로 편지를 옮겨 두었다면 `--moved-folder <그 폴더>`를 붙이세요. `git-backup-plan`은 이제 기본으로 이 PC에 저장된 Git 로그인으로 원격을 읽고, 색인을 만들 때마다 오래된 색인 사본을 지웁니다. 설치만으로 archive는 바뀌지 않습니다.

@@ -220,6 +220,8 @@ class ExactHumanApprovalOperation(Enum):
     # v0.4.54 (owner decision 2026-09-30): delivered letters are deleted; only a
     # one-line deleted record stays.
     operator_feedback_delete = "operator_feedback_delete"
+    # v0.4.55 (owner request 2026-10-01): WOM's own byproducts are deleted.
+    system_cleanup = "system_cleanup"
     # v0.4.30 (letter 163 ⑥): reviewed closing of started claims (dialog or session grant).
     exact_approval_claim_finalize = "exact_approval_claim_finalize"
     local_recovery = "local_recovery"
@@ -596,6 +598,9 @@ _OPERATION_LABELS = {
     ExactHumanApprovalOperation.operator_feedback_delete: (
         "전달 완료 피드백 편지 삭제"
     ),
+    ExactHumanApprovalOperation.system_cleanup: (
+        "WOM 자체 부산물 정리"
+    ),
     ExactHumanApprovalOperation.exact_approval_claim_finalize: (
         "검토 끝난 started 승인 클레임 닫기"
     ),
@@ -734,6 +739,9 @@ _OPERATION_QUESTIONS = {
     ),
     ExactHumanApprovalOperation.operator_feedback_delete: (
         "전달이 끝난 피드백 편지와 본문 영수증을 이 PC에서 완전히 삭제하고, \"편지 N번 삭제됨\" 한 줄 기록만 남길까요?"
+    ),
+    ExactHumanApprovalOperation.system_cleanup: (
+        "WOM이 스스로 남긴 부산물(예전 버전 실행 환경, 설치용 임시 환경, 끝난 업데이트 기록, 임시 파일)을 이 PC에서 삭제할까요?"
     ),
     ExactHumanApprovalOperation.exact_approval_claim_finalize: (
         "영수증 어디에도 흔적이 없는, 검토가 끝난 started 승인 클레임들을 실패로 닫을까요?"
@@ -1008,6 +1016,10 @@ _OPERATION_SUMMARIES = {
         "지정 폴더의 경로는 표시하지 않고 그 해시와 계획 해시만 묶어 승인합니다. 편지 본문과 영수증은 복사·검증이 끝난 뒤에만 "
         "아카이브에서 지워지고, 레코드는 내용 없는 archived 흔적으로 남습니다. 원격 저장소와 외부 전달은 이 승인에 포함되지 않습니다."
     ),
+    ExactHumanApprovalOperation.system_cleanup: (
+        "종류별 개수와 용량, 계획 해시만 묶어 승인합니다. 지금 쓰는 버전과 바로 전 버전의 실행 환경, 영수증, 승인 기록, "
+        "자격 증명 기록, 잠금 파일, 진행 중인 업데이트는 삭제하지 않습니다. 삭제한 항목은 되살릴 수 없습니다."
+    ),
     ExactHumanApprovalOperation.operator_feedback_delete: (
         "편지 목록과 계획 해시만 묶어 승인합니다. 편지 본문, 본문 영수증, 이전 버전이 옮겨 둔 사본은 되살릴 수 없게 삭제되고, "
         "레코드에는 번호·상태·날짜만 남습니다(제목·내용 없음). 아직 전달 전인 편지, 원격 저장소, 외부 전달은 이 승인에 포함되지 않습니다."
@@ -1245,6 +1257,7 @@ _OPERATION_APPROVE_BUTTONS = {
     ExactHumanApprovalOperation.operator_feedback_body_write: "본문 기록",
     ExactHumanApprovalOperation.operator_feedback_archive: "편지 옮기기",
     ExactHumanApprovalOperation.operator_feedback_delete: "편지 삭제",
+    ExactHumanApprovalOperation.system_cleanup: "부산물 삭제",
     ExactHumanApprovalOperation.exact_approval_claim_finalize: "클레임 닫기",
     ExactHumanApprovalOperation.local_recovery: "복구 실행",
     ExactHumanApprovalOperation.local_recovery_revert: "복구 되돌리기",

@@ -56,7 +56,7 @@ Git 이력·미커밋·미추적 파일·비밀설정 후보·외부 워크트�
 
 Windows의 ADS 부가 데이터도 본문과 연결된 별도 객체로 보존·검증한다. `--restore-item <item-number> --destination <new-absolute-file> --dry-run`으로 확인한 뒤 `--approve`로 본문과 ADS를 함께 새 파일에 복원한다. 기존 파일은 대체하지 않는다. 복원 중 끊기면 동일 요청·번호·목적지·검토자로 `--resume`한다. 원래 승인과 서명된 임시 파일 지문·파일 식별자가 일치할 때만 이어가며, 이미 복원한 바이트를 다시 내려받지 않는다. 임의의 같은 내용 파일을 원래 복원본으로 간주하지 않는다.
 
-### 재시작 뒤 남은 항목 이어서 끝내기 (v0.4.54)
+### 재시작 뒤 남은 항목 이어서 끝내기 (v0.4.55)
 
 원래 요청이 `env:` 자격증명 참조를 썼다면 그 값은 실행한 프로세스가 끝나면서 사라진다. 데스크톱 앱이 키를 OS 키체인에 두듯, `object-storage-credential-store <archive-root> --store-slug <이름> --dry-run` 뒤 `--approve --expected-request-sha256 <값>`을 실행하면 WOM의 가려진 입력 창 두 개에서 접근 키 ID와 비밀 키를 받아 Windows 자격 증명 관리자에 저장하고 쓸 참조 두 개를 알려 준다. 그 참조로 `--reconcile --dry-run --rebind-access-key-id-ref credential-manager:<이름> --rebind-secret-access-key-ref credential-manager:<이름>`으로 미리 본 뒤 같은 옵션으로 `--approve`한다. 바뀌는 것은 두 참조뿐이며 저장소·엔드포인트·버킷·지역은 원래 것과 같아야 하고, 그 교체는 새 승인 계획에 기록된다. 완료된 항목은 다시 처리하지 않는다. 미리보기의 `credential_refs_state`가 `unresolved`이면 이 프로세스에서 키를 읽을 수 없다는 뜻이며, 승인 실행은 승인창을 띄우기 전에 `activity_cleanup_credential_ref_unresolved`로 멈춘다. 원격 저장소 키는 이름이 정확히 일치하는 자격 증명만 읽는다.
 

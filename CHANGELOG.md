@@ -4,6 +4,11 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.4.55 - 2026-10-01
+
+- WOM's own byproducts are deleted (owner request 2026-10-01): after a successful update whose result delivery was acknowledged, runtimes other than the pinned and previous version and update results, handoff capsules and journals older than seven days are pruned automatically; `system-cleanup` previews and, under one approval, also deletes bootstrap environments in `%LOCALAPPDATA%\WOM` not newer than the pin, WOM temporary files, abandoned restore downloads and old archive operation results. Receipts, approval claims, credentials, manifests, ledgers and locks are never deleted.
+- Synthetic projects and an injected window only; the customer's PC is not inspected.
+
 ## v0.4.54 - 2026-09-30
 
 - An update that did not finish its result delivery no longer blocks the next update (letter 178): an unreadable unrelated operation journal no longer aborts delivery, an unacknowledged delivery names `result_delivery_failure_code`, a pending delivery is named in the next preview with the exact command, advised resume lines are complete (`archive project-version-update <archive-root> --resume --affirm-external-writers-quiescent --format json`), and `outcome_unknown` names its `cause_code` and a names-free `residue_inventory`.

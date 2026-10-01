@@ -317,7 +317,7 @@ class NotionPropertyBackfillCliTests(unittest.TestCase):
         # v0.4.28 added object-storage-restore; v0.4.29 object-storage-offload;
         # v0.4.30 exact-approval-claim-finalize; v0.4.33 reopened object-storage-upload;
         # v0.4.36 added operator-feedback-archive (replaced by
-        # operator-feedback-delete in v0.4.54); v0.4.38 adds
+        # operator-feedback-delete in v0.4.55); v0.4.38 adds
         # draft-revision-write and activity-cleanup. v0.4.40 reopens 27
         # writers (plus two new batch commands) from the 58-writer triage and
         # deletes 12 closed commands (five sharing/ownership commands were
@@ -325,7 +325,7 @@ class NotionPropertyBackfillCliTests(unittest.TestCase):
         # the Notion recovery chain and trash, and seven more writers.
         self.assertEqual(
             inventory["counts"]["approval_available_command_count"],
-            111,  # v0.4.50: cleanup, open and scoped operation control
+            112,  # v0.4.50: cleanup, open and scoped operation control
         )
         self.assertEqual(
             by_path["operator-feedback-delete"]["approval_status"],
