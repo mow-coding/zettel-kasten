@@ -103,6 +103,34 @@ archive and an in-memory transport (scenarios now in
    the synthetic 20k-row archive), so it is not shipped; `work_timing` will
    show whether the customer's archive differs.
 
+## v0.4.59 also: the Git backup `_exact_add` flake
+
+The recurring Windows CI failure `git_backup_exact_add_failed` (runs 36493971657,
+36503046363, 36558030274 and 36858046636 attempt 1) was traced from the job
+logs and reproduced locally. It is two product defects:
+
+1. Git's stat cache plus the default Windows `core.autocrlf=true`: a file
+   staged by the person (or an editor) a second or more after it was saved
+   keeps the converted blob, `git add` on the real index skips the unchanged
+   entry, and `_index_matches_group` refuses the exact bytes. Forced
+   reproduction (pre-stage delayed 1.1 s) failed 4/4 before, passed 3/3 after.
+   Fix: after the normal add, `git add --renormalize` on the paths that
+   still exist (deleted paths cannot take it); the index check stays as the
+   final guard. The v0.4.46 explanation (a scanner holding the index) was
+   wrong and its retry never triggered for this case.
+2. `git add --pathspec-from-file` with 1024 literal paths walks the entire
+   untracked directory per batch (74 s for the first batch on a hosted
+   runner against a 60 s limit). Fix: the isolated proof index, which has
+   no stat cache, stages with `update-index --add --remove -z --stdin`
+   (identical tree, about 10x faster); the real-index add batches use the
+   120 s commit deadline. `update-index` is not used on the real index
+   because it trusts the same stat cache.
+
+Executing models: the investigation was a read-only subagent (Opus 5.5);
+the fix, tests and documents from this point were made by Claude Fable 5.1
+after the owner switched the session model on 2026-10-02. Earlier v0.4.58
+and v0.4.59 units were Opus 5.5.
+
 ## Not established
 
 The customer's own run, which internal step originally cut their A and B

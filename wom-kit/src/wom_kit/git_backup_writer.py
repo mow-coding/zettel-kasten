@@ -1678,7 +1678,7 @@ class _GitBackupBackend:
             **({'stderr_sink': stderr_sink} if stderr_sink is not None else {}),
         )
 
-    def _git_index_add(self, paths: Sequence[str], *, extra_environment=None):
+    def _git_index_add(self, paths: Sequence[str], *, extra_environment=None, renormalize=False):
         """Stage only approved paths in bounded batches; never retry a prefix.
 
         Large Windows selections can exhaust the per-process deadline before
@@ -1691,14 +1691,16 @@ class _GitBackupBackend:
         for path in paths:
             cost = len(path.encode("utf-8")) + 1
             if batch and (len(batch) >= 1024 or size + cost > 256 * 1024):
-                result = self._git_index_add_batch(batch, extra_environment=extra_environment)
+                result = self._git_index_add_batch(batch, extra_environment=extra_environment,
+                                                   renormalize=renormalize)
                 if result is None or result[0] != 0:
                     return result
                 batch, size = [], 0
             batch.append(path)
             size += cost
         if batch:
-            result = self._git_index_add_batch(batch, extra_environment=extra_environment)
+            result = self._git_index_add_batch(batch, extra_environment=extra_environment,
+                                               renormalize=renormalize)
         return result
 
     def _git_index_add_batch(
@@ -1706,6 +1708,7 @@ class _GitBackupBackend:
         paths: Sequence[str],
         *,
         extra_environment: Mapping[str, str] | None = None,
+        renormalize: bool = False,
     ) -> tuple[int, bytes] | None:
         """Run one exact `git add`, retrying only a transient index-file lock.
 
@@ -1732,11 +1735,15 @@ class _GitBackupBackend:
                     "-c",
                     "core.safecrlf=true",
                     "add",
+                    *(("--renormalize",) if renormalize else ()),
                     "--pathspec-from-file=-",
                     "--pathspec-file-nul",
                 ],
                 input_bytes=_path_input(paths),
                 max_output_bytes=64 * 1024,
+                # v0.4.59: one batch of 1024 literal paths in a large untracked
+                # folder took over 60 s on hosted Windows runners.
+                timeout_seconds=GIT_BACKUP_COMMIT_TIMEOUT_SECONDS,
                 extra_environment=environment,
                 stderr_sink=errors,
             )
@@ -2424,7 +2431,31 @@ class _GitBackupBackend:
             )
             if initialized is None or initialized[0] != 0:
                 raise _fail("git_backup_exact_add_failed")
-            result = self._git_index_add(group.paths, extra_environment=environment)
+            # v0.4.59: this index comes straight from read-tree (no stat
+            # cache), so update-index stages the exact literal paths. git add
+            # walked the whole untracked folder per 1024-path batch (about 10x
+            # slower) and could pass the per-step deadline on large selections.
+            # The diff-tree and tree-byte checks below still prove the result.
+            result = self._git_index_retry(
+                lambda errors: self._git_raw(
+                    [
+                        "-c",
+                        "core.autocrlf=false",
+                        "-c",
+                        "core.safecrlf=true",
+                        "update-index",
+                        "--add",
+                        "--remove",
+                        "-z",
+                        "--stdin",
+                    ],
+                    input_bytes=_path_input(group.paths),
+                    max_output_bytes=64 * 1024,
+                    timeout_seconds=GIT_BACKUP_COMMIT_TIMEOUT_SECONDS,
+                    extra_environment={**environment, "LC_ALL": "C", "LANGUAGE": "C"},
+                    stderr_sink=errors,
+                )
+            )
             if result is None or result[0] != 0:
                 raise _fail("git_backup_exact_add_failed")
             written_raw = self._git_index_retry(
@@ -2518,6 +2549,17 @@ class _GitBackupBackend:
         # `--only` preserves any pre-existing staging outside this group.
         self._exact_add(group)
         exact_add = self._git_index_add(group.paths)
+        expected_worktree = self._expected_group_worktree(group)
+        present = [path for path in group.paths if expected_worktree is not None
+                   and expected_worktree[path].get("state") == "regular_file"]
+        if exact_add is not None and exact_add[0] == 0 and present:
+            # v0.4.59: Git trusts its stat cache. A file staged earlier with
+            # the default Windows core.autocrlf=true keeps its converted blob
+            # when it was saved more than about a second before that add, and
+            # the exact-bytes index check then refused every time. Re-hash the
+            # approved bytes of the files that exist (deleted paths cannot
+            # take --renormalize).
+            exact_add = self._git_index_add(present, renormalize=True)
         self.invalidate()
         head_after_add = self._head()
         if (
