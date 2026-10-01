@@ -4,6 +4,14 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.4.58 - 2026-10-01
+
+- Beta letter 180 (the same two activity-cleanup items as letters 174 and 179, reproduced with the real CLI on Windows): `--reconcile` completes an item whose child upload stored the remote bytes but left its claim started (the full remote bytes are verified; the claim is closed as failed, never as succeeded), and an item whose child offload never wrote its control file (claim succeeded: complete after the remote proof; no effect proven: offload again under the new approval; otherwise kept with `activity_cleanup_child_control_missing_effects_unproven`). Approving the same reconcile again no longer conflicts.
+- `--reconcile --dry-run` adds `pending_item_diagnosis` (steps recorded, child control file and claim statuses, route; read-only, content-free, no remote request); a failed item names its `child_stage` and the child's cause code.
+- operation-control recovery-plan gives activity-cleanup (and each storage command) its own guidance instead of the index-health text, with `command_outcome`.
+- The progress heartbeat survives a non-count value (the stream child sent "N-streams"); `progress_reporting` counts display failures apart from the result.
+- Composed cleanup children skip the display-only archive-wide capacity scan (about half of each item's time on a large synthetic archive); index projection, manifest parsing and separate timings follow in v0.4.59.
+
 ## v0.4.57 - 2026-10-01
 
 - Archived mail readable as threads (owner idea 2026-10-01): `mail-threads --build` rebuilds the .eml mail objets into one Markdown record per thread and mailbox account under `db/mail-threads/<generation>/` (Message-ID / In-Reply-To / References threading, subject-and-participants fallback, duplicates counted once, quoted lines folded); a derived snapshot that never changes the objets; a fetch records the mailbox account privately.

@@ -271,6 +271,11 @@ def _content_free_cause_code(cause: BaseException | None) -> str | None:
             "OperatorFeedbackDeleteError",
             "SystemCleanupError",
             "ObjectStorageCredentialStoreError",
+            # v0.4.58 (letter 180): their fixed codes were dropped, so an
+            # activity cleanup item showed only exact_human_approval_state_unknown.
+            "ObjectStorageOffloadError",
+            "ObjectStorageScopeError",
+            "ActivityCleanupError",
         }
         or len(cause.args) != 1
         or type(cause.args[0]) is not str

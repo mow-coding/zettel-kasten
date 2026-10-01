@@ -624,6 +624,8 @@ def _safe_domain_projection(
 
     if command == "staged-cleanup-check":
         return _safe_staged_cleanup_domain_projection(payload)
+    if command == "activity-cleanup":
+        return _safe_activity_cleanup_domain_projection(payload)
     if command != "project-version-update":
         return None
     raw_status = payload.get("status")
@@ -1276,6 +1278,85 @@ def _apply_project_update_delivery_projection(
         not journal_delivery_acknowledged
     )
     return True
+
+
+ACTIVITY_CLEANUP_COUNT_KEYS = (
+    "completed_item_count",
+    "retained_item_count",
+    "unprocessed_item_count",
+    "interrupted_item_count",
+    "unknown_local_outcome_count",
+)
+
+
+def _safe_activity_cleanup_domain_projection(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """v0.4.58 (letter 180): fixed activity-cleanup truth for recovery guidance.
+
+    Only the command's own state, fixed codes and aggregate counts; never a
+    path, request text or provider message.
+    """
+
+    def safe(value: object) -> str | None:
+        return (
+            value
+            if isinstance(value, str)
+            and SAFE_DOMAIN_VALUE_RE.fullmatch(value) is not None
+            else None
+        )
+
+    measurements = payload.get("measurements")
+    counts: dict[str, int] = {}
+    if isinstance(measurements, dict):
+        for key in ACTIVITY_CLEANUP_COUNT_KEYS:
+            value = measurements.get(key)
+            if type(value) is int and 0 <= value <= 10_000_000:
+                counts[key] = value
+    item_codes: list[str] = []
+    items = payload.get("items")
+    if isinstance(items, list):
+        for row in items[:100_000]:
+            code = safe(row.get("code")) if isinstance(row, dict) else None
+            if (
+                code is not None
+                and code not in item_codes
+                and len(item_codes) < MAX_DOMAIN_BLOCKER_CODES
+            ):
+                item_codes.append(code)
+    return {
+        "command": "activity-cleanup",
+        "ok": payload.get("ok") is True,
+        "state": safe(payload.get("state")),
+        "cause_code": safe(payload.get("cause_code"))
+        or safe(payload.get("reason_code")),
+        "counts": counts,
+        "item_codes": item_codes,
+    }
+
+
+def _activity_cleanup_completed_next_actions(
+    domain: object,
+) -> list[str] | None:
+    if type(domain) is not dict or domain.get("command") != "activity-cleanup":
+        return None
+    if domain.get("ok") is True:
+        return [
+            "The activity cleanup reported every selected item completed. Confirm with activity-cleanup <archive-root> --request <same request> --status --format json before closing the activity.",
+        ]
+    counts = domain.get("counts") if type(domain.get("counts")) is dict else {}
+    details = ([f"state={domain['state']}"] if domain.get("state") else []) + [
+        f"{key}={counts[key]}" for key in ACTIVITY_CLEANUP_COUNT_KEYS if key in counts
+    ]
+    joined = " ".join(details)
+    return [
+        "The activity cleanup ended without completing every selected item"
+        + (f" ({joined})." if joined else "."),
+        "recovery_required=false and resume_supported=false only say that operation-control itself has nothing to recover or resume; they do not mean the cleanup succeeded.",
+        "Run activity-cleanup <archive-root> --request <same request> --status --format json, then the same command with --reconcile --dry-run; approving that exact plan finishes only the remaining items and does not reprocess completed ones.",
+        "Do not delete originals, child controls or claims by hand, and do not start a second activity-cleanup for the same request while one is running.",
+        "Independent work may continue: Git backup (git-backup-plan --dry-run) and upload or offload of objects outside this activity do not depend on these items; this activity's remaining items finish only through --reconcile.",
+    ]
 
 
 def _safe_staged_cleanup_domain_projection(
@@ -3238,9 +3319,11 @@ def _staged_cleanup_completed_next_actions(
 
 
 def _completed_result_next_actions(domain: object) -> list[str] | None:
-    return _project_update_completed_next_actions(
-        domain
-    ) or _staged_cleanup_completed_next_actions(domain)
+    return (
+        _project_update_completed_next_actions(domain)
+        or _staged_cleanup_completed_next_actions(domain)
+        or _activity_cleanup_completed_next_actions(domain)
+    )
 
 
 def inspect_operation(
@@ -3587,6 +3670,21 @@ def recovery_plan(
                 "Read the complete capture result, cause_code, cause_stage and per-item effects before deciding what remains.",
                 "Keep the completed source-intake result. Run objet-capture-batch --dry-run with the same --source-intake-execution-sha256 to reconcile preserved objects; do not copy the originals again.",
             ]
+        elif kind == "activity_cleanup":
+            # v0.4.58 (letter 180): this fell through to the index-health text.
+            actions = _activity_cleanup_completed_next_actions(
+                result.get("result", {}).get("domain")
+                if isinstance(result.get("result"), dict)
+                else None
+            ) or [
+                "Run activity-cleanup <archive-root> --request <same request> --status --format json, then --reconcile --dry-run; completed items are not reprocessed."
+            ]
+        elif kind in KIND_COMMANDS and kind != "archive_index_health":
+            command = KIND_COMMANDS[kind]
+            actions = [
+                f"Read the complete {command} result, its exit code, cause_code and per-item effects; an exit code of 1 is not success even when recovery_required is false.",
+                f"Run {command} --dry-run with the same scope (or its --resume path when the result names one) before any retry; do not start a duplicate writer.",
+            ]
         else:
             actions = [
                 "Review the complete index-health result together with its exit code and index_state."
@@ -3609,6 +3707,17 @@ def recovery_plan(
                 "Keep the prepared source-intake result and authenticated capture receipts. Reconcile with objet-capture-batch --dry-run using the same --source-intake-execution-sha256; missing terminal output does not prove zero writes."
             )
     result["next_safe_actions"] = actions
+    if result.get("state") == "completed_result_available" and isinstance(
+        result.get("result"), dict
+    ):
+        # v0.4.58 (letter 180): ok/recovery_required describe operation
+        # control; say separately whether the command itself succeeded.
+        result["command_outcome"] = (
+            "finished_succeeded"
+            if result["result"].get("ok") is True
+            and result["result"].get("exit_code") == 0
+            else "finished_not_successful"
+        )
     return result
 
 

@@ -1,6 +1,8 @@
 """Capacity and planning estimates, never a claim about an account invoice."""
 from __future__ import annotations
 
+import contextlib
+import contextvars
 from decimal import Decimal, ROUND_CEILING
 import re
 
@@ -32,8 +34,28 @@ def estimate(*, remote_bytes, class_a=0, class_b=0, provider_kind="cloudflare-r2
             "Standard storage only; other classes need their own retrieval and retention rates."]}
 
 
+# v0.4.58 (letter 180): the archive-wide capacity scan only fills the display
+# fields capacity/cost_estimate; it is not part of any approval binding. A
+# child plan composed by activity-cleanup ran it per item (most of the time per
+# item on a large archive), so composed children skip it.
+_COMPOSED_CHILD = contextvars.ContextVar("wom_storage_cost_composed_child", default=False)
+NOT_COMPUTED = "not_computed_for_composed_child"
+
+
+@contextlib.contextmanager
+def composed_child_planning():
+    token = _COMPOSED_CHILD.set(True)
+    try:
+        yield
+    finally:
+        _COMPOSED_CHILD.reset(token)
+
+
 def estimate_capacity(capacity_summary, *, class_a=0, class_b=0, provider_kind="cloudflare-r2"):
     """Refuse a total-cost figure when the manifest coverage is incomplete."""
+    if isinstance(capacity_summary, dict) and capacity_summary.get("state") == NOT_COMPUTED:
+        return {"available": False, "reason": NOT_COMPUTED,
+            "account_free_allowance_remaining_known": False, "actual_account_invoice_estimated": False}
     if (not isinstance(capacity_summary, dict)
         or capacity_summary.get("estimate_coverage") != "complete"
         or capacity_summary.get("scan_complete") is False):
@@ -45,6 +67,8 @@ def estimate_capacity(capacity_summary, *, class_a=0, class_b=0, provider_kind="
 
 
 def capacity(root, groups, *, provider_kind=None, store_ref=None, planned_uploads=(), offloadable_bytes=None, receipt_cache=None):
+    if _COMPOSED_CHILD.get():
+        return {"state": NOT_COMPUTED, "estimate_coverage": "not_computed"}
     from . import archive_services as services
     total = local = remote = local_only = unknown = 0
     known_remote = set()

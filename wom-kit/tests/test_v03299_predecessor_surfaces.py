@@ -272,7 +272,7 @@ CURRENT_DATABASE_CANONICAL_SHA256 = (
     "d9a42f08ee12a6d42e40214cfb12441e4077bf50c38c25b2692ec1344328294a"
 )
 RESOURCE_ADDITIONS = {
-    "release-notes/v0.4.57.md",
+    "release-notes/v0.4.58.md",
     "schemas/activity-cleanup-request-v1.schema.json",
     "schemas/private-objet-finder-result-v0.2.schema.json",
     "templates/ai-runtime/wom-archive/references/storage-scope.md",
@@ -347,7 +347,7 @@ RESOURCE_ADDITIONS = {
 RESOURCE_REMOVALS = {"release-notes/v0.3.297.md"}
 CURRENT_RESOURCE_COUNT = 180  # v0.4.50: finder cursor result schema
 CURRENT_RESOURCE_CANONICAL_SHA256 = (
-    "0e66d540ee5274d64d31edb9e4ccbbd52c8237f7c47fe8a0c19adc5089ab6894"  # v0.4.56 resources (release note, skill and schemas)
+    "ad539e9bc82d94dd7837502debb1910dc14622bdc20da12f17842d200ae96ebe"  # v0.4.56 resources (release note, skill and schemas)
 )
 
 
@@ -705,10 +705,10 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             actual,
             expected,
             "Current package-resource paths must be the full v0.3.297 set plus "
-            "the exact cumulative v0.3.298 through v0.4.57 delta. "
+            "the exact cumulative v0.3.298 through v0.4.58 delta. "
             f"missing={compact(missing)}; extra={compact(extra)}",
         )
-        self.assertEqual(manifest["version"], "0.4.57")
+        self.assertEqual(manifest["version"], "0.4.58")
         self.assertEqual(len(actual), CURRENT_RESOURCE_COUNT)
         self.assertEqual(
             canonical_sha256(actual),
@@ -728,13 +728,13 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         self.assertNotIn("C:\\Users\\", predecessor_text)
 
     def test_v0419_release_note_is_current_and_older_notes_remain_historical(self) -> None:
-        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.4.57.md"
+        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.4.58.md"
         current_packaged_release = (
             SRC_ROOT
             / "wom_kit"
             / "_resources"
             / "release-notes"
-            / "v0.4.57.md"
+            / "v0.4.58.md"
         )
         self.assertEqual(
             current_source_release.read_bytes(),
@@ -743,10 +743,10 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         current_text = current_source_release.read_text(encoding="utf-8")
         current_flat = " ".join(current_text.split())
         for token in (
-            "v0.4.57",
+            "v0.4.58",
             "project-version-update",
             "Installing the tool alone does not change a customer archive",
-            "wom_kit-0.4.57-py3-none-any.whl",
+            "wom_kit-0.4.58-py3-none-any.whl",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, current_flat)

@@ -1,4 +1,4 @@
-"""v0.4.57: Doctor no longer reports a false doctor_cache_snapshot_stale on Windows.
+"""v0.4.56: Doctor no longer reports a false doctor_cache_snapshot_stale on Windows.
 
 NTFS updates the times and end-of-file of a child DIRECTORY copied into its
 parent's index lazily (measured stale in 14 of 20 trials after a change inside
