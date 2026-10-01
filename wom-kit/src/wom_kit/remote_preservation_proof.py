@@ -110,7 +110,12 @@ class ExecutionTransport:
         self.preservation_execution_token = "sha256:" + hashlib.sha256(uuid.uuid4().bytes).hexdigest()
         self.preservation_execution_proofs = {}
     def __getattr__(self, name):
-        return getattr(self.transport, name)
+        attribute = getattr(self.transport, name)
+        if callable(attribute) and re.match(r"(put|get|head|delete|list|copy)_", name):
+            # v0.4.59 (letter 180): provider time in the activity work timing.
+            from .work_timing import timed
+            return timed("provider_request")(attribute)
+        return attribute
 
 
 class PreservationVerifier:

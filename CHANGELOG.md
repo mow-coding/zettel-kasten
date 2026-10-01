@@ -4,6 +4,14 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.4.59 - 2026-10-02
+
+- Beta letter 180, performance: the archive index rewrites only the manifest projection rows that changed instead of every row three times per cleanup item (tables equal a full rewrite; lease, fence, seal and final checks unchanged).
+- `measurements.work_timing`: non-overlapping categories (provider requests, manifest reads, index projection, intake, local hashing, child claims, lock waits, remote verification, child steps) that add up to the processing time with `unattributed_seconds`.
+- Completed items are skipped in their own `activity-cleanup-skip-completed` stage; the item count and ETA cover only the remaining work.
+- A shared manifest parse cache was measured without gain on a synthetic archive and is not shipped.
+- Git backup, two Windows causes of the recurring `git_backup_exact_add_failed` (reproduced from CI logs): a file staged earlier under the default `core.autocrlf=true` a second or more after it was saved kept its converted blob because Git trusted its stat cache, so the exact-bytes index check refused every time (the v0.4.46 note blamed a held index); the writer now re-hashes the approved bytes of the files that exist (`git add --renormalize`). The isolated proof index stages with `update-index --stdin` (about 10x faster than `git add` walking a large untracked folder per 1024-path batch) and add batches get the 120 s commit deadline, so large selections no longer pass the 60 s per-step limit on slow machines.
+
 ## v0.4.58 - 2026-10-01
 
 - Beta letter 180 (the same two activity-cleanup items as letters 174 and 179, reproduced with the real CLI on Windows): `--reconcile` completes an item whose child upload stored the remote bytes but left its claim started (the full remote bytes are verified; the claim is closed as failed, never as succeeded), and an item whose child offload never wrote its control file (claim succeeded: complete after the remote proof; no effect proven: offload again under the new approval; otherwise kept with `activity_cleanup_child_control_missing_effects_unproven`). Approving the same reconcile again no longer conflicts.

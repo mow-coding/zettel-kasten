@@ -1,6 +1,6 @@
 # Archive infra decision log: letter 180 (2026-10-01)
 
-Status: implemented for v0.4.58 under the owner's standing instruction to
+Status: implemented for v0.4.58 and v0.4.59 under the owner's standing instruction to
 finish every implementable item before the reply ("이것도 읽어보고 작업
 진행해"). The deeper performance work is split into v0.4.59 (sequential small
 releases instead of deferring, 2026-09-24).
@@ -79,16 +79,60 @@ archive and an in-memory transport (scenarios now in
    (`not_computed_for_composed_child`); standalone upload and offload still
    show it.
 
-## Carried to v0.4.59 (not deferred, next release)
+## v0.4.59: where the time goes
 
-- The index projection rewrite per child step (about 30 % of the remaining
-  per-item time): rewrite only changed rows, with the same lease, fence and
-  final checks.
-- A per-process manifest parse cache keyed by exact line bytes, shared by the
-  manifest readers (the 51 full lookup rebuilds come from in-place row
-  rewrites by each child).
-- Non-overlapping timing categories that sum to the processing time, and
-  progress/ETA split into skipped completed items and real remaining work.
+1. Index projection: the objects and manifest projection tables are made
+   equal to the manifest by writing only rows whose stored values differ,
+   instead of deleting and re-inserting every row three times per item. The
+   tables end exactly as a full rewrite leaves them (tested against the old
+   behaviour, including duplicate object rows, removed rows, a key-order-only
+   change and stale stored rows). Lease, fence, owner, seal and the final
+   exact-bytes check are unchanged.
+2. Non-overlapping timing: `measurements.work_timing` splits the processing
+   time into `provider_request`, `manifest_read_parse`,
+   `index_projection_seal`, `intake_capture`, `local_hash_verify`,
+   `child_approval_claim`, `lock_wait`, `remote_verification`,
+   `upload_child_other`, `offload_child_other` and `unattributed_seconds`.
+   Entering a category pauses the enclosing one, so they add up to the total;
+   only the writer's own thread is measured.
+3. Progress and ETA: items already completed are counted in their own
+   `activity-cleanup-skip-completed` stage; the item stage and its ETA count
+   only the real remaining work (1-based, never jumping backwards).
+4. Not done, by measurement: a shared manifest parse cache. The prototype
+   measured no gain for the manifest readers (about 11 s before and after on
+   the synthetic 20k-row archive), so it is not shipped; `work_timing` will
+   show whether the customer's archive differs.
+
+## v0.4.59 also: the Git backup `_exact_add` flake
+
+The recurring Windows CI failure `git_backup_exact_add_failed` (runs 36493971657,
+36503046363, 36558030274 and 36858046636 attempt 1) was traced from the job
+logs and reproduced locally. It is two product defects:
+
+1. Git's stat cache plus the default Windows `core.autocrlf=true`: a file
+   staged by the person (or an editor) a second or more after it was saved
+   keeps the converted blob, `git add` on the real index skips the unchanged
+   entry, and `_index_matches_group` refuses the exact bytes. Forced
+   reproduction (pre-stage delayed 1.1 s) failed 4/4 before, passed 3/3 after.
+   Fix: after the normal add, `git add --renormalize` on the paths that
+   still exist (deleted paths cannot take it); the index check stays as the
+   final guard. The v0.4.46 explanation (a scanner holding the index) was
+   wrong and its retry never triggered for this case.
+2. `git add --pathspec-from-file` with 1024 literal paths walks the entire
+   untracked directory per batch (74 s for the first batch on a hosted
+   runner against a 60 s limit). Fix: the isolated proof index, which has
+   no stat cache, stages with `update-index --add --remove -z --stdin`
+   (identical tree, about 10x faster); the real-index add batches use the
+   120 s commit deadline. `update-index` is not used on the real index
+   because it trusts the same stat cache. The first PR CI run of this fix
+   (36901371101) showed that one unbatched `update-index` of all 11,132
+   paths also passes 120 s on a hosted runner (126 s), so the proof index
+   is staged in the same 1024-path / 256 KB batches as the real index.
+
+Executing models: the investigation was a read-only subagent (Opus 5.5);
+the fix, tests and documents from this point were made by Claude Fable 5.1
+after the owner switched the session model on 2026-10-02. Earlier v0.4.58
+and v0.4.59 units were Opus 5.5.
 
 ## Not established
 

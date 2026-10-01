@@ -165,6 +165,13 @@ class Letter180ReconcileTests(unittest.TestCase):
         self.assertEqual(diagnosis["items"][0]["child_steps"]["upload"]["claims"], {"started": 1})
         self.assertNotIn(str(self.external), json.dumps(diagnosis))
         self.assert_all_done(code, result)
+        # v0.4.59: where the time went, non-overlapping, adding up to the total.
+        timing = result["measurements"]["work_timing"]
+        self.assertTrue(timing["non_overlapping"])
+        self.assertIn("upload_child_other", timing["seconds"])
+        self.assertIn("manifest_read_parse", timing["seconds"])
+        self.assertAlmostEqual(sum(timing["seconds"].values()) + timing["unattributed_seconds"],
+                               timing["total_seconds"], delta=0.05)
         # The started child claim is closed as failed, never as succeeded.
         self.assertNotIn("started", self.claim_statuses("object_storage_bytes_upload"))
 
@@ -222,6 +229,35 @@ class Letter180ReconcileTests(unittest.TestCase):
         self.assertEqual(kept["code"], "activity_cleanup_child_control_missing_effects_unproven")
         self.assertEqual(kept["child_stage"], "offload")
         self.assertTrue(Path(self.document["items"][2]["path"]).exists())
+
+
+@unittest.skipUnless(os.name == "nt", "Windows native deletion")
+class Letter180SkipProgressTests(unittest.TestCase):
+    setUp = fixture.ActivityCleanupTests.setUp
+    plan = fixture.ActivityCleanupTests.plan
+    execute = fixture.ActivityCleanupTests.execute
+
+    def test_completed_items_are_skipped_outside_the_item_count(self):
+        second = self.external / "SECOND_SYNTHETIC.txt"
+        second.write_bytes(b"synthetic second source")
+        self.document["items"].append({"path": str(second), "role": "source",
+                                       "reason": "Second synthetic test source", "disposition": "preserve"})
+        self.request.write_text(json.dumps(self.document), encoding="utf-8")
+        self.backend.verify.side_effect = lambda item: item["number"] == 0
+        first = self.execute(self.plan())
+        self.assertEqual([row["state"] for row in first["items"]], ["deleted", "retained"])
+        self.backend.verify.side_effect = None
+        self.backend.verify.return_value = True
+        events = []
+        candidate = self.plan(resume=True)
+        candidate["progress"] = lambda stage, message, current, total: events.append((stage, message, current, total))
+        result = self.execute(candidate)
+        self.assertTrue(result["ok"], result)
+        self.assertIn(("activity-cleanup-skip-completed", "done", 1, 1), events)
+        item_counts = {(current, total) for stage, _message, current, total in events
+                       if stage == "activity-cleanup-items" and current}
+        self.assertEqual(item_counts, {(1, 1)})
+        self.assertIn("work_timing", result["measurements"])
 
 
 class Letter180ProgressTests(unittest.TestCase):

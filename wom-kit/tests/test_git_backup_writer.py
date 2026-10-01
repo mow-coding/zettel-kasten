@@ -742,6 +742,20 @@ class GitBackupWriterTests(unittest.TestCase):
             ("present", raced_oid),
         )
 
+    def test_pre_staged_file_staged_seconds_after_save_is_rehashed(self) -> None:
+        """v0.4.59: the writer re-hashes approved bytes instead of trusting Git's stat cache."""
+        import time
+
+        original = self.git
+
+        def delayed(repository: Path, *args: str, check: bool = True):
+            if args == ("add", "--", "tracked.txt"):
+                time.sleep(1.1)
+            return original(repository, *args, check=check)
+
+        with patch.object(self, "git", delayed):
+            self.test_pre_staged_later_group_is_preserved_by_first_exact_commit()
+
     def test_pre_staged_later_group_is_preserved_by_first_exact_commit(self) -> None:
         from wom_kit.exact_operation_manifest import ExactOperationManifestError
 
@@ -754,9 +768,11 @@ class GitBackupWriterTests(unittest.TestCase):
         observed_failure: tuple[str, str] | None = None
 
         # This test failed only on hosted Windows (later_group_commit,
-        # git_backup_exact_add_failed): a scanner briefly held the index the
-        # first commit had just written. The index-lock tests below reproduce
-        # it. Keep the fixed-code observation across the approval wrapper.
+        # git_backup_exact_add_failed). v0.4.59: the cause was Git's stat
+        # cache, not a held index: with the default Windows core.autocrlf=true
+        # the pre-stage keeps a converted blob when it runs a second or more
+        # after the file was written (see the delayed variant below). Keep the
+        # fixed-code observation across the approval wrapper.
         def observe_failure(error: Exception) -> None:
             nonlocal observed_failure
             if observed_failure is not None:
@@ -916,7 +932,8 @@ class GitBackupWriterTests(unittest.TestCase):
 
         def failing_isolated_add(backend, args, **kwargs):
             environment = kwargs.get("extra_environment") or {}
-            if "add" in args and "GIT_INDEX_FILE" in environment:
+            # v0.4.59: the isolated index stages with update-index.
+            if "update-index" in args and "GIT_INDEX_FILE" in environment:
                 attempts.append(list(args))
                 sink = kwargs.get("stderr_sink")
                 if sink is not None:

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import errno
 import hashlib
+from .work_timing import timed as _work_timed
 import hmac
 import json
 import os
@@ -1151,6 +1152,7 @@ class ExactOperationWriterLock:
             os.close(descriptor)
             raise
 
+    @_work_timed("lock_wait")
     def __enter__(self) -> "ExactOperationWriterLock":
         if self._handle is not None:
             raise _fail("exact_operation_writer_lock_invalid")

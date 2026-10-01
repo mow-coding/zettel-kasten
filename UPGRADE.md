@@ -1,5 +1,18 @@
 # Upgrade Guide
 
+## v0.4.59 faster cleanup, and where the time goes
+
+After publication, use the official project update flow. Activity cleanup no longer rewrites the whole archive index per item; its result shows `measurements.work_timing` (where the time went) and its progress counts only the items that still need work. No archive changes on install.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0459-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.59/wom_kit-0.4.59-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
 ## v0.4.58 the two cleanup items that never finished
 
 After publication, use the official project update flow. If an earlier activity-cleanup ended partial, run the same request with `--reconcile --dry-run`: `pending_item_diagnosis` shows where each unfinished item stopped and what the approved reconcile will do; completed items are not reprocessed. No archive changes on install.

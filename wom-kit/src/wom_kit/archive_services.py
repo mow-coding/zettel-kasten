@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import atexit
+from .work_timing import timed as _work_timed
 import json
 import copy
 import base64
@@ -56072,6 +56073,7 @@ def archive_index_manifest_record_is_strict(record: Any) -> bool:
     )
 
 
+@_work_timed("manifest_read_parse")
 def archive_index_strict_manifest_snapshot(root: Path) -> dict[str, Any]:
     """Read and strictly parse one exact manifest generation."""
 
@@ -59088,6 +59090,7 @@ def _current_archive_index_generation_for_mutation(root: Path) -> str:
     return generation
 
 
+@_work_timed("index_projection_seal")
 def seal_archive_index_mutation(
     root: Path,
     conn: sqlite3.Connection,
@@ -59961,6 +59964,70 @@ def prepare_archive_manifest_index_mutation(
     return generation, False, lease_token
 
 
+def _write_manifest_projection_rows(conn: sqlite3.Connection, records: list[dict[str, Any]]) -> None:
+    """Make the objects and manifest projection tables equal the manifest.
+
+    v0.4.59 (letter 180): every child step of a cleanup item rewrites one
+    manifest row, and deleting and re-inserting every row (three times per
+    item) was about a third of each item's time on a large archive. The
+    tables end exactly as a full rewrite leaves them (the last record per
+    object wins), but only rows whose stored values differ are written.
+    """
+    wanted = {
+        projected["record_ordinal"]: (
+            projected["record"]["object_id"],
+            projected["record_sha256"],
+            projected["record_json"],
+        )
+        for projected in records
+    }
+    stored = {
+        row[0]: (row[1], row[2], row[3])
+        for row in conn.execute(
+            "SELECT record_ordinal, object_id, record_sha256, record_json FROM objet_manifest_projection"
+        )
+    }
+    conn.executemany(
+        "DELETE FROM objet_manifest_projection WHERE record_ordinal = ?",
+        [(ordinal,) for ordinal in stored if ordinal not in wanted],
+    )
+    conn.executemany(
+        """
+        INSERT OR REPLACE INTO objet_manifest_projection(
+          record_ordinal, object_id, record_sha256, record_json
+        )
+        VALUES (?, ?, ?, ?)
+        """,
+        [(ordinal, *values) for ordinal, values in wanted.items() if stored.get(ordinal) != values],
+    )
+    objects: dict[Any, tuple[Any, Any, str]] = {}
+    for projected in records:
+        record = projected["record"]
+        objects[record.get("object_id")] = (
+            record.get("logical_key"),
+            record.get("mime"),
+            json.dumps(record, ensure_ascii=False, default=str),
+        )
+    stored_objects = {
+        row[0]: (row[1], row[2], row[3])
+        for row in conn.execute("SELECT object_id, logical_key, mime, manifest_json FROM objects")
+    }
+    conn.executemany(
+        "DELETE FROM objects WHERE object_id = ?",
+        [(object_id,) for object_id in stored_objects if object_id not in objects],
+    )
+    conn.executemany(
+        """
+        INSERT OR REPLACE INTO objects(
+          object_id, logical_key, mime, manifest_json
+        )
+        VALUES (?, ?, ?, ?)
+        """,
+        [(object_id, *values) for object_id, values in objects.items() if stored_objects.get(object_id) != values],
+    )
+
+
+@_work_timed("index_projection_seal")
 def replace_archive_index_manifest_projection(
     archive_root: Path | str,
     *,
@@ -60057,38 +60124,7 @@ def replace_archive_index_manifest_projection(
             )
         ):
             raise sqlite3.IntegrityError(INDEX_REBUILD_REQUIRED)
-        conn.execute("DELETE FROM objects")
-        conn.execute("DELETE FROM objet_manifest_projection")
-        for projected_record in manifest_snapshot["records"]:
-            record = projected_record["record"]
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO objects(
-                  object_id, logical_key, mime, manifest_json
-                )
-                VALUES (?, ?, ?, ?)
-                """,
-                (
-                    record.get("object_id"),
-                    record.get("logical_key"),
-                    record.get("mime"),
-                    json.dumps(record, ensure_ascii=False, default=str),
-                ),
-            )
-            conn.execute(
-                """
-                INSERT INTO objet_manifest_projection(
-                  record_ordinal, object_id, record_sha256, record_json
-                )
-                VALUES (?, ?, ?, ?)
-                """,
-                (
-                    projected_record["record_ordinal"],
-                    record["object_id"],
-                    projected_record["record_sha256"],
-                    projected_record["record_json"],
-                ),
-            )
+        _write_manifest_projection_rows(conn, manifest_snapshot["records"])
         manifest_generation = manifest_snapshot["file_generation"]
         manifest_metadata = {
             "manifest_sha256": manifest_snapshot["file_sha256"],
@@ -102554,6 +102590,7 @@ def zettel_object_ids(frontmatter: dict[str, Any]) -> set[str]:
     return object_ids
 
 
+@_work_timed("manifest_read_parse")
 def load_manifest_records(archive_root: Path) -> list[dict[str, Any]]:
     manifest_path = archive_internal_path(archive_root, "objects/manifests/files.jsonl")
     if not manifest_path.is_file():

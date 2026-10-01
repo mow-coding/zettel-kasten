@@ -28,6 +28,7 @@ import hmac
 import json
 import os
 import re
+from .work_timing import timed as _work_timed
 import stat
 from contextlib import AbstractContextManager
 from datetime import datetime, timezone
@@ -416,6 +417,7 @@ def _with_key_and_boundary(
         raise _fail("exact_approval_claim_key_unavailable") from None
 
 
+@_work_timed("child_approval_claim")
 def list_exact_human_approval_claims(
     archive_root: Path | str,
     *,
