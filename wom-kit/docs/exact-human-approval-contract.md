@@ -174,7 +174,7 @@ delete that evidence. A full authenticated terminal handoff and terminal
 cleanup outcome reconstruction remain a v0.4.16 follow-up.
 
 The current parser-derived inventory is 112 approval-available, 5 fixed-closed,
-and 194 not-exposed paths (v0.4.41 adds the Notion request builder and `notion-page-trash`, opens `onboard`, `init --approve`, `runtime-skill-install`/`-uninstall` and relation accept; v0.4.38 adds two approval-gated writers and two other commands; v0.4.36 added `operator-feedback-archive`; v0.4.33
+and 195 not-exposed paths (v0.4.41 adds the Notion request builder and `notion-page-trash`, opens `onboard`, `init --approve`, `runtime-skill-install`/`-uninstall` and relation accept; v0.4.38 adds two approval-gated writers and two other commands; v0.4.36 added `operator-feedback-archive`; v0.4.33
 reopened `object-storage-upload`). v0.4.21 added `source-intake-chain` (the
 record → selection → capture intake of one staged original under one exact
 approval; each step re-verifies the chain claim before it writes, and the
@@ -332,7 +332,7 @@ the grant. Claims written before v0.4.34 stay immutable and count as
 granting conversation; another conversation continues a task through
 handoff / accept, never by reusing them.
 
-Since v0.4.56 (beta letter 177; the owner's 2026-09-25 decision, modelled on
+Since v0.4.57 (beta letter 177; the owner's 2026-09-25 decision, modelled on
 the Codex and Claude desktop apps) the presenter secret is no longer a
 condition. The desktop apps keep an "allow" decision as a durable record in the
 user's account, keyed to the project or conversation, and a restart or update

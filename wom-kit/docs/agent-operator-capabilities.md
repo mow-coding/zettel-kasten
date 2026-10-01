@@ -1,17 +1,21 @@
 # Agent Operator Capabilities Manifest
 
-Current v0.4.56 candidate: reuse an existing R2 key file, Git backup and offload unblocked (letter 179): old runtimes and finished update records pruned after a delivered update, and system-cleanup for bootstrap environments, temporary files and restore leftovers. [Release scope](releases/v0.4.56.md). Other ongoing requests are not included in this claim.
-Current release candidate: v0.4.56 reuse an existing R2 key file, Git backup and offload unblocked (letter 179); [release scope](releases/v0.4.56.md).
+Current v0.4.57 candidate: archived mail as threads: archived mail readable as thread text records per mailbox account, rebuilt from the mail objets as a derived snapshot. [Release scope](releases/v0.4.57.md). Other ongoing requests are not included in this claim.
+Current release candidate: v0.4.57 archived mail as threads; [release scope](releases/v0.4.57.md).
 
 Status: v0.4.36 no-dialog grants, letter-168, and writer-session coverage gate
 
-v0.4.56 adds one command path: `system-cleanup` (approval-available,
+v0.4.57 adds one command path: `mail-threads` (read-and-derive, no approval)
+rebuilds archived mail as thread text records per mailbox account under
+`db/mail-threads/`; mail objets are not changed.
+
+v0.4.55 adds one command path: `system-cleanup` (approval-available,
 grantable) deletes WOM's own byproducts (old project runtimes beyond the
 previous one, bootstrap environments, finished update results, handoff
 capsules and journals, temporary files, abandoned restore downloads); a
 successful, delivered update prunes the project-internal ones by itself.
 
-v0.4.56 replaces one command path and moves no count: `operator-feedback-delete`
+v0.4.54 replaces one command path and moves no count: `operator-feedback-delete`
 (approval-available, grantable) permanently deletes delivered / acknowledged /
 resolved letters and their body receipts and keeps a one-line `deleted` record;
 it replaces the v0.4.36 move `operator-feedback-archive`, which is removed
@@ -218,17 +222,17 @@ field remain `history_not_audited`. Inventory, shared capability availability,
 and command help consume the same content-free history. Current availability
 continues to be parser-derived; history does not grant execution authority.
 
-For the current v0.4.56 candidate parser, the inventory snapshot is:
+For the current v0.4.57 candidate parser, the inventory snapshot is:
 
 ```text
-canonical executable command paths: 311
+canonical executable command paths: 312
 alias invocation paths:              215
-all invocation paths:                526
+all invocation paths:                527
 approval_available:                   112
 approval_fixed_closed:                5
-approval_not_exposed:                194
+approval_not_exposed:                195
 conditional approval paths:            10
-dry_run_exposed:                     265
+dry_run_exposed:                     266
 unmatched fixed-close entries:         0
 ```
 

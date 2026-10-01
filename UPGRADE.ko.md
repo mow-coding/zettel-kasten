@@ -1,5 +1,18 @@
 # 업그레이드 가이드
 
+## v0.4.57 보관한 메일을 쓰레드로 보기
+
+공개된 뒤 기존 프로젝트는 공식 업데이트 절차를 쓰세요. 보관한 메일을 메일함 계정별 쓰레드로 볼 수 있습니다. `archive mail-threads <archive-root> --build`를 실행하면 `db/mail-threads/` 아래에 쓰레드 글 문서가 생기며, 원본 메일 오브제는 바뀌지 않습니다. 설치만으로 archive는 바뀌지 않습니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0457-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.57/wom_kit-0.4.57-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
 ## v0.4.56 기존 R2 키 파일 재사용·Git 백업과 오브제 비우기 막힘 해소
 
 공개된 뒤 기존 프로젝트는 공식 업데이트 절차를 쓰세요. 예전에 키 파일로 R2를 연결했다면 키를 다시 입력하지 말고 `archive object-storage-credential-store <archive-root> --store-slug <slug> --from-file <그 파일> --access-key-field <이름> --secret-access-key-field <이름> --dry-run`으로 미리 본 뒤 한 번 승인합니다. Git 백업 미리보기를 다시 실행하세요. 그래도 `receipt_inventory_drifted`가 나오면 이제 무엇이 바뀌었는지 함께 나옵니다. 세션 근거 초안 때문에 막혔거나, 파일이 돌아왔는데 이미 비웠다고 나오던 오브제 비우기 미리보기도 다시 실행할 수 있습니다. 설치만으로 archive는 바뀌지 않습니다.

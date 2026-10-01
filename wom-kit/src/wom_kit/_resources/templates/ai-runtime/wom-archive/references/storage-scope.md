@@ -29,6 +29,11 @@
   names the old script used; never open the file yourself). One approval, or
   the session grant, moves both keys into the Credential Manager.
 
+- Archived mail (.eml objets) can be read as threads: run `archive mail-threads
+  <archive-root> --build`; text records per mailbox account land under
+  `db/mail-threads/<generation>/`. They are a rebuildable snapshot, never
+  evidence or a zet; cite the mail objets when a thread becomes a zet.
+
 ## Classify before upload
 
 The helper AI owns classification when the user delegates cleanup. Inspect
