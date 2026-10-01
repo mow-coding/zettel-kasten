@@ -3083,6 +3083,16 @@ class Doctor:
                 )
             ):
                 fast_path_eligible = False
+            attributes = int(token[3])
+            if attributes & 0x00000010 and not attributes & 0x00000400:
+                # v0.4.56: for a child DIRECTORY, NTFS updates the times and
+                # end-of-file copied into the parent's index lazily (measured:
+                # stale in 14 of 20 trials after a change inside the child,
+                # refreshed by any handle open or lstat), so Doctor reported a
+                # false doctor_cache_snapshot_stale. The child directory is
+                # checked on its own through its real identity; here its name,
+                # volume, file id, attributes and reparse tag remain bound.
+                token = (*token[:4], 0, 0, 0, 0, *token[8:])
             signatures.append((name, *token))
         if len(file_ids) != len(set(file_ids)):
             fast_path_eligible = False
