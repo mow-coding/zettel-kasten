@@ -192,6 +192,7 @@ class Letter136LookupFeedbackTests(unittest.TestCase):
             "schema": operator_feedback_body.REQUEST_SCHEMA,
             "feedback_id": feedback_id,
             "title": "Reviewed operator feedback",
+            "author": {"ai_product": "Synthetic test agent", "model": "synthetic-model", "reasoning_level": "high", "source": "confirmed_by_user"},
             "sections": {
                 "environment": "Local WOM archive on Windows.",
                 "task": "Create body evidence before metadata.",

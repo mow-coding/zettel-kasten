@@ -183,16 +183,14 @@ class CiUnittestShardingTests(unittest.TestCase):
             expected_timeout = (
                 "120"
                 if windows and row["shard_index_zero"] == "1"
-                # v0.4.53: the third Windows shard reached 71-75 minutes on
+                # v0.4.54: the third Windows shard reached 71-75 minutes on
                 # shared runners and was cancelled once at 75; it gets 90.
                 else "90"
-                if windows and row["shard_index_zero"] in {"0", "2"}
+                # v0.4.54: the last Windows shard took 58 of 60 minutes and
+                # was cancelled at 60 with no failing test; it gets 90 too.
+                if windows and row["shard_index_zero"] in {"0", "2", "3"}
                 else "75"
                 if row["shard_index_zero"] == "0"
-                # v0.4.22: the last Windows shard ran 40.7 min on the
-                # v0.4.21 candidate and was cut at 45 by runner variance.
-                else "60"
-                if windows and row["shard_index_zero"] == "3"
                 else "45"
             )
             self.assertEqual(

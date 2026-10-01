@@ -1,5 +1,18 @@
 # 업그레이드 가이드
 
+## v0.4.54 전달 끝난 편지 삭제·비공개 Git 원격 읽기·오래된 색인 사본 삭제
+
+공개된 뒤 기존 프로젝트는 공식 업데이트 절차를 쓰세요. 이전 업데이트 결과에 `post_update_attention_required: true`가 있었다면 먼저 프로젝트의 현재 실행기로 `archive project-version-update <archive-root> --resume --affirm-external-writers-quiescent --format json`를 한 번 실행한 뒤 업데이트 미리보기를 다시 하세요(편지 178). 전달이 끝났거나 해결된 피드백 편지의 용량을 비우려면 `archive operator-feedback-delete <root> --dry-run --format json`으로 미리 보고 같은 계획을 `--approve --reviewed-by <person:...> --expected-plan-sha256 <plan_sha256>`로 한 번 승인합니다. 삭제는 되돌릴 수 없고 편지마다 한 줄 기록만 남습니다. 예전 WOM이 `operator-feedback-archive`(이제 삭제됨)로 편지를 옮겨 두었다면 `--moved-folder <그 폴더>`를 붙이세요. `git-backup-plan`은 이제 기본으로 이 PC에 저장된 Git 로그인으로 원격을 읽고, 색인을 만들 때마다 오래된 색인 사본을 지웁니다. 설치만으로 archive는 바뀌지 않습니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0454-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.54/wom_kit-0.4.54-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
 ## v0.4.53 재시작 뒤에도 이어지는 세션 승인·백업·남은 정리
 
 공개된 뒤 기존 프로젝트는 공식 업데이트 절차를 쓰세요. 같은 대화의 전체 허용 승인이 재시작·업데이트 뒤에도 유지되고, 세션 Git 백업과 일반 백업이 다른 활동의 영수증이나 색인 스냅샷 때문에 멈추지 않으며, 원격 저장소 키를 Windows 자격 증명 관리자에 저장해 남은 정리를 끝낼 수 있습니다. 설치만으로 archive는 바뀌지 않습니다.
@@ -283,7 +296,8 @@ dry-run은 이제 approve에 넣는 요청을 그대로 받습니다.
 --destination <아카이브의 부모>/ops-feedback-archive --dry-run --format json` 뒤 같은 명령에
 `--approve --reviewed-by <person:...> --expected-plan-sha256 <plan_sha256>`을 붙입니다. 레코드마다
 내용 없는 `archived` 흔적이 남고, `operator-feedback-body-check`는 그것을 `archived_stub`로
-보고합니다.
+보고합니다. (v0.4.54에서 폐지: 전달 완료 편지는 이제 `operator-feedback-delete`로 삭제하며,
+`--moved-folder`를 주면 이렇게 옮겨 둔 사본도 함께 삭제합니다.)
 
 검토한 project update 한 번 뒤에는 새 process에서 project launcher를 시작해 pin,
 source, launcher, runtime 근거를 확인하세요. 그 client 실행 결과만이 project가

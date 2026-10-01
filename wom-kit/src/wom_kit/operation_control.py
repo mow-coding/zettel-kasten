@@ -2455,20 +2455,30 @@ def _pending_project_update_delivery_records(
     pending: list[tuple[Path, list[dict[str, Any]]]] = []
     expected_root_ref = _root_ref(root)
     for journal_path in _bounded_operation_journal_paths(root):
-        records = _read_journal(journal_path, root)
-        first = records[0]
-        latest = records[-1]
-        if (
-            first["root_ref"] != expected_root_ref
-            or journal_path.name
-            != _operation_hex(str(first["operation_ref"])) + ".jsonl"
-            or (
-                _parse_timestamp(latest["observed_at"])
-                - datetime.now(timezone.utc)
-            ).total_seconds()
-            > MAX_FUTURE_SKEW_SECONDS
-        ):
-            raise OperationControlError("operation_terminal_delivery_invalid")
+        # v0.4.54 (letter 178): one unrelated journal that fails the strict
+        # reader (a torn last line from a killed process, a copied project,
+        # a clock step) no longer aborts delivery of a successful update. It
+        # cannot carry the capability proof a delivery candidate needs, so
+        # skipping it removes no authentication; the candidate checks below
+        # (handoff digest, capability, durability, uniqueness) are unchanged.
+        try:
+            records = _read_journal(journal_path, root)
+            first = records[0]
+            latest = records[-1]
+            unrelated = (
+                first["root_ref"] != expected_root_ref
+                or journal_path.name
+                != _operation_hex(str(first["operation_ref"])) + ".jsonl"
+                or (
+                    _parse_timestamp(latest["observed_at"])
+                    - datetime.now(timezone.utc)
+                ).total_seconds()
+                > MAX_FUTURE_SKEW_SECONDS
+            )
+        except (OperationControlError, KeyError, IndexError, TypeError, ValueError):
+            continue
+        if unrelated:
+            continue
         if first["operation_kind"] != "project_version_update":
             continue
         if (

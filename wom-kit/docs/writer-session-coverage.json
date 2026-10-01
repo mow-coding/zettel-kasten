@@ -747,12 +747,12 @@
         "test_v0436_letter168"
       ]
     },
-    "operator-feedback-archive": {
+    "operator-feedback-delete": {
       "status": "session_integrated",
       "route": "environment",
-      "reason": "v0.4.36 (letters 164 ⑧ / 168 request 8): delivered-feedback archival under the exact approval broker (operator_feedback_archive, grantable; grant resolved from the environment refs)",
+      "reason": "v0.4.54 (owner decision 2026-09-30): delivered-feedback deletion under the exact approval broker (operator_feedback_delete, grantable; grant resolved from the environment refs); replaces the v0.4.36 move operator-feedback-archive",
       "evidence": [
-        "test_v0436_letter168"
+        "test_v0454_feedback_delete"
       ]
     },
     "connection-evidence-import": {

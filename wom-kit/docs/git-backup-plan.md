@@ -257,7 +257,11 @@ as unavailable in v0.4.2 even when a human can access it through another Git
 client. Do not weaken the observer or place a token in the URL to work around
 that boundary.
 
-For the v0.4.3 exact writer, use `--credential-mode stored`. This permits only
+Since v0.4.54 `git-backup-plan` itself defaults to `--credential-mode stored`
+(letter 177: the anonymous default reported every private backup remote as
+not observable); pass `--credential-mode anonymous` for a public repository.
+When the remote cannot be read, the plan's `next_safe_actions` names the next
+step. For the v0.4.3 exact writer, use `--credential-mode stored`. This permits only
 an already configured non-interactive credential helper; WOM does not ask for,
 print, or place a token in the URL. The approved configured HTTPS URL is kept
 private, bound into the manifest source, checked again after approval, used as

@@ -332,7 +332,7 @@ the grant. Claims written before v0.4.34 stay immutable and count as
 granting conversation; another conversation continues a task through
 handoff / accept, never by reusing them.
 
-Since v0.4.53 (beta letter 177; the owner's 2026-09-25 decision, modelled on
+Since v0.4.54 (beta letter 177; the owner's 2026-09-25 decision, modelled on
 the Codex and Claude desktop apps) the presenter secret is no longer a
 condition. The desktop apps keep an "allow" decision as a durable record in the
 user's account, keyed to the project or conversation, and a restart or update

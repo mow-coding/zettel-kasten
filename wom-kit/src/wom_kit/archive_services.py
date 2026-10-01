@@ -1204,6 +1204,8 @@ OPERATOR_FEEDBACK_DELIVERY_RECEIPT_SCHEMA = "wom-kit/operator-feedback-delivery-
 OPERATOR_FEEDBACK_DIR = "ops/feedback"
 OPERATOR_FEEDBACK_RECEIPTS_DIR = "receipts/operator-feedback"
 OPERATOR_FEEDBACK_STATUSES = ("draft", "delivered", "acknowledged", "resolved", "archived")
+# v0.4.54: written only by operator-feedback-delete (never by operator-feedback-record).
+OPERATOR_FEEDBACK_DELETED_STATUS = "deleted"
 OPERATOR_FEEDBACK_RECORD_INTENTS = ("create", "update")
 # Not-yet-delivered lifecycle state: the only status mark-delivered may transition from.
 OPERATOR_FEEDBACK_PENDING_STATUS = "draft"
@@ -6014,6 +6016,8 @@ def operator_feedback_ledger(archive_root: Path | str, *, dry_run: bool = True) 
         blockers.append("operator-feedback-ledger is read-only and requires --dry-run.")
 
     counts = {status: 0 for status in OPERATOR_FEEDBACK_STATUSES}
+    # v0.4.54: operator-feedback-delete leaves a one-line record with status deleted.
+    counts[OPERATOR_FEEDBACK_DELETED_STATUS] = 0
     counts["unknown_status"] = 0
     unreadable = 0
     total = 0
@@ -6057,7 +6061,9 @@ def operator_feedback_ledger(archive_root: Path | str, *, dry_run: bool = True) 
         "user_view": {
             "labels": dict(OPERATOR_FEEDBACK_USER_LABELS),
             "before_delivery_count": counts["draft"],
-            "delivered_count": sum(counts[status] for status in OPERATOR_FEEDBACK_STATUSES if status != "draft"),
+            "delivered_count": sum(counts[status] for status in OPERATOR_FEEDBACK_STATUSES if status != "draft")
+            + counts[OPERATOR_FEEDBACK_DELETED_STATUS],
+            "deleted_count": counts[OPERATOR_FEEDBACK_DELETED_STATUS],
             "developer_acknowledged_count": counts["acknowledged"] + counts["resolved"],
             "next_feedback_id": operator_feedback_body.next_feedback_id(root),
         },
@@ -123082,6 +123088,7 @@ def _wom_kit_project_version_update_live_approval_transaction(
             return _project_update_terminal_cleanup_outcome_unknown_result(
                 operator_resume_identifiers_supplied=False,
                 archive_identity_metadata_read=True,
+                cause_code="fresh_terminal_invalid_prewrite",
             )
         if (
             len(failure.args) == 1
@@ -123092,6 +123099,7 @@ def _wom_kit_project_version_update_live_approval_transaction(
             return _project_update_terminal_cleanup_outcome_unknown_result(
                 operator_resume_identifiers_supplied=False,
                 archive_identity_metadata_read=True,
+                cause_code="terminal_execution_boundary_unknown",
             )
         if (
             len(failure.args) == 1
@@ -123706,17 +123714,91 @@ def _project_update_resume_project_root_read_only(
     )
 
 
+_PROJECT_UPDATE_OUTCOME_UNKNOWN_CAUSES = frozenset({
+    "unclassified",
+    "fresh_terminal_invalid_prewrite",
+    "terminal_execution_boundary_unknown",
+    "terminal_handoff_invalid",
+    "transaction_residue_unresolved",
+    "terminal_handoff_unobserved",
+    "active_transaction_unreadable",
+    "cleanup_tombstone_mismatch",
+    "terminal_handoff_transaction_mismatch",
+    "cleanup_classification_unknown",
+})
+
+
+def _project_update_residue_inventory_read_only(project_root: Path | None) -> dict[str, Any] | None:
+    """v0.4.54 (letter 178): counts of private update leftovers by kind, never names.
+
+    Letter 178's preview stopped with outcome_unknown and nothing said which
+    leftover caused it, so the only way forward was to ask the customer for a
+    directory listing. This counts entries by fixed kind so the content-free
+    result itself says what is there. Read-only; any failure yields None.
+    """
+
+    if project_root is None:
+        return None
+    try:
+        base = Path(project_root) / ".zettel-kasten"
+        terminal = base / "private" / "version-update-terminal"
+        updates = base / "private" / "version-updates"
+        operations = base / "operations"
+
+        def names(folder: Path) -> list[str]:
+            try:
+                return sorted(entry.name for entry in os.scandir(folder))
+            except OSError:
+                return []
+
+        terminal_names = names(terminal)
+        update_names = names(updates)
+        operation_names = names(operations)
+        return {
+            "version_update_lock_present": (base / "version-update.lock").exists(),
+            "terminal_active_handoff_present": "active.json" in terminal_names,
+            "terminal_display_pending_present": "display-pending.json" in terminal_names,
+            "terminal_other_entry_count": sum(
+                1 for name in terminal_names if name not in {"active.json", "display-pending.json", ".handoff.guard"}
+            ),
+            "transaction_entry_count": sum(
+                1 for name in update_names if not name.startswith(".runtime-candidate-cleanup_")
+            ),
+            "runtime_cleanup_sidecar_count": sum(
+                1 for name in update_names if name.startswith(".runtime-candidate-cleanup_")
+            ),
+            "operation_journal_count": sum(
+                1 for name in operation_names if re.fullmatch(r"[0-9a-f]{64}\.jsonl", name)
+            ),
+            "operation_other_entry_count": sum(
+                1 for name in operation_names if not re.fullmatch(r"[0-9a-f]{64}\.jsonl", name)
+            ),
+            "names_echoed": False,
+        }
+    except Exception:  # noqa: BLE001 - diagnostics never change the outcome
+        return None
+
+
 def _project_update_terminal_cleanup_outcome_unknown_result(
     *,
     operator_resume_identifiers_supplied: bool,
     archive_identity_metadata_read: bool,
+    cause_code: str = "unclassified",
+    project_root: Path | None = None,
 ) -> dict[str, Any]:
-    """Report only that cleanup residue was seen or could not be ruled out."""
+    """Report only that cleanup residue was seen or could not be ruled out.
+
+    v0.4.54 (letter 178): the result names the branch (``cause_code``) and a
+    names-free inventory of leftovers, and says to run the identifier-free
+    resume once with the project's current launcher before reporting.
+    """
 
     if type(archive_identity_metadata_read) is not bool:
         raise ArchiveServiceError(
             "project_version_update_resume_locator_changed"
         )
+    if cause_code not in _PROJECT_UPDATE_OUTCOME_UNKNOWN_CAUSES:
+        cause_code = "unclassified"
 
     return {
         "ok": False,
@@ -123759,9 +123841,14 @@ def _project_update_terminal_cleanup_outcome_unknown_result(
         "client_archive_domain_content_accessed": False,
         "project_domain_files_written": [],
         "files_written": [],
+        "cause_code": cause_code,
+        "residue_inventory": _project_update_residue_inventory_read_only(project_root),
         "next_safe_actions": [
             "Stop without deleting private update metadata, changing the project pin, or retrying approval.",
-            "Send the content-free result to the WOM maintainer for forensic review."
+            "If the previous update's result showed post_update_attention_required: true, run once with the "
+            "project's CURRENT launcher (not the new version): " + '"' + "archive project-version-update <archive-root> --resume --affirm-external-writers-quiescent --format json" + '"' + "; then rerun this preview.",
+            "If it still stops here, send the content-free result (cause_code and residue_inventory included) "
+            "to the WOM maintainer for forensic review."
         ],
     }
 
@@ -123870,6 +123957,35 @@ def _project_update_terminal_cleanup_required_result(
             "After WOM finishes the verified control-history recovery, run a fresh project-version-update preview."
         ],
     }
+
+
+def _project_update_display_pending_present_read_only(project_root: Path) -> bool:
+    """v0.4.54 (letter 178): True when a result delivery was started but never finalised."""
+
+    try:
+        return (
+            Path(project_root) / ".zettel-kasten" / "private" / "version-update-terminal" / "display-pending.json"
+        ).is_file()
+    except OSError:
+        return False
+
+
+def _project_update_terminal_delivery_pending_result() -> dict[str, Any]:
+    """v0.4.54 (letter 178): the previous update's result delivery is unfinished; name it and the command."""
+
+    result = _project_update_terminal_handoff_recovery_required_result()
+    result.update(
+        {
+            "outcome_basis": "previous_update_result_delivery_pending",
+            "terminal_delivery_pending": True,
+            "next_safe_actions": [
+                "The previous update succeeded but its result delivery was not finished. Pause other writers for "
+                "this project and run once with the project's CURRENT launcher: archive project-version-update <archive-root> --resume --affirm-external-writers-quiescent --format json",
+                "Then rerun this project-version-update preview.",
+            ],
+        }
+    )
+    return result
 
 
 def _project_update_terminal_handoff_recovery_required_result() -> dict[str, Any]:
@@ -124563,6 +124679,8 @@ def _project_update_fresh_update_cleanup_preflight_read_only(
             return _project_update_terminal_cleanup_outcome_unknown_result(
                 operator_resume_identifiers_supplied=False,
                 archive_identity_metadata_read=False,
+                cause_code="terminal_handoff_invalid",
+                project_root=project_root,
             )
         raise
     if len(handoff_observation) != 1:
@@ -124578,6 +124696,8 @@ def _project_update_fresh_update_cleanup_preflight_read_only(
         return _project_update_terminal_cleanup_outcome_unknown_result(
             operator_resume_identifiers_supplied=False,
             archive_identity_metadata_read=False,
+            cause_code="transaction_residue_unresolved",
+            project_root=project_root,
         )
     if handoff_state is not None:
         observation = handoff_observation[0]
@@ -124585,6 +124705,8 @@ def _project_update_fresh_update_cleanup_preflight_read_only(
             return _project_update_terminal_cleanup_outcome_unknown_result(
                 operator_resume_identifiers_supplied=False,
                 archive_identity_metadata_read=False,
+                cause_code="terminal_handoff_unobserved",
+                project_root=project_root,
             )
         try:
             active_ref = (
@@ -124598,6 +124720,8 @@ def _project_update_fresh_update_cleanup_preflight_read_only(
                 return _project_update_terminal_cleanup_outcome_unknown_result(
                     operator_resume_identifiers_supplied=False,
                     archive_identity_metadata_read=False,
+                    cause_code="active_transaction_unreadable",
+                    project_root=project_root,
                 )
         active_handoff_ref_matches = bool(
             active_ref is not None
@@ -124629,6 +124753,8 @@ def _project_update_fresh_update_cleanup_preflight_read_only(
                 return _project_update_terminal_cleanup_outcome_unknown_result(
                     operator_resume_identifiers_supplied=False,
                     archive_identity_metadata_read=False,
+                    cause_code="cleanup_tombstone_mismatch",
+                    project_root=project_root,
                 )
             tombstone_handoff_ref_matches = True
         handoff_ref_matches = bool(
@@ -124649,9 +124775,13 @@ def _project_update_fresh_update_cleanup_preflight_read_only(
             return _project_update_terminal_cleanup_outcome_unknown_result(
                 operator_resume_identifiers_supplied=False,
                 archive_identity_metadata_read=False,
+                cause_code="terminal_handoff_transaction_mismatch",
+                project_root=project_root,
             )
         return _project_update_terminal_handoff_recovery_required_result()
     if classification in {"absent", "history_only_exact"}:
+        if _project_update_display_pending_present_read_only(project_root):
+            return _project_update_terminal_delivery_pending_result()
         return None
     if classification == "terminal_original_exact":
         return _project_update_terminal_transaction_cleanup_required_result(
@@ -124670,6 +124800,8 @@ def _project_update_fresh_update_cleanup_preflight_read_only(
     return _project_update_terminal_cleanup_outcome_unknown_result(
         operator_resume_identifiers_supplied=False,
         archive_identity_metadata_read=False,
+        cause_code="cleanup_classification_unknown",
+        project_root=project_root,
     )
 
 
@@ -130406,9 +130538,9 @@ _PROJECT_UPDATE_TERMINAL_CLEANUP_ACTION = (
     "rerun the approved update writer."
 )
 _PROJECT_UPDATE_TERMINAL_DELIVERY_ACTION = (
-    "Run project-version-update --resume without private identifiers; WOM "
-    "will reuse the exact bound output when present or create a "
-    "project-scoped output when needed."
+    "Before any other update, run once: archive project-version-update <archive-root> --resume --affirm-external-writers-quiescent --format json "
+    "(no private identifiers); WOM will reuse the exact bound output when "
+    "present or create a project-scoped output when needed."
 )
 
 
@@ -133048,7 +133180,11 @@ def _project_update_terminal_result_from_domain(
         if isinstance(warnings, list) and warning not in warnings:
             projected["warnings"] = [*warnings, warning]
         next_actions = projected.get("next_safe_actions")
-        if isinstance(next_actions, list) and action not in next_actions:
+        # v0.4.54 (letter 178): a successful result had no next_safe_actions
+        # list, so the follow-up was never shown to the operator.
+        if next_actions is None:
+            projected["next_safe_actions"] = [action]
+        elif isinstance(next_actions, list) and action not in next_actions:
             projected["next_safe_actions"] = [action, *next_actions]
     return projected
 
@@ -154523,6 +154659,74 @@ def ensure_derived_directory_ignored(directory: Path) -> Path:
     except OSError:
         pass
     return Path(directory)
+
+
+DERIVED_GENERATION_KEEP_NEWEST = 2
+DERIVED_GENERATION_MIN_AGE_SECONDS = 3600
+DERIVED_PARTIAL_MIN_AGE_SECONDS = 86400
+_DERIVED_GENERATION_NAME_RE = re.compile(r"^[0-9a-f]{64}\.(?:sqlite|json)$")
+_DERIVED_PARTIAL_NAME_RE = re.compile(r"^(?:[0-9a-f]{32}\.(?:building|pending|pointer)|\.[0-9a-f]{64}\.(?:sqlite|json)\.[0-9a-f]{16}\.tmp)$")
+
+
+def prune_derived_generations(
+    directory: Path,
+    *,
+    keep_digest: str | None,
+    keep_newest: int = DERIVED_GENERATION_KEEP_NEWEST,
+    min_age_seconds: float = DERIVED_GENERATION_MIN_AGE_SECONDS,
+    now: float | None = None,
+) -> int:
+    """v0.4.54: delete old generations of a rebuildable snapshot folder.
+
+    Every index run published a new content-addressed generation (a search
+    generation is a full copy of the index) and nothing ever removed the old
+    ones, so the folder grew on the operator's disk without bound. The current
+    generation, the ``keep_newest`` most recent ones and anything younger than
+    ``min_age_seconds`` (a search cursor or a reviewed plan may still read it)
+    stay; older generations and abandoned partial files are deleted. Only
+    WOM-named regular files are touched; a file that cannot be removed (for
+    example one a reader still has open on Windows) is left for the next run.
+    Returns the number of files deleted.
+    """
+
+    folder = Path(directory)
+    current = time.time() if now is None else now
+    generations: list[tuple[float, Path]] = []
+    removed = 0
+    try:
+        entries = list(os.scandir(folder))
+    except OSError:
+        return 0
+    for entry in entries:
+        name = entry.name
+        try:
+            info = entry.stat(follow_symlinks=False)
+        except OSError:
+            continue
+        if not stat.S_ISREG(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
+            continue
+        if _DERIVED_GENERATION_NAME_RE.fullmatch(name):
+            if keep_digest is not None and name.split(".", 1)[0] == keep_digest:
+                continue
+            generations.append((info.st_mtime, Path(entry.path)))
+        elif _DERIVED_PARTIAL_NAME_RE.fullmatch(name) and current - info.st_mtime > DERIVED_PARTIAL_MIN_AGE_SECONDS:
+            try:
+                os.unlink(entry.path)
+                removed += 1
+            except OSError:
+                pass
+    generations.sort(key=lambda item: item[0], reverse=True)
+    kept = 1 if keep_digest is not None else 0
+    for mtime, path in generations:
+        if kept < keep_newest or current - mtime <= min_age_seconds:
+            kept += 1
+            continue
+        try:
+            os.unlink(path)
+            removed += 1
+        except OSError:
+            pass
+    return removed
 
 
 def _publish_derived_generation_file(path: Path, value: bytes) -> None:

@@ -1,9 +1,15 @@
 # Agent Operator Capabilities Manifest
 
-Current v0.4.53 candidate: session grants that survive restarts like the desktop apps, a session Git backup that ignores other activities' receipts, index snapshots kept out of Git, and object-storage keys in the Windows Credential Manager with a reconcile rebind for remaining cleanup. [Release scope](releases/v0.4.53.md). Other ongoing requests are not included in this claim.
-Current release candidate: v0.4.53 session grants, backups and remaining cleanup after restarts (letter 177); [release scope](releases/v0.4.53.md).
+Current v0.4.54 candidate: delivered feedback letters deleted instead of moved, a general Git backup preview that reads private remotes with the saved Git login, and old index snapshot copies deleted after each run. [Release scope](releases/v0.4.54.md). Other ongoing requests are not included in this claim.
+Current release candidate: v0.4.54 delivered letters deleted, private Git remotes read, old index copies removed; [release scope](releases/v0.4.54.md).
 
 Status: v0.4.36 no-dialog grants, letter-168, and writer-session coverage gate
+
+v0.4.54 replaces one command path and moves no count: `operator-feedback-delete`
+(approval-available, grantable) permanently deletes delivered / acknowledged /
+resolved letters and their body receipts and keeps a one-line `deleted` record;
+it replaces the v0.4.36 move `operator-feedback-archive`, which is removed
+(owner decision 2026-09-30).
 
 v0.4.36 adds one command path: `operator-feedback-archive` (approval-available,
 grantable) moves delivered / acknowledged / resolved feedback letters and
@@ -206,7 +212,7 @@ field remain `history_not_audited`. Inventory, shared capability availability,
 and command help consume the same content-free history. Current availability
 continues to be parser-derived; history does not grant execution authority.
 
-For the current v0.4.53 candidate parser, the inventory snapshot is:
+For the current v0.4.54 candidate parser, the inventory snapshot is:
 
 ```text
 canonical executable command paths: 310

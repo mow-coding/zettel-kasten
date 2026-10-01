@@ -1,5 +1,18 @@
 # Upgrade Guide
 
+## v0.4.54 delivered letters deleted, private Git remotes read, old index copies removed
+
+After publication, use the official project update flow. If the previous update's result showed `post_update_attention_required: true`, first run `archive project-version-update <archive-root> --resume --affirm-external-writers-quiescent --format json` once with the project's current launcher, then preview the update again (letter 178). To free the space of delivered or resolved feedback letters, preview `archive operator-feedback-delete <root> --dry-run --format json` and approve the same plan once with `--approve --reviewed-by <person:...> --expected-plan-sha256 <plan_sha256>`; deletion is permanent and only a one-line record per letter stays. If an older WOM moved letters out with `operator-feedback-archive` (now removed), add `--moved-folder <that folder>`. `git-backup-plan` now reads the remote with the saved Git login by default, and old index snapshot copies are deleted after each index run. No archive changes on install.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0454-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.54/wom_kit-0.4.54-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
 ## v0.4.53 session grants, backups and remaining cleanup after restarts
 
 After publication, use the official project update flow. A full-access grant keeps working in the same conversation after a restart or update, the session Git backup and the general backup no longer stop on other activities' receipts or index snapshots, and object-storage keys can be stored in the Windows Credential Manager to finish remaining cleanup. No archive changes on install.
@@ -310,7 +323,9 @@ To move delivered letters out of the archive:
 archive>/ops-feedback-archive --dry-run --format json`, then the same with
 `--approve --reviewed-by <person:...> --expected-plan-sha256 <plan_sha256>`.
 Each record keeps a content-free `archived` stub; `operator-feedback-body-check`
-reports it as `archived_stub`.
+reports it as `archived_stub`. (Retired in v0.4.54: delivered letters are now
+deleted with `operator-feedback-delete`, which also deletes these moved copies
+when given `--moved-folder`.)
 
 After one reviewed project update, start the project launcher in a new process
 and verify its pin, source, launcher, and runtime evidence. Only that client-run

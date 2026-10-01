@@ -181,7 +181,10 @@ def publish(archive_root, *, rules=None, source_snapshot=None, index_diagnostics
         finally:
             if partial.exists():
                 partial.unlink()
-    return {"ok": True, "snapshot_ref": digest, "counts": document["counts"], "zet_bytes_modified": False}
+        # v0.4.54: old generations no longer pile up on the disk.
+        pruned = services.prune_derived_generations(folder, keep_digest=digest)
+    return {"ok": True, "snapshot_ref": digest, "counts": document["counts"], "zet_bytes_modified": False,
+            "pruned_generations": pruned}
 
 
 def _read(archive_root, snapshot_ref=None):
