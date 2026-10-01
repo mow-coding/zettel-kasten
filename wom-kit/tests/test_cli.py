@@ -5994,11 +5994,24 @@ class ArchiveCliTests(unittest.TestCase):
                 )
                 for _ in range(2)
             ]
-            completed = [
-                (process.returncode, stdout, stderr)
-                for process in processes
-                for stdout, stderr in [process.communicate(timeout=30)]
-            ]
+            # v0.4.60: CI runs without a bytecode cache, so each child compiles
+            # the CLI from source (about 25 s on a hosted Windows runner with
+            # two concurrent starts); the lock path itself takes about 1 s.
+            # The budget matches the other subprocess tests in this file, and
+            # a timed-out child is killed so cleanup does not fail on its open
+            # temporary file.
+            try:
+                completed = [
+                    (process.returncode, stdout, stderr)
+                    for process in processes
+                    for stdout, stderr in [process.communicate(timeout=180)]
+                ]
+            except subprocess.TimeoutExpired:
+                for process in processes:
+                    if process.poll() is None:
+                        process.kill()
+                        process.communicate()
+                raise
             codes = sorted(code for code, _stdout, _stderr in completed)
             self.assertEqual(codes, [0, 1], completed)
             record_path = (
