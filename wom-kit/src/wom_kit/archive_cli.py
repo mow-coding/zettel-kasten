@@ -12074,6 +12074,21 @@ def _command_project_version_update_core(
         )
         if pruned.get("deleted_count") or pruned.get("skipped_count"):
             display_result["system_cleanup"] = pruned
+        # v0.4.56 (letter 179): Git ignore rules added by a newer WOM reach an
+        # existing archive only through repair-gitignore; name it right away.
+        try:
+            archive_candidate = Path(inspection_root)
+            if (archive_candidate / "archive.yml").is_file():
+                missing_patterns = gitignore_missing_patterns(archive_candidate / ".gitignore")
+                if missing_patterns:
+                    display_result["gitignore_missing_pattern_count"] = len(missing_patterns)
+                    actions = display_result.get("next_safe_actions")
+                    advice = ("This archive's .gitignore lacks rules the new WOM recommends (index snapshots, lock "
+                              "files); run archive repair-gitignore <archive-root> --dry-run and approve that plan "
+                              "before the next Git backup.")
+                    display_result["next_safe_actions"] = [*(actions if isinstance(actions, list) else []), advice]
+        except (OSError, UnicodeError):
+            pass
 
     terminal_output_observed = True
     if args.format == "json":

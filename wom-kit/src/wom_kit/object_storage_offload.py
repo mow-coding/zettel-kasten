@@ -259,6 +259,17 @@ def _draft_retention_evidence(root: Path) -> RetentionEvidence:
                     raise ValueError("large")
                 receipt = preservation._strict_json(raw)
                 source = receipt["source_fidelity"]["source"]
+                # v0.4.56 (beta letter 179): a reviewed_session_evidence
+                # source keeps its bytes under profiles/local/source-fidelity,
+                # never under objects/sha256, and by contract has no object_id.
+                # Validate it against its own contract (which refuses any
+                # extra key, so an object_id cannot hide here) instead of
+                # counting a valid receipt as unreadable and blocking every
+                # offload and remote cleanup.
+                if isinstance(source, dict) and source.get("authority_kind") == "reviewed_session_evidence":
+                    if not archive_services._source_fidelity_private_receipt_shape_valid(receipt):
+                        raise ValueError("session evidence receipt")
+                    continue
                 object_id = str(source["object_id"]).lower()
                 if not _SHA256_RE.fullmatch(object_id):
                     raise ValueError("object id")
@@ -607,6 +618,7 @@ def _build_plan(
         "remote_evidence_missing_count": 0,
         "bytes_preserved_receipt_only_count": 0,
         "already_offloaded_count": 0,
+        "offloaded_bytes_reappeared_count": 0,
         "local_identity_unavailable_count": 0,
         "local_bytes_absent_count": 0,
         "local_bytes_conflict_count": 0,
@@ -677,9 +689,25 @@ def _build_plan(
             state = restore._local_location_state(row, logical_key)
             if state == "available" or (state == "offloaded" and local_state == "absent"):
                 local_state = state
+        reappeared_destination: str | None = None
         if local_state == "offloaded":
-            counts["already_offloaded_count"] += 1
-            continue
+            # v0.4.56 (beta letter 179): the manifest alone said "offloaded";
+            # a capture that re-materialised the same bytes put the file back
+            # without touching the row, so the space could never be freed
+            # again. Look at the file: absent stays already-offloaded, verified
+            # bytes are offloaded again under every check below, anything
+            # else is a conflict.
+            try:
+                reappeared_destination = restore._destination_state(root, object_id, size_bytes, heartbeat=heartbeat)
+            except restore.ObjectStorageRestoreError:
+                reappeared_destination = "conflict"
+            if reappeared_destination == "absent":
+                counts["already_offloaded_count"] += 1
+                continue
+            if reappeared_destination == "conflict":
+                counts["local_bytes_conflict_count"] += 1
+                continue
+            counts["offloaded_bytes_reappeared_count"] += 1
         sources = set()
         for row in group:
             provenance = row.get("provenance") if isinstance(row.get("provenance"), dict) else {}
@@ -690,14 +718,17 @@ def _build_plan(
         if archive_services.objet_capture_path_chain_blockers(root, logical_key):
             counts["path_chain_unsafe_count"] += 1
             continue
-        try:
-            destination = restore._destination_state(root, object_id, size_bytes, heartbeat=heartbeat)
-        except restore.ObjectStorageRestoreError:
-            destination = "conflict"
+        if reappeared_destination is not None:
+            destination = reappeared_destination
+        else:
+            try:
+                destination = restore._destination_state(root, object_id, size_bytes, heartbeat=heartbeat)
+            except restore.ObjectStorageRestoreError:
+                destination = "conflict"
         if destination == "absent":
             counts["local_bytes_absent_count"] += 1
             continue
-        if destination == "conflict" or local_state != "available":
+        if destination == "conflict" or local_state not in ("available", "offloaded"):
             counts["local_bytes_conflict_count"] += 1
             continue
         if _file_identity(archive_services.archive_internal_path(root, logical_key)) is None:
