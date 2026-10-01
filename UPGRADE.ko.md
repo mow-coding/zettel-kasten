@@ -1,5 +1,18 @@
 # 업그레이드 가이드
 
+## v0.4.59 더 빠른 정리와 시간 내역
+
+공개된 뒤 기존 프로젝트는 공식 업데이트 절차를 쓰세요. activity-cleanup이 항목마다 아카이브 색인 전체를 다시 쓰지 않습니다. 결과의 `measurements.work_timing`이 시간이 어디에 쓰였는지 보여 주고, 진행 표시는 아직 남은 항목만 셉니다. 설치만으로 archive는 바뀌지 않습니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0459-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.59/wom_kit-0.4.59-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
 ## v0.4.58 끝나지 않던 정리 항목 두 개
 
 공개된 뒤 기존 프로젝트는 공식 업데이트 절차를 쓰세요. 이전 activity-cleanup이 partial로 끝났다면 같은 요청으로 `--reconcile --dry-run`을 실행하세요. `pending_item_diagnosis`가 남은 항목마다 어디서 멈췄는지와 승인 후 무엇을 할지 보여 줍니다. 이미 끝난 항목은 다시 처리하지 않습니다. 설치만으로 archive는 바뀌지 않습니다.

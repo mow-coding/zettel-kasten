@@ -15,13 +15,13 @@ RELEASE = KIT / "docs" / "releases" / "v0.4.15.md"
 LOCK = KIT / "project-runtime-supply-lock-v0.4.15.json"
 LOCK_SHA256 = "8cc4597742bab8bb4f7c1f4e4c28d90d0b8cddd1293247e680c615531d31953d"
 CURRENT_LOCK_SHA256 = (
-    "f714ada3023b1bdf27d1598c3d2fc3dafd757fd8f0979f4da65ac3b34be1bce4"
+    "5459e9e9723ec5b67b185328b1c8c6b63600aee87dc14868952c19c8d04bb26e"
 )
 
 
 class V0415ReleaseDocsTests(unittest.TestCase):
     def test_v0415_is_preserved_as_source_history(self) -> None:
-        self.assertEqual(__version__, "0.4.58")
+        self.assertEqual(__version__, "0.4.59")
         self.assertTrue(RELEASE.is_file())
         self.assertFalse(
             (RESOURCE_ROOT / "release-notes" / "v0.4.15.md").exists()
@@ -32,16 +32,16 @@ class V0415ReleaseDocsTests(unittest.TestCase):
         ):
             with self.subTest(path=path):
                 self.assertIn(
-                    '__version__ = "0.4.58"',
+                    '__version__ = "0.4.59"',
                     path.read_text(encoding="utf-8"),
                 )
         self.assertIn(
-            'version = "0.4.58"',
+            'version = "0.4.59"',
             (KIT / "pyproject.toml").read_text(encoding="utf-8"),
         )
         versioning = (ROOT / "VERSIONING.md").read_text(encoding="utf-8")
-        self.assertIn("Current public baseline:\n\n```text\nv0.4.58", versioning)
-        self.assertIn("Previous public baseline:\n\n```text\nv0.4.57", versioning)
+        self.assertIn("Current public baseline:\n\n```text\nv0.4.59", versioning)
+        self.assertIn("Previous public baseline:\n\n```text\nv0.4.58", versioning)
 
     def test_v0415_supply_lock_is_historical_and_policy_is_v0419(self) -> None:
         current = LOCK.read_bytes()
@@ -60,7 +60,7 @@ class V0415ReleaseDocsTests(unittest.TestCase):
         )
         self.assertEqual(
             policy["supply_lock"],
-            "wom-kit/project-runtime-supply-lock-v0.4.58.json",
+            "wom-kit/project-runtime-supply-lock-v0.4.59.json",
         )
         self.assertEqual(
             policy["supply_lock_sha256"],
@@ -85,13 +85,13 @@ class V0415ReleaseDocsTests(unittest.TestCase):
         release_names = sorted(
             path.name for path in (RESOURCE_ROOT / "release-notes").glob("v*.md")
         )
-        self.assertEqual(release_names, ["v0.4.58.md"])
+        self.assertEqual(release_names, ["v0.4.59.md"])
         manifest = json.loads(
             (RESOURCE_ROOT / "resource-manifest.json").read_text(encoding="utf-8")
         )
-        self.assertEqual(manifest["version"], "0.4.58")
+        self.assertEqual(manifest["version"], "0.4.59")
         packaged_paths = {row["packaged"] for row in manifest["files"]}
-        self.assertIn("release-notes/v0.4.58.md", packaged_paths)
+        self.assertIn("release-notes/v0.4.59.md", packaged_paths)
         self.assertNotIn("release-notes/v0.4.15.md", packaged_paths)
 
     def test_public_v0415_history_has_no_client_evidence(self) -> None:
