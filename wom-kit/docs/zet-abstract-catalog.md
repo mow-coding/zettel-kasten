@@ -45,7 +45,7 @@ The one-zet `read-zettel --section overview` compatibility surface may still
 derive a gist from the first safe body paragraph. The archive-wide catalog does
 not use that fallback because its contract is frontmatter-only enumeration.
 
-Since v0.4.54 each `read-zettel` overview `edges_preview` item names its target
+Since v0.4.55 each `read-zettel` overview `edges_preview` item names its target
 for a human: a zet target carries `target_title` read from the archive index
 (never from the target file) with `target_label_state: title_from_index`;
 otherwise the state says exactly why no title is shown (`target_not_indexed`,

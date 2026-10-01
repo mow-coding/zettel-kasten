@@ -61,7 +61,7 @@ class CoreRulesCardTests(unittest.TestCase):
             "empty `blockers`",
             "in the foreground",
             "person:<id>",
-            "session until released",  # v0.4.54: letter 177
+            "session until released",  # v0.4.55: letter 177
             "Touch only this conversation's work",
             "Never hand-edit drafts",
             "full objet SHA-256",

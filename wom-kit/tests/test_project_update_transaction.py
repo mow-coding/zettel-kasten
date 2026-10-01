@@ -10268,7 +10268,7 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
                             "client_archive_domain_content_accessed": False,
                             "project_domain_files_written": [],
                             "files_written": [],
-                            # v0.4.54 (letter 178): the unknown result names its branch.
+                            # v0.4.55 (letter 178): the unknown result names its branch.
                             "cause_code": "unclassified",
                             "residue_inventory": None,
                             "next_safe_actions": archive_services._project_update_terminal_cleanup_outcome_unknown_result(
