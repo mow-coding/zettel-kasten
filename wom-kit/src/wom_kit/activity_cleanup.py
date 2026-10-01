@@ -751,7 +751,32 @@ def status(candidate):
         counts[row["state"]] += 1
         results.append(row)
     complete = counts["completed"] == len(material["items"])
+    total = len(material["items"])
+    freed = sum(int((item.get("state") or {}).get("size") or 0)
+                for item, row in zip(material["items"], results) if row["state"] == "completed")
+    remaining_bytes = sum(int((item.get("state") or {}).get("size") or 0)
+                          for item, row in zip(material["items"], results) if row["state"] != "completed")
+    # v0.4.56 (beta letter 179): say separately how far each part of the
+    # person's task got; a successful install or synthetic test is not this.
+    boundaries = {
+        "remote_verification": {
+            "state": "past_receipts_only",
+            "items_with_preservation_receipt": counts["preserved_receipt"], "items_total": total,
+            "remote_bytes_verified_now": False,
+        },
+        "original_cleanup": {
+            "state": "complete" if complete else "partial",
+            "completed": counts["completed"], "remaining": total - counts["completed"],
+            "held": counts["held"], "missing_without_evidence": counts["missing_without_evidence"],
+        },
+        "local_space": {"bytes_freed_by_completed_items": freed, "bytes_still_local_in_remaining_items": remaining_bytes},
+        "git_backup": {"state": "not_covered_by_this_command",
+                       "next_action": "archive git-backup-plan <archive-root> --dry-run"},
+        "closure": {"state": "selected_files_completed" if complete else "open"},
+        "cost": {"state": "not_measured_by_this_command"},
+    }
     return {"schema": "wom-kit/activity-cleanup-status/v1", "ok": True, "dry_run": True,
+            "completion_boundaries": boundaries,
             "state": "selected_files_completed" if complete else "partial",
             "plan_sha256": digest(material), "approval_evidence_matches": approval_matches,
             "counts": counts, "items": results, "remaining": remaining_inventory(material),

@@ -143,7 +143,7 @@ metadata record. The old body is not modified. `delivered` remains an internal
 lifecycle fact; `external_submission_performed: false` is independent and does
 not make a delivered body mutable.
 
-Since v0.4.55 (beta letter 178) the request carries a required `author`
+Since v0.4.56 (beta letter 178) the request carries a required `author`
 block: `ai_product`, `model`, `reasoning_level` and `source`
 (`confirmed_by_user`, `read_from_runtime` or `user_could_not_tell`). WOM
 writes it as the first line of the environment section. A placeholder such as

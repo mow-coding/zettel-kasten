@@ -1,7 +1,7 @@
 # Runtime Canonical Entry Points
 
-Current v0.4.55 candidate: WOM's own byproducts deleted: old runtimes and finished update records pruned after a delivered update, and system-cleanup for bootstrap environments, temporary files and restore leftovers. [Release scope](releases/v0.4.55.md). Other ongoing requests are not included in this claim.
-Status: v0.4.55 candidate: WOM's own byproducts deleted; [release scope](releases/v0.4.55.md).
+Current v0.4.56 candidate: reuse an existing R2 key file, Git backup and offload unblocked (letter 179): old runtimes and finished update records pruned after a delivered update, and system-cleanup for bootstrap environments, temporary files and restore leftovers. [Release scope](releases/v0.4.56.md). Other ongoing requests are not included in this claim.
+Status: v0.4.56 candidate: reuse an existing R2 key file, Git backup and offload unblocked (letter 179); [release scope](releases/v0.4.56.md).
 
 Status: v0.4.36 no-dialog grants, letter-168, and session-owned writes truth
 
@@ -384,17 +384,17 @@ environment:
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0455-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0456-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.55/wom_kit-0.4.55-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.56/wom_kit-0.4.56-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-Require exactly `archive 0.4.55` from a new process. This does not update the
+Require exactly `archive 0.4.56` from a new process. This does not update the
 project-local WOM-kit source mirror or change a project pin. Those effects
 require the separate reviewed `project-version-update` plan and native
 approval, or its authenticated same-context resume after interruption.

@@ -23,6 +23,11 @@
   `--rebind-access-key-id-ref` and `--rebind-secret-access-key-ref`, then the
   matching `--approve`. Completed items are not reprocessed; never put a key in
   chat, a file, or a command line.
+- If the human already connected the store through a key file (an earlier
+  script read it), do not ask them to type the keys again: add `--from-file
+  <that file> --access-key-field <name> --secret-access-key-field <name>` (the
+  names the old script used; never open the file yourself). One approval, or
+  the session grant, moves both keys into the Credential Manager.
 
 ## Classify before upload
 

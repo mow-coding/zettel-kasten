@@ -3083,6 +3083,16 @@ class Doctor:
                 )
             ):
                 fast_path_eligible = False
+            attributes = int(token[3])
+            if attributes & 0x00000010 and not attributes & 0x00000400:
+                # v0.4.56: for a child DIRECTORY, NTFS updates the times and
+                # end-of-file copied into the parent's index lazily (measured:
+                # stale in 14 of 20 trials after a change inside the child,
+                # refreshed by any handle open or lstat), so Doctor reported a
+                # false doctor_cache_snapshot_stale. The child directory is
+                # checked on its own through its real identity; here its name,
+                # volume, file id, attributes and reparse tag remain bound.
+                token = (*token[:4], 0, 0, 0, 0, *token[8:])
             signatures.append((name, *token))
         if len(file_ids) != len(set(file_ids)):
             fast_path_eligible = False
@@ -12074,6 +12084,21 @@ def _command_project_version_update_core(
         )
         if pruned.get("deleted_count") or pruned.get("skipped_count"):
             display_result["system_cleanup"] = pruned
+        # v0.4.56 (letter 179): Git ignore rules added by a newer WOM reach an
+        # existing archive only through repair-gitignore; name it right away.
+        try:
+            archive_candidate = Path(inspection_root)
+            if (archive_candidate / "archive.yml").is_file():
+                missing_patterns = gitignore_missing_patterns(archive_candidate / ".gitignore")
+                if missing_patterns:
+                    display_result["gitignore_missing_pattern_count"] = len(missing_patterns)
+                    actions = display_result.get("next_safe_actions")
+                    advice = ("This archive's .gitignore lacks rules the new WOM recommends (index snapshots, lock "
+                              "files); run archive repair-gitignore <archive-root> --dry-run and approve that plan "
+                              "before the next Git backup.")
+                    display_result["next_safe_actions"] = [*(actions if isinstance(actions, list) else []), advice]
+        except (OSError, UnicodeError):
+            pass
 
     terminal_output_observed = True
     if args.format == "json":
@@ -24006,6 +24031,8 @@ def command_object_storage_credential_store(args: argparse.Namespace) -> int:
     from . import object_storage_credential_store as store
 
     root = Path(args.archive_root)
+    if getattr(args, "from_file", None):
+        return _object_storage_credential_import(args, store, root)
     try:
         archive_id = archive_services.read_archive_id(archive_services.require_existing_archive_root(root))
         preview = store.plan(archive_id=archive_id, slug=args.store_slug, replace_existing=args.replace_existing)
@@ -24037,6 +24064,84 @@ def command_object_storage_credential_store(args: argparse.Namespace) -> int:
         print_json({"schema": store.SCHEMA, "ok": False, "reason_code": "object_storage_credential_worker_failed",
                     "key_values_echoed": False, "effects_state": "none"})
         return 1
+
+
+def _object_storage_credential_import(args: argparse.Namespace, store: Any, root: Path) -> int:
+    """v0.4.56 (letter 179): move the operator's existing key file into the Windows Credential Manager.
+
+    The human names the file and the two field names; an isolated child reads
+    the file, so no key reaches this process, the chat, argv or stdout. The
+    approval runs under the exact broker (one dialog, or the session grant).
+    """
+
+    def refused(code: str, effects: str = "none") -> int:
+        print_json({"schema": store.SCHEMA, "ok": False, "reason_code": code, "key_values_echoed": False,
+                    "effects_state": effects})
+        return 1
+
+    if not args.access_key_field or not args.secret_access_key_field:
+        return refused("object_storage_credential_source_field_invalid")
+    try:
+        archive_id = archive_services.read_archive_id(archive_services.require_existing_archive_root(root))
+        preview = store.import_plan(archive_id=archive_id, slug=args.store_slug, replace_existing=args.replace_existing,
+                                    source_path=args.from_file, access_field=args.access_key_field,
+                                    secret_field=args.secret_access_key_field)
+    except store.ObjectStorageCredentialStoreError as exc:
+        return refused(exc.code)
+    except (archive_services.ArchiveServiceError, OSError, ValueError):
+        return refused("object_storage_credential_source_invalid")
+    if args.dry_run:
+        print_json(preview)
+        return 0
+    if args.expected_request_sha256 != preview["request_sha256"]:
+        return refused("object_storage_credential_request_changed")
+    reviewer = str(getattr(args, "reviewed_by", None) or "").strip()
+    if _windows_reviewer_claim_re().fullmatch(reviewer) is None:
+        return refused("object_storage_credential_reviewer_claim_invalid")
+    if not store.windows_available():
+        return refused("object_storage_credential_windows_required")
+    targets_sha = hashlib.sha256(json.dumps(preview["credential_manager_targets"], sort_keys=True).encode("utf-8")).hexdigest()
+    context = _exact_human_approval_context(
+        root,
+        operation=ExactHumanApprovalOperation.object_storage_credential_import,
+        plan_sha256=preview["request_sha256"],
+        target_binding_sha256=targets_sha,
+        reviewer_claim=reviewer,
+        review_binding_codes=("credential_targets_reviewed", "request_digest_reviewed"),
+        warnings=[],
+    )
+
+    def _write(_approval_claim) -> dict[str, Any]:
+        status = store.run_isolated_import(slug=args.store_slug, source_path=str(Path(args.from_file).expanduser()),
+                                           fields=(args.access_key_field, args.secret_access_key_field),
+                                           replace_existing=args.replace_existing)
+        if status.get("ok") is not True:
+            raise store.ObjectStorageCredentialStoreError(str(status.get("code") or ""))
+        record = store.write_record(root, slug=args.store_slug, replaced_existing=bool(status.get("replaced_existing")))
+        return {**preview, "dry_run": False, "stored": True, "record_path": record,
+                "replaced_existing": bool(status.get("replaced_existing")),
+                "next_safe_actions": [
+                    "Use credential_refs as the --access-key-id-ref / --secret-access-key-ref of object-storage "
+                    "commands, or as --rebind-... on activity-cleanup --reconcile. They survive restarts and updates.",
+                    "The original key file was not changed; once the new refs work, the human may delete it."]}
+
+    try:
+        result = _execute_exact_human_approved_write(root, context, _write)
+    except (ExactHumanApprovalError, ExactHumanApprovalWindowsError, ExactHumanApprovalWorkflowError) as exc:
+        code = str(getattr(exc, "code", "exact_human_approval_state_unknown"))
+        cause_code = getattr(exc, "cause_code", None)
+        cause = (
+            {"cause_code": cause_code, "cause_stage": getattr(exc, "cause_stage", None)}
+            if type(cause_code) is str and cause_code.startswith(("object_storage_credential_", "exact_human_approval_"))
+            else None
+        )
+        return _exact_human_approval_cli_error(
+            args, lifecycle_action="object_storage_credential_import", reason_code=code, cause=cause,
+            effects_state=("refused_before_effects" if code == "exact_human_approval_writer_refused"
+                           else "unknown" if code == "exact_human_approval_state_unknown" else None),
+        )
+    print_json(result)
+    return 0
 
 
 def command_activity_cleanup(args: argparse.Namespace) -> int:
@@ -42224,6 +42329,15 @@ def build_parser() -> argparse.ArgumentParser:
     credential_store_parser.add_argument("--expected-request-sha256")
     credential_store_parser.add_argument("--replace-existing", action="store_true",
         help="Overwrite keys already stored under this slug.")
+    credential_store_parser.add_argument("--from-file",
+        help="v0.4.56: absolute path of the operator's existing key file (dotenv, INI such as rclone.conf, or JSON); "
+             "an isolated process reads it, the path and values are never echoed. Replaces the two masked windows.")
+    credential_store_parser.add_argument("--access-key-field",
+        help="With --from-file: field holding the access key id (NAME, section.key, or a dotted JSON path).")
+    credential_store_parser.add_argument("--secret-access-key-field",
+        help="With --from-file: field holding the secret access key.")
+    credential_store_parser.add_argument("--reviewed-by",
+        help="With --from-file --approve: reviewer id (person:<id> or human:<id>); one approval or the session grant.")
     credential_store_parser.add_argument("--format", choices=["json"], default="json")
     credential_store_parser.set_defaults(func=command_object_storage_credential_store)
 

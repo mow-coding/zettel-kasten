@@ -78,7 +78,7 @@ class PresenterBoundGrantTests(_permission_fixture.SessionPermissionModeTests):
         result = self.set_mode(task, "limited", ["create_draft"])
         self.assertEqual(self.native.calls, dialogs + 1)
         inner = result["result"]
-        # v0.4.55 (letter 177): no secret is returned; the grant is this
+        # v0.4.56 (letter 177): no secret is returned; the grant is this
         # conversation's session record and survives the process.
         self.assertNotIn("presenter_token", inner)
         self.assertNotIn("presenter_token_field", result)
@@ -150,7 +150,7 @@ class PresenterBoundGrantTests(_permission_fixture.SessionPermissionModeTests):
         self.set_mode(task, "allow_all")
         token = task["presenter"]
         refs = dict(client_app_ref=task["app"], task_route_ref=task["route"], work_session_ref=task["session"])
-        # v0.4.55 (letter 177): the grant is this conversation's session record;
+        # v0.4.56 (letter 177): the grant is this conversation's session record;
         # no presenter secret is required, whatever a process presents.
         self.assertIsNone(token)
         for presented in (None, "x" * 43):
@@ -364,7 +364,7 @@ class PresenterBoundGrantTests(_permission_fixture.SessionPermissionModeTests):
             "client_app_ref": task["app"], "task_route_ref": route_ref, "work_session_ref": session,
             "request": {"reviewer_claim": REVIEWER, "permission_mode": "allow_all", "operations": [], "grant_hours": 1}})
         inner = granted["structuredContent"]["result"]
-        # v0.4.55 (letter 177): no secret is returned; the grant survives the process.
+        # v0.4.56 (letter 177): no secret is returned; the grant survives the process.
         self.assertNotIn("presenter_token", inner)
         self.assertTrue(inner["grant_survives_process_restart"])
         self.assertIsNotNone(permission.resolve_grant(self.root, client_app_ref=task["app"], task_route_ref=route_ref,

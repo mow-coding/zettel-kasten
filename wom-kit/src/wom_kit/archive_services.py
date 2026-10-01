@@ -91384,6 +91384,12 @@ def credential_adapter_readiness_plan(
             "non_echo_contract_required": True,
             "audit_receipt_required_after_use": True,
             "supported_future_operations": supported_operations,
+            # v0.4.56 (beta letter 179): object-storage keys already have a
+            # working migration; say so instead of only "planned".
+            "available_now_for_object_storage_keys": (
+                "archive object-storage-credential-store <archive-root> --store-slug <slug> --from-file "
+                "<existing key file> --access-key-field <name> --secret-access-key-field <name> --dry-run"
+            ),
         },
         "adapter_contract_preview": {
             "inputs_allowed": [
