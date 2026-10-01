@@ -18,7 +18,7 @@ LOCK_SHA256 = "f3a3e0f5f2b766974bc9b376c7ce6d767b199ecc9c57d05cb7d28e738777ce93"
 
 class V0414ReleaseDocsTests(unittest.TestCase):
     def test_v0414_is_preserved_as_source_history(self) -> None:
-        self.assertEqual(__version__, "0.4.55")
+        self.assertEqual(__version__, "0.4.56")
         self.assertTrue(RELEASE.is_file())
         self.assertFalse(
             (RESOURCE_ROOT / "release-notes" / "v0.4.14.md").exists()
@@ -29,20 +29,20 @@ class V0414ReleaseDocsTests(unittest.TestCase):
         ):
             with self.subTest(path=path):
                 self.assertIn(
-                    '__version__ = "0.4.55"',
+                    '__version__ = "0.4.56"',
                     path.read_text(encoding="utf-8"),
                 )
         self.assertIn(
-            'version = "0.4.55"',
+            'version = "0.4.56"',
             (KIT / "pyproject.toml").read_text(encoding="utf-8"),
         )
         self.assertIn(
-            'version: "0.4.55"',
+            'version: "0.4.56"',
             (ROOT / "CITATION.cff").read_text(encoding="utf-8"),
         )
         versioning = (ROOT / "VERSIONING.md").read_text(encoding="utf-8")
-        self.assertIn("Current public baseline:\n\n```text\nv0.4.55", versioning)
-        self.assertIn("Previous public baseline:\n\n```text\nv0.4.54", versioning)
+        self.assertIn("Current public baseline:\n\n```text\nv0.4.56", versioning)
+        self.assertIn("Previous public baseline:\n\n```text\nv0.4.55", versioning)
 
     def test_v0414_supply_lock_is_historical_and_current_policy_is_v0419(self) -> None:
         current = LOCK.read_bytes()
@@ -61,11 +61,11 @@ class V0414ReleaseDocsTests(unittest.TestCase):
         )
         self.assertEqual(
             policy["supply_lock"],
-            "wom-kit/project-runtime-supply-lock-v0.4.55.json",
+            "wom-kit/project-runtime-supply-lock-v0.4.56.json",
         )
         self.assertEqual(
             policy["supply_lock_sha256"],
-            "sha256:f038028b290159a78af0ce82af1ed5fd8d300bd1b41947b4b54f70a4f314747e",
+            "sha256:3c64c6b7b5a5dd078873f6a8b5fa6a05ea94bc6739ed7413a67fcae39edc16ce",
         )
 
     def test_release_contract_is_reference_aware_private_and_honest(self) -> None:
@@ -93,13 +93,13 @@ class V0414ReleaseDocsTests(unittest.TestCase):
         release_names = sorted(
             path.name for path in (RESOURCE_ROOT / "release-notes").glob("v*.md")
         )
-        self.assertEqual(release_names, ["v0.4.55.md"])
+        self.assertEqual(release_names, ["v0.4.56.md"])
         manifest = json.loads(
             (RESOURCE_ROOT / "resource-manifest.json").read_text(encoding="utf-8")
         )
-        self.assertEqual(manifest["version"], "0.4.55")
+        self.assertEqual(manifest["version"], "0.4.56")
         packaged_paths = {row["packaged"] for row in manifest["files"]}
-        self.assertIn("release-notes/v0.4.55.md", packaged_paths)
+        self.assertIn("release-notes/v0.4.56.md", packaged_paths)
         self.assertNotIn("release-notes/v0.4.14.md", packaged_paths)
 
     def test_public_v0414_surfaces_do_not_publish_client_evidence(self) -> None:

@@ -127,7 +127,7 @@ class Letter139GitBackupCliTests(unittest.TestCase):
                 "max_changes": 37,
                 "max_changed_bytes": 4096,
                 "dry_run": True,
-                # v0.4.55 (letter 177): the preview reads with the saved Git login by default.
+                # v0.4.56 (letter 177): the preview reads with the saved Git login by default.
                 "credential_mode": "stored",
             },
         )

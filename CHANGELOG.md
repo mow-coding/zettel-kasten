@@ -4,6 +4,14 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.4.56 - 2026-10-01
+
+- An R2 connection made earlier is reused (letter 179): `object-storage-credential-store --from-file <existing key file> --access-key-field <name> --secret-access-key-field <name>` moves both keys into the Windows Credential Manager under one approval or the session grant; an isolated process reads the file and no key reaches the chat, argv or stdout.
+- The Git backup preview no longer stops with `receipt_inventory_drifted` on Windows directory-size noise (reproduced with no writer); real drift is reported by kind and WOM category in `receipt_context.drift`; the session heartbeat keeps its own clock.
+- Offload is no longer blocked by valid session-evidence draft receipts, and verified bytes that came back under an offloaded row are offloaded again.
+- After an update, missing recommended `.gitignore` rules are named with `repair-gitignore`; `activity-cleanup --status` returns `completion_boundaries`; Doctor no longer reports a false `doctor_cache_snapshot_stale` on Windows.
+- Synthetic archives, the real CLI on Windows for the Git preview, an injected window and a credential-store double; the customer's own run is not confirmed.
+
 ## v0.4.55 - 2026-10-01
 
 - WOM's own byproducts are deleted (owner request 2026-10-01): after a successful update whose result delivery was acknowledged, runtimes other than the pinned and previous version and update results, handoff capsules and journals older than seven days are pruned automatically; `system-cleanup` previews and, under one approval, also deletes bootstrap environments in `%LOCALAPPDATA%\WOM` not newer than the pin, WOM temporary files, abandoned restore downloads and old archive operation results. Receipts, approval claims, credentials, manifests, ledgers and locks are never deleted.

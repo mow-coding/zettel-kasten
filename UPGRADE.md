@@ -1,5 +1,18 @@
 # Upgrade Guide
 
+## v0.4.56 reuse an existing R2 key file, Git backup and offload unblocked
+
+After publication, use the official project update flow. If R2 was connected earlier through a key file, do not type the keys again: preview `archive object-storage-credential-store <archive-root> --store-slug <slug> --from-file <that file> --access-key-field <name> --secret-access-key-field <name> --dry-run` and approve it once. Rerun the Git backup previews; a `receipt_inventory_drifted` that remains now says what changed. Offload previews that were blocked by a session-evidence draft or showed objects as already offloaded while their files were back can be rerun. No archive changes on install.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0456-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.56/wom_kit-0.4.56-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
 ## v0.4.55 WOM's own byproducts deleted
 
 After publication, use the official project update flow. A successful update now deletes WOM's own superseded runtimes and old update records itself. To free the space taken by bootstrap environments from earlier installs and other WOM leftovers, preview `archive system-cleanup <archive-root> --dry-run --format json` and approve the same plan once with `--approve --reviewed-by <person:...> --expected-plan-sha256 <plan_sha256>`; receipts, approval records and locks are never deleted. No archive changes on install.

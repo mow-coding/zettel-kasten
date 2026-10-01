@@ -317,7 +317,7 @@ class NotionPropertyBackfillCliTests(unittest.TestCase):
         # v0.4.28 added object-storage-restore; v0.4.29 object-storage-offload;
         # v0.4.30 exact-approval-claim-finalize; v0.4.33 reopened object-storage-upload;
         # v0.4.36 added operator-feedback-archive (replaced by
-        # operator-feedback-delete in v0.4.55); v0.4.38 adds
+        # operator-feedback-delete in v0.4.56); v0.4.38 adds
         # draft-revision-write and activity-cleanup. v0.4.40 reopens 27
         # writers (plus two new batch commands) from the 58-writer triage and
         # deletes 12 closed commands (five sharing/ownership commands were
