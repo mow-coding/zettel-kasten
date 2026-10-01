@@ -209,6 +209,12 @@ def _notify(progress, stage, message, current=None, total=None):
             pass
 
 
+def _position(item):
+    """v0.4.58 (letter 180): the 1-based parent position, also for an "N-streams" child (never a string count)."""
+    match = re.match(r"\d+", str(item.get("number")))
+    return int(match.group()) + 1 if match else None
+
+
 def plan(root, request_path, *, resume=False, key_provider=None, progress=None):
     root = services.require_existing_archive_root(root)
     request_path = _safe_path(Path(request_path))
@@ -529,7 +535,71 @@ def reconcile_plan(candidate, *, credential_refs=None):
     public["reconciliation"] = material["reconciliation"]
     public["pending_recovery_count"] = sum(row["state"] in {"pending_recovery", "completion_record_pending"} for row in observations)
     public["completed_items_not_reprocessed"] = sum(row["state"] == "completed_no_reprocessing" for row in observations)
+    pending_numbers = {row["number"] for row in observations if row["state"] == "pending_recovery"}
+    public["pending_item_diagnosis"] = diagnose_pending_items(
+        candidate["root"], journal, [item for item in original["items"] if item["number"] in pending_numbers])
     return {**candidate, "material": material, "journal": ReconciliationJournal(journal, identity), "public": public}
+
+
+DIAGNOSIS_LIMIT = 200
+
+
+def diagnose_pending_items(root, journal, items):
+    """v0.4.58 (letter 180): read-only, content-free diagnosis of unfinished items.
+
+    Names the step each item reached, whether its child control file and
+    child claims exist, and the route --reconcile takes. No remote request is
+    made here; remote bytes are checked by the approved run. Never a path,
+    object id or provider message. Not part of the approval binding.
+    """
+    from types import SimpleNamespace
+    from . import object_storage_upload_exact as upload, object_storage_offload as offload
+    probe = SimpleNamespace(root=root, journal=journal)
+    rows, routes = [], {}
+    try:
+        for item in items[:DIAGNOSIS_LIMIT]:
+            name = "item-" + str(item["number"])
+            row = {"number": item["number"], "steps_recorded": [step for step in
+                   ("chain-control", "intake", "upload-control", "preserved", "offload-control", "delete-intent")
+                   if journal.read(name + "-" + step) is not None]}
+            children = {}
+            for operation, module in (("upload", upload), ("offload", offload)):
+                _label, saved, successor = OfficialPreservationBackend._child_label(probe, item, operation)
+                if not saved:
+                    continue
+                control = services.archive_internal_path(root, module._control_relative(saved["manifest_sha256"]))
+                statuses = {}
+                for claim in OfficialPreservationBackend._child_claims(probe, saved["context_sha256"]):
+                    statuses[claim["status"]] = statuses.get(claim["status"], 0) + 1
+                children[operation] = {"control_file": "present" if os.path.lexists(control) else "absent",
+                    "claims": statuses, "attempts": int(successor.rsplit("-r", 1)[1])}
+            row["child_steps"] = children
+            offload_row, upload_row = children.get("offload"), children.get("upload")
+            if offload_row and offload_row["control_file"] == "absent":
+                if offload_row["claims"].get("succeeded"):
+                    route = "offload_completed_control_absent_complete_after_remote_proof"
+                elif OfficialPreservationBackend._offload_had_no_effect(probe, item):
+                    route = "offload_had_no_effect_restart_offload"
+                else:
+                    route = "offload_effects_unproven_file_kept"
+            elif offload_row:
+                route = "offload_resume_original_child"
+            elif upload_row:
+                route = "upload_complete_after_remote_proof_or_resume_original_child"
+            elif row["steps_recorded"]:
+                route = "intake_resume_original_child"
+            else:
+                route = "not_started_process_from_start"
+            row["reconcile_route"] = route
+            routes[route] = routes.get(route, 0) + 1
+            rows.append(row)
+    except Exception as error:
+        code = getattr(error, "code", None)
+        return {"state": "diagnosis_unavailable",
+                "code": code if isinstance(code, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,127}", code)
+                else "activity_cleanup_diagnosis_failed"}
+    return {"state": "read_only_diagnosis", "remote_bytes_checked_now": False, "items": rows,
+            "route_counts": routes, "diagnosed_count": len(rows), "not_diagnosed_count": max(0, len(items) - len(rows))}
 
 
 def _restore_request_label(number, destination):
@@ -825,9 +895,20 @@ def _execute_locked(candidate, *, reviewer, claim, backend):
     # Immutable first intent is the only resume source; edited requests cannot
     # silently substitute different paths, roles or file identities.
     journal.write("intent", material)
-    journal.write("approval", {"approval_id": claim.public_summary()["approval_id"],
+    approval_record = {"approval_id": claim.public_summary()["approval_id"],
         "plan_sha256": binding.plan_sha256, "target_binding_sha256": binding.target_binding_sha256,
-        "mechanism": claim.public_summary().get("approval_mechanism")})
+        "mechanism": claim.public_summary().get("approval_mechanism")}
+    first_approval = journal.read("approval")
+    if (first_approval is not None and first_approval.get("approval_id") != approval_record["approval_id"]
+            and first_approval.get("plan_sha256") == binding.plan_sha256
+            and first_approval.get("target_binding_sha256") == binding.target_binding_sha256):
+        # v0.4.58 (letter 180): the same reconcile approved again (items still
+        # pending) conflicted with the first approval record and stopped before
+        # any item. Keep the first record and add this approval as an attempt.
+        journal.write("attempt-" + re.sub(r"[^a-z0-9]+", "-", str(approval_record["approval_id"]).lower())[:80]
+                      + "-approval", approval_record)
+    else:
+        journal.write("approval", approval_record)
     results = []
     cancelled = False
     child_interruption = None
@@ -918,8 +999,16 @@ def _execute_locked(candidate, *, reviewer, claim, backend):
             # Never echo provider messages, exception paths, or request prose.
             if not isinstance(code, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,127}", code):
                 code = "activity_cleanup_item_failed"
-            results.append({"number": number, "state": "retained" if os.path.lexists(path) else "outcome_unknown",
-                            "code": code, "child_effects_require_reconciliation": item["disposition"] == "preserve"})
+            failed = {"number": number, "state": "retained" if os.path.lexists(path) else "outcome_unknown",
+                      "code": code, "child_effects_require_reconciliation": item["disposition"] == "preserve"}
+            # v0.4.58 (letter 180): exact_human_approval_state_unknown hid which
+            # child step failed and why; keep the fixed stage and cause codes.
+            for key, value in (("child_stage", getattr(backend, "current_child_stage", None)),
+                               ("cause_code", getattr(error, "cause_code", None)),
+                               ("cause_stage", getattr(error, "cause_stage", None))):
+                if isinstance(value, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,127}", value):
+                    failed[key] = value
+            results.append(failed)
         finally:
             if results and results[-1]["number"] == number:
                 results[-1]["processing_seconds"] = round(time.monotonic() - item_started, 6)
@@ -1081,15 +1170,27 @@ class OfficialPreservationBackend:
         return next(iter(keys))
 
     def _storage_step(self, item, operation, fresh_plan):
+        from . import storage_cost
+        with storage_cost.composed_child_planning():
+            return self._storage_step_inner(item, operation, fresh_plan)
+
+    def _storage_step_inner(self, item, operation, fresh_plan):
         """Resume the original authenticated child execution, not a new claim."""
         from . import exact_approval_claims as claims, object_storage_upload_exact as upload, object_storage_offload as offload, object_storage_restore as restore
         from .exact_human_approval import exact_human_approval_context_sha256, _authenticated_claim_reference_core
         from .exact_operation_manifest import ExactOperationApprovalAuthority, exact_operation_execution_sha256
         from .exact_human_approval_workflow import _production_key_provider
         module = {"upload": upload, "offload": offload, "restore": restore}[operation]
-        label = "item-" + str(item["number"]) + "-" + operation + "-control"
-        saved = self.journal.read(label)
+        self.current_child_stage = operation
+        label, saved, successor = self._child_label(item, operation)
         load = getattr(module, "load_object_storage_" + operation + "_plan")
+        if saved and operation == "upload" and self._verify_body(item):
+            # v0.4.58 (letter 180, item A): the full remote bytes already match
+            # the object, so the upload effect is complete whatever its child
+            # claim recorded. Close a claim left started (never as succeeded)
+            # instead of resuming a plan whose preimage can no longer match.
+            self._close_started_child_claims(saved["context_sha256"], "activity_cleanup_upload_superseded_by_remote_proof")
+            return {"ok": True, "prior_completed_child": True, "remote_proof": True}
         if saved:
             try:
                 plan = load(self.root, manifest_sha256=saved["manifest_sha256"])
@@ -1097,18 +1198,33 @@ class OfficialPreservationBackend:
                 control_path = services.archive_internal_path(self.root, module._control_relative(saved["manifest_sha256"]))
                 if os.path.lexists(control_path):
                     raise ActivityCleanupError("activity_cleanup_child_control_present_but_invalid") from None
-                # A missing control is not evidence of no prior effects. Only
-                # reconstruct the exact original plan, then authenticate its
-                # claim/checkpoint below; never substitute a different scope.
+                # A missing control is not evidence of no prior effects. The
+                # exact original plan cannot be rebuilt (its manifest binds the
+                # whole archive inventory, which other items changed), so
+                # v0.4.58 (letter 180, item B) proves instead that the step had
+                # no effect, closes its started claim and starts the step again
+                # under this approval; any sign of an effect keeps the file.
                 plan = fresh_plan()
-                if (plan.manifest is None or plan.manifest.manifest_sha256 != saved["manifest_sha256"]
-                        or exact_human_approval_context_sha256(getattr(module, "object_storage_" + operation + "_context")(
-                            plan, reviewer_claim=self.reviewer)) != saved["context_sha256"]):
-                    raise ActivityCleanupError("activity_cleanup_child_control_missing_original_not_reconstructable") from None
-                from .exact_operation_manifest import exact_operation_writer_lock
-                with exact_operation_writer_lock(self.root, timeout_seconds=30):
-                    module._persist_control(plan)
-                plan = load(self.root, manifest_sha256=saved["manifest_sha256"])
+                rebuilt = (plan.manifest is not None and plan.manifest.manifest_sha256 == saved["manifest_sha256"]
+                           and exact_human_approval_context_sha256(getattr(module, "object_storage_" + operation + "_context")(
+                               plan, reviewer_claim=self.reviewer)) == saved["context_sha256"])
+                if rebuilt:
+                    from .exact_operation_manifest import exact_operation_writer_lock
+                    with exact_operation_writer_lock(self.root, timeout_seconds=30):
+                        module._persist_control(plan)
+                    plan = load(self.root, manifest_sha256=plan.manifest.manifest_sha256)
+                else:
+                    claimed = self._child_claims(saved["context_sha256"])
+                    if any(row["status"] == "succeeded" for row in claimed):
+                        # The step recorded success; accept it only with a full
+                        # remote byte proof of the object it preserved.
+                        if self._verify_body(item):
+                            return {"ok": True, "prior_completed_child": True, "remote_proof": True}
+                        raise ActivityCleanupError("activity_cleanup_child_control_missing_original_not_reconstructable") from None
+                    if operation != "offload" or not self._offload_had_no_effect(item):
+                        raise ActivityCleanupError("activity_cleanup_child_control_missing_effects_unproven") from None
+                    self._close_started_child_claims(saved["context_sha256"], "activity_cleanup_offload_superseded_no_effects")
+                    label, saved = successor, None
         else:
             plan = fresh_plan()
         if not plan.approveable:
@@ -1182,6 +1298,7 @@ class OfficialPreservationBackend:
         from . import source_intake_chain_exact as chain, exact_approval_claims as claims
         from .exact_human_approval import exact_human_approval_context_sha256
         from .exact_human_approval_workflow import _resume_exact_human_approved_write_core
+        self.current_child_stage = "chain"
         label = "item-" + str(item["number"]) + "-chain-control"
         saved = journal.read(label)
         plan = chain.plan_source_intake_chain(self.root, self.root / relative,
@@ -1222,7 +1339,7 @@ class OfficialPreservationBackend:
         from .object_storage_offload import _create_or_match_document
         name = "item-" + str(item["number"])
         if journal.read(name + "-intake") is None:
-            _notify(self.progress, "activity-cleanup-items", "staging-source", item["number"], len(self.material["items"]))
+            _notify(self.progress, "activity-cleanup-items", "staging-source", _position(item), len(self.material["items"]))
             staged = self._stage(item)
             relative = ROOT + "/" + self.material["activity_id"] + "/" + name + "-source-plan.json"
             saved_plan = journal.read(name + "-intake-plan")
@@ -1246,7 +1363,7 @@ class OfficialPreservationBackend:
         # Reuse existing object bytes across identical sources; each item still
         # retains its own intake and original source association in the journal.
         if self._remote(item) is None or journal.read(name + "-upload-control"):
-            _notify(self.progress, "activity-cleanup-items", "uploading-or-resuming", item["number"], len(self.material["items"]))
+            _notify(self.progress, "activity-cleanup-items", "uploading-or-resuming", _position(item), len(self.material["items"]))
             self._storage_step(item, "upload", lambda: upload.plan_object_storage_upload(self.root,
                 provider_kind=self.provider_kind, store_ref=self.store_ref,
                 scope=ObjectScope("object_list", (item["object_id"],))))
@@ -1254,6 +1371,71 @@ class OfficialPreservationBackend:
             raise ActivityCleanupError("activity_cleanup_remote_preservation_unverified")
         journal.write(name + "-preserved", {"object_id": item["object_id"], "size": item["state"]["size"],
             "state": "remote_verified", "source_link_preserved": True})
+
+    def _child_label(self, item, operation):
+        """v0.4.58: the newest control label of a child step and the next one (labels are create-once)."""
+        base = "item-" + str(item["number"]) + "-" + operation + "-control"
+        label, saved, index = base, self.journal.read(base), 0
+        while saved is not None:
+            following = base + "-r" + str(index + 1)
+            document = self.journal.read(following)
+            if document is None:
+                return label, saved, following
+            label, saved, index = following, document, index + 1
+        return label, saved, base + "-r" + str(index + 1)
+
+    def _child_claims(self, context_sha256):
+        from . import exact_approval_claims as claims
+        listing = claims.list_exact_human_approval_claims(self.root, status="all", max_claims=claims.MAX_LISTED_CLAIMS)
+        if listing["blocker_codes"]:
+            raise ActivityCleanupError("activity_cleanup_child_claim_evidence_incomplete")
+        return [row for row in listing["claims"] if row["context_sha256"] == context_sha256
+                and row["status"] in {"started", "succeeded"}]
+
+    def _close_started_child_claims(self, context_sha256, failure_code):
+        """Close this step's started child claims as failed with a fixed code; never as succeeded."""
+        from . import exact_approval_claims as claims
+        for row in self._child_claims(context_sha256):
+            if row["status"] != "started":
+                continue
+
+            def close(key, boundary, approval_id=row["approval_id"]):
+                if boundary is None:
+                    raise ActivityCleanupError("activity_cleanup_child_claim_evidence_incomplete")
+                bound_root, parent_binding = boundary
+                claim = claims._rehydrate_started_claim_without_context(
+                    self.root, approval_id, key, expected_context_sha256=context_sha256, clock=claims._utc_now,
+                    bound_archive_root=bound_root, claim_parent_binding=parent_binding)
+                try:
+                    claim.finalize_failed(failure_code)
+                finally:
+                    claim.close()
+
+            claims._with_key_and_boundary(self.root, close, key_provider=None, claims_boundary=None)
+
+    def _offload_had_no_effect(self, item):
+        """The local object still holds the exact bytes and its manifest location is not offloaded."""
+        from . import object_storage_restore as restore
+        object_id = str(item.get("object_id") or "")
+        local = self.root / "objects/sha256" / object_id[7:9] / object_id[7:]
+        try:
+            info = os.lstat(local)
+            if not stat.S_ISREG(info.st_mode):
+                return False
+            observed = hashlib.sha256()
+            with local.open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    observed.update(chunk)
+        except OSError:
+            return False
+        if "sha256:" + observed.hexdigest() != object_id:
+            return False
+        logical_key = restore._logical_key(object_id)
+        for row in services.load_manifest_records(self.root):
+            if isinstance(row, dict) and str(row.get("object_id") or "") == object_id:
+                if restore._local_location_state(row, logical_key) == "offloaded":
+                    return False
+        return True
 
     def _verify_body(self, item):
         key = self._remote(item)

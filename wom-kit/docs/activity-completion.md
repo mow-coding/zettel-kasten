@@ -60,6 +60,10 @@ Windows의 ADS 부가 데이터도 본문과 연결된 별도 객체로 보존·
 
 원래 요청이 `env:` 자격증명 참조를 썼다면 그 값은 실행한 프로세스가 끝나면서 사라진다. 데스크톱 앱이 키를 OS 키체인에 두듯, `object-storage-credential-store <archive-root> --store-slug <이름> --dry-run` 뒤 `--approve --expected-request-sha256 <값>`을 실행하면 WOM의 가려진 입력 창 두 개에서 접근 키 ID와 비밀 키를 받아 Windows 자격 증명 관리자에 저장하고 쓸 참조 두 개를 알려 준다. 그 참조로 `--reconcile --dry-run --rebind-access-key-id-ref credential-manager:<이름> --rebind-secret-access-key-ref credential-manager:<이름>`으로 미리 본 뒤 같은 옵션으로 `--approve`한다. 바뀌는 것은 두 참조뿐이며 저장소·엔드포인트·버킷·지역은 원래 것과 같아야 하고, 그 교체는 새 승인 계획에 기록된다. 완료된 항목은 다시 처리하지 않는다. 미리보기의 `credential_refs_state`가 `unresolved`이면 이 프로세스에서 키를 읽을 수 없다는 뜻이며, 승인 실행은 승인창을 띄우기 전에 `activity_cleanup_credential_ref_unresolved`로 멈춘다. 원격 저장소 키는 이름이 정확히 일치하는 자격 증명만 읽는다.
 
+### 끝나지 않던 항목의 진단과 복구 (v0.4.58)
+
+`--reconcile --dry-run` 결과의 `pending_item_diagnosis`는 남은 항목마다 기록된 단계, 하위 업로드·비우기 제어 파일의 유무와 승인 상태, 승인한 reconcile이 택할 경로를 읽기만 하여 보여 준다. 경로·객체 ID·원격 요청은 없다. 업로드가 원격 바이트를 모두 저장한 뒤 승인 기록만 열린 채 끊겼다면, 원격 바이트 전체를 확인한 뒤 그 기록을 실패로 닫고(성공으로 꾸미지 않는다) 비우기로 넘어간다. 비우기 제어 파일이 쓰이기 전에 끊겼다면 원래 계획을 다시 만들지 않는다. 비우기가 성공으로 기록됐으면 원격 확인 뒤 완료하고, 로컬 바이트가 그대로이며 비운 기록이 없으면 새 승인 아래 다시 비운다. 그 밖의 경우는 `activity_cleanup_child_control_missing_effects_unproven`으로 원본을 남긴다. 실패한 항목은 `child_stage`와 하위 원인 코드를 함께 남긴다. 같은 reconcile을 다시 승인해도 충돌하지 않는다.
+
 ### 다른 세션과 함께 작업하기
 
 신규 반입의 해시·외부 파일 복사, 원격 업로드·비우기 검증·복원은 대상별 잠금을 사용한다. 다른 자료 작업은 진행할 수 있으며 공유 목록과 색인에 결과를 반영하는 구간만 순서를 조정한다. 같은 zet의 수정·연결은 함께 실행하지 않는다. 충돌 대기는 기본 30초 후 원래 작업으로 재개할 수 있는 실패를 반환하며 잠금을 지우거나 소유권을 가져오지 않는다. 구형 작업의 원래 승인·실행 형식은 보존한다.

@@ -1589,6 +1589,10 @@ class CommandProgressReporter:
             stage: index
             for index, stage in enumerate(self._stage_order, start=1)
         }
+        # v0.4.58 (letter 180): progress is observational; count contract
+        # violations and emit failures instead of letting the thread die.
+        self.progress_contract_violations = 0
+        self.progress_emit_failures = 0
         self._thread: threading.Thread | None = None
         if self._stderr_callback is not None or self._progress_log_callback is not None:
             self._thread = threading.Thread(
@@ -1598,9 +1602,23 @@ class CommandProgressReporter:
             )
             self._thread.start()
 
+    @staticmethod
+    def _progress_count(value: object) -> int | None:
+        return value if type(value) is int and value >= 0 else None
+
+    def observations(self) -> dict[str, int]:
+        return {"progress_contract_violations": self.progress_contract_violations,
+                "progress_emit_failures": self.progress_emit_failures}
+
     def progress(self, stage: str, message: str, current: int | None, total: int | None) -> None:
         if self._stderr_callback is None and self._progress_log_callback is None:
             return
+        # v0.4.58 (letter 180): a non-count current (e.g. "2-streams") reached
+        # the heartbeat's current / elapsed and killed the heartbeat thread.
+        safe_current, safe_total = self._progress_count(current), self._progress_count(total)
+        if (current is not None and safe_current is None) or (total is not None and safe_total is None):
+            self.progress_contract_violations += 1
+        current, total = safe_current, safe_total
         self._emit_log(stage, message, current, total)
         if stage == "edge-receipt-source-load-detail":
             if self._detail == "verbose":
@@ -1691,6 +1709,9 @@ class CommandProgressReporter:
                 # Disable future progress instead of changing command meaning.
                 _neutralize_failed_standard_stream(sys.stderr)
                 self._stderr_callback = None
+            except Exception:
+                # Any other failure drops only this one event.
+                self.progress_emit_failures += 1
 
     def _emit_log(self, stage: str, message: str, current: int | None, total: int | None) -> None:
         with self._callback_lock:
@@ -1699,7 +1720,7 @@ class CommandProgressReporter:
                 return
             try:
                 callback(stage, message, current, total)
-            except (OSError, UnicodeError, ValueError):
+            except (OSError, UnicodeError, ValueError, TypeError, ArithmeticError):
                 closer = getattr(callback, "close", None)
                 if callable(closer):
                     try:
@@ -1823,8 +1844,11 @@ class CommandProgressReporter:
             stage_annotation = self._stage_annotation(stage, "heartbeat")
             if stage_annotation:
                 message += f" {stage_annotation}"
-            self._emit_stderr(stage, message, current, total)
-            self._emit_log(stage, message, current, total)
+            try:
+                self._emit_stderr(stage, message, current, total)
+                self._emit_log(stage, message, current, total)
+            except Exception:
+                self.progress_emit_failures += 1
 
     def close(self) -> None:
         self._stop.set()
@@ -24292,6 +24316,10 @@ def command_activity_cleanup_result(args: argparse.Namespace) -> dict[str, Any]:
         else:
             writer_entered = True
             result = _execute_exact_human_approved_write(candidate["root"], context, run)
+        if isinstance(result, dict) and reporter is not None:
+            # v0.4.58 (letter 180): progress display failures are reported apart
+            # from the cleanup outcome, never as its cause.
+            result["progress_reporting"] = reporter.observations()
         return result
     except (activity_cleanup.ActivityCleanupError, archive_services.ArchiveServiceError, OSError, ValueError,
             ExactHumanApprovalError, ExactHumanApprovalWorkflowError, ExactHumanApprovalWindowsError) as exc:
