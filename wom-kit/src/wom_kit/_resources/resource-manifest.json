@@ -787,8 +787,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/long-operations-and-updates.md",
       "packaged": "templates/ai-runtime/wom-archive/references/long-operations-and-updates.md",
-      "bytes": 2934,
-      "sha256": "b753ebcc37a2d387f271b3432e5eba8e8ee5df74235ee477567c4f4bfb22a040"
+      "bytes": 3545,
+      "sha256": "7ec958076be88077ee9f45e08eba8c335061cbdd24eb6ed1160e190b29a4d6a3"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/models-and-reasoning.md",
@@ -817,8 +817,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/startup-and-update.md",
       "packaged": "templates/ai-runtime/wom-archive/references/startup-and-update.md",
-      "bytes": 10075,
-      "sha256": "eaba447d5ac3e8c847d738adf644e743dc1bbec61c09658f5008b62d76cbf603"
+      "bytes": 9507,
+      "sha256": "964377f12e549134da12dd0c316eeba2f0e787bdf28709edda63260abf30c25f"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/storage-scope.md",

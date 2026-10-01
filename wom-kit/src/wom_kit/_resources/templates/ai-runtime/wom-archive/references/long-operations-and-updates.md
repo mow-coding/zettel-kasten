@@ -42,3 +42,13 @@ timeouts, and recovery.
   a fresh updater preview and separate approval. Retain uncertain cases and
   locks; never guess a path, delete evidence, or blindly replay.
 
+## After An Update And WOM's Own Leftovers
+
+If the update result shows `post_update_attention_required: true`, run the first
+`next_safe_actions` command once before anything else. After a successful update
+WOM deletes its own superseded runtimes and old update records by itself
+(`system_cleanup` in the result). When the human asks to free space taken by
+WOM itself (old runtimes, bootstrap environments, update leftovers), preview
+`archive system-cleanup <archive-root> --dry-run --format json`, tell the human
+the kinds and `bytes_freed_total`, then approve that plan once. Never delete
+WOM folders by hand.

@@ -106,15 +106,6 @@ use the required Windows approval form:
 archive project-version-update <project-or-archive-root> --target vX.Y.Z --approve --reviewed-by <actor> --affirm-external-writers-quiescent --progress --output .zettel-kasten/diagnostics/update-apply-20260811-001.json --format json
 ```
 
-If the update result shows `post_update_attention_required: true`, run the first
-`next_safe_actions` command once before anything else. After a successful update
-WOM deletes its own superseded runtimes and old update records by itself
-(`system_cleanup` in the result). When the human asks to free space taken by
-WOM itself (old runtimes, bootstrap environments, update leftovers), preview
-`archive system-cleanup <archive-root> --dry-run --format json`, tell the human
-the kinds and `bytes_freed_total`, then approve that plan once. Never delete
-WOM folders by hand.
-
 When updater output has a plan digest and opaque collisions, do not infer paths,
 edit files, or repeat approval; inspect the complete set once:
 
