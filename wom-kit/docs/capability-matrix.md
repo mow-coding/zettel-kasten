@@ -1,9 +1,9 @@
 ﻿# WOM-kit Capability Matrix
 
-Current v0.4.56 candidate: reuse an existing R2 key file, Git backup and offload unblocked (letter 179): old runtimes and finished update records pruned after a delivered update, and system-cleanup for bootstrap environments, temporary files and restore leftovers. [Release scope](releases/v0.4.56.md). Other ongoing requests are not included in this claim.
-Version: v0.4.56 implementation and release scope
+Current v0.4.57 candidate: archived mail as threads: archived mail readable as thread text records per mailbox account, rebuilt from the mail objets as a derived snapshot. [Release scope](releases/v0.4.57.md). Other ongoing requests are not included in this claim.
+Version: v0.4.57 implementation and release scope
 
-Status: v0.4.56 candidate: reuse an existing R2 key file, Git backup and offload unblocked (letter 179); [release scope](releases/v0.4.56.md).
+Status: v0.4.57 candidate: archived mail as threads; [release scope](releases/v0.4.57.md).
 
 Status: v0.4.36 no-dialog grants, letter-168, and session-owned writes truth
 Date: 2026-09-04

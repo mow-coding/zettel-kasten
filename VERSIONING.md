@@ -106,13 +106,13 @@ before approving any frontmatter rewrite.
 Current public baseline:
 
 ```text
-v0.4.56
+v0.4.57
 ```
 
 Previous public baseline:
 
 ```text
-v0.4.55
+v0.4.56
 ```
 
 This baseline is for early review and prototyping. It is not yet a stable `v1.0.0` protocol.

@@ -4,6 +4,12 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.4.57 - 2026-10-01
+
+- Archived mail readable as threads (owner idea 2026-10-01): `mail-threads --build` rebuilds the .eml mail objets into one Markdown record per thread and mailbox account under `db/mail-threads/<generation>/` (Message-ID / In-Reply-To / References threading, subject-and-participants fallback, duplicates counted once, quoted lines folded); a derived snapshot that never changes the objets; a fetch records the mailbox account privately.
+- Capability-document version labels rewritten by earlier bumps are corrected.
+- Synthetic mail only; real mailboxes are not yet tested.
+
 ## v0.4.56 - 2026-10-01
 
 - An R2 connection made earlier is reused (letter 179): `object-storage-credential-store --from-file <existing key file> --access-key-field <name> --secret-access-key-field <name>` moves both keys into the Windows Credential Manager under one approval or the session grant; an isolated process reads the file and no key reaches the chat, argv or stdout.
