@@ -23,6 +23,7 @@ from .exact_human_approval_windows import ExactHumanApprovalOperation
 from .exact_human_approval import PERMISSION_INTERACTIVE_INTENT_MECHANISM
 from .operation_approval_binding import ExactOperationApprovalBinding
 from .process_launch import noninteractive_creationflags
+from . import work_timing
 
 # The intent holds absolute external paths, reasons, a whole-root inventory and
 # storage endpoints. It lives under the private, Git-ignored profile boundary so
@@ -79,6 +80,7 @@ def _safe_path(path):
     return path
 
 
+@work_timing.timed("local_hash_verify")
 def file_state(path):
     path = _safe_path(path)
     info = path.lstat()
@@ -856,6 +858,19 @@ def status(candidate):
 
 
 def execute(candidate, *, reviewer, claim, backend):
+    # v0.4.59 (letter 180): non-overlapping timing of where the processing
+    # time went (provider requests, manifest reads, index projection, intake,
+    # local hashing, child claims, lock waits, child steps, unattributed).
+    with work_timing.recording() as recorder:
+        result = _execute(candidate, reviewer=reviewer, claim=claim, backend=backend)
+    measurements = result.get("measurements") if isinstance(result, dict) else None
+    if isinstance(measurements, dict):
+        measurements["work_timing"] = recorder.summary(
+            measurements.get("processing_seconds_including_child_waits") or 0.0)
+    return result
+
+
+def _execute(candidate, *, reviewer, claim, backend):
     if os.name != "nt":
         raise ActivityCleanupError("activity_cleanup_native_delete_not_supported")
     from .operation_target_leases import TargetLeases
@@ -919,18 +934,28 @@ def _execute_locked(candidate, *, reviewer, claim, backend):
             return True
         return False
     progress = candidate.get("progress")
-    _notify(progress, "activity-cleanup-items", "start", 0, len(material["items"]))
+    # v0.4.59 (letter 180): items already completed are skipped in their own
+    # stage, so the item count and ETA cover only the real remaining work.
+    completed_before = {item["number"] for item in material["items"]
+                        if journal.read("item-" + str(item["number"]) + "-deleted")}
+    work_total, work_position = len(material["items"]) - len(completed_before), 0
+    _notify(progress, "activity-cleanup-skip-completed", "start", 0, len(completed_before))
+    _notify(progress, "activity-cleanup-skip-completed", "done", len(completed_before), len(completed_before))
+    _notify(progress, "activity-cleanup-items", "start", 0, work_total)
     for item in material["items"]:
         if stop_requested():
             cancelled = True
             break
-        _notify(progress, "activity-cleanup-items", "file", len(results) + 1, len(material["items"]))
         number, path = item["number"], Path(item["path"])
         name = "item-" + str(number)
-        deleted = journal.read(name + "-deleted")
+        deleted = journal.read(name + "-deleted") if number in completed_before else None
         if deleted:
             results.append({"number": number, "state": "already_deleted" if not os.path.lexists(path) else "replacement_retained"})
             continue
+        work_position += 1
+        if backend is not None:
+            backend.progress_position = (work_position, work_total)
+        _notify(progress, "activity-cleanup-items", "file", work_position, work_total)
         if number in material.get("reconciliation", {}).get("retained_item_numbers", []):
             results.append({"number": number, "state": "retained", "code": "activity_cleanup_reconcile_item_requires_review"})
             continue
@@ -957,22 +982,22 @@ def _execute_locked(candidate, *, reviewer, claim, backend):
                     "streams": item["alternate_streams"]})
             _assert_no_new_git_worktree_dependency(item)
             if item["disposition"] == "preserve":
-                _notify(progress, "activity-cleanup-items", "preserving", number + 1, len(material["items"]))
+                _notify(progress, "activity-cleanup-items", "preserving", work_position, work_total)
                 backend.preserve(item, journal)
                 checkpoint()
                 authorize()
-                _notify(progress, "activity-cleanup-items", "verifying-remote", number + 1, len(material["items"]))
+                _notify(progress, "activity-cleanup-items", "verifying-remote", work_position, work_total)
                 # Even a resumed preserved item must check current remote bytes.
                 if not backend.verify(item):
                     raise ActivityCleanupError("activity_cleanup_remote_preservation_unverified")
                 checkpoint()
             if item["disposition"] == "preserve":
                 authorize()
-                _notify(progress, "activity-cleanup-items", "offloading-verified-copy", number + 1, len(material["items"]))
+                _notify(progress, "activity-cleanup-items", "offloading-verified-copy", work_position, work_total)
                 backend.finish_local_preservation(item)
                 checkpoint()
             authorize()
-            _notify(progress, "activity-cleanup-items", "deleting-bound-original", number + 1, len(material["items"]))
+            _notify(progress, "activity-cleanup-items", "deleting-bound-original", work_position, work_total)
             journal.write(name + "-delete-intent", {"number": number, "state": item["state"],
                 "preservation": "remote_verified" if item["disposition"] == "preserve" else "explicit_discard"})
             _delete_exact_approved_file(item["root"], path, item["state"], allow_readonly=True,
@@ -1018,7 +1043,7 @@ def _execute_locked(candidate, *, reviewer, claim, backend):
         recorded = {row["number"] for row in results}
         results.extend({"number": item["number"], "state": "not_attempted"}
                        for item in material["items"] if item["number"] not in recorded)
-    _notify(progress, "activity-cleanup-items", "done", len(results), len(material["items"]))
+    _notify(progress, "activity-cleanup-items", "done", work_position, work_total)
     _notify(progress, "activity-cleanup-directories", "start", 0, len(material["directories"]))
     directory_results = []
     for index, directory in sorted(enumerate(material["directories"]), key=lambda pair: len(Path(pair[1]["path"]).parts), reverse=True):
@@ -1171,7 +1196,7 @@ class OfficialPreservationBackend:
 
     def _storage_step(self, item, operation, fresh_plan):
         from . import storage_cost
-        with storage_cost.composed_child_planning():
+        with storage_cost.composed_child_planning(), work_timing.measure(operation + "_child_other"):
             return self._storage_step_inner(item, operation, fresh_plan)
 
     def _storage_step_inner(self, item, operation, fresh_plan):
@@ -1294,6 +1319,7 @@ class OfficialPreservationBackend:
             raise ActivityCleanupError("activity_cleanup_" + operation + "_incomplete")
         return result
 
+    @work_timing.timed("intake_capture")
     def _intake_step(self, item, relative, journal):
         from . import source_intake_chain_exact as chain, exact_approval_claims as claims
         from .exact_human_approval import exact_human_approval_context_sha256
@@ -1339,7 +1365,8 @@ class OfficialPreservationBackend:
         from .object_storage_offload import _create_or_match_document
         name = "item-" + str(item["number"])
         if journal.read(name + "-intake") is None:
-            _notify(self.progress, "activity-cleanup-items", "staging-source", _position(item), len(self.material["items"]))
+            _notify(self.progress, "activity-cleanup-items", "staging-source",
+                    *(getattr(self, "progress_position", None) or (_position(item), len(self.material["items"]))))
             staged = self._stage(item)
             relative = ROOT + "/" + self.material["activity_id"] + "/" + name + "-source-plan.json"
             saved_plan = journal.read(name + "-intake-plan")
@@ -1363,7 +1390,8 @@ class OfficialPreservationBackend:
         # Reuse existing object bytes across identical sources; each item still
         # retains its own intake and original source association in the journal.
         if self._remote(item) is None or journal.read(name + "-upload-control"):
-            _notify(self.progress, "activity-cleanup-items", "uploading-or-resuming", _position(item), len(self.material["items"]))
+            _notify(self.progress, "activity-cleanup-items", "uploading-or-resuming",
+                    *(getattr(self, "progress_position", None) or (_position(item), len(self.material["items"]))))
             self._storage_step(item, "upload", lambda: upload.plan_object_storage_upload(self.root,
                 provider_kind=self.provider_kind, store_ref=self.store_ref,
                 scope=ObjectScope("object_list", (item["object_id"],))))
@@ -1489,6 +1517,7 @@ class OfficialPreservationBackend:
         if not self.verify(item):
             raise ActivityCleanupError("activity_cleanup_remote_preservation_unverified")
 
+    @work_timing.timed("remote_verification")
     def verify(self, item):
         if not self._verify_body(item):
             return False

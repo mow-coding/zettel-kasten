@@ -1,6 +1,6 @@
 # Archive infra decision log: letter 180 (2026-10-01)
 
-Status: implemented for v0.4.58 under the owner's standing instruction to
+Status: implemented for v0.4.58 and v0.4.59 under the owner's standing instruction to
 finish every implementable item before the reply ("이것도 읽어보고 작업
 진행해"). The deeper performance work is split into v0.4.59 (sequential small
 releases instead of deferring, 2026-09-24).
@@ -79,16 +79,29 @@ archive and an in-memory transport (scenarios now in
    (`not_computed_for_composed_child`); standalone upload and offload still
    show it.
 
-## Carried to v0.4.59 (not deferred, next release)
+## v0.4.59: where the time goes
 
-- The index projection rewrite per child step (about 30 % of the remaining
-  per-item time): rewrite only changed rows, with the same lease, fence and
-  final checks.
-- A per-process manifest parse cache keyed by exact line bytes, shared by the
-  manifest readers (the 51 full lookup rebuilds come from in-place row
-  rewrites by each child).
-- Non-overlapping timing categories that sum to the processing time, and
-  progress/ETA split into skipped completed items and real remaining work.
+1. Index projection: the objects and manifest projection tables are made
+   equal to the manifest by writing only rows whose stored values differ,
+   instead of deleting and re-inserting every row three times per item. The
+   tables end exactly as a full rewrite leaves them (tested against the old
+   behaviour, including duplicate object rows, removed rows, a key-order-only
+   change and stale stored rows). Lease, fence, owner, seal and the final
+   exact-bytes check are unchanged.
+2. Non-overlapping timing: `measurements.work_timing` splits the processing
+   time into `provider_request`, `manifest_read_parse`,
+   `index_projection_seal`, `intake_capture`, `local_hash_verify`,
+   `child_approval_claim`, `lock_wait`, `remote_verification`,
+   `upload_child_other`, `offload_child_other` and `unattributed_seconds`.
+   Entering a category pauses the enclosing one, so they add up to the total;
+   only the writer's own thread is measured.
+3. Progress and ETA: items already completed are counted in their own
+   `activity-cleanup-skip-completed` stage; the item stage and its ETA count
+   only the real remaining work (1-based, never jumping backwards).
+4. Not done, by measurement: a shared manifest parse cache. The prototype
+   measured no gain for the manifest readers (about 11 s before and after on
+   the synthetic 20k-row archive), so it is not shipped; `work_timing` will
+   show whether the customer's archive differs.
 
 ## Not established
 

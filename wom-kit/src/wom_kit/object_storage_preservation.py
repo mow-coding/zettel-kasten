@@ -29,6 +29,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from . import archive_services
 from . import object_storage_setup_registration
+from .work_timing import timed as _work_timed
 from .exact_human_approval import (
     ExactHumanApprovalError,
     _ClaimedExactHumanApproval,
@@ -320,6 +321,7 @@ def _call_with_heartbeat(
     return outcome.get("value")
 
 
+@_work_timed("manifest_read_parse")
 def _read_manifest_groups(
     root: Path,
     *,
