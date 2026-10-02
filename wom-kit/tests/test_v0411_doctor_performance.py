@@ -2252,7 +2252,11 @@ class DoctorReadCacheTests(unittest.TestCase):
         )
         reader.start()
         try:
-            self.assertEqual(ready.get(timeout=30), "doctor-ready\n")
+            # v0.4.60: without a bytecode cache (CI and -B) the child compiles
+            # the CLI from source, about 25-30 s on a hosted Windows runner,
+            # so the readiness budget matches the other subprocess tests. The
+            # interrupted-worker exit budget below is unchanged.
+            self.assertEqual(ready.get(timeout=180), "doctor-ready\n")
             reader.join(timeout=1)
             started = time.monotonic()
             stdout, stderr = completed.communicate(input="continue\n", timeout=5)
