@@ -557,6 +557,51 @@ class FeedbackComposeExactApprovalTests(unittest.TestCase):
         self.assertEqual(codes[0], [])
         self.assertTrue(codes[1] and codes[1][0].startswith("warning_set_"), codes)
 
+    def test_revise_moves_the_draft_record_and_body_check_verifies(self) -> None:
+        """v0.4.60 (letter 180 follow-up): one revise approval leaves a verified letter."""
+        preview = self.compose("--dry-run")
+        created = self.compose("--approve", "--expected-plan-sha256", preview["plan_sha256"], "--reviewed-by", REVIEWER)
+        body_sha = created["feedback_ref"].rsplit(":", 1)[-1]
+        self.request["sections"]["observed_failure"] = "a corrected synthetic fact for the binding test"
+        self.request_path.write_text(json.dumps(self.request, ensure_ascii=False) + chr(10), encoding="utf-8")
+        revise_preview = self.compose("--dry-run", "--intent", "revise", "--expected-body-sha256", body_sha)
+        revised = self.compose("--approve", "--intent", "revise", "--expected-body-sha256", body_sha,
+                               "--expected-plan-sha256", revise_preview["plan_sha256"], "--reviewed-by", REVIEWER)
+        self.assertTrue(revised["draft_record_update"]["record_updated"], revised["draft_record_update"])
+        self.assertTrue(revised["record_binding"]["feedback_ref_bound"])
+        self.assertEqual(revised["user_status_label"], "전달 전")
+        check = self.run_cli("operator-feedback-body-check", str(self.root), "--feedback-id",
+                             self.request["feedback_id"], "--dry-run")
+        self.assertEqual(check["state"], "verified", check)
+        self.assertEqual(check["feedback_ref"], revised["feedback_ref"])
+
+    def test_body_check_names_the_exact_record_update_after_a_service_revise(self) -> None:
+        preview = self.compose("--dry-run")
+        created = self.compose("--approve", "--expected-plan-sha256", preview["plan_sha256"], "--reviewed-by", REVIEWER)
+        body_sha = created["feedback_ref"].rsplit(":", 1)[-1]
+        self.request["sections"]["observed_failure"] = "a corrected synthetic fact for the mismatch test"
+        self.request_path.write_text(json.dumps(self.request, ensure_ascii=False) + chr(10), encoding="utf-8")
+        # The service layer alone (as before v0.4.60) rewrites only the body and receipt.
+        plan = body_module.plan_operator_feedback_body(self.root, self.request_path, intent="revise",
+                                                       expected_body_sha256=body_sha)
+        revised = body_module.approve_operator_feedback_body(self.root, self.request_path, intent="revise",
+            expected_body_sha256=body_sha, expected_plan_sha256=plan["plan_sha256"], reviewed_by="operator:legacy")
+        self.assertTrue(revised["ok"], revised)
+        check = self.run_cli("operator-feedback-body-check", str(self.root), "--feedback-id",
+                             self.request["feedback_id"], "--dry-run", ok=False)
+        self.assertEqual(check["blockers"], ["feedback_record_binding_mismatch"])
+        named = check["next_safe_actions"][0]
+        self.assertIn("--intent update --expected-record-sha256 ", named)
+        self.assertIn("--feedback-ref " + check["feedback_ref"], named)
+        expected = named.split("--expected-record-sha256 ", 1)[1].split()[0]
+        updated = self.run_cli("operator-feedback-record", str(self.root), "--feedback-id", self.request["feedback_id"],
+                               "--feedback-ref", check["feedback_ref"], "--status", "draft", "--intent", "update",
+                               "--expected-record-sha256", expected, "--approve", "--reviewed-by", REVIEWER)
+        self.assertTrue(updated["ok"], updated)
+        verified = self.run_cli("operator-feedback-body-check", str(self.root), "--feedback-id",
+                                self.request["feedback_id"], "--dry-run")
+        self.assertEqual(verified["state"], "verified")
+
     def test_cancelled_dialog_writes_nothing_and_legacy_receipts_stay_valid(self) -> None:
         preview = self.compose("--dry-run")
         self.native.approve = False

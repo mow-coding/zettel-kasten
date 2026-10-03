@@ -11,7 +11,10 @@ Load this reference when the human asks to write to the WOM developers.
    compose IS the letter: there is no further registration step, so never
    describe one and never ask again for an instruction already given.
 4. An undelivered letter is revised through compose's revise path, not by a
-   new number and not by editing the file.
+   new number and not by editing the file. The revise approval also moves the
+   draft record to the new body (`draft_record_update`); then run body-check.
+   If body-check reports `feedback_record_binding_mismatch`, run exactly the
+   record update its `next_safe_actions` names; the number and "전달 전" stay.
 5. When the human says it was delivered, run `operator-feedback-mark-delivered
    --only <id> --approve`.
 6. When the human asks to clean up (정리) delivered or resolved letters, that
