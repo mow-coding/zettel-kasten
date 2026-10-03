@@ -28,6 +28,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from . import archive_services
 from . import git_backup_plan as planning
+from . import work_timing
 from .exact_human_approval import (
     _ClaimedExactHumanApproval,
     exact_human_approval_archive_identity_sha256,
@@ -1653,6 +1654,7 @@ class _GitBackupBackend:
     def invalidate(self) -> None:
         self._cache = None
 
+    @work_timing.timed("git_local_process")
     def _git_raw(
         self,
         args: list[str],
@@ -2421,6 +2423,7 @@ class _GitBackupBackend:
             chunks.append(result[1])
         return 0, b"".join(chunks)
 
+    @work_timing.timed("git_exact_staging_proof")
     def _exact_add(self, group: _PreparedGroup) -> str:
         """Prove exact staging in an isolated index without touching user state."""
 
@@ -2617,6 +2620,7 @@ class _GitBackupBackend:
         if self._group_state(group) != _COMMITTED:
             raise _fail("git_backup_commit_verification_failed")
 
+    @work_timing.timed("git_push_and_requery")
     def _push(self) -> None:
         # Recheck the privately approved effective fetch/push URL and complete
         # config digest immediately before the transport boundary.  Passing the
@@ -3063,10 +3067,14 @@ def _apply_prepared_with_claim(
 ) -> dict[str, Any]:
     _require_legacy_git_backup_scope(prepared)
     prepared = _freeze_validated_prepared(prepared)
-    result, backend = _run_git_backup_exact_operation(
-        prepared, context=context, claim=claim, writer_lock=writer_lock,
-        resume=resume, progress_hook=progress_hook,
-    )
+    # v0.4.60 (letter 180 follow-up): where a 16-minute approved run went.
+    started = time.monotonic()
+    with work_timing.recording() as recorder:
+        result, backend = _run_git_backup_exact_operation(
+            prepared, context=context, claim=claim, writer_lock=writer_lock,
+            resume=resume, progress_hook=progress_hook,
+        )
+    timing = recorder.summary(time.monotonic() - started)
     authority = ExactOperationApprovalAuthority.from_reference(claim.assert_ready_for_context(context))
     git_receipt_sha256 = _persist_domain_receipt(
         prepared, writer_lock=writer_lock, authority=authority, result=result, backend=backend,
@@ -3077,6 +3085,7 @@ def _apply_prepared_with_claim(
         "lifecycle_action": "git_backup_exact_apply",
         "git_backup_completion_receipt_sha256": git_receipt_sha256,
         "commit_count": len(prepared.groups),
+        "work_timing": timing,
         "remote_ref_independently_requeried": True,
         # v0.4.60: whether the local cached remote-tracking ref (read by the
         # session-start Git attention) now names the verified pushed commit.
