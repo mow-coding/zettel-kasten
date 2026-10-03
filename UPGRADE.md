@@ -1,5 +1,18 @@
 # Upgrade Guide
 
+## v0.4.60 the last cleanup item, letter revisions, and Git status
+
+After publication, use the official project update flow. If an activity-cleanup item still ends in exact_human_approval_state_unknown at the upload step, run the same request with `--reconcile --dry-run` and check `original_resume_check`; the approved reconcile uploads it again from the exact local bytes when the original cannot resume. No archive changes on install.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0460-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.60/wom_kit-0.4.60-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
 ## v0.4.59 faster cleanup, and where the time goes
 
 After publication, use the official project update flow. Activity cleanup no longer rewrites the whole archive index per item; its result shows `measurements.work_timing` (where the time went) and its progress counts only the items that still need work. No archive changes on install.
