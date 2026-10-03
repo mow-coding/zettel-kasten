@@ -361,6 +361,12 @@ def _human_summary(block: dict[str, Any]) -> str:
         tip = block.get("remote_tip_age_days")
         if tip is not None:
             parts.append(f"the newest commit the remote is known to have is {tip} day(s) old")
+        if block.get("attention") and (ahead or (tip is not None and tip >= GIT_BACKUP_ATTENTION_STALE_DAYS)):
+            # v0.4.60 (letter 180 follow-up): say what this is based on.
+            parts.append(
+                "these numbers come from the locally cached remote-tracking ref, not a live check; "
+                "git-backup-plan --dry-run queries the remote"
+            )
     summary = "Git backup attention: " + "; ".join(parts) + "."
     if not block.get("attention"):
         summary = "Git backup attention: " + "; ".join(parts) + " (nothing waiting)."

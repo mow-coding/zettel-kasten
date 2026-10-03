@@ -211,6 +211,10 @@ def _notify(progress, stage, message, current=None, total=None):
             pass
 
 
+def _safe_code(value):
+    return value if isinstance(value, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,127}", value) else None
+
+
 def _position(item):
     """v0.4.58 (letter 180): the 1-based parent position, also for an "N-streams" child (never a string count)."""
     match = re.match(r"\d+", str(item.get("number")))
@@ -546,6 +550,28 @@ def reconcile_plan(candidate, *, credential_refs=None):
 DIAGNOSIS_LIMIT = 200
 
 
+def _upload_original_resume_check(root, journal, item):
+    """Read-only: whether the saved original upload's manifest preconditions still hold."""
+    from types import SimpleNamespace
+    from . import object_storage_upload_exact as upload
+    probe = SimpleNamespace(root=root, journal=journal)
+    _label, saved, _successor = OfficialPreservationBackend._child_label(probe, item, "upload")
+    if not saved:
+        return "no_original_upload"
+    control = services.archive_internal_path(root, upload._control_relative(saved["manifest_sha256"]))
+    if not os.path.lexists(control):
+        return "original_control_absent"
+    try:
+        plan = upload.load_object_storage_upload_plan(root, manifest_sha256=saved["manifest_sha256"])
+    except Exception as error:
+        return _safe_code(getattr(error, "code", None)) or "original_control_unreadable"
+    try:
+        upload._assert_target_preimages(plan)
+    except Exception as error:
+        return _safe_code(getattr(error, "code", None)) or "original_preconditions_changed"
+    return "resumable_preconditions_match"
+
+
 def diagnose_pending_items(root, journal, items):
     """v0.4.58 (letter 180): read-only, content-free diagnosis of unfinished items.
 
@@ -588,6 +614,15 @@ def diagnose_pending_items(root, journal, items):
                 route = "offload_resume_original_child"
             elif upload_row:
                 route = "upload_complete_after_remote_proof_or_resume_original_child"
+                # v0.4.60: say up front when the original upload cannot resume
+                # (its manifest preconditions changed); local check only.
+                if upload_row["claims"].get("started") and not upload_row["claims"].get("succeeded"):
+                    check = _upload_original_resume_check(root, journal, item)
+                    upload_row["original_resume_check"] = check
+                    if check != "resumable_preconditions_match":
+                        route = ("upload_complete_after_remote_proof_or_upload_again_from_local_bytes"
+                                 if OfficialPreservationBackend._local_object_exact(probe, item)
+                                 else "upload_original_not_resumable_local_bytes_missing_file_kept")
             elif row["steps_recorded"]:
                 route = "intake_resume_original_child"
             else:
@@ -1200,6 +1235,42 @@ class OfficialPreservationBackend:
             return self._storage_step_inner(item, operation, fresh_plan)
 
     def _storage_step_inner(self, item, operation, fresh_plan):
+        """Resume the original child; an upload that cannot resume is uploaded again.
+
+        v0.4.60 (letter 180 follow-up, item A): an upload child whose claim was
+        left started before any remote effect can no longer resume once the
+        object's manifest row changed (later versions, a second row for the
+        same bytes); the reconcile then ended in exact_human_approval_state_unknown
+        every time. Uploading is content-addressed and idempotent and the full
+        remote bytes are verified afterwards, so when the original cannot resume,
+        the remote copy is absent and the local object still holds the exact
+        bytes, the started claim is closed as failed (never as succeeded) and
+        the upload runs again under this approval. Anything else keeps the file.
+        """
+        entry_saved = self._child_label(item, operation)[1]
+        try:
+            return self._storage_step_core(item, operation, fresh_plan)
+        except Exception as error:
+            from .operation_cancellation import OperationCancelled
+            from .storage_cancellation import is_cancelled
+            if (operation != "upload" or not entry_saved or isinstance(error, OperationCancelled)
+                    or is_cancelled(error)):
+                raise
+            reason = _safe_code(getattr(error, "cause_code", None)) or _safe_code(getattr(error, "code", None)) \
+                or "activity_cleanup_upload_original_not_resumable"
+            if self._verify_body(item):
+                self._close_started_child_claims(entry_saved["context_sha256"],
+                                                 "activity_cleanup_upload_superseded_by_remote_proof")
+                return {"ok": True, "prior_completed_child": True, "remote_proof": True,
+                        "original_not_resumable_reason": reason}
+            if not self._local_object_exact(item):
+                raise
+            self._close_started_child_claims(entry_saved["context_sha256"],
+                                             "activity_cleanup_upload_superseded_original_not_resumable")
+            result = self._storage_step_core(item, operation, fresh_plan, force_fresh=True)
+            return {**result, "superseded_original_child": True, "original_not_resumable_reason": reason}
+
+    def _storage_step_core(self, item, operation, fresh_plan, force_fresh=False):
         """Resume the original authenticated child execution, not a new claim."""
         from . import exact_approval_claims as claims, object_storage_upload_exact as upload, object_storage_offload as offload, object_storage_restore as restore
         from .exact_human_approval import exact_human_approval_context_sha256, _authenticated_claim_reference_core
@@ -1208,6 +1279,8 @@ class OfficialPreservationBackend:
         module = {"upload": upload, "offload": offload, "restore": restore}[operation]
         self.current_child_stage = operation
         label, saved, successor = self._child_label(item, operation)
+        if force_fresh:
+            label, saved = successor, None
         load = getattr(module, "load_object_storage_" + operation + "_plan")
         if saved and operation == "upload" and self._verify_body(item):
             # v0.4.58 (letter 180, item A): the full remote bytes already match
@@ -1441,10 +1514,11 @@ class OfficialPreservationBackend:
 
             claims._with_key_and_boundary(self.root, close, key_provider=None, claims_boundary=None)
 
-    def _offload_had_no_effect(self, item):
-        """The local object still holds the exact bytes and its manifest location is not offloaded."""
-        from . import object_storage_restore as restore
+    def _local_object_exact(self, item):
+        """The archive's local object file exists and hashes to its object id."""
         object_id = str(item.get("object_id") or "")
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", object_id):
+            return False
         local = self.root / "objects/sha256" / object_id[7:9] / object_id[7:]
         try:
             info = os.lstat(local)
@@ -1456,7 +1530,14 @@ class OfficialPreservationBackend:
                     observed.update(chunk)
         except OSError:
             return False
-        if "sha256:" + observed.hexdigest() != object_id:
+        return "sha256:" + observed.hexdigest() == object_id
+
+    def _offload_had_no_effect(self, item):
+        """The local object still holds the exact bytes and its manifest location is not offloaded."""
+        from . import object_storage_restore as restore
+        object_id = str(item.get("object_id") or "")
+        # Called on a read-only probe by the diagnosis, so not via self.
+        if not OfficialPreservationBackend._local_object_exact(self, item):
             return False
         logical_key = restore._logical_key(object_id)
         for row in services.load_manifest_records(self.root):

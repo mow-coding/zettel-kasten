@@ -28,6 +28,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from . import archive_services
 from . import git_backup_plan as planning
+from . import work_timing
 from .exact_human_approval import (
     _ClaimedExactHumanApproval,
     exact_human_approval_archive_identity_sha256,
@@ -1653,6 +1654,7 @@ class _GitBackupBackend:
     def invalidate(self) -> None:
         self._cache = None
 
+    @work_timing.timed("git_local_process")
     def _git_raw(
         self,
         args: list[str],
@@ -2421,6 +2423,7 @@ class _GitBackupBackend:
             chunks.append(result[1])
         return 0, b"".join(chunks)
 
+    @work_timing.timed("git_exact_staging_proof")
     def _exact_add(self, group: _PreparedGroup) -> str:
         """Prove exact staging in an isolated index without touching user state."""
 
@@ -2617,6 +2620,7 @@ class _GitBackupBackend:
         if self._group_state(group) != _COMMITTED:
             raise _fail("git_backup_commit_verification_failed")
 
+    @work_timing.timed("git_push_and_requery")
     def _push(self) -> None:
         # Recheck the privately approved effective fetch/push URL and complete
         # config digest immediately before the transport boundary.  Passing the
@@ -2678,6 +2682,42 @@ class _GitBackupBackend:
         self.invalidate()
         if self._remote_state() != _REMOTE_VERIFIED:
             raise _fail("git_backup_remote_verification_failed")
+        self.tracking_ref_refreshed = self._refresh_remote_tracking_ref(head)
+
+    def _refresh_remote_tracking_ref(self, head: str) -> bool:
+        """Record the verified push in the local remote-tracking ref.
+
+        v0.4.60 (letter 180 follow-up): the backup pushes to the resolved URL,
+        so Git never moved ``refs/remotes/<remote>/<branch>``; session-start
+        Git attention reads that cached ref and kept reporting the verified
+        commits as not pushed and the remote tip as days old. After the remote
+        ref was requeried and matched, move the cached ref exactly as a plain
+        ``git push <remote>`` would, only when the remote's fetch refspec maps
+        the pushed branch there. Observational: any doubt leaves it unchanged.
+        """
+        branch = self.prepared.target_ref.removeprefix("refs/heads/")
+        remote = self.prepared.remote_name
+        if (
+            not self.prepared.target_ref.startswith("refs/heads/")
+            or not branch
+            or not isinstance(remote, str)
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}", remote)
+            or _OID_RE.fullmatch(str(head or "")) is None
+        ):
+            return False
+        try:
+            fetch = self._git_raw(["config", "--get-all", f"remote.{remote}.fetch"], max_output_bytes=16 * 1024)
+            mapping = f"+refs/heads/*:refs/remotes/{remote}/*"
+            if fetch is None or fetch[0] != 0 or mapping not in fetch[1].decode("utf-8", "replace").split():
+                return False
+            tracking = f"refs/remotes/{remote}/{branch}"
+            updated = self._git_raw(
+                ["update-ref", "-m", "wom git-backup: remote ref verified after push", tracking, head],
+                max_output_bytes=16 * 1024,
+            )
+            return updated is not None and updated[0] == 0
+        except (OSError, ValueError):
+            return False
 
     def target_identity(self, target_kind: str, target_ref: str) -> str:
         if target_kind == "git_commit_group" and target_ref in self._group_by_target:
@@ -3027,10 +3067,14 @@ def _apply_prepared_with_claim(
 ) -> dict[str, Any]:
     _require_legacy_git_backup_scope(prepared)
     prepared = _freeze_validated_prepared(prepared)
-    result, backend = _run_git_backup_exact_operation(
-        prepared, context=context, claim=claim, writer_lock=writer_lock,
-        resume=resume, progress_hook=progress_hook,
-    )
+    # v0.4.60 (letter 180 follow-up): where a 16-minute approved run went.
+    started = time.monotonic()
+    with work_timing.recording() as recorder:
+        result, backend = _run_git_backup_exact_operation(
+            prepared, context=context, claim=claim, writer_lock=writer_lock,
+            resume=resume, progress_hook=progress_hook,
+        )
+    timing = recorder.summary(time.monotonic() - started)
     authority = ExactOperationApprovalAuthority.from_reference(claim.assert_ready_for_context(context))
     git_receipt_sha256 = _persist_domain_receipt(
         prepared, writer_lock=writer_lock, authority=authority, result=result, backend=backend,
@@ -3041,7 +3085,11 @@ def _apply_prepared_with_claim(
         "lifecycle_action": "git_backup_exact_apply",
         "git_backup_completion_receipt_sha256": git_receipt_sha256,
         "commit_count": len(prepared.groups),
+        "work_timing": timing,
         "remote_ref_independently_requeried": True,
+        # v0.4.60: whether the local cached remote-tracking ref (read by the
+        # session-start Git attention) now names the verified pushed commit.
+        "remote_tracking_ref_refreshed": bool(getattr(backend, "tracking_ref_refreshed", False)),
         "paths_echoed": False,
         "commit_messages_echoed": False,
         "remote_url_echoed": False,

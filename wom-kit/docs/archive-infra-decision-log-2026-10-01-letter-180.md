@@ -1,6 +1,6 @@
 # Archive infra decision log: letter 180 (2026-10-01)
 
-Status: implemented for v0.4.58 and v0.4.59 under the owner's standing instruction to
+Status: implemented for v0.4.58, v0.4.59 and v0.4.60 under the owner's standing instruction to
 finish every implementable item before the reply ("이것도 읽어보고 작업
 진행해"). The deeper performance work is split into v0.4.59 (sequential small
 releases instead of deferring, 2026-09-24).
@@ -133,6 +133,49 @@ Executing models: the investigation was a read-only subagent (Opus 5.5);
 the fix, tests and documents from this point were made by Claude Fable 5.1
 after the owner switched the session model on 2026-10-02. Earlier v0.4.58
 and v0.4.59 units were Opus 5.5.
+
+## v0.4.60: the customer's v0.4.59 follow-up (same letter, revised 2026-10-03)
+
+The customer updated to v0.4.59 and reran the reconcile for A and B once
+(about 94 s instead of 61 min). B was deleted as designed. A remained:
+`child_stage=upload`, `exact_human_approval_state_unknown`. They also
+reported a letter-flow defect, a stale Git attention and long Git runs.
+
+1. A was not reproduced by the v0.4.58 tests: they cut the upload after the
+   remote PUT, where the remote proof completes the item. Reproduced now with
+   the real CLI: the upload claim starts, the process is cut before the PUT,
+   and the object's manifest row changes afterwards (a later version, or a
+   second row for the same bytes). The original child then fails its own
+   precondition (`object_storage_upload_plan_changed`) under
+   `exact_human_approval_state_unknown`, every time. The customer's A was
+   started by a version many releases older, so this is the likely path; the
+   exact row change on their PC is not confirmed.
+   Decision: when the original upload cannot resume, the remote copy is
+   absent and the local object still hashes to its id, close the started
+   claim as failed (`activity_cleanup_upload_superseded_original_not_resumable`,
+   never as succeeded) and upload again under the reconcile approval (content
+   addressed, idempotent, the full remote bytes are verified afterwards);
+   otherwise keep the file. The preview reports `original_resume_check` (local
+   preconditions only) and the route
+   `upload_complete_after_remote_proof_or_upload_again_from_local_bytes`.
+2. `operator-feedback-compose --intent revise` rewrote the body and receipt
+   but left the draft record on the prior `feedback_ref`, so body-check
+   blocked with `feedback_record_binding_mismatch` and no next step; the
+   customer's AI had to read the source. The revise approval now moves the
+   draft record too (compare-and-swap on the record that still names the
+   prior body; status stays draft), and body-check names the exact
+   `--intent update --expected-record-sha256` command when needed.
+3. Session-start Git attention reported verified pushes as "not pushed" with
+   a remote tip 11 days old: the backup pushes to the resolved URL, so Git
+   never moved the cached `refs/remotes/<remote>/<branch>` that the attention
+   reads. A verified push now moves that ref exactly as `git push <remote>`
+   would (only when the remote's fetch refspec maps the branch), and the
+   attention says its numbers come from the cached ref.
+4. Git preview and run now return `work_timing` (non-overlapping categories);
+   the timer follows one owning thread at a time.
+5. Shared archive files (manifest, policy, operational context, ledgers) are
+   archive-owned; a scoped backup leaves them out by design and an
+   archive-wide backup needs the human's agreement (operator guidance).
 
 ## Not established
 

@@ -5913,43 +5913,11 @@ class ArchiveCliTests(unittest.TestCase):
             revised_ref = revision["feedback_ref"]
             self.assertNotEqual(revised_ref, initial_ref)
             self.assertTrue(revision["revision_evidence"]["immutable"])
-
-            rebind_preview_code, rebind_preview_output = self.run_cli(
-                [
-                    *record_base,
-                    "--feedback-ref",
-                    revised_ref,
-                    "--intent",
-                    "update",
-                    "--dry-run",
-                ]
-            )
-            rebind_preview = json.loads(rebind_preview_output)
-            self.assertEqual(rebind_preview_code, 0, rebind_preview_output)
-            self.assertTrue(
-                rebind_preview["summary"]["feedback_body_authority_verified"]
-            )
-            self.assertEqual(
-                rebind_preview["data"]["feedback_ref_rebinding_scope"],
-                "draft_only_managed_body_cas",
-            )
-            rebind_code, rebind_output = self.run_cli(
-                [
-                    *record_base,
-                    "--feedback-ref",
-                    revised_ref,
-                    "--intent",
-                    "update",
-                    "--expected-record-sha256",
-                    rebind_preview["summary"]["current_record_sha256"],
-                    "--approve",
-                    "--reviewed-by",
-                    "person:synthetic-reviewer",
-                ]
-            )
-            rebind = json.loads(rebind_output)
-            self.assertEqual(rebind_code, 0, rebind_output)
-            self.assertTrue(rebind["approved"])
+            # v0.4.60 (letter 180 follow-up): the revise approval moves the
+            # same draft record to the revised body itself; no second step.
+            self.assertTrue(revision["draft_record_update"]["record_updated"], revision)
+            self.assertTrue(revision["record_binding"]["feedback_ref_bound"])
+            self.assertEqual(revision["user_status_label"], "전달 전")
             verified = operator_feedback_body.check_operator_feedback_body(
                 archive_root,
                 feedback_id,

@@ -1,6 +1,6 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.4.59",
+  "version": "0.4.60",
   "source_of_truth": "wom-kit source resource directories",
   "file_count": 180,
   "files": [
@@ -775,8 +775,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/developer-letters.md",
       "packaged": "templates/ai-runtime/wom-archive/references/developer-letters.md",
-      "bytes": 2084,
-      "sha256": "3cae410b9e6aff7d9fa0d13a473635466e9451648f5798d4d843b635f50104fd"
+      "bytes": 2356,
+      "sha256": "511d85b2feb6d1b9a9512845b77ea5d9aec24400c7be8d038c15f7f74d486800"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/foreign-sharing-and-trust.md",
@@ -823,8 +823,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/storage-scope.md",
       "packaged": "templates/ai-runtime/wom-archive/references/storage-scope.md",
-      "bytes": 6874,
-      "sha256": "068542be9e7a700196dab4feb6a2f565c96f69f63c8f9842620ab22886bed758"
+      "bytes": 7420,
+      "sha256": "c8445368769e83e8039a23a6c5428273b3f616509db8d3338ea35bf61954944c"
     },
     {
       "source": "templates/company/AGENTS.md",
@@ -1079,10 +1079,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.4.59.md",
-      "packaged": "release-notes/v0.4.59.md",
-      "bytes": 3500,
-      "sha256": "a6f2024c074ac42cafa0a07f67932ac5ac865ea2b4e661af3b626534a163618c"
+      "source": "docs/releases/v0.4.60.md",
+      "packaged": "release-notes/v0.4.60.md",
+      "bytes": 3592,
+      "sha256": "e49fde6ccf0f3e1db4e997bed2d03b3c24bfc351f9087946ea9c361b4c7a8026"
     }
   ]
 }

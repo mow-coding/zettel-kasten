@@ -1,10 +1,12 @@
 """Non-overlapping work timing for long composed writers (v0.4.59, letter 180).
 
-A recorder is active only inside one writer run (activity-cleanup). Entering a
-category pauses the category it is nested in, so the categories never overlap
-and, with ``unattributed``, add up to the measured processing time. Only the
-thread that started the recorder is measured; work in helper threads is
-counted in whatever the starting thread was waiting in. Timing is
+A recorder is active only inside one writer run (activity-cleanup, Git
+backup). Entering a category pauses the category it is nested in, so the
+categories never overlap and, with ``unattributed``, add up to the measured
+processing time. One thread is measured at a time: the thread that enters the
+first category owns the timeline until it leaves it (a writer that hands its
+work to one worker thread is measured there); concurrent helper threads are
+counted in whatever the owning thread was waiting in. Timing is
 observational: it never changes a result and records no paths or content.
 """
 from __future__ import annotations
@@ -20,18 +22,26 @@ _ACTIVE: contextvars.ContextVar["WorkTiming | None"] = contextvars.ContextVar("w
 
 class WorkTiming:
     def __init__(self) -> None:
-        self.owner = threading.get_ident()
+        self.owner: int | None = None
+        self._lock = threading.Lock()
         self.seconds: dict[str, float] = {}
         self.calls: dict[str, int] = {}
         self._stack: list[list] = []
 
-    def _push(self, category: str) -> None:
+    def _push(self, category: str) -> bool:
+        with self._lock:
+            current = threading.get_ident()
+            if not self._stack:
+                self.owner = current
+            elif self.owner != current:
+                return False
         now = time.monotonic()
         if self._stack:
             parent = self._stack[-1]
             self.seconds[parent[0]] = self.seconds.get(parent[0], 0.0) + now - parent[1]
         self._stack.append([category, now])
         self.calls[category] = self.calls.get(category, 0) + 1
+        return True
 
     def _pop(self) -> None:
         now = time.monotonic()
@@ -65,10 +75,9 @@ def recording():
 @contextlib.contextmanager
 def measure(category: str):
     recorder = _ACTIVE.get()
-    if recorder is None or threading.get_ident() != recorder.owner:
+    if recorder is None or not recorder._push(category):
         yield
         return
-    recorder._push(category)
     try:
         yield
     finally:

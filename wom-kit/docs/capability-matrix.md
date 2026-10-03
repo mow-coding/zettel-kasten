@@ -1,9 +1,9 @@
 ﻿# WOM-kit Capability Matrix
 
-Current v0.4.59 candidate: faster cleanup, and where the time goes (letter 180): an archive index that rewrites only changed manifest rows, non-overlapping work timing for activity-cleanup and progress and ETA that skip completed items. [Release scope](releases/v0.4.59.md). Other ongoing requests are not included in this claim.
-Version: v0.4.59 implementation and release scope
+Current v0.4.60 candidate: the last cleanup item, letter revisions, and Git status (letter 180 follow-up): a reconcile that uploads again an upload child that can no longer resume, letter revisions that keep the record bound, a Git status that knows about verified pushes and Git work timing. [Release scope](releases/v0.4.60.md). Other ongoing requests are not included in this claim.
+Version: v0.4.60 implementation and release scope
 
-Status: v0.4.59 candidate: faster cleanup, and where the time goes (letter 180); [release scope](releases/v0.4.59.md).
+Status: v0.4.60 candidate: the last cleanup item, letter revisions, and Git status (letter 180 follow-up); [release scope](releases/v0.4.60.md).
 
 Status: v0.4.36 no-dialog grants, letter-168, and session-owned writes truth
 Date: 2026-09-04

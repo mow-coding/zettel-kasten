@@ -23,6 +23,14 @@
   `--rebind-access-key-id-ref` and `--rebind-secret-access-key-ref`, then the
   matching `--approve`. Completed items are not reprocessed; never put a key in
   chat, a file, or a command line.
+- Shared archive files (the objet manifest, policy, operational context,
+  ledgers) carry several activities' changes and belong to the archive, not
+  to one session. A session- or list-scoped Git backup leaves them out by
+  design. Back them up with one archive-wide `git-backup-plan --dry-run` only
+  after the human agrees to include every activity's pending changes in that
+  commit; never split a shared file by hand. Session-start Git attention
+  reads the locally cached remote ref, not the remote; the plan's dry-run is
+  the live check.
 - If an `activity-cleanup` ends partial, change nothing by hand and do not
   start it again: read `pending_item_diagnosis` in the `--reconcile --dry-run`
   result (each unfinished item's step and route) and approve that exact plan

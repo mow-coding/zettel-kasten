@@ -1,5 +1,18 @@
 # 업그레이드 가이드
 
+## v0.4.60 마지막 정리 항목, 편지 수정, Git 상태
+
+공개된 뒤 기존 프로젝트는 공식 업데이트 절차를 쓰세요. activity-cleanup 항목이 업로드 단계의 exact_human_approval_state_unknown으로 계속 남는다면 같은 요청으로 `--reconcile --dry-run`을 실행해 `original_resume_check`를 확인하세요. 원래 업로드를 이어 갈 수 없으면 승인된 reconcile이 정확한 로컬 바이트로 다시 올립니다. 설치만으로 archive는 바뀌지 않습니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0460-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.60/wom_kit-0.4.60-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
 ## v0.4.59 더 빠른 정리와 시간 내역
 
 공개된 뒤 기존 프로젝트는 공식 업데이트 절차를 쓰세요. activity-cleanup이 항목마다 아카이브 색인 전체를 다시 쓰지 않습니다. 결과의 `measurements.work_timing`이 시간이 어디에 쓰였는지 보여 주고, 진행 표시는 아직 남은 항목만 셉니다. 설치만으로 archive는 바뀌지 않습니다.

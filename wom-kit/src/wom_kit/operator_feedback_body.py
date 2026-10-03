@@ -143,8 +143,9 @@ REVISE_PATH_NEXT_SAFE_ACTIONS = (
     "3. archive operator-feedback-compose <archive-root> --request <same-request> --intent revise "
     "--expected-body-sha256 <current body sha256> --dry-run  then --approve with --expected-plan-sha256 "
     "and --reviewed-by (one dialog)",
-    "4. archive operator-feedback-record <archive-root> --feedback-id <id> --status draft --intent update "
-    "--approve --reviewed-by <person:...>  (moves the record to the revised feedback_ref)",
+    "4. since v0.4.60 the revise approval also moves the draft record to the revised feedback_ref "
+    "(draft_record_update in its result); only if that reports a skipped_reason, run the exact "
+    "operator-feedback-record --intent update --expected-record-sha256 command that body-check names",
     "5. archive operator-feedback-body-check <archive-root> --feedback-id <id> --dry-run --format json",
 )
 IMMUTABLE_FEEDBACK_STATUSES = frozenset(
@@ -2438,11 +2439,37 @@ def check_operator_feedback_body(
             "next_safe_actions": (
                 list(REVISE_PATH_NEXT_SAFE_ACTIONS)
                 if binding_blocker == "feedback_record_binding_missing"
+                else _record_mismatch_next_actions(root, feedback_id, feedback_ref)
+                if binding_blocker == "feedback_record_binding_mismatch"
                 else []
             ),
         }
     )
     return result
+
+
+def _record_mismatch_next_actions(root: Path, feedback_id: str, feedback_ref: str) -> list[str]:
+    """v0.4.60 (letter 180 follow-up): name the exact same-number record update.
+
+    Before v0.4.60 a revised body left the draft record on the prior
+    feedback_ref and this check returned no next step.
+    """
+    try:
+        state = _feedback_record_state(root, feedback_id)
+    except _BodyContractError:
+        return []
+    if state["status"] != "draft":
+        return [
+            "the record is no longer a draft (전달 완료 or later); its body cannot be revised. "
+            "Use operator-feedback-compose --intent supersede for a new letter that replaces it."
+        ]
+    return [
+        f"archive operator-feedback-record <archive-root> --feedback-id {feedback_id} --feedback-ref {feedback_ref} "
+        f"--status draft --intent update --expected-record-sha256 {state['record_sha256']} --dry-run --format json",
+        "then the same command with --approve --reviewed-by <person:...> (no dialog with the session grant); "
+        "the number and the 전달 전 state stay the same",
+        f"archive operator-feedback-body-check <archive-root> --feedback-id {feedback_id} --dry-run --format json",
+    ]
 
 
 __all__ = [

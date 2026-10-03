@@ -27,7 +27,9 @@ from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import urlsplit
 
 from . import archive_services
+from . import work_timing
 from .process_launch import noninteractive_creationflags
+from .work_timing import timed as _work_timed
 
 
 GIT_BACKUP_PLAN_SCHEMA = "wom-kit/git-backup-plan/v0.1"
@@ -540,6 +542,7 @@ def _kill_process_tree(
     return True
 
 
+@_work_timed("git_remote_transport")
 def _run_transport_capped(
     command: list[str],
     *,
@@ -655,6 +658,7 @@ def _run_transport_capped(
     return return_code, output_box[0] if output_box else b""
 
 
+@_work_timed("git_local_process")
 def _local_git_raw(
     root: Path,
     args: list[str],
@@ -1616,6 +1620,7 @@ def _git_config_trust_digest(root: Path) -> str | None:
     return _sha256_bytes(digest_stdout.strip().lower())
 
 
+@_work_timed("structural_snapshot")
 def _structural_snapshot(
     root: Path,
     *,
@@ -2085,6 +2090,7 @@ def _receipt_inventory_drift(root: Path, cache: _ReceiptInventoryCache, *, limit
     }
 
 
+@_work_timed("receipt_inventory")
 def _receipt_inventory(
     root: Path,
 ) -> tuple[_ReceiptInventory, _ReceiptInventoryCache | None, list[str]]:
@@ -2270,6 +2276,7 @@ def _receipt_inventory(
     )
 
 
+@_work_timed("receipt_inventory")
 def _receipt_inventory_recheck(
     root: Path,
     cache: _ReceiptInventoryCache,
@@ -2386,6 +2393,7 @@ def _size_bucket(size: int | None) -> str:
     return "over_16x_file_limit"
 
 
+@_work_timed("changed_file_hashing")
 def _observe_changed_files(
     root: Path,
     records: list[_StatusRecord],
@@ -2463,6 +2471,7 @@ def _observe_changed_files(
     return observations, total_bytes, _unique(blockers), context
 
 
+@_work_timed("git_blob_inventory")
 def _git_blob_inventory(
     root: Path,
     snapshot: dict[str, Any],
@@ -3444,18 +3453,24 @@ def git_backup_plan(
             )
         token = _PINNED_GIT_EXECUTABLE.set(pinned)
         try:
-            result = _git_backup_plan_with_pinned_git(
-                archive_root,
-                remote_name=remote_name,
-                branch=branch,
-                credential_mode=credential_mode,
-                max_changes=max_changes,
-                max_changed_bytes=max_changed_bytes,
-                dry_run=dry_run,
-                _private_capture=_private_capture,
-                _progress=progress,
-                _inspection_paths=_inspection_paths,
-            )
+            # v0.4.60 (letter 180 follow-up): a 12-minute preview could not be
+            # explained; record where the time went, without overlap.
+            started = time.monotonic()
+            with work_timing.recording() as recorder:
+                result = _git_backup_plan_with_pinned_git(
+                    archive_root,
+                    remote_name=remote_name,
+                    branch=branch,
+                    credential_mode=credential_mode,
+                    max_changes=max_changes,
+                    max_changed_bytes=max_changed_bytes,
+                    dry_run=dry_run,
+                    _private_capture=_private_capture,
+                    _progress=progress,
+                    _inspection_paths=_inspection_paths,
+                )
+            if isinstance(result, dict):
+                result["work_timing"] = recorder.summary(time.monotonic() - started)
             progress.status("verifying_git_pin")
             final_observation = _pin_git_at(Path(pinned.path))
             if final_observation != pinned:

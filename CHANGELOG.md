@@ -4,6 +4,13 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.4.60 - 2026-10-04
+
+- Beta letter 180, v0.4.59 follow-up (item A): an upload child whose claim started before any remote write could not resume once the object's manifest row changed (`object_storage_upload_plan_changed` under `exact_human_approval_state_unknown`); reproduced with the real CLI. When the original cannot resume, the remote copy is absent and the local object holds the exact bytes, the started claim is closed as failed and the upload runs again under the reconcile approval (full remote bytes verified afterwards); otherwise the file is kept. The preview reports `original_resume_check`.
+- `operator-feedback-compose --intent revise` also moves the draft record to the revised body (compare-and-swap, status stays draft); body-check names the exact record update when the record still points at a prior body.
+- A verified Git backup push refreshes the cached remote-tracking ref, so session-start Git attention no longer reports pushed work as unpushed; the attention says its numbers are cached, not live.
+- `git-backup-plan` and the approved Git backup return non-overlapping `work_timing`; shared archive files guidance for scoped backups.
+
 ## v0.4.59 - 2026-10-02
 
 - Beta letter 180, performance: the archive index rewrites only the manifest projection rows that changed instead of every row three times per cleanup item (tables equal a full rewrite; lease, fence, seal and final checks unchanged).

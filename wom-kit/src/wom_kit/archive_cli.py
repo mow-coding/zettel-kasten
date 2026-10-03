@@ -12875,6 +12875,53 @@ def _operator_feedback_compose_exact_approval(
                 f"after the person reports delivery: archive operator-feedback-mark-delivered <archive-root> --only {feedback_id} --approve --reviewed-by <person:...> --format json (전달 완료)",
             ]
             return result
+    if intent == "revise" and result.get("state") in {"revised", "already_written"}:
+        # v0.4.60 (letter 180 follow-up): revise rewrote the body and its
+        # receipt but left the draft record on the old feedback_ref, so
+        # body-check blocked with feedback_record_binding_mismatch and no next
+        # step. Move the record to the revised ref here, in sequence like the
+        # create path, with a compare-and-swap on the record that still names
+        # the prior body; status stays draft (전달 전).
+        feedback_id = str(result.get("feedback_id") or "")
+        expected_body = str(getattr(args, "expected_body_sha256", None) or "").strip().lower()
+        binding = {"record_updated": False, "record_sha256": None, "skipped_reason": None}
+        try:
+            state = api._feedback_record_state(archive_root, feedback_id)
+            if state["feedback_ref"] == feedback_ref:
+                binding["skipped_reason"] = "already_bound"
+            elif state["status"] != "draft" or state["feedback_ref"] != "feedback-body-sha256:" + expected_body:
+                binding["skipped_reason"] = "feedback_record_changed"
+            else:
+                record_result = archive_services.operator_feedback_record(
+                    archive_root, feedback_id=feedback_id, feedback_ref=feedback_ref, status="draft",
+                    intent="update", expected_record_sha256=state["record_sha256"],
+                    dry_run=False, approve=True, reviewed_by=reviewer,
+                )
+                if record_result.get("ok") is True:
+                    receipt = record_result.get("receipt") if isinstance(record_result.get("receipt"), dict) else {}
+                    binding.update(record_updated=True, record_sha256=receipt.get("record_sha256"))
+                else:
+                    codes = record_result.get("blocker_codes") if isinstance(record_result.get("blocker_codes"), list) else []
+                    binding["skipped_reason"] = str(codes[0]) if codes else "feedback_record_update_blocked"
+        except Exception:  # noqa: BLE001 - the body write already succeeded; report, never raise
+            binding["skipped_reason"] = "feedback_record_update_failed"
+        bound = binding["record_updated"] or binding["skipped_reason"] == "already_bound"
+        result["draft_record_update"] = binding
+        result["record_binding"] = {"record_present": True, "feedback_ref_bound": bound}
+        if bound:
+            result["user_status"] = "before_delivery"
+            result["user_status_label"] = "전달 전"
+            result["next_safe_actions"] = [
+                f"archive operator-feedback-body-check <archive-root> --feedback-id {feedback_id} --dry-run --format json",
+                "tell the person this one letter is ready to deliver (전달 전) and where it is; make no review copies",
+            ]
+            return result
+        result["letter_verified"] = False
+        result["next_safe_actions"] = [
+            f"archive operator-feedback-body-check <archive-root> --feedback-id {feedback_id} --dry-run --format json"
+            "  (it names the exact record update when the record still points at the prior body)",
+        ]
+        return result
     result["next_safe_actions"] = [
         *[item for item in result.get("next_safe_actions", []) if isinstance(item, str)],
         *getattr(api, "REVISE_PATH_NEXT_SAFE_ACTIONS", ()),
