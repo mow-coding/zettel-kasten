@@ -179,6 +179,74 @@ class Letter180ReconcileTests(unittest.TestCase):
         _preview, code, again = self.reconcile()
         self.assert_all_done(code, again)
 
+    def cut_upload_before_put(self, number):
+        target, fired = _oid(self.bodies[number]), [False]
+        original_put = self.transport.put_object
+
+        def put(**kwargs):
+            if not fired[0] and kwargs.get("key", "").endswith(target[7:]):
+                fired[0] = True
+                raise OSError("synthetic cut before the remote PUT")
+            return original_put(**kwargs)
+        return (self.transport, "put_object", put)
+
+    def change_manifest_row(self, number):
+        """A later version rewrote the object's manifest row (here: its mime)."""
+        target = _oid(self.bodies[number])
+        manifest = self.root / "objects/manifests/files.jsonl"
+        lines = manifest.read_text(encoding="utf-8").splitlines()
+        for index, line in enumerate(lines):
+            row = json.loads(line) if line.strip() else None
+            if row and row.get("object_id") == target:
+                row["mime"] = "text/x-synthetic-later-version"
+                lines[index] = json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        manifest.write_text(chr(10).join(lines) + chr(10), encoding="utf-8")
+        services.index_archive(self.root)
+
+    def test_a_upload_cut_before_put_resumes_the_original_child(self):
+        code, _first = self.run_cli("--approve", "--reviewed-by", "person:synthetic",
+                                    patches=[self.cut_upload_before_put(1)])
+        self.assertEqual(code, 1)
+        preview, code, result = self.reconcile()
+        row = preview["pending_item_diagnosis"]["items"][0]
+        self.assertEqual(row["child_steps"]["upload"]["original_resume_check"], "resumable_preconditions_match")
+        self.assert_all_done(code, result)
+        self.assertEqual(self.claim_statuses("object_storage_bytes_upload"), {"succeeded": 4})
+
+    def test_a_upload_not_resumable_after_row_change_uploads_again(self):
+        """v0.4.60 (letter 180 follow-up): the customer's remaining item A."""
+        code, first = self.run_cli("--approve", "--reviewed-by", "person:synthetic",
+                                   patches=[self.cut_upload_before_put(1)])
+        self.assertEqual(code, 1)
+        self.assertEqual(self.item(first, 1).get("child_stage"), "upload")
+        self.change_manifest_row(1)
+        preview, code, result = self.reconcile()
+        row = preview["pending_item_diagnosis"]["items"][0]
+        self.assertEqual(row["child_steps"]["upload"]["original_resume_check"], "object_storage_upload_plan_changed")
+        self.assertEqual(row["reconcile_route"], "upload_complete_after_remote_proof_or_upload_again_from_local_bytes")
+        self.assert_all_done(code, result)
+        # The old started claim is closed as failed, never as succeeded.
+        self.assertEqual(self.claim_statuses("object_storage_bytes_upload"), {"succeeded": 4, "failed": 1})
+        self.assertTrue(any(value == self.bodies[1] for value in self.transport.objects.values()))
+
+    def test_a_upload_not_resumable_without_exact_local_bytes_keeps_the_file(self):
+        code, _first = self.run_cli("--approve", "--reviewed-by", "person:synthetic",
+                                    patches=[self.cut_upload_before_put(1)])
+        self.assertEqual(code, 1)
+        self.change_manifest_row(1)
+        target = _oid(self.bodies[1])
+        (self.root / "objects/sha256" / target[7:9] / target[7:]).write_bytes(b"synthetic damaged local bytes")
+        preview, code, result = self.reconcile()
+        self.assertEqual(preview["pending_item_diagnosis"]["items"][0]["reconcile_route"],
+                         "upload_original_not_resumable_local_bytes_missing_file_kept")
+        self.assertEqual(code, 1)
+        kept = self.item(result, 1)
+        self.assertEqual(kept["state"], "retained")
+        self.assertEqual(kept.get("child_stage"), "upload")
+        self.assertTrue(Path(self.document["items"][1]["path"]).exists())
+        self.assertFalse(any(value == self.bodies[1] for value in self.transport.objects.values()))
+        self.assertEqual(self.claim_statuses("object_storage_bytes_upload").get("started"), 1)
+
     def test_b_offload_cut_before_control_restarts_after_no_effect_proof(self):
         code, first = self.run_cli("--approve", "--reviewed-by", "person:synthetic",
                                    patches=[self.cut_offload_before_control(2)])
