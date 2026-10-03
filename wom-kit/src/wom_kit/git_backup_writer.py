@@ -2678,6 +2678,42 @@ class _GitBackupBackend:
         self.invalidate()
         if self._remote_state() != _REMOTE_VERIFIED:
             raise _fail("git_backup_remote_verification_failed")
+        self.tracking_ref_refreshed = self._refresh_remote_tracking_ref(head)
+
+    def _refresh_remote_tracking_ref(self, head: str) -> bool:
+        """Record the verified push in the local remote-tracking ref.
+
+        v0.4.60 (letter 180 follow-up): the backup pushes to the resolved URL,
+        so Git never moved ``refs/remotes/<remote>/<branch>``; session-start
+        Git attention reads that cached ref and kept reporting the verified
+        commits as not pushed and the remote tip as days old. After the remote
+        ref was requeried and matched, move the cached ref exactly as a plain
+        ``git push <remote>`` would, only when the remote's fetch refspec maps
+        the pushed branch there. Observational: any doubt leaves it unchanged.
+        """
+        branch = self.prepared.target_ref.removeprefix("refs/heads/")
+        remote = self.prepared.remote_name
+        if (
+            not self.prepared.target_ref.startswith("refs/heads/")
+            or not branch
+            or not isinstance(remote, str)
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}", remote)
+            or _OID_RE.fullmatch(str(head or "")) is None
+        ):
+            return False
+        try:
+            fetch = self._git_raw(["config", "--get-all", f"remote.{remote}.fetch"], max_output_bytes=16 * 1024)
+            mapping = f"+refs/heads/*:refs/remotes/{remote}/*"
+            if fetch is None or fetch[0] != 0 or mapping not in fetch[1].decode("utf-8", "replace").split():
+                return False
+            tracking = f"refs/remotes/{remote}/{branch}"
+            updated = self._git_raw(
+                ["update-ref", "-m", "wom git-backup: remote ref verified after push", tracking, head],
+                max_output_bytes=16 * 1024,
+            )
+            return updated is not None and updated[0] == 0
+        except (OSError, ValueError):
+            return False
 
     def target_identity(self, target_kind: str, target_ref: str) -> str:
         if target_kind == "git_commit_group" and target_ref in self._group_by_target:
@@ -3042,6 +3078,9 @@ def _apply_prepared_with_claim(
         "git_backup_completion_receipt_sha256": git_receipt_sha256,
         "commit_count": len(prepared.groups),
         "remote_ref_independently_requeried": True,
+        # v0.4.60: whether the local cached remote-tracking ref (read by the
+        # session-start Git attention) now names the verified pushed commit.
+        "remote_tracking_ref_refreshed": bool(getattr(backend, "tracking_ref_refreshed", False)),
         "paths_echoed": False,
         "commit_messages_echoed": False,
         "remote_url_echoed": False,

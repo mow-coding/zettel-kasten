@@ -488,6 +488,29 @@ class GitBackupWriterTests(unittest.TestCase):
         )
         self.assert_remote_matches_head()
 
+    def test_verified_push_refreshes_the_cached_remote_tracking_ref(self) -> None:
+        """v0.4.60 (letter 180 follow-up): start-check attention no longer reports pushed work as unpushed."""
+        from wom_kit import git_backup_attention
+
+        self.git(self.root, "update-ref", "refs/remotes/origin/main", self.initial_head)
+        self.git(self.root, "branch", "--set-upstream-to=origin/main", "main")
+        prepared = self.plan_and_prepare()
+        with self.patches()[0], self.patches()[1], self.patches()[2], self.patches()[3]:
+            result = writer.execute_git_backup(
+                prepared,
+                selection_manifest_path=self.selection_path,
+                reviewer_claim="person:local-operator",
+                native=_Native(),
+                key_provider=_KeyProvider(),
+            )
+        self.assertTrue(result["ok"], result)
+        self.assertTrue(result["remote_tracking_ref_refreshed"])
+        head = self.git(self.root, "rev-parse", "HEAD").stdout.strip()
+        self.assertEqual(self.git(self.root, "rev-parse", "refs/remotes/origin/main").stdout.strip(), head)
+        attention = git_backup_attention.git_backup_attention(self.root)
+        self.assertEqual(attention["ahead_count"], 0, attention)
+        self.assertNotIn("commits_not_pushed", attention["attention"])
+
     def test_push_after_crash_is_requeried_and_resume_does_not_push_twice(self) -> None:
         prepared = self.plan_and_prepare()
         push_calls = 0
