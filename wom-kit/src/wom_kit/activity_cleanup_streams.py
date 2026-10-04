@@ -103,7 +103,7 @@ def hold(path, body_state, *, base_handle=None, expected=None):
         if own_base:
             base_handle = bound._windows_open(path, directory=False)
         bound._validate_windows_named_file(path, approved)
-        bound._windows_digest_handle(base_handle, approved, expected_link_count=1)
+        bound._windows_digest_handle(base_handle, approved, expected_link_count=approved.link_count)
         names = sorted(bound._windows_stream_names(base_handle, directory=False))
         if "::$DATA" not in names or len(set(names)) != len(names):
             raise _fail("activity_cleanup_stream_inventory_invalid")
@@ -123,7 +123,8 @@ def hold(path, body_state, *, base_handle=None, expected=None):
                 raise _fail()
             if [_state(name, handle) for name, handle in handles.items()] != rows:
                 raise _fail()
-            bound._windows_digest_handle(base_handle, approved, expected_link_count=0 if after_delete else 1)
+            bound._windows_digest_handle(base_handle, approved,
+                expected_link_count=approved.link_count - 1 if after_delete else approved.link_count)
 
         verify()
         yield rows, handles, verify

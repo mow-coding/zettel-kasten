@@ -7,8 +7,8 @@
     {
       "source": "schemas/activity-cleanup-request-v1.schema.json",
       "packaged": "schemas/activity-cleanup-request-v1.schema.json",
-      "bytes": 2747,
-      "sha256": "57e8438ee6a4d7af21a7c1c5b84f1579caa8d1dc3077b1b3d1e0d49ee9b3a08f"
+      "bytes": 3061,
+      "sha256": "0e1c4090724849af2177d2f4c19b727b77214ade70563660b622315723915144"
     },
     {
       "source": "schemas/activity-group-membership-receipt.schema.json",
@@ -823,8 +823,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/storage-scope.md",
       "packaged": "templates/ai-runtime/wom-archive/references/storage-scope.md",
-      "bytes": 7420,
-      "sha256": "c8445368769e83e8039a23a6c5428273b3f616509db8d3338ea35bf61954944c"
+      "bytes": 8625,
+      "sha256": "3727152a411ee851ef3b7b09939073c56f4dcfdea4d95f57d6f33d206cc26ad4"
     },
     {
       "source": "templates/company/AGENTS.md",

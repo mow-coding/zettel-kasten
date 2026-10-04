@@ -52,6 +52,10 @@ class _ApprovedFile:
     size: int
     mtime_ns: int
     sha256: str
+    # v0.4.63 (letter 182): the number of hard links the approved file has
+    # right now. Deleting one approved link takes it from N to N-1; the
+    # classic single-link delete is 1 to 0.
+    link_count: int = 1
 
 
 @dataclass(frozen=True)
@@ -118,12 +122,16 @@ def _approved_file(expected: Mapping[str, Any]) -> _ApprovedFile:
     digest = expected.get("sha256")
     if not isinstance(digest, str) or SHA256_RE.fullmatch(digest) is None:
         raise _fail("legacy_cleanup_expected_file_sha256_invalid")
+    link_count = expected.get("link_count", 1)
+    if isinstance(link_count, bool) or not isinstance(link_count, int) or not 1 <= link_count <= 1024:
+        raise _fail("legacy_cleanup_expected_file_link_count_invalid")
     return _ApprovedFile(
         device=device,
         inode=inode,
         size=size,
         mtime_ns=mtime_ns,
         sha256=digest,
+        link_count=link_count,
     )
 
 
@@ -585,7 +593,7 @@ def _validate_windows_named_file(path: Path, approved: _ApprovedFile) -> None:
         _is_reparse(named)
         or not stat.S_ISREG(named.st_mode)
         or _identity(named) != (approved.device, approved.inode)
-        or int(named.st_nlink) != 1
+        or int(named.st_nlink) != approved.link_count
         or int(named.st_size) != approved.size
         or int(named.st_mtime_ns) != approved.mtime_ns
     ):
@@ -606,7 +614,7 @@ def _cancel_windows_file_disposition(
             api.set_readonly_disposition(handle, False)
         else:
             api.set_disposition(handle, False)
-        _windows_digest_handle(handle, approved, expected_link_count=1)
+        _windows_digest_handle(handle, approved, expected_link_count=approved.link_count)
         if stream_verifier is None:
             _reject_windows_alternate_streams(handle, directory=False)
         else:
@@ -646,10 +654,11 @@ def _delete_windows_file(
             else:
                 from .activity_cleanup_streams import hold
                 state = {"type": "file", "identity": {"device": approved.device, "inode": approved.inode},
-                         "size": approved.size, "mtime_ns": approved.mtime_ns, "sha256": approved.sha256}
+                         "size": approved.size, "mtime_ns": approved.mtime_ns, "sha256": approved.sha256,
+                         **({"link_count": approved.link_count} if approved.link_count != 1 else {})}
                 _rows, _handles, stream_verifier = stream_stack.enter_context(
                     hold(path, state, base_handle=handle, expected=expected_streams))
-            _windows_digest_handle(handle, approved, expected_link_count=1)
+            _windows_digest_handle(handle, approved, expected_link_count=approved.link_count)
             readonly_disposition = bool(allow_readonly and
                 _windows_api().query(handle).attributes & _windows_api().FILE_ATTRIBUTE_READONLY)
             if readonly_disposition:
@@ -657,7 +666,8 @@ def _delete_windows_file(
             else:
                 _windows_api().set_disposition(handle, True)
             delete_marked = True
-            _windows_digest_handle(handle, approved, expected_link_count=0)
+            # The delete-pending link no longer counts: N-1 (0 for a single link).
+            _windows_digest_handle(handle, approved, expected_link_count=approved.link_count - 1)
             if stream_verifier is None:
                 _reject_windows_alternate_streams(handle, directory=False)
             else:

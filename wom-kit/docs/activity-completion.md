@@ -31,10 +31,12 @@
 - `activity_id`: 재개에 사용할 고유한 활동 이름.
 - `roots`: 작업 대상의 절대 디렉터리 목록. WOM 아카이브 자체를 외부 원본으로 지정하지 않는다.
 - `items`: 각 파일의 절대 경로, `role`, 판단 근거 `reason`, `disposition`.
-- 역할은 `deliverable` / `source` / `evidence` / `temporary` / `unknown`. AI 도우미가 파일 내용, 생성 과정, 의존 관계와 실제 사용 목적을 조사하여 먼저 분류한다. 사용자가 파일마다 분류해 주기를 기다리지 않는다.
+- 역할은 `deliverable` / `source` / `evidence` / `temporary` / `unknown` / `secret_config`. AI 도우미가 파일 내용, 생성 과정, 의존 관계와 실제 사용 목적을 조사하여 먼저 분류한다. 사용자가 파일마다 분류해 주기를 기다리지 않는다.
 - 원본·최종 결과·복구 근거는 `preserve`. 재생성 가능한 캐시, 필요 없어진 중간 산출물, 보존본이 확인된 임시 사본은 근거를 적고 `temporary` + `discard` + `discard_intent: true`로 처리한다. 이는 분류자의 명시적 폐기 기록이며, 유효한 전체 액세스에서 별도 승인창을 요구하는 항목이 아니다.
 - `temporary`를 `preserve`로 지정하면 업로드 전에 차단한다. 실제로 남길 가치가 있는 중간 자료는 그 이유를 확인하고 `source` 또는 `evidence`로 분류한다. 임시물까지 일괄 업로드하는 것을 안전한 기본값으로 삼지 않는다.
 - 판단 불명·다른 활동 의존·아직 사용하는 파일은 `retain`으로 남긴다. `retain`은 반입·업로드·삭제 모두 하지 않으며 다른 확정 항목은 처리한다. 결과는 보류 항목이 남은 `partial`이고 전체 정리 완료가 아니다.
+- 실제 비밀 설정 파일(키·토큰)은 `secret_config` 역할이다. 원격에 올리지 않는다. `retain`으로 남기거나, 사용자가 그 파일의 비밀값을 다른 곳에 보관하고 있다고 확인한 뒤에만 `discard` + `discard_intent: true` + `secret_values_kept_elsewhere: true`로 지운다. 비밀값이 없는 예제 설정은 일반 `source`다. 이름이 아니라 내용으로 파일마다 판정한다.
+- 하드링크(한 파일에 이름이 여러 개)는 모든 연결 경로를 같은 역할·처리로 각각 항목에 넣는다(`fsutil hardlink list <경로>`로 확인). WOM은 본문을 한 번만 보존하고 연결을 하나씩 지운다. 선택한 폴더 밖에 연결이 있으면(`links_outside_selected_roots`) 그 파일은 보류하고 사용자에게 알린다. 복사·연결 해제·교체로 우회하지 않는다.
 - `storage`: 비공개 공급자·저장소 참조와 자격증명 **참조 이름**. 비밀값을 요청에 적지 않는다.
 - `remove_empty_directories`: 파일 처리 후 실제 비었을 때만 제거할 디렉터리.
 

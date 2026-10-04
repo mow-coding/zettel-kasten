@@ -50,7 +50,8 @@
               "source",
               "evidence",
               "temporary",
-              "unknown"
+              "unknown",
+              "secret_config"
             ]
           },
           "reason": {
@@ -70,6 +71,10 @@
           "discard_intent": {
             "type": "boolean",
             "description": "The classifier records disposal intent within delegated cleanup authority; not an additional approval-window requirement."
+          },
+          "secret_values_kept_elsewhere": {
+            "type": "boolean",
+            "description": "Only with role secret_config and disposition discard: the person confirmed that this file's secret values are kept elsewhere. A secret_config file is never uploaded."
           }
         }
       }

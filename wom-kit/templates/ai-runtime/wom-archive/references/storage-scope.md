@@ -62,12 +62,32 @@ Use the private `activity-cleanup` request to record each role and its reason:
 - Retain uncertain or still-used files: `disposition: retain`. No upload or
   deletion; explain the remaining uncertainty without calling cleanup complete.
 
-A filename, age or ignore rule alone is not disposal evidence. Preserve unique
-work, secret configuration, Git history and other activities' dependencies.
+- A real secret file (keys, tokens) is `role: secret_config`. It is never
+  uploaded. Use `disposition: retain`, or, only after the human confirms for
+  that file that its secret values are kept elsewhere, `disposition: discard`
+  with `discard_intent: true` and `secret_values_kept_elsewhere: true`. An
+  example file without secret values is an ordinary `source`. Judge each
+  file by its content, not its name.
+- A file with several hard links (one file, several names): make every link
+  its own item with the same role and disposition; `fsutil hardlink list
+  <path>` lists them. WOM preserves the bytes once and removes each link.
+  If the plan reports `links_outside_selected_roots`, the file is shared
+  outside this activity: leave it, tell the human, and never copy, unlink or
+  replace it to get past the check.
+
+A filename, age or ignore rule alone is not disposal evidence. Never dispose
+of unique work, Git history or other activities' dependencies.
 Temporary files cannot silently use `preserve`; meaningful intermediate
 evidence needs the appropriate role and reason. A valid full-access grant
 covers the official child operations without additional approval windows.
 Do not delete already-uploaded remote temporary objects through local cleanup.
+
+Report the result with its `plain_summary`: "selected items done" and "folders
+empty" are two answers (`selected_items_complete`, `folders_empty`). Count
+distinct files, not paths ("5 files under 10 paths"). Keep three things
+apart: files still on this PC, what is published online, and the private
+backup. Say what the human must do and what you will do; a blocker code alone
+is not an answer.
 
 ## Already-uploaded disposable files
 
