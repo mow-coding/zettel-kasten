@@ -56073,6 +56073,13 @@ def archive_index_manifest_record_is_strict(record: Any) -> bool:
     )
 
 
+# v0.4.62 (letter 181 B): per exact line text of the latest manifest
+# generation, the facts its strict parse produced (node count, canonical
+# record JSON, record digest). The file is still read through the stable
+# snapshot every time; a line is re-validated whenever its text differs.
+_STRICT_MANIFEST_LINE_FACTS: dict[str, tuple[int, str, str]] = {}
+
+
 @_work_timed("manifest_read_parse")
 def archive_index_strict_manifest_snapshot(root: Path) -> dict[str, Any]:
     """Read and strictly parse one exact manifest generation."""
@@ -56087,7 +56094,9 @@ def archive_index_strict_manifest_snapshot(root: Path) -> dict[str, Any]:
         text = snapshot["raw"].decode("utf-8")
     except UnicodeDecodeError as exc:
         raise ArchiveServiceError("archive_index_manifest_invalid") from exc
+    global _STRICT_MANIFEST_LINE_FACTS
     records: list[dict[str, Any]] = []
+    facts_by_line: dict[str, tuple[int, str, str]] = {}
     remaining_json_nodes = ZETTEL_OBJET_LINK_MANIFEST_MAX_JSON_NODES
     for line_number, raw_line in enumerate(text.splitlines(), start=1):
         line = raw_line.strip()
@@ -56095,6 +56104,23 @@ def archive_index_strict_manifest_snapshot(root: Path) -> dict[str, Any]:
             continue
         if len(records) >= ZETTEL_OBJET_LINK_MANIFEST_MAX_RECORDS:
             raise ArchiveServiceError("archive_index_manifest_too_many_records")
+        known = _STRICT_MANIFEST_LINE_FACTS.get(line)
+        if known is not None:
+            node_count, record_json, record_sha256 = known
+            if node_count > remaining_json_nodes:
+                raise ArchiveServiceError("archive_index_manifest_invalid")
+            remaining_json_nodes -= node_count
+            facts_by_line[line] = known
+            records.append(
+                {
+                    "record_ordinal": len(records) + 1,
+                    "source_line_number": line_number,
+                    "record_sha256": record_sha256,
+                    "record_json": record_json,
+                    "record": json.loads(line),
+                }
+            )
+            continue
         try:
             record = json.loads(
                 line,
@@ -56130,16 +56156,18 @@ def archive_index_strict_manifest_snapshot(root: Path) -> dict[str, Any]:
             sort_keys=True,
             separators=(",", ":"),
         )
+        record_sha256 = "sha256:" + hashlib.sha256((record_json + "\n").encode("utf-8")).hexdigest()
+        facts_by_line[line] = (node_count, record_json, record_sha256)
         records.append(
             {
                 "record_ordinal": len(records) + 1,
                 "source_line_number": line_number,
-                "record_sha256": "sha256:"
-                + hashlib.sha256((record_json + "\n").encode("utf-8")).hexdigest(),
+                "record_sha256": record_sha256,
                 "record_json": record_json,
                 "record": record,
             }
         )
+    _STRICT_MANIFEST_LINE_FACTS = facts_by_line
     return {**snapshot, "records": records, "record_count": len(records)}
 
 
@@ -59981,10 +60009,13 @@ def _write_manifest_projection_rows(conn: sqlite3.Connection, records: list[dict
         )
         for projected in records
     }
+    # v0.4.62 (letter 181 B): record_sha256 is the digest of record_json, so
+    # comparing (object_id, record_sha256) decides a row exactly without
+    # reading every stored record_json back.
     stored = {
-        row[0]: (row[1], row[2], row[3])
+        row[0]: (row[1], row[2])
         for row in conn.execute(
-            "SELECT record_ordinal, object_id, record_sha256, record_json FROM objet_manifest_projection"
+            "SELECT record_ordinal, object_id, record_sha256 FROM objet_manifest_projection"
         )
     }
     conn.executemany(
@@ -59998,7 +60029,7 @@ def _write_manifest_projection_rows(conn: sqlite3.Connection, records: list[dict
         )
         VALUES (?, ?, ?, ?)
         """,
-        [(ordinal, *values) for ordinal, values in wanted.items() if stored.get(ordinal) != values],
+        [(ordinal, *values) for ordinal, values in wanted.items() if stored.get(ordinal) != values[:2]],
     )
     objects: dict[Any, tuple[Any, Any, str]] = {}
     for projected in records:

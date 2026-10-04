@@ -321,6 +321,14 @@ def _call_with_heartbeat(
     return outcome.get("value")
 
 
+# v0.4.62 (letter 181 B): a cleanup item read the whole manifest about 15
+# times and strictly re-validated every unchanged line each time. The file is
+# still read in full with the same stat checks; only "these exact line bytes
+# pass the strict checks and carry this object id" is remembered, for the
+# lines of the latest generation. Each call builds fresh row objects.
+_VALIDATED_MANIFEST_LINES: dict[bytes, str] = {}
+
+
 @_work_timed("manifest_read_parse")
 def _read_manifest_groups(
     root: Path,
@@ -329,8 +337,10 @@ def _read_manifest_groups(
 ) -> tuple[list[dict[str, Any]], dict[str, list[dict[str, Any]]]]:
     path = archive_services.archive_internal_path(root, "objects/manifests/files.jsonl")
     info = _plain_regular_file(path, max_bytes=_MAX_MANIFEST_BYTES)
+    global _VALIDATED_MANIFEST_LINES
     rows: list[dict[str, Any]] = []
     groups: dict[str, list[dict[str, Any]]] = {}
+    validated: dict[bytes, str] = {}
     read_bytes = 0
     if progress is not None:
         progress("preservation-inventory", "start", 0, None)
@@ -346,20 +356,25 @@ def _read_manifest_groups(
                     raise _fail("object_storage_preservation_manifest_invalid")
                 if not raw.strip():
                     continue
-                try:
-                    row = _strict_json(raw)
-                    object_id = _normalize_object_id(row.get("object_id"))
-                    digest = _normalize_object_id(row.get("sha256"))
-                except (ValueError, UnicodeError, ObjectStoragePreservationError):
-                    raise _fail("object_storage_preservation_manifest_invalid") from None
-                if object_id != digest:
-                    raise _fail("object_storage_preservation_manifest_invalid")
-                if (
-                    type(row.get("size_bytes")) is not int
-                    or row["size_bytes"] < 0
-                    or not isinstance(row.get("locations"), list)
-                ):
-                    raise _fail("object_storage_preservation_manifest_invalid")
+                object_id = _VALIDATED_MANIFEST_LINES.get(raw)
+                if object_id is not None:
+                    row = json.loads(raw)  # these exact bytes already passed the strict checks
+                else:
+                    try:
+                        row = _strict_json(raw)
+                        object_id = _normalize_object_id(row.get("object_id"))
+                        digest = _normalize_object_id(row.get("sha256"))
+                    except (ValueError, UnicodeError, ObjectStoragePreservationError):
+                        raise _fail("object_storage_preservation_manifest_invalid") from None
+                    if object_id != digest:
+                        raise _fail("object_storage_preservation_manifest_invalid")
+                    if (
+                        type(row.get("size_bytes")) is not int
+                        or row["size_bytes"] < 0
+                        or not isinstance(row.get("locations"), list)
+                    ):
+                        raise _fail("object_storage_preservation_manifest_invalid")
+                validated[raw] = object_id
                 row["object_id"] = object_id
                 rows.append(row)
                 groups.setdefault(object_id, []).append(row)
@@ -374,6 +389,7 @@ def _read_manifest_groups(
         raise _fail("object_storage_preservation_manifest_invalid")
     if not rows:
         raise _fail("object_storage_preservation_manifest_invalid")
+    _VALIDATED_MANIFEST_LINES = validated
     if progress is not None:
         progress("preservation-inventory", "done", len(rows), len(rows))
     return rows, groups
