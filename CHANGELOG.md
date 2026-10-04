@@ -4,6 +4,12 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.4.61 - 2026-10-04
+
+- Beta letter 181 (A): the session closeout proves the alternate-stream state of cleanup items whose intent (v0.4.38-v0.4.46) names no streams: `bound_delete_guard_no_streams` from a signed attempt's `deleted` row under that exact intent (the bound delete refuses files carrying a stream), recorded empty inventories, and recorded inventories with stream backups (rejected before, a bug); anything else is counted as `legacy_stream_state_unknown` with a plain summary, never assumed empty. The official restore accepts guard-proven items; `session-handoff-checkpoint --accept-legacy-stream-boundary` completes a closeout whose only gap is that boundary after the person agrees.
+- Letters (C/E): a statement that a letter was or is being delivered counts as delivered (operator guidance, revise preview check); revising back to an earlier body reuses the existing approval receipt for exactly that body instead of failing with `feedback_body_existing_receipt_conflict`, which the preview now decides before approval.
+- `exact-approval-claim-finalize` refuses a reviewed plan made stale by later receipts at once instead of byte-scanning every receipt; an unchanged inventory skips the pre-dialog scan.
+
 ## v0.4.60 - 2026-10-04
 
 - Beta letter 180, v0.4.59 follow-up (item A): an upload child whose claim started before any remote write could not resume once the object's manifest row changed (`object_storage_upload_plan_changed` under `exact_human_approval_state_unknown`); reproduced with the real CLI. When the original cannot resume, the remote copy is absent and the local object holds the exact bytes, the started claim is closed as failed and the upload runs again under the reconcile approval (full remote bytes verified afterwards); otherwise the file is kept. The preview reports `original_resume_check`.

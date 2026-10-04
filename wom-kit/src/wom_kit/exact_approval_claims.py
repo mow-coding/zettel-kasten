@@ -891,6 +891,15 @@ def plan_exact_human_approval_claim_finalize(
             selected=selected, fingerprint=fingerprint, evidence_clean=True,
         )
         trusted_clean = hmac.compare_digest(_sha256_of(_PLAN_DOMAIN, candidate), str(trusted_plan_sha256))
+    # v0.4.61 (letter 181 F): the reviewed digest binds the inventory
+    # fingerprint. When the current fingerprint (complete) no longer yields
+    # that digest, no scan result can make it match, so say so at once
+    # instead of byte-scanning every receipt and then reporting a mismatch.
+    stale_review = bool(
+        trusted_plan_sha256 is not None and selected and fingerprint["complete"] and not trusted_clean
+    )
+    if stale_review:
+        blockers.append('exact_approval_claim_finalize_evidence_changed_since_review')
     evidence = {
         "scan_roots": ["/".join(parts) for parts in EVIDENCE_SCAN_ROOTS],
         "scan_method": "fingerprint_matched_plan",
@@ -902,7 +911,18 @@ def plan_exact_human_approval_claim_finalize(
         "oversize_ceiling_bytes": _MAX_EVIDENCE_FILE_BYTES,
         "complete": True,
         "referenced": {},
-    } if trusted_clean else scan_receipt_references(
+    } if trusted_clean else {
+        "scan_roots": ["/".join(parts) for parts in EVIDENCE_SCAN_ROOTS],
+        "scan_method": "skipped_reviewed_plan_already_stale",
+        "files_scanned": 0,
+        "unreadable_file_count": 0,
+        "unreadable_receipt_paths": [],
+        "oversize_skipped_count": 0,
+        "oversize_skipped_receipt_paths": [],
+        "oversize_ceiling_bytes": _MAX_EVIDENCE_FILE_BYTES,
+        "complete": True,
+        "referenced": {},
+    } if stale_review else scan_receipt_references(
         root, {str(item["approval_id"]) for item in selected}
     ) if selected else {
         "scan_roots": ["/".join(parts) for parts in EVIDENCE_SCAN_ROOTS],
@@ -966,6 +986,13 @@ def plan_exact_human_approval_claim_finalize(
             "A receipt references a selected claim: that write happened; audit it "
             "with 'archive approval-integrity-audit <archive-root>' instead of "
             "closing the claim."
+        )
+    if stale_review:
+        next_safe_actions.append(
+            "Receipts changed after the reviewed dry-run (another writer ran in this archive), so "
+            "that plan can no longer be approved. Let other writers finish, run the same dry-run "
+            "again and approve its new plan_sha256; do not write letters or receipts while a "
+            "finalize plan is being reviewed."
         )
     if not evidence["complete"]:
         next_safe_actions.append(
@@ -1165,6 +1192,8 @@ def finalize_exact_human_approval_claims(
             # skip the byte-stream scan when the inventory is unchanged.
             trusted_plan_sha256=expected_plan_sha256,
         )
+        if 'exact_approval_claim_finalize_evidence_changed_since_review' in (plan["blockers"] or []):
+            raise archive_services.ArchiveServiceError("exact_approval_claim_finalize_plan_mismatch")
         if plan["ok"] is not True or plan["blockers"]:
             raise archive_services.ArchiveServiceError("exact_approval_claim_finalize_plan_blocked")
         if not hmac.compare_digest(str(plan["plan_sha256"]), expected_plan_sha256):

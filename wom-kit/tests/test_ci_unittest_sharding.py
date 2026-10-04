@@ -181,14 +181,14 @@ class CiUnittestShardingTests(unittest.TestCase):
         for row in matrix_rows:
             windows = row["os"] == "windows-latest"
             expected_timeout = (
+                # v0.4.61: the third Windows shard was cancelled twice at 90
+                # with 1,869 of 1,874 tests done on slow runners; it gets 120.
                 "120"
-                if windows and row["shard_index_zero"] == "1"
-                # v0.4.56: the third Windows shard reached 71-75 minutes on
-                # shared runners and was cancelled once at 75; it gets 90.
-                else "90"
+                if windows and row["shard_index_zero"] in {"1", "2"}
                 # v0.4.56: the last Windows shard took 58 of 60 minutes and
-                # was cancelled at 60 with no failing test; it gets 90 too.
-                if windows and row["shard_index_zero"] in {"0", "2", "3"}
+                # was cancelled at 60 with no failing test; it gets 90.
+                else "90"
+                if windows and row["shard_index_zero"] in {"0", "3"}
                 else "75"
                 if row["shard_index_zero"] == "0"
                 else "45"

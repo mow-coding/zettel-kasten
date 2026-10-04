@@ -320,10 +320,32 @@ class FinalizeWriterTests(_ClaimStoreCase):
         self.assertEqual(str(caught.exception), "exact_approval_claim_finalize_plan_mismatch")
         self.assertEqual(self.document(approval_id)["status"], "started")
         self.write_receipt_referencing(approval_id)
+        # v0.4.61 (letter 181 F): a reviewed digest that the current receipt
+        # inventory can no longer produce is refused at once as stale, before
+        # any byte scan or swap; the fresh dry-run names the reference.
         with self.assertRaises(ArchiveServiceError) as caught:
             self.finalize(all_started=True, expected_plan_sha256="sha256:" + "0" * 64)
-        self.assertEqual(str(caught.exception), "exact_approval_claim_finalize_plan_blocked")
+        self.assertEqual(str(caught.exception), "exact_approval_claim_finalize_plan_mismatch")
         self.assertEqual(self.document(approval_id)["status"], "started")
+        self.assertIn("exact_approval_claim_referenced_by_receipt", self.plan(all_started=True)["blockers"])
+
+    def test_receipts_written_after_the_dry_run_are_refused_without_a_byte_scan(self) -> None:
+        """v0.4.61 (letter 181 F): a stale reviewed plan fails fast, not after scanning every receipt."""
+        from unittest.mock import patch
+        from wom_kit.archive_services import ArchiveServiceError
+
+        approval_id = self.make_claim(ExactHumanApprovalOperation.mint_zet)
+        plan = self.plan(all_started=True)
+        self.assertTrue(plan["ok"], plan)
+        self.write_receipt_referencing("approval_" + "e" * 32)  # another writer, unrelated claim
+        with patch.object(claims, "scan_receipt_references", side_effect=AssertionError("byte scan ran")):
+            with self.assertRaises(ArchiveServiceError) as caught:
+                self.finalize(all_started=True, expected_plan_sha256=plan["plan_sha256"])
+        self.assertEqual(str(caught.exception), "exact_approval_claim_finalize_plan_mismatch")
+        self.assertEqual(self.document(approval_id)["status"], "started")
+        fresh = self.plan(all_started=True)
+        self.assertTrue(fresh["ok"], fresh)
+        self.assertNotEqual(fresh["plan_sha256"], plan["plan_sha256"])
 
     def test_partial_failure_keeps_earlier_closings_and_the_next_plan_shrinks(self) -> None:
         ids = [self.make_claim(ExactHumanApprovalOperation.mint_zet) for _ in range(3)]
@@ -449,8 +471,10 @@ class CliTests(_ClaimStoreCase):
             "exact-approval-claim-finalize", str(self.root), "--all-started", "--approve",
             "--reviewed-by", REVIEWER, "--expected-plan-sha256", "sha256:" + "0" * 64, "--format", "json",
         )
-        self.assertEqual(json.loads(out)["reason_codes"], ["exact_approval_claim_finalize_plan_blocked"])
+        # v0.4.61: a stale reviewed digest is refused at once (no byte scan).
+        self.assertEqual(json.loads(out)["reason_codes"], ["exact_approval_claim_finalize_plan_mismatch"])
         self.assertEqual(err, "")
+        self.assertEqual(self.document(approval_id)["status"], "started")
 
     def test_command_status_inventory_classifies_both_commands(self) -> None:
         from wom_kit import command_status

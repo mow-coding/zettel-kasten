@@ -1,5 +1,18 @@
 # Upgrade Guide
 
+## v0.4.61 closing out old cleanups, and safer letter revisions
+
+After publication, use the official project update flow. Rerun `session-handoff-checkpoint --dry-run` with the same `--cleanup-request`: items deleted by an older WOM are now proven by its delete guard; if the only gap left is `legacy_stream_state_unknown`, read the plain summary with the person and, if they agree, rerun with `--accept-legacy-stream-boundary`. No archive changes on install.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0461-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.61/wom_kit-0.4.61-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
 ## v0.4.60 the last cleanup item, letter revisions, and Git status
 
 After publication, use the official project update flow. If an activity-cleanup item still ends in exact_human_approval_state_unknown at the upload step, run the same request with `--reconcile --dry-run` and check `original_resume_check`; the approved reconcile uploads it again from the exact local bytes when the original cannot resume. No archive changes on install.

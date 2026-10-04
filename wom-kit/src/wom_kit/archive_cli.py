@@ -14722,6 +14722,7 @@ def command_session_handoff_checkpoint(args: argparse.Namespace) -> int:
             expected_state_digest=args.expected_state_digest,
             activity_roots=list(getattr(args, "activity_root", None) or []),
             cleanup_requests=list(getattr(args, "cleanup_request", None) or []),
+            accept_legacy_stream_boundary=bool(getattr(args, "accept_legacy_stream_boundary", False)),
         )
     except (archive_services.ArchiveServiceError, OSError) as exc:
         print(str(exc), file=sys.stderr)
@@ -16231,14 +16232,25 @@ def command_exact_approval_claim_finalize(args: argparse.Namespace) -> int:
     try:
         archive_root = Path(args.archive_root)
         boundary = lambda: _exact_approval_claims_boundary(archive_root)
+        reviewed = str(args.expected_plan_sha256 or "").strip().lower() if args.approve else ""
         plan = exact_approval_claims.plan_exact_human_approval_claim_finalize(
             archive_root,
             claims_boundary=boundary,
+            # v0.4.61 (letter 181 F): with the reviewed digest an unchanged
+            # receipt inventory skips the byte scan and a changed one is
+            # reported as a stale plan at once.
+            trusted_plan_sha256=reviewed if re.fullmatch(r"sha256:[0-9a-f]{64}", reviewed) else None,
             **selection,
         )
         if args.dry_run:
             result = plan
         else:
+            if "exact_approval_claim_finalize_evidence_changed_since_review" in (plan.get("blockers") or []):
+                return _exact_approval_claims_cli_error(
+                    args,
+                    lifecycle_action=lifecycle_action,
+                    reason_code="exact_approval_claim_finalize_plan_mismatch",
+                )
             if plan.get("ok") is not True or plan.get("blockers"):
                 return _exact_approval_claims_cli_error(
                     args,
@@ -41501,6 +41513,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     session_handoff_checkpoint.add_argument("--cleanup-request", action="append",
         help="Private activity-cleanup request whose authenticated completion and recorded preservation belong to this handoff (repeatable).")
+    session_handoff_checkpoint.add_argument("--accept-legacy-stream-boundary", action="store_true",
+        help="Only after the person agrees: accept that older records cannot prove the extra-stream state of already deleted items (their bodies are verified); the count stays reported.")
     session_handoff_checkpoint.add_argument("--format", choices=["json"], default="json", help="Output format.")
     session_handoff_checkpoint.set_defaults(func=command_session_handoff_checkpoint)
 

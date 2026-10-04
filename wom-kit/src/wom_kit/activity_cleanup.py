@@ -437,6 +437,20 @@ class Journal:
             return signed["document"]
         except Exception:
             raise ActivityCleanupError("activity_cleanup_journal_invalid") from None
+    def names(self, pattern):
+        """v0.4.61: names of records matching a fixed pattern, in both journal roots (read() verifies each)."""
+        found = set()
+        for base in (ROOT, LEGACY_ROOT):
+            folder = services.archive_internal_path(self.root, base + "/" + self.activity)
+            try:
+                entries = os.listdir(folder)
+            except OSError:
+                continue
+            for entry in entries:
+                if entry.endswith(".json") and re.fullmatch(pattern, entry[:-5]):
+                    found.add(entry[:-5])
+        return sorted(found)
+
     def write(self, name, document):
         from .object_storage_offload import _create_or_match_document
         self._require_private(self.relative(name))
@@ -639,6 +653,68 @@ def diagnose_pending_items(root, journal, items):
             "route_counts": routes, "diagnosed_count": len(rows), "not_diagnosed_count": max(0, len(items) - len(rows))}
 
 
+def guard_deleted_numbers(journal, material):
+    """v0.4.61 (letter 181 A): items an actual bound delete removed under this exact intent.
+
+    When the intent names no alternate streams, the bound delete runs with no
+    expected streams and refuses any file that carries one
+    (legacy_cleanup_bound_delete._reject_windows_alternate_streams, checked
+    before and after the delete mark). So an item recorded as ``deleted`` in a
+    signed attempt bound to this intent provably had no alternate data
+    stream when it was deleted. ``already_absent_after_intent`` rows prove
+    nothing and are not counted; reconcile attempts (other intents) are not read.
+    """
+    plan_sha256 = digest(material)
+    numbers = set()
+    for name in [*journal.names(r"attempt-[0-9a-f]{32}"), "completed"]:
+        document = journal.read(name)
+        if (not isinstance(document, dict) or document.get("plan_sha256") != plan_sha256
+                or document.get("dry_run") is not False):
+            continue
+        for row in document.get("items") or []:
+            if isinstance(row, dict) and row.get("state") == "deleted" and type(row.get("number")) is int:
+                numbers.add(row["number"])
+    return numbers
+
+
+def stream_evidence_basis(journal, item, guard_deleted):
+    """v0.4.61 (letter 181 A): how an item's alternate-stream state is proven, or None if unknown.
+
+    Never assumes an unknown inventory is empty.
+    """
+    number = item["number"]
+    streams = journal.read("item-" + str(number) + "-streams")
+    def stream_backup_ok(expected):
+        child = streams.get("item") if isinstance(streams, dict) else None
+        return bool(streams and streams.get("parent_object_id") == item["object_id"]
+                    and streams.get("streams") == expected and isinstance(child, dict)
+                    and _child_preservation_recorded(child, journal))
+    if item.get("alternate_streams"):
+        return "intent_inventory_with_stream_backup" if stream_backup_ok(item["alternate_streams"]) else "stream_backup_missing"
+    if "alternate_streams" in item:
+        return "intent_inventory_empty"
+    inventory = journal.read("item-" + str(number) + "-stream-inventory")
+    if inventory is not None:
+        if inventory.get("object_id") != item["object_id"]:
+            return "stream_evidence_changed"
+        if not inventory.get("streams"):
+            return "recorded_inventory_empty"
+        # Before v0.4.61 a recorded nonempty inventory was never accepted even
+        # when its streams were preserved with the item (51 of the customer's).
+        return "recorded_inventory_with_stream_backup" if stream_backup_ok(inventory["streams"]) else "stream_backup_missing"
+    if number in guard_deleted and journal.read("item-" + str(number) + "-deleted") is not None:
+        return "bound_delete_guard_no_streams"
+    return None
+
+
+def _child_preservation_recorded(item, journal):
+    proof = journal.read("item-" + str(item["number"]) + "-preserved")
+    return bool(proof and proof.get("object_id") == item.get("object_id")
+                and proof.get("size") == (item.get("state") or {}).get("size")
+                and proof.get("state") == "remote_verified"
+                and proof.get("source_link_preserved") is True)
+
+
 def _restore_request_label(number, destination):
     return "restore-request-" + digest([number, str(Path(destination))])[7:]
 
@@ -655,7 +731,10 @@ def restore_plan(candidate, *, number, destination, resume=False):
         raise ActivityCleanupError("activity_cleanup_restore_preservation_missing")
     streams = candidate["journal"].read("item-" + str(number) + "-streams")
     recorded_inventory = candidate["journal"].read("item-" + str(number) + "-stream-inventory")
-    if "alternate_streams" not in item and streams is None and recorded_inventory is None:
+    if ("alternate_streams" not in item and streams is None and recorded_inventory is None
+            and number not in guard_deleted_numbers(candidate["journal"], candidate["material"])):
+        # v0.4.61 (letter 181 A): an item the bound delete removed under this
+        # intent provably had no alternate stream, so its body restores alone.
         raise ActivityCleanupError("activity_cleanup_restore_stream_inventory_unknown")
     if streams is not None and streams.get("parent_object_id") != item["object_id"]:
         raise ActivityCleanupError("activity_cleanup_stream_evidence_changed")

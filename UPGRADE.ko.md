@@ -1,5 +1,18 @@
 # 업그레이드 가이드
 
+## v0.4.61 옛 정리 기록 마감과 안전한 편지 수정
+
+공개된 뒤 기존 프로젝트는 공식 업데이트 절차를 쓰세요. 같은 `--cleanup-request`로 `session-handoff-checkpoint --dry-run`을 다시 실행하세요. 예전 WOM이 지운 항목은 이제 삭제 보호 장치 기록으로 증명됩니다. 남은 것이 `legacy_stream_state_unknown`뿐이면 쉬운 설명을 사람과 함께 읽고, 동의하면 `--accept-legacy-stream-boundary`를 붙여 다시 실행하세요. 설치만으로 archive는 바뀌지 않습니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0461-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.61/wom_kit-0.4.61-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
 ## v0.4.60 마지막 정리 항목, 편지 수정, Git 상태
 
 공개된 뒤 기존 프로젝트는 공식 업데이트 절차를 쓰세요. activity-cleanup 항목이 업로드 단계의 exact_human_approval_state_unknown으로 계속 남는다면 같은 요청으로 `--reconcile --dry-run`을 실행해 `original_resume_check`를 확인하세요. 원래 업로드를 이어 갈 수 없으면 승인된 reconcile이 정확한 로컬 바이트로 다시 올립니다. 설치만으로 archive는 바뀌지 않습니다.

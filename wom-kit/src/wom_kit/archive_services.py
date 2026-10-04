@@ -112918,6 +112918,7 @@ def session_handoff_checkpoint(
     expected_state_digest: str | None = None,
     activity_roots: list[str] | None = None,
     cleanup_requests: list[str] | None = None,
+    accept_legacy_stream_boundary: bool = False,
 ) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
@@ -112994,8 +112995,30 @@ def session_handoff_checkpoint(
     if cleanup_requests:
         from .activity_closeout import evidence as closeout_evidence
         closeout = closeout_evidence(root, cleanup_requests)
-        if closeout["state"] != "complete":
+        partial_rows = [row for row in closeout["requests"] if row.get("state") != "complete"]
+        legacy_only = bool(partial_rows) and closeout["state"] == "partial" and all(
+            row.get("legacy_stream_boundary_only") for row in partial_rows)
+        if legacy_only and accept_legacy_stream_boundary:
+            # v0.4.61 (letter 181 A): the person accepted, in this reviewed
+            # checkpoint, that older records cannot prove whether some already
+            # deleted items carried extra Windows data streams. Their bodies
+            # are verified; the count stays reported and is never counted as
+            # verified stream evidence.
+            unknown_total = sum(int(row["recorded_backup"]["legacy_stream_state_unknown_count"]) for row in partial_rows)
+            closeout = {**closeout, "state": "complete_with_accepted_legacy_stream_boundary",
+                        "accepted_legacy_stream_boundary": {"unknown_item_count": unknown_total,
+                                                            "accepted_in_this_checkpoint": True}}
+            warnings.append(
+                f"{unknown_total} already deleted item(s): older records cannot prove whether they carried extra "
+                "Windows data streams; accepted as a recorded boundary in this checkpoint."
+            )
+        elif closeout["state"] != "complete":
             durable_gaps.append("Explicit activity cleanup/backup evidence is " + closeout["state"] + ".")
+            if legacy_only:
+                durable_gaps.append(
+                    "The only gap is the legacy stream boundary: after the person reads recorded_backup.plain_summary "
+                    "and agrees, rerun this checkpoint with --accept-legacy-stream-boundary."
+                )
 
     state_evidence = {
         "operational_context_sha256": context_evidence.get("record_sha256"),
@@ -113009,6 +113032,9 @@ def session_handoff_checkpoint(
         state_evidence["activity_roots"] = inventory_snapshot["activity_roots"]
     if closeout is not None:
         state_evidence["activity_closeout_evidence_sha256"] = closeout["evidence_sha256"]
+        if closeout.get("accepted_legacy_stream_boundary"):
+            # The approved checkpoint binds the acceptance itself.
+            state_evidence["activity_closeout_accepted_legacy_stream_boundary"] = closeout["accepted_legacy_stream_boundary"]
     state_digest = sha256_json_value(state_evidence)
     proposed_receipt_path = session_handoff_checkpoint_receipt_relative_path(state_digest)
     checkpoint_root = archive_internal_path(root, SESSION_HANDOFF_CHECKPOINT_RECEIPTS_DIR)
