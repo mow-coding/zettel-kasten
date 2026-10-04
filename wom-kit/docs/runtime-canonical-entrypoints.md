@@ -1,7 +1,7 @@
 # Runtime Canonical Entry Points
 
-Current v0.4.60 candidate: the last cleanup item, letter revisions, and Git status (letter 180 follow-up): a reconcile that uploads again an upload child that can no longer resume, letter revisions that keep the record bound, a Git status that knows about verified pushes and Git work timing. [Release scope](releases/v0.4.60.md). Other ongoing requests are not included in this claim.
-Status: v0.4.60 candidate: the last cleanup item, letter revisions, and Git status (letter 180 follow-up); [release scope](releases/v0.4.60.md).
+Current v0.4.61 candidate: closing out old cleanups, and safer letter revisions (letter 181): a session closeout that proves the stream state of cleanups made by older versions, letter revisions that can restore delivered text, and stale approval-record plans refused at once. [Release scope](releases/v0.4.61.md). Other ongoing requests are not included in this claim.
+Status: v0.4.61 candidate: closing out old cleanups, and safer letter revisions (letter 181); [release scope](releases/v0.4.61.md).
 
 Status: v0.4.36 no-dialog grants, letter-168, and session-owned writes truth
 
@@ -384,17 +384,17 @@ environment:
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0460-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0461-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.60/wom_kit-0.4.60-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.61/wom_kit-0.4.61-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-Require exactly `archive 0.4.60` from a new process. This does not update the
+Require exactly `archive 0.4.61` from a new process. This does not update the
 project-local WOM-kit source mirror or change a project pin. Those effects
 require the separate reviewed `project-version-update` plan and native
 approval, or its authenticated same-context resume after interruption.
