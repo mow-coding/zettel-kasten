@@ -1,9 +1,9 @@
 ﻿# WOM-kit Capability Matrix
 
-Current v0.4.62 candidate: faster remote cleanup, and progress you can read (letter 181): remote cleanup that fences keys in chunks, manifest readers that skip re-validating unchanged lines, and progress counts in operation-control status. [Release scope](releases/v0.4.62.md). Other ongoing requests are not included in this claim.
-Version: v0.4.62 implementation and release scope
+Current v0.4.63 candidate: hard-linked files, secret config files, and a plain done answer (letter 182): activity cleanup of a hard-link group whose links are all selected, a never-uploaded secret_config role, and a completion summary that separates selected items from empty folders. [Release scope](releases/v0.4.63.md). Other ongoing requests are not included in this claim.
+Version: v0.4.63 implementation and release scope
 
-Status: v0.4.62 candidate: faster remote cleanup, and progress you can read (letter 181); [release scope](releases/v0.4.62.md).
+Status: v0.4.63 candidate: hard-linked files, secret config files, and a plain done answer (letter 182); [release scope](releases/v0.4.63.md).
 
 Status: v0.4.36 no-dialog grants, letter-168, and session-owned writes truth
 Date: 2026-09-04
