@@ -167,7 +167,10 @@ jobs:
             # v0.4.52: the third Windows shard reached 71-75 minutes on shared
             # runners (one run was cancelled at its 75-minute limit while a
             # second PR run shared the runners); 90 keeps honest headroom.
-            timeout-minutes: 90
+            # v0.4.61: the same candidate took 55 minutes, then was cancelled
+            # twice at 90 with 1,869 of 1,874 tests done (slow runners, no
+            # failing test); 120 like the second shard.
+            timeout-minutes: 120
           - os: windows-latest
             python-version: '3.12'
             shard_index: 4
