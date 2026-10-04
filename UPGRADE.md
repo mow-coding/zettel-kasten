@@ -1,5 +1,18 @@
 # Upgrade Guide
 
+## v0.4.62 faster remote cleanup, and progress you can read
+
+After publication, use the official project update flow. Remote cleanup of many keys is much faster, and operation-control status shows done/total for activity-cleanup and object-storage-cleanup while they run. No archive changes on install.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0462-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.62/wom_kit-0.4.62-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
 ## v0.4.61 closing out old cleanups, and safer letter revisions
 
 After publication, use the official project update flow. Rerun `session-handoff-checkpoint --dry-run` with the same `--cleanup-request`: items deleted by an older WOM are now proven by its delete guard; if the only gap left is `legacy_stream_state_unknown`, read the plain summary with the person and, if they agree, rerun with `--accept-legacy-stream-boundary`. No archive changes on install.

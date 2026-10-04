@@ -1,9 +1,9 @@
 ﻿# WOM-kit Capability Matrix
 
-Current v0.4.61 candidate: closing out old cleanups, and safer letter revisions (letter 181): a session closeout that proves the stream state of cleanups made by older versions, letter revisions that can restore delivered text, and stale approval-record plans refused at once. [Release scope](releases/v0.4.61.md). Other ongoing requests are not included in this claim.
-Version: v0.4.61 implementation and release scope
+Current v0.4.62 candidate: faster remote cleanup, and progress you can read (letter 181): remote cleanup that fences keys in chunks, manifest readers that skip re-validating unchanged lines, and progress counts in operation-control status. [Release scope](releases/v0.4.62.md). Other ongoing requests are not included in this claim.
+Version: v0.4.62 implementation and release scope
 
-Status: v0.4.61 candidate: closing out old cleanups, and safer letter revisions (letter 181); [release scope](releases/v0.4.61.md).
+Status: v0.4.62 candidate: faster remote cleanup, and progress you can read (letter 181); [release scope](releases/v0.4.62.md).
 
 Status: v0.4.36 no-dialog grants, letter-168, and session-owned writes truth
 Date: 2026-09-04

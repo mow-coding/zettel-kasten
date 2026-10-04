@@ -4,6 +4,12 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.4.62 - 2026-10-04
+
+- Beta letter 181 (B), remote cleanup: one fresh reference scan under the writer lock fences up to 16 keys, each key still doing proof, delete intent, DELETE, absence check and final journal; cancellation releases unattempted fences; the scan still reads and hashes every file but reuses parse results of identical bytes. 80 keys: about 269 s -> about 8 s on a synthetic archive at the customer's scale.
+- Manifest readers reuse the strict-parse facts of unchanged lines (full reads and stability checks kept): manifest parsing 53 s -> 33.5 s for three cleanup items; the projection compares rows by digest. A metadata-keyed claim cache was not shipped.
+- Operation journals v0.3 carry done/total of the current stage (older journals stay readable); activity-cleanup and object-storage-cleanup report stages and counts to operation-control status.
+
 ## v0.4.61 - 2026-10-04
 
 - Beta letter 181 (A): the session closeout proves the alternate-stream state of cleanup items whose intent (v0.4.38-v0.4.46) names no streams: `bound_delete_guard_no_streams` from a signed attempt's `deleted` row under that exact intent (the bound delete refuses files carrying a stream), recorded empty inventories, and recorded inventories with stream backups (rejected before, a bug); anything else is counted as `legacy_stream_state_unknown` with a plain summary, never assumed empty. The official restore accepts guard-proven items; `session-handoff-checkpoint --accept-legacy-stream-boundary` completes a closeout whose only gap is that boundary after the person agrees.
