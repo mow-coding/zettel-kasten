@@ -14722,6 +14722,7 @@ def command_session_handoff_checkpoint(args: argparse.Namespace) -> int:
             expected_state_digest=args.expected_state_digest,
             activity_roots=list(getattr(args, "activity_root", None) or []),
             cleanup_requests=list(getattr(args, "cleanup_request", None) or []),
+            accept_legacy_stream_boundary=bool(getattr(args, "accept_legacy_stream_boundary", False)),
         )
     except (archive_services.ArchiveServiceError, OSError) as exc:
         print(str(exc), file=sys.stderr)
@@ -41512,6 +41513,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     session_handoff_checkpoint.add_argument("--cleanup-request", action="append",
         help="Private activity-cleanup request whose authenticated completion and recorded preservation belong to this handoff (repeatable).")
+    session_handoff_checkpoint.add_argument("--accept-legacy-stream-boundary", action="store_true",
+        help="Only after the person agrees: accept that older records cannot prove the extra-stream state of already deleted items (their bodies are verified); the count stays reported.")
     session_handoff_checkpoint.add_argument("--format", choices=["json"], default="json", help="Output format.")
     session_handoff_checkpoint.set_defaults(func=command_session_handoff_checkpoint)
 
