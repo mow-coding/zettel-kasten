@@ -248,6 +248,45 @@ def _mentioned_ids(text):
     return {"sha256:" + digest for digest in re.findall(r"(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])", text)}
 
 
+# v0.4.62 (letter 181 B): the reference scan ran once per deleted key and spent
+# most of its time re-deriving the same facts from unchanged bytes. Every file
+# is still read and hashed on every scan (the evidence digest is unchanged);
+# only the pure results derived from exactly those bytes are remembered.
+_MENTION_MEMO: dict[str, frozenset[str]] = {}
+_MANIFEST_LINE_MEMO: dict[bytes, tuple[Any, ...]] = {}
+_MEMO_LIMIT = 400_000
+
+
+def _remembered_mentions(digest: str, raw: bytes) -> frozenset[str]:
+    mentioned = _MENTION_MEMO.get(digest)
+    if mentioned is None:
+        mentioned = frozenset(_mentioned_ids(raw.decode("utf-8")))
+        if len(_MENTION_MEMO) >= _MEMO_LIMIT:
+            _MENTION_MEMO.clear()
+        _MENTION_MEMO[digest] = mentioned
+    return mentioned
+
+
+def _manifest_line_facts(line: bytes) -> tuple[Any, ...]:
+    facts = _MANIFEST_LINE_MEMO.get(line)
+    if facts is None:
+        row = _json(line)
+        if not isinstance(row, dict):
+            raise _fail("object_storage_cleanup_reference_scan_incomplete")
+        provenance = row.get("provenance") or {}
+        source = provenance.get("source") if isinstance(provenance, dict) else None
+        encoded = _canonical(row).decode("ascii")
+        snapshot_like = isinstance(source, str) and any(
+            word in source for word in ("snapshot", "revision", "title_remap", "activity_group"))
+        facts = (row.get("object_id"), snapshot_like, frozenset(_mentioned_ids(encoded)), encoded,
+                 json.dumps(row, sort_keys=True))
+        if len(_MANIFEST_LINE_MEMO) >= _MEMO_LIMIT:
+            _MANIFEST_LINE_MEMO.clear()
+        _MANIFEST_LINE_MEMO[line] = facts
+    # A fresh row object per scan: callers never share mutable state.
+    return (*facts[:4], json.loads(facts[4]))
+
+
 def _references(root, entries):
     """Full local reference scan. Any unreadable evidence fails the whole scan.
 
@@ -275,12 +314,13 @@ def _references(root, entries):
                 if path.is_symlink() or path.stat().st_size > MAX_DOCUMENT:
                     raise _fail()
                 raw = path.read_bytes()
-                text = raw.decode("utf-8")
+                digest = hashlib.sha256(raw).hexdigest()
+                mentioned = _remembered_mentions(digest, raw)
                 relative = path.relative_to(root).as_posix()
             except Exception:
                 raise _fail("object_storage_cleanup_reference_scan_incomplete") from None
-            evidence.append([relative, hashlib.sha256(raw).hexdigest()])
-            for oid in ids & _mentioned_ids(text):
+            evidence.append([relative, digest])
+            for oid in ids & mentioned:
                 refs[oid].append(_digest(relative))
     manifest = services.archive_internal_path(root, "objects/manifests/files.jsonl")
     if manifest.exists():
@@ -291,20 +331,14 @@ def _references(root, entries):
         for line in raw.splitlines():
             if not line.strip():
                 continue
-            row = _json(line)
-            if not isinstance(row, dict):
-                raise _fail("object_storage_cleanup_reference_scan_incomplete")
-            own = row.get("object_id")
-            provenance = row.get("provenance") or {}
-            source = provenance.get("source") if isinstance(provenance, dict) else None
-            encoded = _canonical(row).decode("ascii")
-            for oid in ids & _mentioned_ids(encoded):
+            own, snapshot_like, mentioned, encoded, row = _manifest_line_facts(line)
+            for oid in ids & mentioned:
                 if own == oid:
-                    if isinstance(source, str) and any(word in source for word in ("snapshot", "revision", "title_remap", "activity_group")):
+                    if snapshot_like:
                         refs[oid].append("retained_snapshot_or_provider_object")
                 elif oid[7:] in encoded:
                     refs[oid].append("other_object_dependency")
-            if isinstance(source, str) and any(word in source for word in ("snapshot", "revision", "title_remap", "activity_group")):
+            if snapshot_like:
                 # A retained old note can be the only remaining use of a source
                 # object. Inspect that immutable note, not just its receipt's hash.
                 local = [location for location in row.get("locations", []) if isinstance(location, dict)
@@ -678,7 +712,8 @@ def _cleanup_checkpoint(result, entries):
 def execute_cleanup_approved(archive_root, *, request_path, expected_plan_sha256, reviewed_by,
                              exact_human_approval_claim, expected_exact_approval_plan_sha256,
                              expected_exact_approval_target_binding_sha256, transport_factory,
-                             key_provider=None, heartbeat=lambda: None, fault_hook=lambda _stage, _entry: None):
+                             key_provider=None, heartbeat=lambda: None, fault_hook=lambda _stage, _entry: None,
+                             progress=None):
     root = _root(archive_root)
     _authorize(root, operation="object_storage_remote_cleanup", reviewed_by=reviewed_by,
                exact_human_approval_claim=exact_human_approval_claim, expected_plan_sha256=expected_plan_sha256,
@@ -697,75 +732,71 @@ def execute_cleanup_approved(archive_root, *, request_path, expected_plan_sha256
     transport = _adapt(transport_factory())
     if transport.preservation_binding() != request["remote_binding"]:
         raise _fail("object_storage_cleanup_remote_binding_changed")
-    for entry in entries:
+    total = len(entries)
+    index = 0
+    while index < total:
         if _cleanup_checkpoint(result, entries):
             return result
         heartbeat()
-        if entry["reason_codes"]:
-            result["items"].append({"entry_id": entry["entry_id"], "state": "review_required", "reason_codes": entry["reason_codes"]})
+        group = []
+        while index < total and len(group) < CLEANUP_FENCE_CHUNK:
+            entry = entries[index]
+            index += 1
+            if entry["reason_codes"]:
+                result["items"].append({"entry_id": entry["entry_id"], "state": "review_required", "reason_codes": entry["reason_codes"]})
+                continue
+            group.append(entry)
+        if not group:
             continue
-        targets = [("object", entry["object_id"]), ("execution", entry["entry_id"])]
+        # v0.4.62 (letter 181 B): one fresh reference scan under the writer
+        # lock publishes the pending fences of a whole chunk (the fence other
+        # writers honour under the same lock); each key then still does
+        # proof -> delete intent -> DELETE -> absence check -> final journal.
+        targets = [target for entry in group for target in (("object", entry["object_id"]), ("execution", entry["entry_id"]))]
         with TargetLeases(root, targets, heartbeat=heartbeat) as lease:
-            relative = _state_path(request["store_ref"], entry["remote_key"])
+            fenced = []
             with exact_operation_writer_lock(root):
                 # Bind all private source files again after waiting for leases.
                 fresh_request, fresh_entries, fresh_binding, fresh_eligible = _prepare(root, request_path, key_provider)
-                if _digest(fresh_binding) != expected_plan_sha256 or entry["entry_id"] not in fresh_eligible:
+                if _digest(fresh_binding) != expected_plan_sha256 or any(entry["entry_id"] not in fresh_eligible for entry in group):
                     raise _fail("object_storage_cleanup_plan_changed")
-                path = services.archive_internal_path(root, relative)
-                previous = _load_signed(root, relative, key_provider) if path.exists() else None
-                if previous and (previous.get("entry_id") != entry["entry_id"] or previous.get("object_id") != entry["object_id"]
-                                 or previous.get("remote_binding") != request["remote_binding"]):
-                    raise _fail("object_storage_cleanup_journal_conflict")
-                if previous and previous.get("state") == "deleted":
-                    result["items"].append({"entry_id": entry["entry_id"], "state": "already_deleted"})
-                    continue
-                journal = {"schema": QUALIFICATION_SCHEMA, "archive_identity_sha256": _archive_identity(root),
-                           "entry_id": entry["entry_id"], "object_id": entry["object_id"], "remote_key": entry["remote_key"],
-                           "size": entry["size"], "store_ref": request["store_ref"], "remote_binding": request["remote_binding"],
-                           "plan_sha256": expected_plan_sha256, "classification_sha256": binding["classification_sha256"],
-                           "management_sha256": binding["management_sha256"], "reference_scan_sha256": binding["reference_scan_sha256"],
-                           "state": "pending", "delete_intent_recorded": bool(previous and previous.get("delete_intent_recorded")),
-                           "recovery_guaranteed": False}
-                _save_signed(root, relative, journal, key_provider)
-            fault_hook("pending_published", entry["entry_id"])
-            lease.verify_held()
-            # Resume after an unknown DELETE by confirming absence, never by
-            # blindly repeating a destructive request against a possibly new key.
-            if journal["delete_intent_recorded"] and _absent(transport, entry["remote_key"]):
-                state = "deleted"
-            else:
-                state, etag = _proof(transport, entry)
-                if state == "verified":
-                    conditional = getattr(transport, "conditional_delete_supported", False) is True
-                    if conditional and etag is None:
-                        state = "validator_required"
-                    else:
-                        # The explicit exclusive-management contract is mandatory
-                        # even for a provider adapter with conditional DELETE.
+                for entry in group:
+                    relative = _state_path(request["store_ref"], entry["remote_key"])
+                    path = services.archive_internal_path(root, relative)
+                    previous = _load_signed(root, relative, key_provider) if path.exists() else None
+                    if previous and (previous.get("entry_id") != entry["entry_id"] or previous.get("object_id") != entry["object_id"]
+                                     or previous.get("remote_binding") != request["remote_binding"]):
+                        raise _fail("object_storage_cleanup_journal_conflict")
+                    if previous and previous.get("state") == "deleted":
+                        result["items"].append({"entry_id": entry["entry_id"], "state": "already_deleted"})
+                        continue
+                    journal = {"schema": QUALIFICATION_SCHEMA, "archive_identity_sha256": _archive_identity(root),
+                               "entry_id": entry["entry_id"], "object_id": entry["object_id"], "remote_key": entry["remote_key"],
+                               "size": entry["size"], "store_ref": request["store_ref"], "remote_binding": request["remote_binding"],
+                               "plan_sha256": expected_plan_sha256, "classification_sha256": binding["classification_sha256"],
+                               "management_sha256": binding["management_sha256"], "reference_scan_sha256": binding["reference_scan_sha256"],
+                               "state": "pending", "delete_intent_recorded": bool(previous and previous.get("delete_intent_recorded")),
+                               "recovery_guaranteed": False}
+                    _save_signed(root, relative, journal, key_provider)
+                    fenced.append((entry, relative, journal))
+            for position, (entry, relative, journal) in enumerate(fenced):
+                if position and _cancel_requested():
+                    # No request was sent for the rest of this chunk: release
+                    # their fences (a key with a recorded delete intent keeps
+                    # its pending journal for the absence-confirming resume).
+                    with exact_operation_writer_lock(root):
                         lease.verify_held()
-                        journal.update(delete_intent_recorded=True, etag=etag)
-                        with exact_operation_writer_lock(root):
-                            _save_signed(root, relative, journal, key_provider)
-                        fault_hook("delete_intent_recorded", entry["entry_id"])
-                        heartbeat()
-                        try:
-                            deletion = transport.delete_exact(key=entry["remote_key"], etag=etag if conditional else None)
-                        except Exception:
-                            deletion = {"state": "unknown"}
-                        fault_hook("delete_returned", entry["entry_id"])
-                        state = "deleted" if _absent(transport, entry["remote_key"]) else (
-                            "delete_rejected" if deletion.get("state") == "rejected" else "outcome_unknown")
-                elif state == "absent":
-                    state = "already_absent"
-            with exact_operation_writer_lock(root):
-                lease.verify_held()
-                journal["state"] = "deleted" if state in {"deleted", "already_absent"} else (
-                    "outcome_unknown" if journal["delete_intent_recorded"] else "preserved")
-                journal["result_code"] = state
-                _save_signed(root, relative, journal, key_provider)
-            fault_hook("receipt_published", entry["entry_id"])
-            result["items"].append({"entry_id": entry["entry_id"], "state": state})
+                        for _rest, rest_relative, rest_journal in fenced[position:]:
+                            if not rest_journal["delete_intent_recorded"]:
+                                rest_journal.update(state="preserved", result_code="not_attempted")
+                                _save_signed(root, rest_relative, rest_journal, key_provider)
+                    _cleanup_checkpoint(result, entries)
+                    return result
+                _report_cleanup_progress(progress, result, total)
+                state = _dispose_fenced_key(root, transport, entry, relative, journal, lease, key_provider,
+                                            heartbeat, fault_hook)
+                result["items"].append({"entry_id": entry["entry_id"], "state": state})
+        _report_cleanup_progress(progress, result, total)
         # Never put cancellation between DELETE and its direct absence check,
         # or before the unknown/deleted result reaches the signed journal.
         if _cleanup_checkpoint(result, entries):
@@ -773,6 +804,72 @@ def execute_cleanup_approved(archive_root, *, request_path, expected_plan_sha256
     result["state"] = "completed" if all(row["state"] in {"deleted", "already_deleted", "already_absent"} for row in result["items"]) else "review_required"
     result["ok"] = result["state"] == "completed"
     return result
+
+
+CLEANUP_FENCE_CHUNK = 16
+
+
+def _cancel_requested() -> bool:
+    from .operation_cancellation import checkpoint, OperationCancelled
+    try:
+        checkpoint()
+    except OperationCancelled:
+        return True
+    return False
+
+
+def _report_cleanup_progress(progress, result, total):
+    """v0.4.62 (letter 181 B): counts, not only a stage, for the remote cleanup."""
+    if progress is None:
+        return
+    done = sum(row["state"] in {"deleted", "already_deleted", "already_absent"} for row in result["items"])
+    held = len(result["items"]) - done
+    try:
+        progress("object-storage-cleanup-keys", "progress", done + held, total)
+    except Exception:
+        pass
+
+
+def _dispose_fenced_key(root, transport, entry, relative, journal, lease, key_provider, heartbeat, fault_hook):
+    """One fenced key: proof, delete intent, DELETE, direct absence check, final journal."""
+    fault_hook("pending_published", entry["entry_id"])
+    lease.verify_held()
+    # Resume after an unknown DELETE by confirming absence, never by
+    # blindly repeating a destructive request against a possibly new key.
+    if journal["delete_intent_recorded"] and _absent(transport, entry["remote_key"]):
+        state = "deleted"
+    else:
+        state, etag = _proof(transport, entry)
+        if state == "verified":
+            conditional = getattr(transport, "conditional_delete_supported", False) is True
+            if conditional and etag is None:
+                state = "validator_required"
+            else:
+                # The explicit exclusive-management contract is mandatory
+                # even for a provider adapter with conditional DELETE.
+                lease.verify_held()
+                journal.update(delete_intent_recorded=True, etag=etag)
+                with exact_operation_writer_lock(root):
+                    _save_signed(root, relative, journal, key_provider)
+                fault_hook("delete_intent_recorded", entry["entry_id"])
+                heartbeat()
+                try:
+                    deletion = transport.delete_exact(key=entry["remote_key"], etag=etag if conditional else None)
+                except Exception:
+                    deletion = {"state": "unknown"}
+                fault_hook("delete_returned", entry["entry_id"])
+                state = "deleted" if _absent(transport, entry["remote_key"]) else (
+                    "delete_rejected" if deletion.get("state") == "rejected" else "outcome_unknown")
+        elif state == "absent":
+            state = "already_absent"
+    with exact_operation_writer_lock(root):
+        lease.verify_held()
+        journal["state"] = "deleted" if state in {"deleted", "already_absent"} else (
+            "outcome_unknown" if journal["delete_intent_recorded"] else "preserved")
+        journal["result_code"] = state
+        _save_signed(root, relative, journal, key_provider)
+    fault_hook("receipt_published", entry["entry_id"])
+    return state
 
 
 def _inventory_request(root, request_path):

@@ -24,7 +24,10 @@ from . import project_update_legacy_recovery, project_update_transaction
 from .version_policy import RELEASE_VERSION_TAG_RE
 
 
-OPERATION_JOURNAL_SCHEMA = "wom-kit/operation-journal/v0.2"
+# v0.4.62 (letter 181 B): v0.3 records carry the latest progress count so
+# status and recovery-plan show done/total, not only a stage and a sequence.
+OPERATION_JOURNAL_SCHEMA = "wom-kit/operation-journal/v0.3"
+PRE_PROGRESS_OPERATION_JOURNAL_SCHEMA = "wom-kit/operation-journal/v0.2"
 LEGACY_OPERATION_JOURNAL_SCHEMA = "wom-kit/operation-journal/v0.1"
 OPERATION_CONTROL_SCHEMA = "wom-kit/operation-control/v0.1"
 OPERATION_REF_RE = re.compile(r"op:sha256:([0-9a-f]{64})")
@@ -135,8 +138,11 @@ COMMAND_STAGES = {
     "object-storage-upload": frozenset({"starting", "preparation", "approval", "remote-io", "verification", "recording", "unknown"}),
     "object-storage-offload": frozenset({"starting", "preparation", "approval", "remote-io", "verification", "recording", "unknown"}),
     "object-storage-adopt-existing": frozenset({"starting", "preparation", "approval", "remote-io", "verification", "recording", "unknown"}),
-    "activity-cleanup": frozenset({"starting", "preparation", "approval", "remote-io", "verification", "recording", "unknown"}),
-    "object-storage-cleanup": frozenset({"starting", "preparation", "approval", "remote-io", "verification", "recording", "unknown"}),
+    "activity-cleanup": frozenset({"starting", "preparation", "approval", "remote-io", "verification", "recording", "unknown",
+                                   "activity-cleanup-inventory", "activity-cleanup-hash", "activity-cleanup-skip-completed",
+                                   "activity-cleanup-items", "activity-cleanup-directories"}),
+    "object-storage-cleanup": frozenset({"starting", "preparation", "approval", "remote-io", "verification", "recording", "unknown",
+                                         "object-storage-cleanup-keys"}),
     "object-storage-restore": frozenset({"starting", "preparation", "approval", "remote-io", "verification", "recording", "unknown"}),
     "objet-capture-batch": frozenset({
         "starting", "objet-capture-batch-plan", "batch-plan", "native-approval",
@@ -230,12 +236,17 @@ RECORD_KEYS = (
     "terminal_delivery_acknowledged",
     "terminal_handoff_sha256",
     "recovery_required",
+    "progress_current",
+    "progress_total",
     "previous_record_sha256",
     "record_sha256",
 )
+PRE_PROGRESS_RECORD_KEYS = tuple(
+    key for key in RECORD_KEYS if key not in {"progress_current", "progress_total"}
+)
 LEGACY_RECORD_KEYS = tuple(
     key
-    for key in RECORD_KEYS
+    for key in PRE_PROGRESS_RECORD_KEYS
     if key
     not in {
         "terminal_delivery_acknowledged",
@@ -1669,6 +1680,8 @@ class OperationRunJournal:
     _previous_digest: str | None = None
     _stage: str = "starting"
     _last_completed_stage: str | None = None
+    _progress_current: int | None = None
+    _progress_total: int | None = None
     _failed: bool = False
     _terminal: bool = False
 
@@ -1839,6 +1852,8 @@ class OperationRunJournal:
             ),
             "terminal_handoff_sha256": terminal_handoff_sha256,
             "recovery_required": recovery_required,
+            "progress_current": self._progress_current,
+            "progress_total": self._progress_total,
             "previous_record_sha256": self._previous_digest,
             "record_sha256": None,
         }
@@ -1958,10 +1973,11 @@ class OperationRunJournal:
         self,
         stage: str,
         message: str,
-        _current: int | None,
-        _total: int | None,
+        current: int | None,
+        total: int | None,
     ) -> None:
         safe_stage = self._safe_stage(stage)
+        counts_valid = (type(current) is int and type(total) is int and 0 <= current <= total)
         normalized_message = str(message or "").strip().lower()
         checkpoint = normalized_message == "start" or normalized_message.startswith(
             "start "
@@ -1972,6 +1988,12 @@ class OperationRunJournal:
         with self._lock:
             stage_changed = safe_stage != self._stage
             self._stage = safe_stage
+            if stage_changed:
+                self._progress_current = self._progress_total = None
+            if counts_valid:
+                # Carried by the next checkpoint or heartbeat record; counts
+                # alone never add records, so the journal stays bounded.
+                self._progress_current, self._progress_total = current, total
             if completed and safe_stage != "unknown":
                 self._last_completed_stage = safe_stage
             if stage_changed or checkpoint or completed:
@@ -2244,6 +2266,8 @@ def _read_journal(path: Path, root: Path) -> list[dict[str, Any]]:
         expected_record_keys = (
             RECORD_KEYS
             if record_schema == OPERATION_JOURNAL_SCHEMA
+            else PRE_PROGRESS_RECORD_KEYS
+            if record_schema == PRE_PROGRESS_OPERATION_JOURNAL_SCHEMA
             else LEGACY_RECORD_KEYS
             if record_schema == LEGACY_OPERATION_JOURNAL_SCHEMA
             else ()
@@ -2263,6 +2287,19 @@ def _read_journal(path: Path, root: Path) -> list[dict[str, Any]]:
                 "terminal_delivery_acknowledged": None,
                 "terminal_handoff_sha256": None,
             }
+        if record_schema != OPERATION_JOURNAL_SCHEMA:
+            record = {**record, "progress_current": None, "progress_total": None}
+        progress_current = record.get("progress_current")
+        progress_total = record.get("progress_total")
+        if not (
+            (progress_current is None and progress_total is None)
+            or (
+                type(progress_current) is int
+                and type(progress_total) is int
+                and 0 <= progress_current <= progress_total
+            )
+        ):
+            raise OperationControlError("operation_journal_invalid")
         operation_ref = record.get("operation_ref")
         operation_kind = record.get("operation_kind")
         root_ref = record.get("root_ref")
@@ -3497,6 +3534,13 @@ def inspect_operation(
                 "sequence": latest["sequence"],
                 "last_completed_stage": latest["last_completed_stage"],
             },
+            # v0.4.62 (letter 181 B): done/total of the current stage when
+            # the command reports counts; None means it reports none.
+            "progress": (
+                {"current": latest.get("progress_current"), "total": latest.get("progress_total")}
+                if latest.get("progress_total") is not None
+                else None
+            ),
             "result": {
                 "available": bool(
                     result_binding_verified

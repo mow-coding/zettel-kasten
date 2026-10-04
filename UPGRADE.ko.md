@@ -1,5 +1,18 @@
 # 업그레이드 가이드
 
+## v0.4.62 빨라진 원격 정리와 읽을 수 있는 진행 표시
+
+공개된 뒤 기존 프로젝트는 공식 업데이트 절차를 쓰세요. 원격 정리가 크게 빨라졌고, activity-cleanup과 object-storage-cleanup이 도는 동안 operation-control 상태에 완료/전체 개수가 나옵니다. 설치만으로 archive는 바뀌지 않습니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0462-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.62/wom_kit-0.4.62-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
 ## v0.4.61 옛 정리 기록 마감과 안전한 편지 수정
 
 공개된 뒤 기존 프로젝트는 공식 업데이트 절차를 쓰세요. 같은 `--cleanup-request`로 `session-handoff-checkpoint --dry-run`을 다시 실행하세요. 예전 WOM이 지운 항목은 이제 삭제 보호 장치 기록으로 증명됩니다. 남은 것이 `legacy_stream_state_unknown`뿐이면 쉬운 설명을 사람과 함께 읽고, 동의하면 `--accept-legacy-stream-boundary`를 붙여 다시 실행하세요. 설치만으로 archive는 바뀌지 않습니다.

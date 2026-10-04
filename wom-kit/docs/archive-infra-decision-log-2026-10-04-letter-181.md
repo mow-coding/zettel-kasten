@@ -1,6 +1,6 @@
 # Archive infra decision log: letter 181 (2026-10-04)
 
-Status: implemented for v0.4.61 under the owner's standing instruction
+Status: implemented for v0.4.61 and v0.4.62 under the owner's standing instruction
 ("바로 작업 시작해"); the performance work follows in the next release
 (sequential small releases, 2026-09-24).
 
@@ -79,10 +79,40 @@ make it match. Decision: report
 passes the reviewed digest to its first plan, so an unchanged inventory no
 longer repeats the byte scan before the dialog.
 
-## Not in this release
+## v0.4.62: B. Slow small cleanups and remote deletes
 
-B (28 small items took about 26 minutes; 80 remote deletes about 14 minutes;
-progress without counts) is investigated at the customer's scale and follows
-next.
+Reproduced on a synthetic archive at the customer's scale (23,005 manifest
+rows, 3,017 approval claims, 3,004 zettels; in-memory transport) by a
+read-only investigation agent; per item the manifest was read about 15
+times, the strict manifest snapshot 3 times, the claim store listed 3
+times; one object-storage-cleanup key re-ran the archive-wide reference scan
+(about 3.4 s synthetic, about 10.8 s on the customer's archive).
+
+Decisions (every safety check kept: exact approval, writer locks, final
+exact-bytes checks, reference checks, post-delete absence checks):
+
+1. Remote cleanup: one fresh reference scan under the writer lock publishes
+   the pending fences of up to 16 keys, then each key still does proof,
+   delete intent, DELETE, absence check and final journal. Cancellation in a
+   chunk releases the fences of keys never attempted. The scan still reads
+   and hashes every file; only the parse results of identical bytes are
+   reused. 80 keys: about 269 s -> about 8 s (synthetic).
+2. Manifest readers reuse the strict-parse facts of unchanged lines (the
+   file is still read in full with the same stability checks, fresh row
+   objects each call): manifest_read_parse 53 s -> 33.5 s for three items.
+   The projection compares rows by digest instead of reading record_json.
+3. Not shipped: a claim-listing cache keyed by file metadata (it would trust
+   size and timestamps for approval evidence), and deeper removal of
+   repeated authority checks (measured gain unclear, higher risk).
+4. Progress: operation journals v0.3 carry the latest done/total of the
+   current stage on checkpoint and heartbeat records (v0.2/v0.1 stay
+   readable; no extra records); activity-cleanup and object-storage-cleanup
+   report their stages and counts to the running journal, so
+   operation-control status shows them.
+
+The overall gain for a small activity cleanup at this scale is about 10 %;
+the remote cleanup gain is large. The customer's intake and child-step costs
+were higher than the synthetic ones and are not yet explained; their
+`work_timing` after this release will show where the rest goes.
 
 Executing model: Claude Opus 5.5 (two read-only investigation subagents).

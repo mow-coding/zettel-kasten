@@ -30,6 +30,10 @@ Load this reference when the human asks to write to the WOM developers.
    `moved_letter_needs_moved_folder`, ask the human for the folder an older
    WOM moved letters to and add `--moved-folder <that folder>`.
 
+While an `exact-approval-claim-finalize` plan is being reviewed, write no
+letter (or any other receipt) in the same archive: new receipts make that
+plan stale, and its approve is then refused.
+
 Author block (required, v0.4.54): fill `author.ai_product`, `author.model`
 and `author.reasoning_level` with what this conversation actually uses. If
 you cannot read them yourself, ask the human (the app shows them) and set

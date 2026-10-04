@@ -1328,6 +1328,36 @@ class OperationControlTests(unittest.TestCase):
                 .discover_pending_project_update_terminal_delivery(root)
             )
 
+    def test_progress_counts_reach_status_and_v02_journals_stay_readable(self) -> None:
+        """v0.4.62 (letter 181 B): status shows done/total, not only a stage."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "archive"
+            journal, _output = self.start_journal(root, command="activity-cleanup")
+            journal.progress("activity-cleanup-items", "start", 0, 5)
+            journal.progress("activity-cleanup-items", "file", 3, 5)  # no record of its own
+            journal.progress("activity-cleanup-items", "done", 5, 5)
+            status = operation_control.inspect_operation(root, journal.operation_ref)
+            self.assertEqual(status["stage"], "activity-cleanup-items")
+            self.assertEqual(status["progress"], {"current": 5, "total": 5})
+            journal.progress("activity-cleanup-directories", "start", None, None)
+            status = operation_control.inspect_operation(root, journal.operation_ref)
+            self.assertIsNone(status["progress"])
+            # A v0.2 journal (no progress fields) is still read.
+            lines, previous = [], None
+            for raw_line in journal.journal_path.read_text(encoding="ascii").splitlines():
+                record = json.loads(raw_line)
+                record["schema"] = operation_control.PRE_PROGRESS_OPERATION_JOURNAL_SCHEMA
+                record.pop("progress_current")
+                record.pop("progress_total")
+                record["previous_record_sha256"] = previous
+                record["record_sha256"] = operation_control._record_digest(record)
+                previous = record["record_sha256"]
+                lines.append(json.dumps(record, sort_keys=True, separators=(",", ":")))
+            journal.journal_path.write_text(chr(10).join(lines) + chr(10), encoding="ascii")
+            older = operation_control.inspect_operation(root, journal.operation_ref)
+            self.assertNotIn("operation_journal_invalid", older["blockers"], older)
+            self.assertIsNone(older["progress"])
+
     def test_legacy_v01_journal_remains_readable_for_status_wait_and_recovery(
         self,
     ) -> None:
@@ -1364,6 +1394,8 @@ class OperationControlTests(unittest.TestCase):
                 )
                 record.pop("terminal_delivery_acknowledged", None)
                 record.pop("terminal_handoff_sha256", None)
+                record.pop("progress_current", None)  # v0.3 fields
+                record.pop("progress_total", None)
                 record["previous_record_sha256"] = previous
                 record["record_sha256"] = operation_control._record_digest(
                     record

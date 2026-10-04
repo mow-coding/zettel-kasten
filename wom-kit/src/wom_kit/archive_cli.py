@@ -24293,7 +24293,8 @@ def command_activity_cleanup_result(args: argparse.Namespace) -> dict[str, Any]:
         if rebind_access is not None and not reconcile:
             raise activity_cleanup.ActivityCleanupError("activity_cleanup_credential_rebind_requires_reconcile")
         candidate = activity_cleanup.plan(Path(args.archive_root), args.request,
-            resume=args.resume or inspect_status or reconcile or restore_number is not None, progress=reporter.progress)
+            resume=args.resume or inspect_status or reconcile or restore_number is not None,
+            progress=_active_journal_progress(reporter))
         if restore_number is not None:
             candidate = activity_cleanup.restore_plan(candidate, number=restore_number, destination=args.destination, resume=args.resume)
             candidate["public"] = candidate["restore_public"]
@@ -36109,7 +36110,8 @@ def command_object_storage_cleanup(args: argparse.Namespace) -> int:
                     expected_plan_sha256=digest, reviewed_by=reviewer,
                     exact_human_approval_claim=claim, expected_exact_approval_plan_sha256=binding.plan_sha256,
                     expected_exact_approval_target_binding_sha256=binding.target_binding_sha256,
-                    transport_factory=transport))
+                    transport_factory=transport,
+                    **({} if args.inventory else {"progress": _active_journal_progress()})))
         result = _run_tracked_domain_operation(args, execute)
         print_json(result)
         return 0 if result.get("ok") else 1
@@ -38644,6 +38646,28 @@ def prepare_operation_tracking(
             file=sys.stderr,
         )
     return journal
+
+
+def _active_journal_progress(reporter: CommandProgressReporter | None = None):
+    """v0.4.62 (letter 181 B): also record stages and counts in the running operation journal.
+
+    operation-control status read only a "starting" stage and heartbeat
+    sequence numbers for activity-cleanup and object-storage-cleanup, because
+    their progress reached the terminal only.
+    """
+    from . import operation_cancellation
+
+    def report(stage: str, message: str, current: int | None, total: int | None) -> None:
+        selected = operation_cancellation.ACTIVE.get()
+        if selected is not None:
+            try:
+                selected[0].progress(stage, message, current, total)
+            except Exception:  # noqa: BLE001 - progress is observational
+                pass
+        if reporter is not None:
+            reporter.progress(stage, message, current, total)
+
+    return report
 
 
 def operation_progress_callback(
