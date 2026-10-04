@@ -1097,6 +1097,34 @@ def _prepare_plan(
         )
     elif normalized_intent == "supersede":
         would_change.append(f"write {SUPERSESSION_PREFIX}/<binding>.json")
+    if normalized_intent == "revise":
+        # v0.4.61 (letter 181 E): the approve used to find an existing receipt
+        # for the proposed body only after the dialog. Decide it here.
+        try:
+            existing_receipt = _read_optional_exact(
+                root,
+                _archive_path(root, f"{RECEIPT_PREFIX}/{safe_id}.{body_digest[:16]}.json"),
+                maximum=MAX_RECEIPT_BYTES,
+                invalid_code="feedback_body_existing_receipt_unsafe",
+            )
+        except _BodyContractError as exc:
+            result["blockers"] = [exc.code]
+            return result, None
+        if existing_receipt is not None:
+            if not _receipt_attests_same_body(existing_receipt, prepared):
+                result["blockers"] = ["feedback_body_existing_receipt_conflict"]
+                result["next_safe_actions"] = [
+                    "an existing receipt for this body hash does not attest these exact bytes; nothing was "
+                    "written. Report it instead of retrying; never delete or overwrite receipts."
+                ]
+                return result, None
+            result["body_receipt_reused_from_prior_approval"] = True
+        # v0.4.61 (letter 181 C): WOM cannot know about delivery outside it.
+        result["delivery_check_before_approval"] = (
+            "Before approving, make sure this letter was not delivered: if the person said they delivered or are "
+            "delivering it (for example '전달하고 올게'), do not revise it; run operator-feedback-mark-delivered "
+            "for it and write the follow-up as a new letter."
+        )
     result.update(
         {
             "ok": True,
@@ -1310,6 +1338,34 @@ def _receipt_matches(
     keys = RECEIPT_KEYS if envelope is None else RECEIPT_KEYS | {"exact_human_approval"}
     return set(document) == keys and document == expected and _valid_timestamp(
         document.get("approved_at")
+    )
+
+
+def _receipt_attests_same_body(raw: bytes, prepared: _PreparedPlan) -> bool:
+    """v0.4.61 (letter 181 E): an earlier approval receipt for exactly this body.
+
+    Restoring a prior body (for example the delivered text) produces the same
+    body hash, so its ordinary receipt already exists from the approval that
+    created that text. It still attests these exact bytes (same id, body ref,
+    path and size, valid shape); the revision receipt records the new approval
+    of the restore. Any other existing receipt stays a conflict.
+    """
+    try:
+        document = _parse_json_mapping(raw, "feedback_body_receipt_invalid")
+    except _BodyContractError:
+        return False
+    envelope = _document_envelope(document)
+    if envelope is not None and not _valid_envelope(envelope):
+        return False
+    keys = RECEIPT_KEYS if envelope is None else RECEIPT_KEYS | {"exact_human_approval"}
+    return (
+        set(document) == keys
+        and document.get("schema") in {RECEIPT_SCHEMA, RECEIPT_SCHEMA_V2}
+        and document.get("feedback_id") == prepared.feedback_id
+        and document.get("feedback_ref") == prepared.feedback_ref
+        and document.get("body_path") == prepared.proposed_relative_path
+        and document.get("body_utf8_bytes") == len(prepared.body_bytes)
+        and _valid_timestamp(document.get("approved_at"))
     )
 
 
@@ -1599,7 +1655,11 @@ def _approve_operator_feedback_revision(
                 receipt_bytes,
             )
             files_written.append(ordinary_receipt_relative)
-        elif not _receipt_matches(ordinary_receipt, prepared, reviewer):
+        elif _receipt_matches(ordinary_receipt, prepared, reviewer):
+            pass
+        elif _receipt_attests_same_body(ordinary_receipt, prepared):
+            result["body_receipt_reused_from_prior_approval"] = True
+        else:
             result.update(
                 {
                     "ok": False,

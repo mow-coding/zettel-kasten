@@ -15,8 +15,14 @@ Load this reference when the human asks to write to the WOM developers.
    draft record to the new body (`draft_record_update`); then run body-check.
    If body-check reports `feedback_record_binding_mismatch`, run exactly the
    record update its `next_safe_actions` names; the number and "전달 전" stay.
-5. When the human says it was delivered, run `operator-feedback-mark-delivered
-   --only <id> --approve`.
+5. When the human says it was delivered, or that they are delivering it now
+   ("전달하고 올게", "보냈어"), it counts as delivered: run
+   `operator-feedback-mark-delivered --only <id> --approve` at once. The
+   record does not know about delivery outside WOM, so never treat "전달 전"
+   as proof that a letter was not sent. Never revise a delivered letter; write
+   later observations as a new letter. If a delivered letter was revised by
+   mistake, restore its delivered text with the same revise path (the earlier
+   receipt for that text is reused), then mark it delivered.
 6. When the human asks to clean up (정리) delivered or resolved letters, that
    means delete. Preview `operator-feedback-delete <root> --dry-run`, tell the
    human the letter count and `bytes_freed_total`, then approve that plan once.

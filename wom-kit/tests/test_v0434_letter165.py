@@ -602,6 +602,36 @@ class FeedbackComposeExactApprovalTests(unittest.TestCase):
                                 self.request["feedback_id"], "--dry-run")
         self.assertEqual(verified["state"], "verified")
 
+    def test_revise_back_to_the_delivered_text_reuses_its_receipt(self) -> None:
+        """v0.4.61 (letter 181 E): restoring a prior body no longer stops on its own old receipt."""
+        original_sections = dict(self.request["sections"])
+        preview = self.compose("--dry-run")
+        created = self.compose("--approve", "--expected-plan-sha256", preview["plan_sha256"], "--reviewed-by", REVIEWER)
+        first_sha = created["feedback_ref"].rsplit(":", 1)[-1]
+        self.request["sections"]["observed_failure"] = "a later observation wrongly written into the same letter"
+        self.request_path.write_text(json.dumps(self.request, ensure_ascii=False) + chr(10), encoding="utf-8")
+        revise_preview = self.compose("--dry-run", "--intent", "revise", "--expected-body-sha256", first_sha)
+        self.assertIn("delivery_check_before_approval", revise_preview)
+        revised = self.compose("--approve", "--intent", "revise", "--expected-body-sha256", first_sha,
+                               "--expected-plan-sha256", revise_preview["plan_sha256"], "--reviewed-by", REVIEWER)
+        second_sha = revised["feedback_ref"].rsplit(":", 1)[-1]
+        # Restore the delivered text exactly.
+        self.request["sections"] = original_sections
+        self.request_path.write_text(json.dumps(self.request, ensure_ascii=False) + chr(10), encoding="utf-8")
+        restore_preview = self.compose("--dry-run", "--intent", "revise", "--expected-body-sha256", second_sha)
+        self.assertTrue(restore_preview["ok"], restore_preview)
+        self.assertEqual(restore_preview["feedback_ref"], created["feedback_ref"])
+        self.assertTrue(restore_preview["body_receipt_reused_from_prior_approval"])
+        restored = self.compose("--approve", "--intent", "revise", "--expected-body-sha256", second_sha,
+                                "--expected-plan-sha256", restore_preview["plan_sha256"], "--reviewed-by", REVIEWER)
+        self.assertTrue(restored["ok"], restored)
+        self.assertTrue(restored["body_receipt_reused_from_prior_approval"])
+        self.assertTrue(restored["record_binding"]["feedback_ref_bound"])
+        check = self.run_cli("operator-feedback-body-check", str(self.root), "--feedback-id",
+                             self.request["feedback_id"], "--dry-run")
+        self.assertEqual(check["state"], "verified", check)
+        self.assertEqual(check["feedback_ref"], created["feedback_ref"])
+
     def test_cancelled_dialog_writes_nothing_and_legacy_receipts_stay_valid(self) -> None:
         preview = self.compose("--dry-run")
         self.native.approve = False
