@@ -1136,6 +1136,60 @@ def _audit_exact_human_approval_terminal_record_core(
                 key[index] = 0
 
 
+def _audited_terminal_record_session_ref_core(
+    archive_root: Path | str,
+    reference: Mapping[str, Any],
+    *,
+    expected_operation: ExactHumanApprovalOperation,
+    expected_plan_sha256: str,
+    expected_target_binding_sha256: str,
+    payload: bytes,
+    expected_mac: str,
+    receipt_authentication_key: memoryview,
+) -> str | None:
+    """The work session whose grant a succeeded claim used, or ``None``.
+
+    v0.4.66 (beta letter 184): returns a session only when the terminal
+    record authenticates against the succeeded claim (operation, plan, target
+    binding and MAC) and that MAC-verified claim carries a presenter block.
+    A claim approved through a window has no presenter and yields ``None``;
+    every mismatch or unreadable claim also yields ``None``.
+    """
+
+    key: bytearray | None = None
+    try:
+        if not _audit_exact_human_approval_terminal_record_core(
+            archive_root,
+            reference,
+            expected_operation=expected_operation,
+            expected_plan_sha256=expected_plan_sha256,
+            expected_target_binding_sha256=expected_target_binding_sha256,
+            allowed_statuses=frozenset({"succeeded"}),
+            expected_succeeded_evidence_digests=None,
+            payload=payload,
+            expected_mac=expected_mac,
+            receipt_authentication_key=receipt_authentication_key,
+        ):
+            return None
+        key = _validated_key(receipt_authentication_key)
+        root, archive_id = _archive_identity(archive_root)
+        document = _read_claim(
+            _claims_root(root, create=False) / f"{reference['approval_id']}.json",
+            archive_id=archive_id,
+            key=key,
+        )
+        presenter = document.get("session_presenter")
+        if presenter is None or document.get("status") != "succeeded":
+            return None
+        return validate_session_presenter(presenter)["work_session_ref"]
+    except Exception:
+        return None
+    finally:
+        if key is not None:
+            for index in range(len(key)):
+                key[index] = 0
+
+
 def audit_exact_human_approval_succeeded_terminal_record_read_only(
     archive_root: Path | str,
     reference: Mapping[str, Any],
@@ -1642,6 +1696,40 @@ class _ClaimedExactHumanApproval:
                 )
             except Exception:
                 return False
+
+    def exact_terminal_record_session_ref(
+        self,
+        reference: Mapping[str, Any],
+        expected_operation: ExactHumanApprovalOperation,
+        expected_plan_sha256: str,
+        expected_target_binding_sha256: str,
+        payload: bytes,
+        expected_mac: str,
+    ) -> str | None:
+        """Session of another succeeded archive-local claim, without exposing the key."""
+
+        with self._lock:
+            try:
+                if self._status not in {"started", "succeeded"}:
+                    return None
+                self._assert_current_status(self._status)
+                archive_root = (
+                    self._bound_archive_root
+                    if self._bound_archive_root is not None
+                    else self._path.parents[4]
+                )
+                return _audited_terminal_record_session_ref_core(
+                    archive_root,
+                    reference,
+                    expected_operation=expected_operation,
+                    expected_plan_sha256=expected_plan_sha256,
+                    expected_target_binding_sha256=expected_target_binding_sha256,
+                    payload=payload,
+                    expected_mac=expected_mac,
+                    receipt_authentication_key=memoryview(self._key),
+                )
+            except Exception:
+                return None
 
     def assert_ready_for_context(
         self, context: ExactHumanApprovalContext

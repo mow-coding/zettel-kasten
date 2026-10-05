@@ -122,6 +122,33 @@ class _ReceiptSelection:
         intake_summary = data.get("intake_provenance_summary")
         document_summary = data.get("document_provenance_summary")
         selected_documents = [proof for proof in documents if proof["change_ref"] in selected_refs]
+        link_summary = data.get("link_provenance_summary")
+        link_outputs = [proof for proof in data["proofs"]
+                        if proof["producer"] == "session_claimed_zettel_objet_link_output"
+                        and proof["change_ref"] in selected_refs]
+        linked_zettels = [proof for proof in link_outputs if proof["output_kind"] == "linked_zettel_document"]
+        link_non_receipts = sum(proof["output_kind"] in ("linked_zettel_document", "zettel_link_before_snapshot")
+                                for proof in link_outputs)
+        if link_outputs or link_summary is not None:
+            # v0.4.66 (letter 184): link outputs are counted on their own.
+            result.update(
+                status="session_output_selection_classified" if selected else "no_eligible_session_outputs",
+                selected_output_count=selected,
+                selected_receipt_count=selected - link_non_receipts,
+                selected_link_output_count=len(link_outputs),
+                selected_linked_zettel_count=len(linked_zettels),
+                receipt_only=not link_non_receipts,
+                document_provenance_evaluated=True,
+                whole_document_ownership_verified=False,
+                source_bytes_backed_up=False, artifact_capture_performed=False,
+            )
+            if link_summary is not None:
+                result.update(
+                    authenticated_link_approval_count=link_summary["authenticated_link_approval_count"],
+                    accepted_link_receipt_count=link_summary["accepted_link_receipt_count"],
+                    linked_zettel_candidate_count=link_summary["linked_zettel_candidate_count"],
+                    linked_zettel_not_selected_count=link_summary["linked_zettel_not_selected_count"],
+                )
         if intake or selected_documents or intake_summary is not None or document_summary is not None:
             selected_intake = [proof for proof in intake if proof["change_ref"] in selected_refs]
             requests = sum(proof["output_kind"] == "prepared_capture_request" for proof in selected_intake)
@@ -130,9 +157,10 @@ class _ReceiptSelection:
             other_documents = sum(proof["change_ref"] not in selected_refs for proof in documents)
             result.update(
                 status="session_output_selection_classified" if selected else "no_eligible_session_outputs",
-                selected_output_count=selected, selected_receipt_count=selected - requests - len(selected_documents),
+                selected_output_count=selected,
+                selected_receipt_count=selected - requests - len(selected_documents) - link_non_receipts,
                 selected_intake_output_count=len(selected_intake), selected_document_count=len(selected_documents),
-                receipt_only=not requests and not selected_documents,
+                receipt_only=not requests and not selected_documents and not link_non_receipts,
                 other_session_output_count=result["other_session_receipt_count"],
                 other_session_receipt_count=result["other_session_receipt_count"] - other_requests - other_documents,
                 source_bytes_backed_up=False, artifact_capture_performed=False,
@@ -327,8 +355,9 @@ def _authenticated_inspection_paths_held(archive_root, *, held, selected_binding
             raise WorkSessionGitProvenanceError()
         from . import work_session_intake_git_provenance as intake
         from . import work_session_local_recovery_git_provenance as documents
+        from . import work_session_link_git_provenance as links
         owned, producer_paths = set(), set()
-        for module in (intake, documents):
+        for module in (intake, documents, links):
             inventory = module._authenticated_output_inventory_held(
                 store.root, held, selected_binding, key_provider)
             origins, outputs = inventory[:2]
@@ -438,6 +467,14 @@ def _select_receipt_changes_held(
         document_proofs = {proof["change_ref"]: proof for proof in document_data["proofs"]}
         if len(document_proofs) != len(document_data["proofs"]) or set(document_proofs) & set(intake_proofs):
             raise WorkSessionGitProvenanceError()
+        # v0.4.66 (letter 184): this session's zettel-objet link outputs.
+        from . import work_session_link_git_provenance as link_provenance
+        link_selection = link_provenance._select_link_changes_held(
+            store.root, held=held, snapshot=snapshot, selected_binding=binding, key_provider=key_provider,
+        )
+        link_data = link_selection._private_document()
+        link_proofs = {proof["change_ref"]: proof for proof in link_data["proofs"]
+                       if proof["change_ref"] not in intake_proofs and proof["change_ref"] not in document_proofs}
         # Intake outputs and recovery documents are authenticated once per
         # original, not once per changed output or by falling through the
         # human-decision parser.
@@ -449,7 +486,8 @@ def _select_receipt_changes_held(
             coverage.tick()
             change_ref = row["public_observation"]["change_ref"]
             match = _RECEIPT_PATH.fullmatch(row["path"])
-            if match is None or change_ref in intake_proofs or change_ref in document_proofs:
+            if (match is None or change_ref in intake_proofs or change_ref in document_proofs
+                    or change_ref in link_proofs):
                 continue
             store._require_held_lock(held)
             hint = _receipt_session_hint(store, held, "sha256:" + match[1])
@@ -465,7 +503,8 @@ def _select_receipt_changes_held(
             coverage.tick()
             change_ref = row["public_observation"]["change_ref"]
             match = _RECEIPT_PATH.fullmatch(row["path"])
-            proof = intake_proofs.get(change_ref) or document_proofs.get(change_ref)
+            proof = (intake_proofs.get(change_ref) or document_proofs.get(change_ref)
+                     or link_proofs.get(change_ref))
             if (proof is None and match is not None and change_ref in own_receipt_refs
                     and _new_whole_receipt(row)):
                 try:
@@ -495,7 +534,9 @@ def _select_receipt_changes_held(
             row["public_observation"]["change_ref"] in document_proofs
             and document_proofs[row["public_observation"]["change_ref"]]["output_kind"] == "canonical_zettel_document"
             for row in selected)
+        has_selected_link = any(row["public_observation"]["change_ref"] in link_proofs for row in selected)
         subject = ("Back up authenticated session documents and outputs" if has_selected_document
+                   else "Back up this session's zettel-objet links" if has_selected_link
                    else "Back up authenticated session outputs" if has_selected_intake
                    else "Back up authenticated session receipts")
 
@@ -537,5 +578,7 @@ def _select_receipt_changes_held(
             result["intake_provenance_summary"] = intake_selection.public_summary()
         if document_data["control_inventory_state"] == "present":
             result["document_provenance_summary"] = document_selection.public_summary()
+        if link_data["approval_count"]:
+            result["link_provenance_summary"] = link_selection.public_summary()
         return _ReceiptSelection(_canonical(result))
     return _safe_failure(select)
