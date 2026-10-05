@@ -1,14 +1,14 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.4.62",
+  "version": "0.4.63",
   "source_of_truth": "wom-kit source resource directories",
   "file_count": 180,
   "files": [
     {
       "source": "schemas/activity-cleanup-request-v1.schema.json",
       "packaged": "schemas/activity-cleanup-request-v1.schema.json",
-      "bytes": 2747,
-      "sha256": "57e8438ee6a4d7af21a7c1c5b84f1579caa8d1dc3077b1b3d1e0d49ee9b3a08f"
+      "bytes": 3061,
+      "sha256": "0e1c4090724849af2177d2f4c19b727b77214ade70563660b622315723915144"
     },
     {
       "source": "schemas/activity-group-membership-receipt.schema.json",
@@ -823,8 +823,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/storage-scope.md",
       "packaged": "templates/ai-runtime/wom-archive/references/storage-scope.md",
-      "bytes": 7420,
-      "sha256": "c8445368769e83e8039a23a6c5428273b3f616509db8d3338ea35bf61954944c"
+      "bytes": 8625,
+      "sha256": "3727152a411ee851ef3b7b09939073c56f4dcfdea4d95f57d6f33d206cc26ad4"
     },
     {
       "source": "templates/company/AGENTS.md",
@@ -1079,10 +1079,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.4.62.md",
-      "packaged": "release-notes/v0.4.62.md",
-      "bytes": 2793,
-      "sha256": "4eb0ae0bee4296f5b361f76bfd6d6f3b9e794caf3a9c6511e3d9a56f16445785"
+      "source": "docs/releases/v0.4.63.md",
+      "packaged": "release-notes/v0.4.63.md",
+      "bytes": 2786,
+      "sha256": "ab9a2c84c3a827676402e9b606f7bd4437e0f12a8a4a1aae37a36312085801d8"
     }
   ]
 }

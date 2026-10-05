@@ -4,6 +4,12 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.4.63 - 2026-10-05
+
+- Beta letter 182, hard-link groups: activity-cleanup accepts a multi-link file when every link is a selected item with the same role and disposition; the body is preserved once and each link is removed with the exact identity and the expected link count proven before and after the delete mark. A partly selected group or a link outside the selected folders is a named blocker with counts; a link created after planning retains both names.
+- New role `secret_config`: never uploaded; retained, or discarded only with `discard_intent` and `secret_values_kept_elsewhere` after the person confirms it for that file.
+- Result and status separate `selected_items_complete` from `folders_empty`, add `plain_summary`, and count leftovers as paths and as distinct files; reclaimed bytes count each file once.
+
 ## v0.4.62 - 2026-10-04
 
 - Beta letter 181 (B), remote cleanup: one fresh reference scan under the writer lock fences up to 16 keys, each key still doing proof, delete intent, DELETE, absence check and final journal; cancellation releases unattempted fences; the scan still reads and hashes every file but reuses parse results of identical bytes. 80 keys: about 269 s -> about 8 s on a synthetic archive at the customer's scale.

@@ -1,5 +1,18 @@
 # Upgrade Guide
 
+## v0.4.63 hard-linked files, secret config files, and a plain done answer
+
+After publication, use the official project update flow. activity-cleanup can clean a hard-linked file when every link is listed as its own item, a real secret file uses the secret_config role and is never uploaded, and the result says separately whether the selected items are done and whether the folders are empty. No archive changes on install.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0463-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.63/wom_kit-0.4.63-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
 ## v0.4.62 faster remote cleanup, and progress you can read
 
 After publication, use the official project update flow. Remote cleanup of many keys is much faster, and operation-control status shows done/total for activity-cleanup and object-storage-cleanup while they run. No archive changes on install.

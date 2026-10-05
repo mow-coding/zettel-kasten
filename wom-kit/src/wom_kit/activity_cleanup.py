@@ -31,7 +31,10 @@ from . import work_timing
 ROOT = "profiles/local/activity-cleanup"
 LEGACY_ROOT = "receipts/activity-cleanup"
 SCHEMA = "wom-kit/activity-cleanup-request/v1"
-ROLES = frozenset({"deliverable", "source", "evidence", "temporary", "unknown"})
+# v0.4.63 (letter 182): secret_config is a real secret file (keys, tokens).
+# It is never uploaded as ordinary material; it stays, or is discarded after
+# the person confirms the secret values are kept elsewhere.
+ROLES = frozenset({"deliverable", "source", "evidence", "temporary", "unknown", "secret_config"})
 MAX_ITEMS = 100000
 MAX_CONTROL_BYTES = 32 * 1024 * 1024
 DOMAIN = b"wom-kit/activity-cleanup/v1\0"
@@ -81,10 +84,17 @@ def _safe_path(path):
 
 
 @work_timing.timed("local_hash_verify")
-def file_state(path):
+def file_state(path, *, allow_link_group=False):
+    """Exact state of one regular file.
+
+    v0.4.63 (letter 182): with ``allow_link_group`` a file with several hard
+    links is described with its ``link_count``; the caller must then prove
+    that every link is an approved item of the same request (``live_state``).
+    A single-link file's state is unchanged (no ``link_count`` key).
+    """
     path = _safe_path(path)
     info = path.lstat()
-    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+    if not stat.S_ISREG(info.st_mode) or (info.st_nlink != 1 and not (allow_link_group and info.st_nlink > 1)):
         raise ActivityCleanupError("activity_cleanup_regular_single_link_file_required")
     sha = hashlib.sha256()
     with path.open("rb") as stream:
@@ -99,7 +109,63 @@ def file_state(path):
     if key(info) != key(end) or key(info) != key(latest):
         raise ActivityCleanupError("activity_cleanup_file_changed")
     return {"type": "file", "identity": {"device": info.st_dev, "inode": info.st_ino},
-            "size": info.st_size, "mtime_ns": info.st_mtime_ns, "sha256": sha.hexdigest()}
+            "size": info.st_size, "mtime_ns": info.st_mtime_ns, "sha256": sha.hexdigest(),
+            **({"link_count": info.st_nlink} if info.st_nlink != 1 else {})}
+
+
+def live_state(material, item):
+    """The state an item's file must have right now.
+
+    v0.4.63 (letter 182): for a member of a hard-link group the link count is
+    the number of approved group paths that still name the same file. A link
+    outside the request (also one created after planning) makes the real
+    count larger, so the state check and the bound delete both refuse.
+    """
+    state = item["state"]
+    if "link_count" not in state:
+        return state
+    identity = state["identity"]
+    live = 0
+    for sibling in material["items"]:
+        if sibling["state"].get("identity") != identity or "link_count" not in sibling["state"]:
+            continue
+        try:
+            info = os.lstat(sibling["path"])
+        except OSError:
+            continue
+        if stat.S_ISREG(info.st_mode) and (info.st_dev, info.st_ino) == (identity["device"], identity["inode"]):
+            live += 1
+    current = {key: value for key, value in state.items() if key != "link_count"}
+    if live != 1:
+        current["link_count"] = live
+    return current
+
+
+def hardlink_groups(material):
+    """Content-free description of the selected hard-link groups (counts and item numbers only)."""
+    groups = {}
+    for item in material["items"]:
+        state = item["state"]
+        if "link_count" in state:
+            groups.setdefault((state["identity"]["device"], state["identity"]["inode"]), []).append(item)
+    inside = {}
+    for scope in material["roots"]:
+        for row in scope["inventory"]:
+            key = tuple(row["identity"])
+            if row["kind"] == "file" and key in groups:
+                inside[key] = inside.get(key, 0) + 1
+    rows = []
+    for key, members in groups.items():
+        link_count = members[0]["state"]["link_count"]
+        within = max(inside.get(key, 0), len(members))
+        rows.append({"item_numbers": [member["number"] for member in members], "link_count": link_count,
+            "selected_link_count": len(members),
+            "unselected_links_inside_selected_roots": within - len(members),
+            "links_outside_selected_roots": max(0, link_count - within),
+            "fully_selected": len(members) == link_count,
+            "same_role_and_disposition": len({(m["role"], m["disposition"]) for m in members}) == 1,
+            "size_bytes": members[0]["state"]["size"]})
+    return rows
 
 
 def _directory_state(path):
@@ -176,6 +242,7 @@ def _inventory(root):
 
 def remaining_inventory(material):
     remaining, newly_created, unsafe = 0, 0, 0
+    identities, secret_like = {}, 0
     for scope in material["roots"]:
         root = Path(scope["path"])
         if not root.exists():
@@ -187,8 +254,42 @@ def remaining_inventory(material):
         current = _inventory(root)
         remaining += sum(row["kind"] != "directory" for row in current)
         newly_created += sum(row["kind"] != "directory" and row["relative"] not in prior for row in current)
+        for row in current:
+            if row["kind"] != "directory":
+                key = tuple(row["identity"])
+                identities[key] = identities.get(key, 0) + 1
+                secret_like += bool(row["possible_secret_config"])
+    # v0.4.63 (letter 182): a path is not a file. Two paths that are hard
+    # links of one file are one distinct file, reported as such.
+    linked_files = sum(count > 1 for count in identities.values())
     return {"remaining_file_or_link_count": remaining, "new_file_or_link_count": newly_created,
+            "remaining_path_count": remaining, "remaining_distinct_file_count": len(identities),
+            "remaining_hard_linked_path_count": sum(count for count in identities.values() if count > 1),
+            "remaining_hard_linked_file_count": linked_files,
+            "remaining_possible_secret_config_count": secret_like,
+            "folders_empty": remaining == 0 and unsafe == 0,
             "changed_root_count": unsafe, "scope_completion": "empty" if remaining == 0 and unsafe == 0 else "selected_files_only"}
+
+
+def completion_summary(selected_total, selected_done, remaining):
+    """v0.4.63 (letter 182): plain sentences that keep 'selected items done' apart from 'folders empty'."""
+    lines = [f"Selected items: {selected_done} of {selected_total} completed."]
+    paths = remaining["remaining_path_count"]
+    if remaining["changed_root_count"]:
+        lines.append(f"{remaining['changed_root_count']} selected folder(s) changed since the plan and were not inspected.")
+    if paths == 0 and not remaining["changed_root_count"]:
+        lines.append("The selected folders now contain no files.")
+    elif paths:
+        detail = f"{paths} path(s) remain, which are {remaining['remaining_distinct_file_count']} distinct file(s)"
+        if remaining["remaining_hard_linked_path_count"]:
+            detail += (f"; {remaining['remaining_hard_linked_path_count']} of those paths are hard links (extra names) of "
+                       f"{remaining['remaining_hard_linked_file_count']} file(s)")
+        if remaining["remaining_possible_secret_config_count"]:
+            detail += f"; {remaining['remaining_possible_secret_config_count']} look like secret configuration by name"
+        lines.append("The selected folders are NOT empty: " + detail + ". Completing the selected items does not make "
+                     "the folders deletable.")
+    lines.append("These counts are local files only; they say nothing about online publication or the remote backup.")
+    return lines
 
 
 def write_private_plan(candidate, destination):
@@ -271,7 +372,7 @@ def plan(root, request_path, *, resume=False, key_provider=None, progress=None):
     _notify(progress, "activity-cleanup-hash", "start", 0, len(items))
     for number, item in enumerate(items):
         if (not isinstance(item, dict) or item.get("role") not in ROLES
-            or set(item) - {"path", "role", "reason", "disposition", "discard_intent"}):
+            or set(item) - {"path", "role", "reason", "disposition", "discard_intent", "secret_values_kept_elsewhere"}):
             raise ActivityCleanupError("activity_cleanup_classification_required")
         if not isinstance(item.get("path"), str) or not Path(item["path"]).is_absolute():
             raise ActivityCleanupError("activity_cleanup_absolute_file_required")
@@ -290,9 +391,22 @@ def plan(root, request_path, *, resume=False, key_provider=None, progress=None):
             raise ActivityCleanupError("activity_cleanup_disposition_invalid")
         if role == "temporary" and disposition == "preserve":
             blockers.append("activity_cleanup_temporary_upload_requires_reclassification")
-        if disposition == "discard" and (role != "temporary" or item.get("discard_intent") is not True):
+        if role == "secret_config":
+            # v0.4.63 (letter 182): a real secret file is never uploaded as
+            # ordinary material. It stays (retain) or is discarded only when
+            # the request records the person's confirmation that the secret
+            # values are kept elsewhere. Example files without secrets are
+            # ordinary sources.
+            if disposition == "preserve":
+                blockers.append("activity_cleanup_secret_config_is_never_uploaded")
+            if disposition == "discard" and (item.get("discard_intent") is not True
+                                             or item.get("secret_values_kept_elsewhere") is not True):
+                blockers.append("activity_cleanup_secret_config_discard_requires_person_confirmation")
+        elif "secret_values_kept_elsewhere" in item:
+            raise ActivityCleanupError("activity_cleanup_classification_required")
+        elif disposition == "discard" and (role != "temporary" or item.get("discard_intent") is not True):
             blockers.append("activity_cleanup_explicit_temporary_discard_required")
-        state = file_state(path)
+        state = file_state(path, allow_link_group=True)
         from .activity_cleanup_streams import inventory as stream_inventory
         streams = stream_inventory(path, state)
         selected.append({"number": number, "path": str(path), "root": matching[0]["path"],
@@ -300,6 +414,14 @@ def plan(root, request_path, *, resume=False, key_provider=None, progress=None):
             "object_id": "sha256:" + state["sha256"], "alternate_streams": streams})
         _notify(progress, "activity-cleanup-hash", "file", len(selected), len(items))
     _notify(progress, "activity-cleanup-hash", "done", len(selected), len(items))
+    # v0.4.63 (letter 182): a file with several hard links is accepted only
+    # when every link is an item of this request (so all are inside the
+    # approved roots) with one role and disposition; otherwise it is held.
+    for group in hardlink_groups({"items": selected, "roots": scopes}):
+        if not group["fully_selected"]:
+            blockers.append("activity_cleanup_hardlink_not_fully_selected")
+        if not group["same_role_and_disposition"]:
+            blockers.append("activity_cleanup_hardlink_group_classification_mismatch")
     in_archive = [item for item in selected if _in_archive_ai_scratch(root, Path(item["path"]))]
     if in_archive:
         # Deleting a file a draft or zet still points at would break that note;
@@ -360,7 +482,43 @@ def public_plan(material):
             "possible_secret_config_count": sum(row["possible_secret_config"] for s in material["roots"] for row in s["inventory"]),
             "classification_basis": "explicit_request_reasons", "filename_based_disposal": False},
         "deletion_supported": os.name == "nt", "whole_folder_preservation_claimed": False,
-        "private_values_echoed": False, "writes_performed": False}
+        "private_values_echoed": False, "writes_performed": False,
+        **_link_and_distinct_summary(material)}
+
+
+def _link_and_distinct_summary(material):
+    """v0.4.63 (letter 182): paths versus distinct files, and each hard-link group's selection."""
+    groups = hardlink_groups(material)
+    distinct = {}
+    for item in material["items"]:
+        identity = item["state"].get("identity") or {}
+        distinct[(identity.get("device"), identity.get("inode"))] = item["state"]["size"]
+    summary = {"selected_path_count": len(material["items"]), "distinct_selected_file_count": len(distinct),
+               "distinct_selected_file_bytes": sum(distinct.values()),
+               "secret_config_discard_count": sum(i["role"] == "secret_config" and i["disposition"] == "discard"
+                                                  for i in material["items"]),
+               "hardlink_groups": groups}
+    actions = []
+    if any(not group["fully_selected"] for group in groups):
+        actions.append(
+            "A selected file has more hard links than items in this request. List its links with "
+            "'fsutil hardlink list <path>' and add every link inside the selected roots as its own item with the "
+            "same role and disposition. If hardlink_groups shows links_outside_selected_roots, the file is shared "
+            "with something outside this activity: leave it, tell the person, and do not copy, unlink or replace it.")
+    if any(not group["same_role_and_disposition"] for group in groups):
+        actions.append("Give every link of one file the same role and disposition.")
+    if "activity_cleanup_secret_config_is_never_uploaded" in material.get("blockers", []):
+        actions.append(
+            "A real secret file is never uploaded: use disposition retain, or discard with discard_intent and "
+            "secret_values_kept_elsewhere set to true only after the person confirms the secret values are kept "
+            "elsewhere. An example file without secret values is an ordinary source (preserve).")
+    if "activity_cleanup_secret_config_discard_requires_person_confirmation" in material.get("blockers", []):
+        actions.append(
+            "Ask the person whether each secret file's values are kept elsewhere (password manager, hosting "
+            "settings); only then set discard_intent and secret_values_kept_elsewhere to true for that file.")
+    if actions:
+        summary["next_safe_actions"] = actions
+    return summary
 
 
 def approval_binding(candidate):
@@ -536,9 +694,10 @@ def reconcile_plan(candidate, *, credential_refs=None):
             observations.append({"number": item["number"], "state": state})
             continue
         try:
-            if file_state(path) != item["state"]:
+            expected_now = live_state(material, item)
+            if file_state(path, allow_link_group=True) != expected_now:
                 raise ActivityCleanupError("activity_cleanup_file_changed")
-            current_streams = stream_inventory(path, item["state"])
+            current_streams = stream_inventory(path, expected_now)
             if "alternate_streams" in item and item["alternate_streams"] != current_streams:
                 raise ActivityCleanupError("activity_cleanup_streams_changed")
             item["alternate_streams"] = current_streams
@@ -751,7 +910,8 @@ def restore_plan(candidate, *, number, destination, resume=False):
     material = {"schema": "wom-kit/activity-cleanup-restore-intent/v1",
         "activity_id": candidate["material"]["activity_id"], "number": number,
         "destination": str(target), "parent_state": _directory_state(target.parent),
-        "body_object_id": item["object_id"], "body_state": item["state"],
+        "body_object_id": item["object_id"],
+        "body_state": {key: value for key, value in item["state"].items() if key != "link_count"},
         "streams": streams["streams"] if streams else [], "stream_item": streams["item"] if streams else None}
     saved = None
     if resume:
@@ -925,7 +1085,7 @@ def status(candidate):
                 row.update(state="missing_without_evidence", code="activity_cleanup_missing_without_delete_intent")
         else:
             try:
-                if file_state(item["path"]) != item["state"]:
+                if file_state(item["path"], allow_link_group=True) != live_state(material, item):
                     row.update(state="held", code="activity_cleanup_file_changed")
             except (ActivityCleanupError, OSError):
                 row.update(state="held", code="activity_cleanup_file_state_unavailable")
@@ -961,14 +1121,40 @@ def status(candidate):
         "closure": {"state": "selected_files_completed" if complete else "open"},
         "cost": {"state": "not_measured_by_this_command"},
     }
+    remaining = remaining_inventory(material)
+    boundaries["folders"] = {"state": "empty" if remaining["folders_empty"] else "files_remain",
+                             "remaining_path_count": remaining["remaining_path_count"],
+                             "remaining_distinct_file_count": remaining["remaining_distinct_file_count"]}
     return {"schema": "wom-kit/activity-cleanup-status/v1", "ok": True, "dry_run": True,
             "completion_boundaries": boundaries,
             "state": "selected_files_completed" if complete else "partial",
             "plan_sha256": digest(material), "approval_evidence_matches": approval_matches,
-            "counts": counts, "items": results, "remaining": remaining_inventory(material),
-            "whole_folder_cleanup_complete": False, "remote_bytes_verified_now": False,
+            "counts": counts, "items": results, "remaining": remaining,
+            # v0.4.63 (letter 182): two separate answers, in plain words too.
+            "selected_items_complete": complete, "folders_empty": remaining["folders_empty"],
+            "plain_summary": completion_summary(total, counts["completed"], remaining),
+            "whole_folder_cleanup_complete": bool(complete and remaining["folders_empty"]),
+            "remote_bytes_verified_now": False,
             "writes_performed": False, "private_values_echoed": False,
             "next_action": "review_remaining_scope" if complete else "reconcile_authenticated_item_evidence"}
+
+
+def _fully_deleted_identities(material, deleted_now):
+    """Identities of files whose last approved link was deleted in this run (a hard-link group counts once)."""
+    gone = {}
+    for item in material["items"]:
+        if item["number"] not in deleted_now:
+            continue
+        state = item["state"]
+        if "link_count" in state and live_state(material, item).get("link_count", 1) != 0:
+            continue  # another link of this file is still present
+        gone[(state["identity"]["device"], state["identity"]["inode"])] = item
+    return gone
+
+
+def _deleted_payload_bytes(material, deleted_now):
+    return sum(item["state"]["size"] + sum(s["size"] for s in item.get("alternate_streams", []))
+               for item in _fully_deleted_identities(material, deleted_now).values())
 
 
 def execute(candidate, *, reviewer, claim, backend):
@@ -1086,11 +1272,12 @@ def _execute_locked(candidate, *, reviewer, claim, backend):
                 journal.write(name + "-deleted", {"number": number, "state": "absent_after_bound_delete_intent"})
                 results.append({"number": number, "state": "already_absent_after_intent"})
                 continue
-            if file_state(path) != item["state"]:
+            expected_now = live_state(material, item)
+            if file_state(path, allow_link_group=True) != expected_now:
                 raise ActivityCleanupError("activity_cleanup_file_changed")
             if "alternate_streams" in item:
                 from .activity_cleanup_streams import inventory as stream_inventory
-                if stream_inventory(path, item["state"]) != item["alternate_streams"]:
+                if stream_inventory(path, expected_now) != item["alternate_streams"]:
                     raise ActivityCleanupError("activity_cleanup_streams_changed")
                 journal.write(name + "-stream-inventory", {"object_id": item["object_id"],
                     "streams": item["alternate_streams"]})
@@ -1114,7 +1301,9 @@ def _execute_locked(candidate, *, reviewer, claim, backend):
             _notify(progress, "activity-cleanup-items", "deleting-bound-original", work_position, work_total)
             journal.write(name + "-delete-intent", {"number": number, "state": item["state"],
                 "preservation": "remote_verified" if item["disposition"] == "preserve" else "explicit_discard"})
-            _delete_exact_approved_file(item["root"], path, item["state"], allow_readonly=True,
+            # v0.4.63: the link count is re-derived right before the delete;
+            # the bound delete then proves N -> N-1 on this exact file.
+            _delete_exact_approved_file(item["root"], path, live_state(material, item), allow_readonly=True,
                                         expected_streams=item.get("alternate_streams"))
             journal.write(name + "-deleted", {"number": number, "state": "absent_after_bound_delete_intent"})
             results.append({"number": number, "state": "deleted"})
@@ -1193,6 +1382,12 @@ def _execute_locked(candidate, *, reviewer, claim, backend):
         "state": "completed" if success else "partial", "writes_performed": True,
         "items": results, "directories": directory_results, "whole_folder_preservation_claimed": False,
         "remaining": remaining_inventory(material)}
+    # v0.4.63 (letter 182): "the selected items are done" and "the folders
+    # are empty" are two answers; say both, in plain words too.
+    selected_done = sum(row["state"] in {"deleted", "already_deleted", "already_absent_after_intent"} for row in results)
+    result.update(selected_items_complete=selected_done == len(material["items"]),
+                  folders_empty=result["remaining"]["folders_empty"],
+                  plain_summary=completion_summary(len(material["items"]), selected_done, result["remaining"]))
     if cancelled:
         success = False
         result.update(ok=False, state="cancelled_at_checkpoint", cause_code="operation_cancelled_at_checkpoint",
@@ -1208,8 +1403,10 @@ def _execute_locked(candidate, *, reviewer, claim, backend):
         "activity_writer_wait_seconds": round(candidate.get("activity_writer_wait_seconds", 0), 6),
         "approval_resolution_seconds": candidate.get("approval_resolution_seconds"),
         "processing_seconds_including_child_waits": round(time.monotonic() - execution_started, 6),
-        "newly_deleted_file_payload_bytes": sum(item["state"]["size"] + sum(s["size"] for s in item.get("alternate_streams", []))
-            for item in material["items"] if item["number"] in deleted_now),
+        "newly_deleted_file_payload_bytes": _deleted_payload_bytes(material, deleted_now),
+        "newly_deleted_path_count": len(deleted_now),
+        "newly_deleted_distinct_file_count": len(_fully_deleted_identities(material, deleted_now)),
+        "payload_bytes_count_each_file_once_when_its_last_link_is_gone": True,
         "unique_body_bytes_selected_for_preservation": sum(unique_preserved.values()),
         "unique_body_bytes_excludes_ads_bundle_overhead": True,
         "actual_physical_disk_reclaimed_bytes": None,
@@ -1294,7 +1491,8 @@ class OfficialPreservationBackend:
                 count += len(chunk)
             destination.flush()
             os.fsync(destination.fileno())
-        if sha.hexdigest() != expected["sha256"] or count != expected["size"] or file_state(item["path"]) != expected:
+        if (sha.hexdigest() != expected["sha256"] or count != expected["size"]
+                or file_state(item["path"], allow_link_group=True) != live_state(self.material, item)):
             raise ActivityCleanupError("activity_cleanup_file_changed")
         _atomic_move_file_no_replace(temporary, target)
         return target
@@ -1662,7 +1860,7 @@ class OfficialPreservationBackend:
         path = services.archive_internal_path(self.root, ROOT + "/" + self.material["activity_id"] + "/" + label + ".zip")
         path.parent.mkdir(parents=True, exist_ok=True)
         _safe_path(path.parent)
-        build_bundle(Path(item["path"]), item["state"], rows, path)
+        build_bundle(Path(item["path"]), live_state(self.material, item), rows, path)
         state = file_state(path)
         child = {"number": str(item["number"]) + "-streams", "path": str(path), "root": str(path.parent),
                  "role": "evidence", "disposition": "preserve", "state": state, "object_id": "sha256:" + state["sha256"]}
