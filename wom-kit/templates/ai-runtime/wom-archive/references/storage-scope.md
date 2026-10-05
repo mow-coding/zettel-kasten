@@ -89,6 +89,30 @@ apart: files still on this PC, what is published online, and the private
 backup. Say what the human must do and what you will do; a blocker code alone
 is not an answer.
 
+Folders are a third answer. `folders_empty` means "no files"; `folders_removed`
+says whether the selected folders are gone. When every file is finished and a
+run still ends `partial` with `state_detail:
+selected_items_complete_folder_removal_unfinished`, nothing needs reconciling
+or re-uploading. Close out the folders with a new request: a new
+`activity_id`, `"items": []`, the same exact `roots`, and
+`remove_empty_directory_trees` naming them. Preview it (`directory_trees`
+gives the counts; `--private-plan-output` the exact list), then approve. Only
+unchanged empty folders are removed, deepest first; a folder that holds a
+file, link or junction stays with its parents and that is a finished state.
+A `.git` with no file left in it is treated as empty folders. Never delete
+folders by hand, recreate files, or fake a repository to pass a check.
+
+A secret file whose owner does not know where else its values are kept stays
+`retain`. Tell the human, by variable NAME only, what the file holds; a
+provider showing that a name is registered does not prove the value can be
+read back or equals the local one. The human saves the values somewhere they
+can read them (password manager, an encrypted backup) and says so; only then
+may the file be discarded. Never print, upload or compare secret values.
+
+Say which of four states applies: waiting for approval, processing, ended, or
+ended with folders or protected files left. A recorded state is not a running
+process; report `plain_time_summary` rather than guessing where time went.
+
 ## Already-uploaded disposable files
 
 The helper AI owns this classification when cleanup has been delegated. Read

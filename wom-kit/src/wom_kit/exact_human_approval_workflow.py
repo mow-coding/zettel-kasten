@@ -576,6 +576,23 @@ def _attach_session_permission_evidence(
         result["session_permission_refused"] = {
             "reason_code": grant_refusal, "dialog_shown": True, "private_values_echoed": False,
         }
+    elif session_presenter is None:
+        # v0.4.64 (letter 183): a window opened although no grant was
+        # refused. If this process simply lacked the conversation's routing
+        # refs, say so: that is the usual reason for repeated windows, and it
+        # does not mean a grant expired.
+        try:
+            from .work_session_caller_status import context_diagnostic
+
+            diagnostic = context_diagnostic()
+        except Exception:
+            diagnostic = None
+        if diagnostic is not None and diagnostic["state"] in {"missing", "incomplete"}:
+            result["caller_session_context"] = {
+                **diagnostic,
+                "dialog_shown_without_session_refs": True,
+                "next_action": "export_this_conversations_three_session_refs_in_every_new_process",
+            }
     return result
 
 
@@ -835,9 +852,15 @@ def _execute_exact_human_approved_write_with_review_kind_core(
                 archive_root=archive_root,
                 claim_succeeded_finalizer=claim_succeeded_finalizer,
             )
-            return _attach_session_permission_evidence(
+            result = _attach_session_permission_evidence(
                 result, session_presenter=session_presenter, grant_refusal=grant_refusal,
             )
+            from . import work_session_permission as _permission
+
+            if _permission.grant_self_service_refused(context):
+                # The grant action always has its own window.
+                result.pop("caller_session_context", None)
+            return result
         return _after_key
 
     try:

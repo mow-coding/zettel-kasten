@@ -1,14 +1,14 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.4.63",
+  "version": "0.4.64",
   "source_of_truth": "wom-kit source resource directories",
   "file_count": 180,
   "files": [
     {
       "source": "schemas/activity-cleanup-request-v1.schema.json",
       "packaged": "schemas/activity-cleanup-request-v1.schema.json",
-      "bytes": 3061,
-      "sha256": "0e1c4090724849af2177d2f4c19b727b77214ade70563660b622315723915144"
+      "bytes": 3848,
+      "sha256": "16856fa5de42d2bd1739943a8489f9a70e542de4a4e586f33aebc6f5b65fd6e9"
     },
     {
       "source": "schemas/activity-group-membership-receipt.schema.json",
@@ -769,8 +769,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/credentials-and-sessions.md",
       "packaged": "templates/ai-runtime/wom-archive/references/credentials-and-sessions.md",
-      "bytes": 4315,
-      "sha256": "140d342a6d228c732779a6db15d4410edc5e513a483001373aaaf883296fbd88"
+      "bytes": 4924,
+      "sha256": "2f9b2182aff4ee2c2412af255e6b690d52a4b672cfbc21fee483ccc46e9f9f59"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/developer-letters.md",
@@ -823,8 +823,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/storage-scope.md",
       "packaged": "templates/ai-runtime/wom-archive/references/storage-scope.md",
-      "bytes": 8625,
-      "sha256": "3727152a411ee851ef3b7b09939073c56f4dcfdea4d95f57d6f33d206cc26ad4"
+      "bytes": 10162,
+      "sha256": "2e425e7609120b9e6bb7c4aa3d78328da65a4bfff853a3741a0b39308a0853c5"
     },
     {
       "source": "templates/company/AGENTS.md",
@@ -1079,10 +1079,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.4.63.md",
-      "packaged": "release-notes/v0.4.63.md",
-      "bytes": 2786,
-      "sha256": "ab9a2c84c3a827676402e9b606f7bd4437e0f12a8a4a1aae37a36312085801d8"
+      "source": "docs/releases/v0.4.64.md",
+      "packaged": "release-notes/v0.4.64.md",
+      "bytes": 2934,
+      "sha256": "6486598380c558a13c231c349ecf5abc410f64857fe64e6c9583dd8a2bc47308"
     }
   ]
 }

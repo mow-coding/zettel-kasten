@@ -29,7 +29,8 @@
     },
     "items": {
       "type": "array",
-      "minItems": 1,
+      "description": "May be empty only when the request names remove_empty_directories or remove_empty_directory_trees (a folder-only closeout).",
+      "minItems": 0,
       "maxItems": 100000,
       "items": {
         "type": "object",
@@ -81,7 +82,18 @@
     },
     "remove_empty_directories": {
       "type": "array",
+      "description": "Exact directories removed only if completely empty after the file items; subfolders are not removed for them.",
       "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "remove_empty_directory_trees": {
+      "type": "array",
+      "description": "Exact directories inside the roots (a root itself is allowed). Every folder of the tree is bound at plan time and removed deepest first only if unchanged and empty. A folder holding a file, link or reparse point at any depth is kept with its parents. No file is uploaded, moved or deleted.",
+      "uniqueItems": true,
+      "maxItems": 64,
       "items": {
         "type": "string",
         "minLength": 1

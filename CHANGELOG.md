@@ -4,6 +4,13 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.4.64 - 2026-10-05
+
+- Beta letter 183, folder closeout: an activity-cleanup request may have `"items": []` and name `remove_empty_directory_trees`; every folder of a tree is bound at plan time and removed deepest first only if unchanged and empty. A folder holding a file, link or reparse point stays with its parents (not a failure); changed or new folders are not removed; no file is uploaded, moved or deleted.
+- A `.git` with no file at any depth is not a repository (`empty_git_residue`), so the residue of an earlier cleanup no longer blocks planning with `activity_cleanup_git_inventory_unavailable`.
+- Results separate folder removal from file items: `folders_removed`, `folder_outcome`, per-directory codes, `state_detail: selected_items_complete_folder_removal_unfinished`, files kept on purpose, and `measurements.plain_time_summary`. operation-control recovery guidance no longer says items are incomplete when only folders are.
+- A preview shows `caller_session_context`, and a result says when an approval window opened because the process lacked the conversation's session refs.
+
 ## v0.4.63 - 2026-10-05
 
 - Beta letter 182, hard-link groups: activity-cleanup accepts a multi-link file when every link is a selected item with the same role and disposition; the body is preserved once and each link is removed with the exact identity and the expected link count proven before and after the delete mark. A partly selected group or a link outside the selected folders is a named blocker with counts; a link created after planning retains both names.

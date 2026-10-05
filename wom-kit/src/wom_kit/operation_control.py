@@ -1298,6 +1298,13 @@ ACTIVITY_CLEANUP_COUNT_KEYS = (
     "interrupted_item_count",
     "unknown_local_outcome_count",
 )
+# v0.4.64 (letter 183): folder removal is reported apart from the file items.
+ACTIVITY_CLEANUP_FOLDER_COUNT_KEYS = (
+    "selected_item_count",
+    "directory_removed_count",
+    "directory_kept_not_empty_count",
+    "directory_unfinished_count",
+)
 
 
 def _safe_activity_cleanup_domain_projection(
@@ -1320,7 +1327,7 @@ def _safe_activity_cleanup_domain_projection(
     measurements = payload.get("measurements")
     counts: dict[str, int] = {}
     if isinstance(measurements, dict):
-        for key in ACTIVITY_CLEANUP_COUNT_KEYS:
+        for key in ACTIVITY_CLEANUP_COUNT_KEYS + ACTIVITY_CLEANUP_FOLDER_COUNT_KEYS:
             value = measurements.get(key)
             if type(value) is int and 0 <= value <= 10_000_000:
                 counts[key] = value
@@ -1356,6 +1363,25 @@ def _activity_cleanup_completed_next_actions(
             "The activity cleanup reported every selected item completed. Confirm with activity-cleanup <archive-root> --request <same request> --status --format json before closing the activity.",
         ]
     counts = domain.get("counts") if type(domain.get("counts")) is dict else {}
+    if (
+        domain.get("state") == "partial"
+        and "selected_item_count" in counts
+        and counts.get("completed_item_count") == counts["selected_item_count"]
+        and not any(
+            counts.get(key)
+            for key in ACTIVITY_CLEANUP_COUNT_KEYS
+            if key != "completed_item_count"
+        )
+    ):
+        # v0.4.64 (letter 183): every selected file finished; only folders
+        # are left. Do not tell the operator that items are incomplete.
+        return [
+            f"Every selected file item is finished ({counts['completed_item_count']} of {counts['selected_item_count']}). Nothing needs reconciling, and nothing must be uploaded, restored or deleted again.",
+            f"Only folder removal is unfinished: {counts.get('directory_unfinished_count', 0)} folder(s) were kept because they are not empty or changed after the plan ({counts.get('directory_removed_count', 0)} removed).",
+            "The command exited 1 because a folder it was asked to remove still exists; that is the whole reason. Read plain_summary and folder_outcome in the result.",
+            "To remove leftover empty subfolders, make a new request with a new activity_id, \"items\": [] and remove_empty_directory_trees naming the exact activity folder, preview it with --dry-run, and approve that plan. A folder that still holds a file (for example a protected secret configuration kept on purpose) stays, and that is a finished state.",
+            "Do not delete folders by hand and do not recreate files to get past a check.",
+        ]
     details = ([f"state={domain['state']}"] if domain.get("state") else []) + [
         f"{key}={counts[key]}" for key in ACTIVITY_CLEANUP_COUNT_KEYS if key in counts
     ]

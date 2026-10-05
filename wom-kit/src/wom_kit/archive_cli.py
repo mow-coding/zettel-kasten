@@ -24320,7 +24320,21 @@ def command_activity_cleanup_result(args: argparse.Namespace) -> dict[str, Any]:
                 "credential-manager:<name> --rebind-secret-access-key-ref credential-manager:<name>; completed "
                 "items are not reprocessed.")
         if args.dry_run:
-            return candidate["public"]
+            # v0.4.64 (letter 183): check before the approval step whether this
+            # process carries the conversation's session refs. Presence only;
+            # never a value, and never a claim that a grant exists or expired.
+            from .work_session_caller_status import context_diagnostic
+            preview = dict(candidate["public"])
+            diagnostic = context_diagnostic()
+            preview["caller_session_context"] = {
+                **diagnostic,
+                "approval_window_expected_without_refs": diagnostic["state"] != "valid_shape",
+                "next_action": (None if diagnostic["state"] == "valid_shape" else
+                    "If this conversation has a work-session grant, export its three routing refs in this process "
+                    "before --approve (check with work-session --action inspect --caller-status); otherwise an "
+                    "approval window opens for every write."),
+            }
+            return preview
         if os.name != "nt":
             raise activity_cleanup.ActivityCleanupError("activity_cleanup_native_delete_not_supported")
         if args.expected_plan_sha256 and args.expected_plan_sha256 != candidate["public"]["plan_sha256"]:

@@ -20,6 +20,14 @@ explaining a work-session permission grant.
   `work_session_caller_context_missing`, restore those refs; do not ask for a
   new grant. Never write the refs into memory files, notes, letters, or
   another conversation.
+- Before every `--approve` in a new process, check that the three refs are
+  exported: a preview's `caller_session_context.state` must be `valid_shape`
+  (activity-cleanup shows it), or run `--caller-status`. A result carrying
+  `caller_session_context.dialog_shown_without_session_refs` means the window
+  opened because this process lacked the refs, not because a grant expired.
+  To restore them, search THIS conversation's own record: the output of its
+  original `work-session` call and the inputs of its own earlier tool calls
+  (shell commands and custom tool-call arguments, not only printed output).
 - Another conversation that finds session refs must not reuse them. It asks the
   human, or continues through `work-session` handoff/accept.
 - Do not tell the human a window will appear or not appear; the result states
