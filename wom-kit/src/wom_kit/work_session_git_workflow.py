@@ -87,9 +87,14 @@ def _assert_actor(routing, selected):
         raise WorkSessionGitWorkflowError("work_session_git_changed")
 
 
-def _progress(hook, phase):
+def _progress(hook, phase, current=None, total=None):
     if hook is not None:
-        hook({"phase": phase, "artifact_backup_complete": False, "private_values_echoed": False})
+        event = {"phase": phase, "artifact_backup_complete": False, "private_values_echoed": False}
+        if type(current) is int and type(total) is int:
+            # v0.4.65 (letter 184): how many originals and receipt candidates
+            # of this stage are checked, out of how many.
+            event.update(current=current, total=total)
+        hook(event)
 
 
 @dataclass(frozen=True, repr=False)
@@ -103,7 +108,7 @@ class _FreshGit:
 
 
 def _fresh(root, *, held, client_app_ref, task_route_ref, work_session_ref,
-           key_provider, progress_hook, options):
+           key_provider, progress_hook, options, explain=False):
     store, routing = lifecycle._routing(root, held=held, client_app_ref=client_app_ref,
                                         task_route_ref=task_route_ref)
     selected = routing._read(current=False)
@@ -128,22 +133,38 @@ def _fresh(root, *, held, client_app_ref, task_route_ref, work_session_ref,
                     "execution_sha256": established["execution_sha256"],
                     "receipt_sha256": established["receipt_sha256"]}
     generation = store.read().sha256
-    _progress(progress_hook, "git_output_scope_discovery")
-    inspection_paths = provenance._authenticated_inspection_paths_held(
-        root, held=held, selected_binding=binding, branch=options.get("branch"),
-        key_provider=key_provider,
-    )
-    _progress(progress_hook, "git_receipt_snapshot")
-    snapshot = provenance._capture_git_snapshot_held(
-        root, held=held, inspection_paths=inspection_paths, **options)
-    _progress(progress_hook, "git_receipt_provenance")
-    selected_receipts = provenance._select_receipt_changes_held(
-        root, held=held, snapshot=snapshot, selected_binding=binding, key_provider=key_provider,
-    )
+    from . import work_session_git_coverage as coverage
+    with coverage.observing(lambda phase, current, total: _progress(progress_hook, phase, current, total)) as seen:
+        _progress(progress_hook, "git_output_scope_discovery")
+        coverage.stage("git_output_scope_discovery")
+        inspection_paths = provenance._authenticated_inspection_paths_held(
+            root, held=held, selected_binding=binding, branch=options.get("branch"),
+            key_provider=key_provider,
+        )
+        coverage.stage(None)
+        _progress(progress_hook, "git_receipt_snapshot")
+        snapshot = provenance._capture_git_snapshot_held(
+            root, held=held, inspection_paths=inspection_paths, **options)
+        _progress(progress_hook, "git_receipt_provenance")
+        coverage.stage("git_receipt_provenance")
+        selected_receipts = provenance._select_receipt_changes_held(
+            root, held=held, snapshot=snapshot, selected_binding=binding, key_provider=key_provider,
+        )
+        coverage.stage(None)
     data, summary = selected_receipts._private_document(), selected_receipts.public_summary()
     summary["uninspected_change_count"] = snapshot._document()["capture"].get("uninspected_change_count", 0)
     summary["uninspected_contents_read"] = False
     summary["inspection_scope"] = "authenticated_session_output_paths"
+    if explain:
+        # v0.4.65 (letter 184): a preview says what the selection is and what
+        # it is not. Counts and fixed labels only; the write path skips this.
+        summary["session_backup_coverage"] = coverage.build(
+            proofs=data["proofs"],
+            selected_refs={ref for group in data["selection"]["selected_groups"] for ref in group["change_refs"]},
+            changed_paths=seen.changed_paths, inspected_path_count=len(inspection_paths),
+            operations=coverage.session_operation_counts(root, binding.work_session_ref, key_provider=key_provider),
+        )
+        summary["long_run_guidance"] = dict(coverage.LONG_RUN_GUIDANCE)
     prepared = None
     selected_count = summary.get("selected_output_count", summary["selected_receipt_count"])
     if selected_count:
@@ -193,7 +214,7 @@ def _preview_session_git_backup_held(
     return _safe_call(lambda: _preview_result(_fresh(
         root, held=held, client_app_ref=client_app_ref, task_route_ref=task_route_ref,
         work_session_ref=work_session_ref, key_provider=key_provider,
-        progress_hook=progress_hook, options=options,
+        progress_hook=progress_hook, options=options, explain=True,
     )))
 
 

@@ -31,6 +31,19 @@
   commit; never split a shared file by hand. Session-start Git attention
   reads the locally cached remote ref, not the remote; the plan's dry-run is
   the live check.
+- A session-scoped Git preview (`git-backup-reconcile-plan` with the session
+  refs) selects a file only when an authenticated record proves the whole
+  file is this session's output. Read `session_backup_coverage`: what was
+  selected by kind, the roles of all changed paths, and this session's own
+  approvals whose Git changes are `not_provable_as_session_owned_yet`
+  (objet registration, zettel-objet links and others). Report its
+  `plain_summary`. A small selected count is not a backup of the whole
+  conversation and not an error; the rest stays uncommitted. Do not rerun
+  the preview to get a different answer, and do not commit by hand. Git
+  never holds objet bytes: report their remote preservation separately.
+- A long preview is read-only: progress lines carry `current` and `total`.
+  If `current` has not moved for 5 minutes, interrupt it and report the last
+  line; nothing needs resuming.
 - If an `activity-cleanup` ends partial, change nothing by hand and do not
   start it again: read `pending_item_diagnosis` in the `--reconcile --dry-run`
   result (each unfinished item's step and route) and approve that exact plan

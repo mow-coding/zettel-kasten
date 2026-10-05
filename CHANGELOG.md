@@ -4,6 +4,11 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.4.65 - 2026-10-06
+
+- Beta letter 184, part 1: a session-scoped `git-backup-reconcile-plan --dry-run` carries `session_backup_coverage` (selected outputs by kind, roles of all Git-changed paths as fixed labels, this session's succeeded approvals by operation with whether their Git changes are provable as session-owned, the shared-by-design objet ledger and the archive-wide route, objet bytes never in Git) and `long_run_guidance`. Objet registration and zettel-objet links are reported as outside the selection instead of silently left out.
+- The `git_output_scope_discovery` and `git_receipt_provenance` progress lines carry `current`/`total`; one fresh preview or write authenticates each source-intake original and local-recovery control once instead of twice. Write-time proof revalidation is unchanged.
+
 ## v0.4.64 - 2026-10-05
 
 - Beta letter 183, folder closeout: an activity-cleanup request may have `"items": []` and name `remove_empty_directory_trees`; every folder of a tree is bound at plan time and removed deepest first only if unchanged and empty. A folder holding a file, link or reparse point stays with its parents (not a failure); changed or new folders are not removed; no file is uploaded, moved or deleted.
