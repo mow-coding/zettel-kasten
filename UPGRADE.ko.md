@@ -1,5 +1,18 @@
 # 업그레이드 가이드
 
+## v0.4.65 대화별 Git 백업 미리보기가 무엇을 포함하는지
+
+공개된 뒤 기존 프로젝트는 공식 업데이트 절차를 쓰세요. 대화별 Git 백업 미리보기가 무엇을 골랐는지, 그 대화의 작업 중 무엇이 선택 밖인지(지금은 오브제 등록과 제텔-오브제 연결), 오래 걸리는 미리보기가 어디까지 갔는지 알려 줍니다. 설치만으로 archive는 바뀌지 않습니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0465-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.65/wom_kit-0.4.65-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
 ## v0.4.64 빈 폴더 마감과 실제로 남은 것 알려 주기
 
 공개된 뒤 기존 프로젝트는 공식 업데이트 절차를 쓰세요. 파일 없이 폴더만 적은 activity-cleanup 요청으로 앞선 정리가 남긴 빈 폴더를 지울 수 있고(remove_empty_directory_trees), 파일이 모두 사라진 .git은 더 이상 계획을 막지 않으며, 결과는 파일 완료와 폴더 제거를 따로 알려 줍니다. 설치만으로 archive는 바뀌지 않습니다.

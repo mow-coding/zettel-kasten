@@ -1,9 +1,9 @@
 ﻿# WOM-kit Capability Matrix
 
-Current v0.4.64 candidate: closing out empty folders, and saying what is actually left (letter 183): a folder-only activity-cleanup request that removes bound empty-folder trees, an emptied .git that no longer blocks planning, and results that report folder removal apart from the file items. [Release scope](releases/v0.4.64.md). Other ongoing requests are not included in this claim.
-Version: v0.4.64 implementation and release scope
+Current v0.4.65 candidate: what a conversation's Git backup preview covers (letter 184): a session-scoped Git backup preview that explains its selection, the changed-path roles and the session's operations outside it, with progress counts and one authentication pass per preview. [Release scope](releases/v0.4.65.md). Other ongoing requests are not included in this claim.
+Version: v0.4.65 implementation and release scope
 
-Status: v0.4.64 candidate: closing out empty folders, and saying what is actually left (letter 183); [release scope](releases/v0.4.64.md).
+Status: v0.4.65 candidate: what a conversation's Git backup preview covers (letter 184); [release scope](releases/v0.4.65.md).
 
 Status: v0.4.36 no-dialog grants, letter-168, and session-owned writes truth
 Date: 2026-09-04
