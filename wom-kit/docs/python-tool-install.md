@@ -1,7 +1,7 @@
 # Install WOM-kit As A Python Tool
 
-Current v0.4.65 candidate: a session-scoped Git backup preview that explains its selection, the changed-path roles and the session's operations outside it, with progress counts and one authentication pass per preview. [Release scope](releases/v0.4.65.md). Other ongoing requests are not included in this claim.
-Current release candidate: v0.4.65 what a conversation's Git backup preview covers (letter 184); [release scope](releases/v0.4.65.md).
+Current v0.4.66 candidate: a session-scoped Git backup that selects the session's own zettel-objet link outputs: the changed zettel when it is exactly those links, the link receipt, the before-snapshot and the usage record. [Release scope](releases/v0.4.66.md). Other ongoing requests are not included in this claim.
+Current release candidate: v0.4.66 a conversation's zettel-objet links in its own Git backup (letter 184); [release scope](releases/v0.4.66.md).
 
 Status: v0.4.36 conditional GitHub wheel contract; no-dialog grants; letter-168
 
@@ -37,9 +37,9 @@ launcher. Other project folders and the user-shared PATH executable do not
 change. This is WOM's supported project runtime boundary; it does not isolate
 arbitrary non-WOM programs or separate Windows user permissions.
 
-The v0.4.65 URL below is a conditional contract, not proof that an artifact is
+The v0.4.66 URL below is a conditional contract, not proof that an artifact is
 public. Use it only after the matching GitHub Release exists and lists the
-verified wheel. See the [v0.4.65 release note](releases/v0.4.65.md) for the
+verified wheel. See the [v0.4.66 release note](releases/v0.4.66.md) for the
 separate source and release-evidence boundary; the v0.4.19 through v0.4.35
 notes remain the record of the runtime-truth, session-owned-write,
 reopened-writer, update-failure, fidelity-source, permission-mode,
@@ -81,17 +81,17 @@ archive so it cannot become project input or an updater collision:
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0465-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0466-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.65/wom_kit-0.4.65-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.66/wom_kit-0.4.66-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-After the new process reports exactly `archive 0.4.65`, use that explicit
+After the new process reports exactly `archive 0.4.66`, use that explicit
 bootstrap executable for `project-version-update`. After approval succeeds,
 verify the project runtime and use its launcher:
 
@@ -143,7 +143,7 @@ bootstrap, use another external virtual environment:
 ```powershell
 $womToolRoot = Join-Path $env:LOCALAPPDATA "WOM\tool-v0419"
 py -3.12 -m venv $womToolRoot
-& "$womToolRoot\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.65/wom_kit-0.4.65-py3-none-any.whl"
+& "$womToolRoot\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.66/wom_kit-0.4.66-py3-none-any.whl"
 & "$womToolRoot\Scripts\archive.exe" --version
 ```
 

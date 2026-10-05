@@ -1,7 +1,7 @@
 # Agent Operator Capabilities Manifest
 
-Current v0.4.65 candidate: what a conversation's Git backup preview covers (letter 184): a session-scoped Git backup preview that explains its selection, the changed-path roles and the session's operations outside it, with progress counts and one authentication pass per preview. [Release scope](releases/v0.4.65.md). Other ongoing requests are not included in this claim.
-Current release candidate: v0.4.65 what a conversation's Git backup preview covers (letter 184); [release scope](releases/v0.4.65.md).
+Current v0.4.66 candidate: a conversation's zettel-objet links in its own Git backup (letter 184): a session-scoped Git backup that selects the session's own zettel-objet link outputs: the changed zettel when it is exactly those links, the link receipt, the before-snapshot and the usage record. [Release scope](releases/v0.4.66.md). Other ongoing requests are not included in this claim.
+Current release candidate: v0.4.66 a conversation's zettel-objet links in its own Git backup (letter 184); [release scope](releases/v0.4.66.md).
 
 Status: v0.4.36 no-dialog grants, letter-168, and writer-session coverage gate
 
@@ -222,7 +222,7 @@ field remain `history_not_audited`. Inventory, shared capability availability,
 and command help consume the same content-free history. Current availability
 continues to be parser-derived; history does not grant execution authority.
 
-For the current v0.4.65 candidate parser, the inventory snapshot is:
+For the current v0.4.66 candidate parser, the inventory snapshot is:
 
 ```text
 canonical executable command paths: 312

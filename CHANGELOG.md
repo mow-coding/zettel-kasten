@@ -4,6 +4,12 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.4.66 - 2026-10-06
+
+- Beta letter 184, part 2: a session-scoped Git backup selects the session's own zettel-objet link outputs (producer `session_claimed_zettel_objet_link_output`, scope schema v5): the link receipt, the before-snapshot, the MAC'd session-object-usage record, and the changed zettel when Git's HEAD is the recorded preimage, the worktree is exactly that session's chain of links and the parsed difference is only the appended assets and `updated_at`.
+- The approval claim, its session and the usage record are authenticated with the archive receipt key; the unsigned link receipt is accepted only as the single receipt naming that approval with the same context, plan and target digests. A zettel with another pending edit, another conversation's link or a window-approved link stays unselected. The approved writer re-audits every link claim with its own claim before each Git effect.
+- The objet ledger stays archive-wide by design; objet registration receipts are not selected yet.
+
 ## v0.4.65 - 2026-10-06
 
 - Beta letter 184, part 1: a session-scoped `git-backup-reconcile-plan --dry-run` carries `session_backup_coverage` (selected outputs by kind, roles of all Git-changed paths as fixed labels, this session's succeeded approvals by operation with whether their Git changes are provable as session-owned, the shared-by-design objet ledger and the archive-wide route, objet bytes never in Git) and `long_run_guidance`. Objet registration and zettel-objet links are reported as outside the selection instead of silently left out.

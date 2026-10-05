@@ -1,9 +1,9 @@
 ﻿# WOM-kit Capability Matrix
 
-Current v0.4.65 candidate: what a conversation's Git backup preview covers (letter 184): a session-scoped Git backup preview that explains its selection, the changed-path roles and the session's operations outside it, with progress counts and one authentication pass per preview. [Release scope](releases/v0.4.65.md). Other ongoing requests are not included in this claim.
-Version: v0.4.65 implementation and release scope
+Current v0.4.66 candidate: a conversation's zettel-objet links in its own Git backup (letter 184): a session-scoped Git backup that selects the session's own zettel-objet link outputs: the changed zettel when it is exactly those links, the link receipt, the before-snapshot and the usage record. [Release scope](releases/v0.4.66.md). Other ongoing requests are not included in this claim.
+Version: v0.4.66 implementation and release scope
 
-Status: v0.4.65 candidate: what a conversation's Git backup preview covers (letter 184); [release scope](releases/v0.4.65.md).
+Status: v0.4.66 candidate: a conversation's zettel-objet links in its own Git backup (letter 184); [release scope](releases/v0.4.66.md).
 
 Status: v0.4.36 no-dialog grants, letter-168, and session-owned writes truth
 Date: 2026-09-04

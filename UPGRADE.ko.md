@@ -1,5 +1,18 @@
 # 업그레이드 가이드
 
+## v0.4.66 대화별 Git 백업에 그 대화의 제텔-오브제 연결 포함
+
+공개된 뒤 기존 프로젝트는 공식 업데이트 절차를 쓰세요. 대화별 Git 백업이 그 대화의 제텔-오브제 연결 산출물을 고릅니다. 연결 영수증, 연결 전 사본, 사용 기록, 그리고 남은 변경이 정확히 그 연결뿐인 제텔입니다. 공유 오브제 장부는 계속 보관함 전체 백업으로만 올립니다. 설치만으로 archive는 바뀌지 않습니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0466-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.66/wom_kit-0.4.66-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
 ## v0.4.65 대화별 Git 백업 미리보기가 무엇을 포함하는지
 
 공개된 뒤 기존 프로젝트는 공식 업데이트 절차를 쓰세요. 대화별 Git 백업 미리보기가 무엇을 골랐는지, 그 대화의 작업 중 무엇이 선택 밖인지(지금은 오브제 등록과 제텔-오브제 연결), 오래 걸리는 미리보기가 어디까지 갔는지 알려 줍니다. 설치만으로 archive는 바뀌지 않습니다.
