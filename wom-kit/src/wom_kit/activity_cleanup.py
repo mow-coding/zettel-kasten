@@ -176,10 +176,39 @@ def _directory_state(path):
             "birthtime_ns": getattr(info, "st_birthtime_ns", None)}}
 
 
+def _git_residue_is_empty(git_dir):
+    """True only for a real directory tree that holds no file, link or reparse point at any depth."""
+    try:
+        info = git_dir.lstat()
+        if not stat.S_ISDIR(info.st_mode) or getattr(info, "st_file_attributes", 0) & 1024:
+            return False
+        seen, stack = 0, [git_dir]
+        while stack:
+            with os.scandir(stack.pop()) as entries:
+                for entry in entries:
+                    entry_info = entry.stat(follow_symlinks=False)
+                    if (not stat.S_ISDIR(entry_info.st_mode)
+                            or getattr(entry_info, "st_file_attributes", 0) & 1024):
+                        return False
+                    seen += 1
+                    if seen > MAX_ITEMS:
+                        return False
+                    stack.append(Path(entry.path))
+        return True
+    except OSError:
+        return False
+
+
 def _git_inventory(root):
     """Read Git facts without checkout, hooks or interpreting the output as code."""
     if not (root / ".git").exists():
         return {"repository": False}
+    # v0.4.64 (letter 183): after an official cleanup removed every file of
+    # .git, only empty folders remain. That is no repository (no HEAD, no
+    # objects, nothing to protect), and it must not block the next request.
+    # Any file, link or reparse point inside keeps the full Git checks.
+    if _git_residue_is_empty(root / ".git"):
+        return {"repository": False, "empty_git_residue": True}
     def git(*args):
         run = subprocess.run(["git", "--no-optional-locks", "-C", str(root), *args],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30, check=False,
@@ -240,18 +269,95 @@ def _inventory(root):
     return result
 
 
+def _directories_holding_content(inventory):
+    """Relative paths of directories that hold a file or link at any depth ('' is the root itself)."""
+    holding = set()
+    for row in inventory:
+        if row["kind"] == "directory":
+            continue
+        parent = row["relative"].rpartition("/")[0]
+        while True:
+            if parent in holding:
+                break
+            holding.add(parent)
+            if not parent:
+                break
+            parent = parent.rpartition("/")[0]
+    return holding
+
+
+def _directory_block_reason(path, expected_state):
+    """Why an approved directory is not removed now; None when it is unchanged and empty."""
+    try:
+        if _directory_state(path) != expected_state:
+            return "directory_changed_since_plan"
+        reason = None
+        with os.scandir(path) as entries:
+            for entry in entries:
+                info = entry.stat(follow_symlinks=False)
+                if not stat.S_ISDIR(info.st_mode) or getattr(info, "st_file_attributes", 0) & 1024:
+                    return "contains_file_or_link"
+                reason = "contains_subdirectory"
+        return reason
+    except (ActivityCleanupError, OSError):
+        return "directory_state_unavailable"
+
+
+def _target_binding_material(material):
+    """Items alone bind a file request (unchanged since v0.4.38); a request
+    without items binds its exact directories instead (v0.4.64)."""
+    if material["items"]:
+        return material["items"]
+    return {"items": [], "directories": material["directories"],
+            "directory_trees": material.get("directory_trees", [])}
+
+
+def directory_tree_preview(material):
+    """v0.4.64 (letter 183): counts for each requested empty-folder tree; never a path."""
+    rows = []
+    scopes = {scope["path"]: scope for scope in material["roots"]}
+    for number, tree in enumerate(material.get("directory_trees", [])):
+        scope = scopes[tree["root"]]
+        prefix = Path(tree["path"]).relative_to(tree["root"]).as_posix()
+        prefix = "" if prefix == "." else prefix
+        inside = [row for row in scope["inventory"]
+                  if not prefix or row["relative"] == prefix or row["relative"].startswith(prefix + "/")]
+        holding = _directories_holding_content(inside)
+        blocking = [row for row in inside if row["kind"] != "directory"]
+        total = len(tree["directories"]) + 1
+        kept = sum(1 for row in tree["directories"]
+                   if ((prefix + "/" if prefix else "") + row["relative"]) in holding) + (prefix in holding)
+        rows.append({"number": number, "directory_count": total,
+            "empty_directory_count_to_remove": total - kept,
+            "directory_count_kept_because_it_holds_a_file": kept,
+            "file_or_link_count_inside": len(blocking),
+            "link_or_reparse_point_count_inside": sum(row["kind"] == "link" for row in blocking),
+            "possible_secret_config_count_inside": sum(bool(row["possible_secret_config"]) for row in blocking),
+            "tree_is_a_selected_root": not prefix,
+            "tree_root_would_be_removed": prefix not in holding,
+            "files_are_never_uploaded_moved_or_deleted_by_this": True})
+    return rows
+
+
 def remaining_inventory(material):
     remaining, newly_created, unsafe = 0, 0, 0
     identities, secret_like = {}, 0
+    roots_present, directory_count, empty_directory_count = 0, 0, 0
     for scope in material["roots"]:
         root = Path(scope["path"])
         if not root.exists():
             continue
+        roots_present += 1
         if _directory_state(root) != scope["state"]:
             unsafe += 1
             continue
         prior = {row["relative"] for row in scope["inventory"]}
         current = _inventory(root)
+        holding = _directories_holding_content(current)
+        for row in current:
+            if row["kind"] == "directory":
+                directory_count += 1
+                empty_directory_count += row["relative"] not in holding
         remaining += sum(row["kind"] != "directory" for row in current)
         newly_created += sum(row["kind"] != "directory" and row["relative"] not in prior for row in current)
         for row in current:
@@ -268,17 +374,81 @@ def remaining_inventory(material):
             "remaining_hard_linked_file_count": linked_files,
             "remaining_possible_secret_config_count": secret_like,
             "folders_empty": remaining == 0 and unsafe == 0,
+            # v0.4.64 (letter 183): "no files" is not "no folders". Subfolders
+            # that still exist are counted, and whether the selected folders
+            # themselves are gone is its own answer.
+            "folders_contain_no_files": remaining == 0 and unsafe == 0,
+            "remaining_selected_folder_count": roots_present,
+            "remaining_subfolder_count": directory_count,
+            "remaining_subfolder_without_files_count": empty_directory_count,
+            "folders_removed": roots_present == 0,
             "changed_root_count": unsafe, "scope_completion": "empty" if remaining == 0 and unsafe == 0 else "selected_files_only"}
 
 
-def completion_summary(selected_total, selected_done, remaining):
+def folder_outcome(directory_results, tree_results):
+    """v0.4.64 (letter 183): folder removal as its own outcome, apart from the file items."""
+    listed = {"requested": len(directory_results),
+              "removed": sum(row["state"] == "removed_empty" for row in directory_results),
+              "already_absent": sum(row["state"] == "absent" for row in directory_results),
+              "kept": sum(row["state"] not in {"removed_empty", "absent"} for row in directory_results)}
+    trees = {"requested": len(tree_results),
+             "empty_directories_removed": sum(row.get("removed_empty", 0) for row in tree_results),
+             "already_absent": sum(row.get("already_absent", 0) for row in tree_results),
+             "kept_because_not_empty": sum(row.get("kept_not_empty", 0) for row in tree_results),
+             "held_changed_or_unverifiable": sum(row.get("held", 0) for row in tree_results),
+             "not_attempted": sum(row.get("not_attempted", 0) for row in tree_results)}
+    return {"listed_directories": listed, "directory_trees": trees,
+            "listed_directories_state": ("none_requested" if not directory_results
+                else "all_removed" if not listed["kept"] else "some_kept"),
+            "directory_trees_state": ("none_requested" if not tree_results
+                else "empty_directories_removed" if not (trees["held_changed_or_unverifiable"] or trees["not_attempted"])
+                else "some_held")}
+
+
+def folder_summary_lines(outcome, *, selected_complete):
+    lines = []
+    listed, trees = outcome["listed_directories"], outcome["directory_trees"]
+    if listed["requested"]:
+        lines.append(f"Folders listed for removal: {listed['removed']} removed, {listed['already_absent']} already "
+                     f"absent, {listed['kept']} kept.")
+        if listed["kept"]:
+            lines.append("A listed folder is removed only when it is completely empty; a kept one still holds a "
+                         "subfolder or a file, or changed after the plan. To remove leftover empty subfolders, make "
+                         "a new request with a new activity_id, \"items\": [] and remove_empty_directory_trees; "
+                         "nothing is uploaded, restored or deleted again for that.")
+            if selected_complete:
+                lines.append("Every selected file is finished: nothing needs reconciling or uploading again. Only "
+                             "folder removal is unfinished.")
+    if trees["requested"]:
+        lines.append(f"Empty-folder trees: {trees['empty_directories_removed']} empty folder(s) removed, "
+                     f"{trees['already_absent']} already absent, {trees['kept_because_not_empty']} kept because "
+                     f"they (or a subfolder) still hold a file, {trees['held_changed_or_unverifiable']} held because "
+                     "they changed or could not be checked"
+                     + (f", {trees['not_attempted']} not attempted." if trees["not_attempted"] else "."))
+    return lines
+
+
+def retained_on_purpose(material):
+    kept = [item for item in material["items"] if item["disposition"] == "retain" and os.path.lexists(item["path"])]
+    return {"retained_by_request_count": len(kept),
+            "retained_secret_config_count": sum(item["role"] == "secret_config" for item in kept)}
+
+
+def completion_summary(selected_total, selected_done, remaining, *, material=None):
     """v0.4.63 (letter 182): plain sentences that keep 'selected items done' apart from 'folders empty'."""
-    lines = [f"Selected items: {selected_done} of {selected_total} completed."]
+    lines = [f"Selected items: {selected_done} of {selected_total} completed."
+             if selected_total else "This request selected no files; it only concerns folders."]
     paths = remaining["remaining_path_count"]
     if remaining["changed_root_count"]:
         lines.append(f"{remaining['changed_root_count']} selected folder(s) changed since the plan and were not inspected.")
     if paths == 0 and not remaining["changed_root_count"]:
         lines.append("The selected folders now contain no files.")
+        if remaining.get("folders_removed"):
+            lines.append("The selected folders themselves no longer exist.")
+        elif remaining.get("remaining_selected_folder_count"):
+            lines.append(f"{remaining['remaining_selected_folder_count']} selected folder(s) still exist with "
+                         f"{remaining['remaining_subfolder_count']} subfolder(s) and no files. \"No files\" does not "
+                         "mean the folders were removed.")
     elif paths:
         detail = f"{paths} path(s) remain, which are {remaining['remaining_distinct_file_count']} distinct file(s)"
         if remaining["remaining_hard_linked_path_count"]:
@@ -288,6 +458,14 @@ def completion_summary(selected_total, selected_done, remaining):
             detail += f"; {remaining['remaining_possible_secret_config_count']} look like secret configuration by name"
         lines.append("The selected folders are NOT empty: " + detail + ". Completing the selected items does not make "
                      "the folders deletable.")
+        if material is not None:
+            kept = retained_on_purpose(material)
+            if kept["retained_by_request_count"]:
+                lines.append(f"{kept['retained_by_request_count']} of the remaining file(s) were kept on purpose by "
+                             f"this request (retain); {kept['retained_secret_config_count']} of them are protected "
+                             "secret configuration, which is never uploaded and is deleted only after the person "
+                             "confirms its values are kept elsewhere. A folder kept for such a file is a finished "
+                             "state, not a failure.")
     lines.append("These counts are local files only; they say nothing about online publication or the remote backup.")
     return lines
 
@@ -333,7 +511,8 @@ def plan(root, request_path, *, resume=False, key_provider=None, progress=None):
     except (ValueError, UnicodeError):
         raise ActivityCleanupError("activity_cleanup_request_invalid") from None
     if (not isinstance(request, dict) or request.get("schema") != SCHEMA
-        or set(request) - {"schema", "activity_id", "roots", "items", "remove_empty_directories", "storage"}):
+        or set(request) - {"schema", "activity_id", "roots", "items", "remove_empty_directories",
+                           "remove_empty_directory_trees", "storage"}):
         raise ActivityCleanupError("activity_cleanup_request_invalid")
     activity = request.get("activity_id")
     if not isinstance(activity, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", activity):
@@ -347,7 +526,11 @@ def plan(root, request_path, *, resume=False, key_provider=None, progress=None):
         return {"root": root, "material": saved, "journal": store, "public": public_plan(saved), "progress": progress}
     roots = request.get("roots")
     items = request.get("items")
-    if not isinstance(roots, list) or not roots or not isinstance(items, list) or not 0 < len(items) <= MAX_ITEMS:
+    if not isinstance(roots, list) or not roots or not isinstance(items, list) or len(items) > MAX_ITEMS:
+        raise ActivityCleanupError("activity_cleanup_request_invalid")
+    # v0.4.64 (letter 183): a request may select no files when it only closes
+    # out folders (listed empty directories or empty-folder trees).
+    if not items and not (request.get("remove_empty_directories") or request.get("remove_empty_directory_trees")):
         raise ActivityCleanupError("activity_cleanup_request_invalid")
     scopes = []
     _notify(progress, "activity-cleanup-inventory", "start", 0, len(roots))
@@ -440,6 +623,35 @@ def plan(root, request_path, *, resume=False, key_provider=None, progress=None):
         if not any(path.is_relative_to(scope["path"]) for scope in scopes):
             raise ActivityCleanupError("activity_cleanup_directory_outside_selection")
         directories.append({"path": str(path), "state": _directory_state(path)})
+    # v0.4.64 (letter 183): close out the empty folders an official cleanup
+    # left behind. Every folder of the tree is bound by identity now and is
+    # removed later, deepest first, only if it is unchanged and empty. A
+    # folder that holds a file, link or reparse point at any depth stays, and
+    # so do its ancestors. Files are never touched by this.
+    trees = []
+    tree_requests = request.get("remove_empty_directory_trees", [])
+    if (not isinstance(tree_requests, list) or len(tree_requests) > 64
+            or any(not isinstance(v, str) or not Path(v).is_absolute() for v in tree_requests)):
+        raise ActivityCleanupError("activity_cleanup_absolute_directory_required")
+    for value in tree_requests:
+        path = _safe_path(value)
+        owners = [scope for scope in scopes if path.is_relative_to(scope["path"])]
+        if len(owners) != 1:
+            raise ActivityCleanupError("activity_cleanup_directory_outside_selection")
+        if any(path.is_relative_to(tree["path"]) or Path(tree["path"]).is_relative_to(path) for tree in trees):
+            raise ActivityCleanupError("activity_cleanup_directory_tree_overlap")
+        scope = owners[0]
+        prefix = path.relative_to(scope["path"]).as_posix()
+        prefix = "" if prefix == "." else prefix
+        members = []
+        for row in scope["inventory"]:
+            if row["kind"] != "directory" or (prefix and not row["relative"].startswith(prefix + "/")):
+                continue
+            relative = row["relative"][len(prefix) + 1:] if prefix else row["relative"]
+            members.append({"relative": relative,
+                            "state": _directory_state(Path(scope["path"]) / row["relative"])})
+        trees.append({"path": str(path), "root": scope["path"], "state": _directory_state(path),
+                      "directories": sorted(members, key=lambda member: member["relative"])})
     for scope in scopes:
         if scope["git"].get("external_worktree_dependency"):
             # Never remove shared Git metadata while another checkout depends on it.
@@ -454,6 +666,8 @@ def plan(root, request_path, *, resume=False, key_provider=None, progress=None):
         "archive_id": services.read_archive_id(root), "request_sha256": request_sha,
         "roots": scopes, "items": selected, "directories": directories, "storage": storage,
         "blockers": sorted(set(blockers))}
+    if trees:
+        material["directory_trees"] = trees
     old = store.read("intent")
     if old is not None:
         raise ActivityCleanupError("activity_cleanup_use_resume_for_existing_activity")
@@ -483,7 +697,24 @@ def public_plan(material):
             "classification_basis": "explicit_request_reasons", "filename_based_disposal": False},
         "deletion_supported": os.name == "nt", "whole_folder_preservation_claimed": False,
         "private_values_echoed": False, "writes_performed": False,
-        **_link_and_distinct_summary(material)}
+        **_link_and_distinct_summary(material), **_folder_plan_summary(material)}
+
+
+def _folder_plan_summary(material):
+    """v0.4.64 (letter 183): what the folder part of the request will do, in counts."""
+    summary = {"listed_directory_count": len(material["directories"]),
+               "empty_git_residue_root_count": sum(bool(s["git"].get("empty_git_residue")) for s in material["roots"])}
+    if material.get("directory_trees"):
+        summary["directory_trees"] = directory_tree_preview(material)
+        summary["directory_tree_rule"] = (
+            "Each folder is removed deepest first only if it is unchanged and empty. A folder that holds a file, "
+            "link or reparse point at any depth is kept with its parents. No file is uploaded, moved or deleted. "
+            "The exact folder list is in the private plan (--private-plan-output).")
+    if summary["empty_git_residue_root_count"]:
+        summary["empty_git_residue_note"] = (
+            "A selected folder has a .git that holds no file at any depth (what an earlier cleanup left behind). "
+            "It is not a Git repository and is treated as ordinary empty folders.")
+    return summary
 
 
 def _link_and_distinct_summary(material):
@@ -524,7 +755,7 @@ def _link_and_distinct_summary(material):
 def approval_binding(candidate):
     sha = digest(candidate["material"])
     return ExactOperationApprovalBinding(operation=ExactHumanApprovalOperation.activity_cleanup,
-        plan_sha256=sha, target_binding_sha256=digest(candidate["material"]["items"]),
+        plan_sha256=sha, target_binding_sha256=digest(_target_binding_material(candidate["material"])),
         warning_codes=(), review_binding_codes=("activity_cleanup_exact_files", "activity_cleanup_remote_preservation"))
 
 
@@ -1124,7 +1355,12 @@ def status(candidate):
     remaining = remaining_inventory(material)
     boundaries["folders"] = {"state": "empty" if remaining["folders_empty"] else "files_remain",
                              "remaining_path_count": remaining["remaining_path_count"],
-                             "remaining_distinct_file_count": remaining["remaining_distinct_file_count"]}
+                             "remaining_distinct_file_count": remaining["remaining_distinct_file_count"],
+                             # v0.4.64 (letter 183): files gone is not folders gone.
+                             "folders_removed": remaining["folders_removed"],
+                             "remaining_selected_folder_count": remaining["remaining_selected_folder_count"],
+                             "remaining_subfolder_count": remaining["remaining_subfolder_count"],
+                             **retained_on_purpose(material)}
     return {"schema": "wom-kit/activity-cleanup-status/v1", "ok": True, "dry_run": True,
             "completion_boundaries": boundaries,
             "state": "selected_files_completed" if complete else "partial",
@@ -1132,8 +1368,9 @@ def status(candidate):
             "counts": counts, "items": results, "remaining": remaining,
             # v0.4.63 (letter 182): two separate answers, in plain words too.
             "selected_items_complete": complete, "folders_empty": remaining["folders_empty"],
-            "plain_summary": completion_summary(total, counts["completed"], remaining),
+            "plain_summary": completion_summary(total, counts["completed"], remaining, material=material),
             "whole_folder_cleanup_complete": bool(complete and remaining["folders_empty"]),
+            "folders_removed": remaining["folders_removed"],
             "remote_bytes_verified_now": False,
             "writes_performed": False, "private_values_echoed": False,
             "next_action": "review_remaining_scope" if complete else "reconcile_authenticated_item_evidence"}
@@ -1167,7 +1404,26 @@ def execute(candidate, *, reviewer, claim, backend):
     if isinstance(measurements, dict):
         measurements["work_timing"] = recorder.summary(
             measurements.get("processing_seconds_including_child_waits") or 0.0)
+        measurements["plain_time_summary"] = plain_time_summary(measurements)
     return result
+
+
+def plain_time_summary(measurements):
+    """v0.4.64 (letter 183): where the time went, in sentences. Recorded facts of an ended run only."""
+    def seconds(value):
+        return f"{value:.1f} s" if isinstance(value, (int, float)) and not isinstance(value, bool) else "not measured"
+    lines = [f"Waiting for the approval decision: {seconds(measurements.get('approval_resolution_seconds'))}.",
+             f"Waiting for another writer of this activity: {seconds(measurements.get('activity_writer_wait_seconds'))}.",
+             f"Processing after approval: {seconds(measurements.get('processing_seconds_including_child_waits'))}."]
+    timing = measurements.get("work_timing") or {}
+    parts = sorted(((value, name) for name, value in (timing.get("seconds") or {}).items() if value >= 0.05), reverse=True)[:4]
+    if parts:
+        lines.append("Largest parts of the processing time: "
+                     + ", ".join(f"{name} {value:.1f} s" for value, name in parts)
+                     + f"; not attributed {seconds(timing.get('unattributed_seconds'))}.")
+    lines.append("These parts do not overlap and are not the whole wall-clock time of the conversation. "
+                 "This command has ended: the figures are a record, not a running process.")
+    return lines
 
 
 def _execute(candidate, *, reviewer, claim, backend):
@@ -1359,8 +1615,10 @@ def _execute_locked(candidate, *, reviewer, claim, backend):
             if not path.exists():
                 directory_results.append({"number": index, "state": "absent"})
                 continue
-            if _directory_state(path) != directory["state"] or any(path.iterdir()):
-                directory_results.append({"number": index, "state": "retained_nonempty_or_changed"})
+            blocked = _directory_block_reason(path, directory["state"])
+            if blocked:
+                # v0.4.64 (letter 183): say which it was.
+                directory_results.append({"number": index, "state": "retained_nonempty_or_changed", "code": blocked})
                 continue
             _delete_exact_approved_empty_directory(path.parent, path, directory["state"])
             journal.write("directory-" + str(index) + "-deleted", {"number": index, "state": "removed_empty"})
@@ -1376,18 +1634,92 @@ def _execute_locked(candidate, *, reviewer, claim, backend):
         recorded = {row["number"] for row in directory_results}
         directory_results.extend({"number": number, "state": "not_attempted"}
                                  for number in range(len(material["directories"])) if number not in recorded)
+    # v0.4.64 (letter 183): empty-folder trees, deepest first. Each folder is
+    # removed only when it is the planned folder (identity) and empty now.
+    tree_results = []
+    for index, tree in enumerate(material.get("directory_trees", [])):
+        base = Path(tree["path"])
+        rows = sorted(tree["directories"], key=lambda row: row["relative"].count("/"), reverse=True)
+        rows.append({"relative": "", "state": tree["state"]})
+        counts = {"removed_empty": 0, "already_absent": 0, "kept_not_empty": 0, "held": 0, "not_attempted": 0}
+        codes = {}
+        stopped = cancelled
+        for position, row in enumerate(rows):
+            if not stopped and position % 64 == 0:
+                if stop_requested():
+                    stopped = cancelled = True
+                else:
+                    try:
+                        authorize()
+                    except OperationCancelled:
+                        stopped = cancelled = True
+                    except Exception:
+                        stopped = True
+                        codes["authorization_unavailable"] = codes.get("authorization_unavailable", 0) + 1
+            if stopped:
+                counts["not_attempted"] += 1
+                continue
+            path = base / row["relative"] if row["relative"] else base
+            try:
+                if not os.path.lexists(path):
+                    counts["already_absent"] += 1
+                    continue
+                blocked = _directory_block_reason(path, row["state"])
+                if blocked in {"contains_file_or_link", "contains_subdirectory"}:
+                    counts["kept_not_empty"] += 1
+                    codes[blocked] = codes.get(blocked, 0) + 1
+                    continue
+                if blocked:
+                    counts["held"] += 1
+                    codes[blocked] = codes.get(blocked, 0) + 1
+                    continue
+                _delete_exact_approved_empty_directory(path.parent, path, row["state"])
+                counts["removed_empty"] += 1
+            except OperationCancelled:
+                stopped = cancelled = True
+                counts["not_attempted"] += 1
+            except Exception as error:
+                code = getattr(error, "code", None)
+                if not isinstance(code, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,127}", code):
+                    code = "directory_delete_refused"
+                counts["held"] += 1
+                codes[code] = codes.get(code, 0) + 1
+            if position % 64 == 0:
+                _notify(progress, "activity-cleanup-directories", "tree", position, len(rows))
+        tree_results.append({"number": index,
+            "state": ("not_attempted" if counts["not_attempted"] == len(rows)
+                      else "stopped" if counts["not_attempted"]
+                      else "some_held" if counts["held"] else "empty_directories_removed"),
+            "directory_count": len(rows), **counts, "codes": dict(sorted(codes.items())),
+            "tree_root_removed": not os.path.lexists(base)})
+    _notify(progress, "activity-cleanup-directories", "done", len(material["directories"]), len(material["directories"]))
     success = all(row["state"] in {"deleted", "already_deleted", "already_absent_after_intent"} for row in results)
     success = success and all(row["state"] in {"absent", "removed_empty"} for row in directory_results)
+    # A folder kept because it still holds a file is the stated contract of a
+    # tree request, not a failure; a changed or unverifiable folder is.
+    success = success and all(row["state"] == "empty_directories_removed" for row in tree_results)
     result = {**candidate["public"], "ok": success, "dry_run": False,
         "state": "completed" if success else "partial", "writes_performed": True,
         "items": results, "directories": directory_results, "whole_folder_preservation_claimed": False,
         "remaining": remaining_inventory(material)}
+    if material.get("directory_trees"):
+        result["directory_trees"] = tree_results
     # v0.4.63 (letter 182): "the selected items are done" and "the folders
     # are empty" are two answers; say both, in plain words too.
     selected_done = sum(row["state"] in {"deleted", "already_deleted", "already_absent_after_intent"} for row in results)
-    result.update(selected_items_complete=selected_done == len(material["items"]),
+    selected_complete = selected_done == len(material["items"])
+    outcome = folder_outcome(directory_results, tree_results)
+    result.update(selected_items_complete=selected_complete,
                   folders_empty=result["remaining"]["folders_empty"],
-                  plain_summary=completion_summary(len(material["items"]), selected_done, result["remaining"]))
+                  folders_removed=result["remaining"]["folders_removed"],
+                  folder_outcome=outcome,
+                  plain_summary=completion_summary(len(material["items"]), selected_done, result["remaining"],
+                                                   material=material)
+                  + folder_summary_lines(outcome, selected_complete=selected_complete))
+    if not success and not cancelled and selected_complete:
+        # v0.4.64 (letter 183): every file is finished and only folders are
+        # left; "partial" alone read as if files were still pending.
+        result["state_detail"] = "selected_items_complete_folder_removal_unfinished"
     if cancelled:
         success = False
         result.update(ok=False, state="cancelled_at_checkpoint", cause_code="operation_cancelled_at_checkpoint",
@@ -1416,6 +1748,13 @@ def _execute_locked(candidate, *, reviewer, claim, backend):
         "unprocessed_item_count": sum(row["state"] == "not_attempted" for row in results),
         "interrupted_item_count": sum(row["state"] == "interrupted" for row in results),
         "unknown_local_outcome_count": sum(row["state"] == "outcome_unknown" for row in results),
+        "selected_item_count": len(material["items"]),
+        "directory_removed_count": outcome["listed_directories"]["removed"]
+                                   + outcome["directory_trees"]["empty_directories_removed"],
+        "directory_kept_not_empty_count": outcome["directory_trees"]["kept_because_not_empty"]
+            + sum(row.get("code") in {"contains_file_or_link", "contains_subdirectory"} for row in directory_results),
+        "directory_unfinished_count": outcome["listed_directories"]["kept"]
+            + outcome["directory_trees"]["held_changed_or_unverifiable"] + outcome["directory_trees"]["not_attempted"],
     }
     if isinstance(backend, OfficialPreservationBackend):
         observe = getattr(backend.transport, "transfer_observation", None)
