@@ -456,6 +456,22 @@ documents or prove source/objet byte custody. No eligible outputs is a completed
 classification, not a successful backup. Do not use metadata backup to justify
 source deletion or whole-archive completion.
 
+Since v0.4.65 a CLI preview also carries `session_backup_coverage`: the
+selected outputs by kind, the roles of every Git-changed path (fixed labels,
+never a path), and this session's own succeeded approvals by operation with
+whether their Git-managed changes are `session_ownership_provable`,
+`no_git_managed_output` or `not_provable_as_session_owned_yet`. Objet
+registration and zettel-objet links are in the last group: their changed
+zettels, ledger rows and receipts stay uncommitted and are not selected. The
+objet ledger is shared by every conversation and is left out by design; it
+is backed up only by the archive-wide `git-backup-plan`, after the person
+agrees to include every conversation's pending changes. `long_run_guidance`
+says that a preview is read-only, has nothing to resume, and reports
+`current`/`total` in its `git_output_scope_discovery` and
+`git_receipt_provenance` progress lines. Objet bytes are never part of a Git
+backup. The MCP projection keeps its closed field list and does not carry the
+coverage block.
+
 MCP output contains fixed status, count, digest and verification fields, not
 private paths, selection documents or nested Git anchors. The original verified
 commit, current ownership, independent remote ref and final acknowledgement are

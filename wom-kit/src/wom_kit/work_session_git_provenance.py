@@ -353,17 +353,26 @@ def _authenticated_inspection_paths_held(archive_root, *, held, selected_binding
                     cause_code=next(iter(blockers), "git_metadata_snapshot_unavailable"))
             wanted = _session_identity(selected_binding)
             paths = set()
-            for candidate in sorted(row.path for row in state["all_status"]
-                                    if _RECEIPT_PATH.fullmatch(row.path) and row.path not in producer_paths):
+            # v0.4.65 (letter 184): the changed-path roles and the number of
+            # receipt candidates are reported, content-free, by the preview.
+            from . import work_session_git_coverage as coverage
+            coverage.record_changed_paths(row.path for row in state["all_status"])
+            receipt_candidates = sorted(row.path for row in state["all_status"]
+                                        if _RECEIPT_PATH.fullmatch(row.path) and row.path not in producer_paths)
+            coverage.add_total(len(receipt_candidates))
+            for candidate in receipt_candidates:
                 held.verify_held()
+                coverage.tick()
                 hint = _receipt_session_hint(
                     store, held, "sha256:" + _RECEIPT_PATH.fullmatch(candidate)[1])
                 if hint == wanted:
                     paths.add(candidate)
             if len(paths) > _MAX_RECEIPT_CANDIDATES:
                 raise WorkSessionGitProvenanceError("work_session_git_receipt_limit")
+            coverage.add_total(len(paths))
             for path in sorted(paths):
                 held.verify_held()
+                coverage.tick()
                 execution_sha = "sha256:" + _RECEIPT_PATH.fullmatch(path)[1]
                 try:
                     receipt = exact.load_exact_operation_final_receipt_read_only(
@@ -434,7 +443,10 @@ def _select_receipt_changes_held(
         # human-decision parser.
         wanted = _session_identity(binding)
         own_receipt_refs, other_hint_refs = set(), set()
+        from . import work_session_git_coverage as coverage
+        coverage.add_total(2 * len(rows))
         for row in rows:
+            coverage.tick()
             change_ref = row["public_observation"]["change_ref"]
             match = _RECEIPT_PATH.fullmatch(row["path"])
             if match is None or change_ref in intake_proofs or change_ref in document_proofs:
@@ -450,6 +462,7 @@ def _select_receipt_changes_held(
         selected, excluded, proofs, unverified = [], [], [], 0
         for row in rows:
             store._require_held_lock(held)
+            coverage.tick()
             change_ref = row["public_observation"]["change_ref"]
             match = _RECEIPT_PATH.fullmatch(row["path"])
             proof = intake_proofs.get(change_ref) or document_proofs.get(change_ref)

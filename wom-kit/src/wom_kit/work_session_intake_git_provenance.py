@@ -252,6 +252,19 @@ def _partition(plan_sha, rows, proofs, binding):
 
 
 def _authenticated_output_inventory_held(actual, held, binding, key_provider=None):
+    # v0.4.65 (letter 184): one fresh preview authenticated every original
+    # twice (path discovery, then selection). Inside one observation scope the
+    # second caller reuses the first result after re-checking that both
+    # context inventories are byte-for-byte unchanged. Write-time proof
+    # revalidation is separate and unchanged.
+    from . import work_session_git_coverage as coverage
+    shared = coverage.memo()
+    if shared is not None and "intake" in shared:
+        cached_binding, cached = shared["intake"]
+        if cached_binding == binding.document():
+            for _producer, _family, hints, require in cached[2]:
+                require(actual, inventory=hints, held=held)
+            return cached
     # Capture both complete fixed generations before any authentication
     # callback. Each directory retains its existing independent budget.
     inventories = (
@@ -265,8 +278,10 @@ def _authenticated_output_inventory_held(actual, held, binding, key_provider=Non
         if type(hints) is not inventory_module._SourceIntakeContextInventory or hints._family != family:
             raise WorkSessionIntakeGitProvenanceError()
         codec, (read, expected) = _domain_bundle(producer), _reader_api(producer, "key")
+        coverage.add_total(len(hints.hints()))
         for hint in hints.hints():
             held.verify_held()
+            coverage.tick()
             try:
                 _prepared, context = codec._decode_context(actual, hint.raw, hint.manifest_sha256)
                 context_sha = approval.exact_human_approval_context_sha256(context)
@@ -289,6 +304,8 @@ def _authenticated_output_inventory_held(actual, held, binding, key_provider=Non
                 outputs[path] = (key, output)
     for _producer, _family, hints, require in inventories:
         require(actual, inventory=hints, held=held)
+    if shared is not None:
+        shared["intake"] = (binding.document(), (origins, outputs, inventories, unverified))
     return origins, outputs, inventories, unverified
 
 

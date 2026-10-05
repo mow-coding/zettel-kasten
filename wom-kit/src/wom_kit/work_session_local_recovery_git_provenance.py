@@ -250,11 +250,21 @@ def _control_candidates(root, held):
 
 
 def _authenticated_output_inventory_held(actual, held, binding, key_provider=None):
+    # v0.4.65 (letter 184): reuse within one observation scope, after the
+    # control candidates are confirmed unchanged (see the intake adapter).
+    from . import work_session_git_coverage as coverage
+    shared = coverage.memo()
+    if shared is not None and "document" in shared:
+        cached_binding, cached = shared["document"]
+        if cached_binding == binding.document() and _control_candidates(actual, held) == cached[2]:
+            return cached
     candidates = _control_candidates(actual, held)
     read, expected = _reader_api("key")
     origins, outputs, overlapping, document_controls, unverified = {}, {}, set(), 0, 0
+    coverage.add_total(len(candidates))
     for manifest_sha in candidates:
         held.verify_held()
+        coverage.tick()
         plan = None
         try:
             plan = recovery.load_local_recovery_plan(actual, manifest_sha256=manifest_sha)
@@ -289,6 +299,9 @@ def _authenticated_output_inventory_held(actual, held, binding, key_provider=Non
         outputs.pop(path, None)
     if _control_candidates(actual, held) != candidates:
         raise WorkSessionDocumentGitProvenanceError()
+    if shared is not None:
+        shared["document"] = (binding.document(),
+                              (origins, outputs, candidates, overlapping, document_controls, unverified))
     return origins, outputs, candidates, overlapping, document_controls, unverified
 
 
