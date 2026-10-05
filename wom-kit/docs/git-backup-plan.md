@@ -257,7 +257,7 @@ as unavailable in v0.4.2 even when a human can access it through another Git
 client. Do not weaken the observer or place a token in the URL to work around
 that boundary.
 
-Since v0.4.63 `git-backup-plan` itself defaults to `--credential-mode stored`
+Since v0.4.64 `git-backup-plan` itself defaults to `--credential-mode stored`
 (letter 177: the anonymous default reported every private backup remote as
 not observable); pass `--credential-mode anonymous` for a public repository.
 When the remote cannot be read, the plan's `next_safe_actions` names the next

@@ -1,7 +1,7 @@
 # Agent Operator Capabilities Manifest
 
-Current v0.4.63 candidate: hard-linked files, secret config files, and a plain done answer (letter 182): activity cleanup of a hard-link group whose links are all selected, a never-uploaded secret_config role, and a completion summary that separates selected items from empty folders. [Release scope](releases/v0.4.63.md). Other ongoing requests are not included in this claim.
-Current release candidate: v0.4.63 hard-linked files, secret config files, and a plain done answer (letter 182); [release scope](releases/v0.4.63.md).
+Current v0.4.64 candidate: closing out empty folders, and saying what is actually left (letter 183): a folder-only activity-cleanup request that removes bound empty-folder trees, an emptied .git that no longer blocks planning, and results that report folder removal apart from the file items. [Release scope](releases/v0.4.64.md). Other ongoing requests are not included in this claim.
+Current release candidate: v0.4.64 closing out empty folders, and saying what is actually left (letter 183); [release scope](releases/v0.4.64.md).
 
 Status: v0.4.36 no-dialog grants, letter-168, and writer-session coverage gate
 
@@ -222,7 +222,7 @@ field remain `history_not_audited`. Inventory, shared capability availability,
 and command help consume the same content-free history. Current availability
 continues to be parser-derived; history does not grant execution authority.
 
-For the current v0.4.63 candidate parser, the inventory snapshot is:
+For the current v0.4.64 candidate parser, the inventory snapshot is:
 
 ```text
 canonical executable command paths: 312

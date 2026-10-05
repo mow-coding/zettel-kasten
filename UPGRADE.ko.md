@@ -1,5 +1,18 @@
 # 업그레이드 가이드
 
+## v0.4.64 빈 폴더 마감과 실제로 남은 것 알려 주기
+
+공개된 뒤 기존 프로젝트는 공식 업데이트 절차를 쓰세요. 파일 없이 폴더만 적은 activity-cleanup 요청으로 앞선 정리가 남긴 빈 폴더를 지울 수 있고(remove_empty_directory_trees), 파일이 모두 사라진 .git은 더 이상 계획을 막지 않으며, 결과는 파일 완료와 폴더 제거를 따로 알려 줍니다. 설치만으로 archive는 바뀌지 않습니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0464-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.64/wom_kit-0.4.64-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
 ## v0.4.63 하드링크 파일, 비밀 설정 파일, 그리고 쉬운 완료 표시
 
 공개된 뒤 기존 프로젝트는 공식 업데이트 절차를 쓰세요. 하드링크 파일은 모든 연결 경로를 항목으로 넣으면 activity-cleanup이 정리하고, 실제 비밀 파일은 secret_config 역할로 올리지 않고 처리하며, 결과는 선택 항목 완료와 폴더 비움을 따로 알려 줍니다. 설치만으로 archive는 바뀌지 않습니다.
