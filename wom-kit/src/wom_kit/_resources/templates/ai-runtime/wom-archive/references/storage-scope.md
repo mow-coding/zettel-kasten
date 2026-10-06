@@ -46,6 +46,11 @@
 - A long preview is read-only: progress lines carry `current` and `total`.
   If `current` has not moved for 5 minutes, interrupt it and report the last
   line; nothing needs resuming.
+- `writer_unavailable` on an upload preview is the store label, never the
+  writer, a lock, a credential or the session: use a label from
+  `registered_store_refs`. If `--this-session` selects nothing, the captures
+  were approved through a window: `object-storage-scope-list --approval-id
+  <your own batch approval ids> --output <private file>`, then `--object-list`.
 - If an `activity-cleanup` ends partial, change nothing by hand and do not
   start it again: read `pending_item_diagnosis` in the `--reconcile --dry-run`
   result (each unfinished item's step and route) and approve that exact plan

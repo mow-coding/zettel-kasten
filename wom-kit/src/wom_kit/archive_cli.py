@@ -18329,12 +18329,37 @@ def _object_storage_upload_credential_refs_present(args: argparse.Namespace) -> 
 def command_object_storage_scope_list(args: argparse.Namespace) -> int:
     try:
         result = object_storage_scope.export_scope_list(Path(args.archive_root), output=args.output,
-            sessions=args.session or (), object_lists=args.object_list or (), this_session=args.this_session)
+            sessions=args.session or (), object_lists=args.object_list or (), this_session=args.this_session,
+            approval_ids=getattr(args, "approval_id", None) or ())
     except (object_storage_scope.ObjectStorageScopeError, OSError, archive_services.ArchiveServiceError) as exc:
         result = {"ok": False, "reason_codes": [getattr(exc, "code", "object_storage_scope_list_unavailable")],
                   "private_values_echoed": False, "list_written": False}
     print_json(result)
     return 0 if result["ok"] else 1
+
+
+def _object_storage_session_scope_next_actions(args: argparse.Namespace, code: str) -> list[str] | None:
+    """v0.4.67 (beta letter 185): when --this-session selects nothing, say why
+    in counts (captures without a session mark are the usual reason) and
+    give the exact-approval route; never an id or a path."""
+    if code != "object_storage_session_scope_unavailable_use_object_list":
+        return None
+    session = getattr(args, "captured_by_session", None) or os.environ.get("WOM_WORK_SESSION_REF")
+    try:
+        diagnosis = object_storage_scope.session_scope_diagnosis(Path(args.archive_root), session)
+    except Exception:
+        return ["This session has no attributed captures and the reason could not be counted; use "
+                "object-storage-scope-list --approval-id <id> for captures approved through a window."]
+    return [
+        "This session has no capture attributed to it: "
+        f"{diagnosis['captured_by_this_session_count']} object(s) carry this session's mark, "
+        f"{diagnosis['captured_without_session_mark_count']} object(s) under "
+        f"{diagnosis['capture_approvals_without_session_mark_count']} capture approval(s) carry no session mark "
+        f"(approved through a window), {diagnosis['captured_by_other_sessions_count']} belong to other sessions.",
+        diagnosis["session_mark_meaning"],
+        *diagnosis["next_safe_actions"],
+        "Git backup completion is separate: a Git backup never holds objet bytes; their remote preservation has not started.",
+    ]
 
 
 def command_object_storage_upload(args: argparse.Namespace) -> int:
@@ -18490,7 +18515,8 @@ def command_object_storage_upload_result(args: argparse.Namespace) -> dict[str, 
     except exact_approval_claims.ExactApprovalClaimsError as error:
         return _object_storage_upload_cli_error(args, error.code)
     except object_storage_scope.ObjectStorageScopeError as error:
-        return _object_storage_upload_cli_error(args, error.code)
+        return _object_storage_upload_cli_error(
+            args, error.code, next_safe_actions=_object_storage_session_scope_next_actions(args, error.code))
     except object_storage_upload_exact.ObjectStorageUploadError as exc:
         return _object_storage_upload_cli_error(
             args, exc.code, cause=_object_storage_upload_content_free_cause(exc),
@@ -42553,6 +42579,7 @@ def build_parser() -> argparse.ArgumentParser:
     scope_list_parser.add_argument("--session", action="append", help="Explicitly include a work session; repeat for delegated sessions.")
     scope_list_parser.add_argument("--this-session", action="store_true")
     scope_list_parser.add_argument("--object-list", action="append", help="Add an existing exact object list.")
+    scope_list_parser.add_argument("--approval-id", action="append", help="v0.4.67: include the objects captured under this exact approval id (from your own objet-capture-batch result), also when the approval was given through a window and carries no session mark; repeatable.")
     scope_list_parser.add_argument("--output", required=True, help="New private list file outside the archive; never overwrites.")
     scope_list_parser.add_argument("--format", choices=["json"], default="json")
     scope_list_parser.set_defaults(func=command_object_storage_scope_list)

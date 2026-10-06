@@ -77,8 +77,13 @@ class ObjectScope:
                 "scope_warning_codes": ["object_storage_all_sessions_explicit"] if self.kind == "all_sessions" else []}
 
 
-def _session_owners(root, *, key_provider=None):
-    from . import archive_services as services, exact_approval_claims as claims
+CAPTURE_OPERATIONS = frozenset({"objet_capture", "objet_capture_batch", "source_intake_chain"})
+_CAPTURE_ACTIONS = {"capture": "captured", "repair_append": "repair_appended",
+                    "re_materialize": "re_materialized", "skip_already_present": "skip_already_present"}
+
+
+def _verified_claims(root, key_provider=None):
+    from . import exact_approval_claims as claims
 
     try:
         listing = claims.list_exact_human_approval_claims(root, status="all", max_claims=claims.MAX_LISTED_CLAIMS,
@@ -87,13 +92,24 @@ def _session_owners(root, *, key_provider=None):
         raise ObjectStorageScopeError("object_storage_scope_evidence_unavailable") from None
     if listing["blocker_codes"]:
         raise ObjectStorageScopeError("object_storage_scope_evidence_incomplete")
-    by_id = {c["approval_id"]: c for c in listing["claims"]}
+    return {c["approval_id"]: c for c in listing["claims"]}
+
+
+def _capture_attributions(root, by_id):
+    """(object_id, approval_id, claim) for every valid capture receipt item whose
+    approval is a MAC-verified succeeded capture claim with the same context.
+
+    v0.4.67 (beta letter 185): shared by the session selector and the
+    approval selector. A claim approved through a window has no session mark
+    but is still this exact approval; it is attributable by approval id."""
+    from . import archive_services as services
+
     documents, _names, complete, _authorities = services._staged_cleanup_receipt_documents(
         root, services.OBJET_CAPTURE_RECEIPTS_DIR, safety_required=True)
     if not complete:
         raise ObjectStorageScopeError("object_storage_scope_evidence_incomplete")
     archive_id = services.read_archive_id(root)
-    owners: dict[str, set[str]] = {}
+    rows = []
     for filename, receipt in documents:
         if not services._staged_cleanup_valid_objet_receipt_envelope(receipt, filename=filename, archive_id=archive_id):
             continue
@@ -104,20 +120,98 @@ def _session_owners(root, *, key_provider=None):
         if not isinstance(approval_id, str):
             continue
         claim = by_id.get(approval_id)
-        if not claim or claim.get("operation") not in {"objet_capture", "objet_capture_batch", "source_intake_chain"} or claim["context_sha256"] != reference.get("context_sha256"):
-            continue
-        presenter = claim.get("session_presenter") or {}
-        owner = presenter.get("work_session_ref")
-        if not isinstance(owner, str) or not SESSION.fullmatch(owner):
+        if (not claim or claim.get("operation") not in CAPTURE_OPERATIONS
+                or claim.get("status") != "succeeded" or claim["context_sha256"] != reference.get("context_sha256")):
             continue
         for item in receipt["items"]:
             oid = item.get("object_id")
             if (isinstance(oid, str) and OID.fullmatch(oid) and not item.get("blockers")
-                    and item.get("action") in {"captured", "repair_appended", "re_materialized", "skip_already_present"}
+                    and item.get("action") in set(_CAPTURE_ACTIONS.values())
                     and item.get("approved_object_id") == oid
                     and item.get("logical_key") == f"objects/sha256/{oid[7:9]}/{oid[7:]}"
-                    and {"capture": "captured", "repair_append": "repair_appended", "re_materialize": "re_materialized", "skip_already_present": "skip_already_present"}.get(item.get("planned_action")) == item.get("action")):
-                owners.setdefault(oid, set()).add(owner)
+                    and _CAPTURE_ACTIONS.get(item.get("planned_action")) == item.get("action")):
+                rows.append((oid, approval_id, claim))
+    return rows
+
+
+def _approval_objects(root, approval_ids, *, key_provider=None):
+    """Objects captured under exactly these approvals, by approval, with the
+    claim facts that matter for the person: found, succeeded capture, session mark."""
+    by_id = _verified_claims(root, key_provider)
+    attributions = _capture_attributions(root, by_id)
+    objects, facts = {}, {}
+    for approval_id in approval_ids:
+        claim = by_id.get(approval_id)
+        facts[approval_id] = {
+            "found": claim is not None,
+            "capture_operation": bool(claim and claim.get("operation") in CAPTURE_OPERATIONS),
+            "succeeded": bool(claim and claim.get("status") == "succeeded"),
+            "session_marked": bool(claim and isinstance(claim.get("session_presenter"), dict)),
+            "object_count": 0,
+        }
+    for oid, approval_id, _claim in attributions:
+        if approval_id in facts:
+            objects.setdefault(oid, set()).add(approval_id)
+            facts[approval_id]["object_count"] += 1
+    return objects, facts
+
+
+def session_scope_diagnosis(root, session_ref, *, key_provider=None):
+    """Why --this-session selects nothing: counts only, never an id or a path.
+
+    v0.4.67 (beta letter 185): a capture approved through a window carries no
+    session mark; its objects belong to no session until the person names the
+    approval (object-storage-scope-list --approval-id) or lists the objects."""
+    from . import archive_services as services
+
+    root = services.require_existing_archive_root(Path(root))
+    by_id = _verified_claims(root, key_provider)
+    attributions = _capture_attributions(root, by_id)
+    this_session, other_sessions, unmarked_objects, unmarked_approvals = set(), set(), set(), set()
+    for oid, approval_id, claim in attributions:
+        presenter = claim.get("session_presenter") or {}
+        owner = presenter.get("work_session_ref") if isinstance(presenter, dict) else None
+        if owner == session_ref:
+            this_session.add(oid)
+        elif isinstance(owner, str):
+            other_sessions.add(oid)
+        else:
+            unmarked_objects.add(oid)
+            unmarked_approvals.add(approval_id)
+    manifest = {r["object_id"] for r in services.load_manifest_records(root)
+                if isinstance(r, dict) and OID.fullmatch(str(r.get("object_id") or ""))}
+    attributed = this_session | other_sessions | unmarked_objects
+    return {
+        "schema": "wom-kit/object-storage-session-scope-diagnosis/v1",
+        "manifest_object_count": len(manifest),
+        "captured_by_this_session_count": len(this_session),
+        "captured_by_other_sessions_count": len(other_sessions - this_session),
+        "captured_without_session_mark_count": len(unmarked_objects - this_session - other_sessions),
+        "capture_approvals_without_session_mark_count": len(unmarked_approvals),
+        "objects_without_valid_capture_receipt_count": len(manifest - attributed),
+        "session_mark_meaning": ("A capture approved through a window, before a grant, carries no session mark; it is "
+                                 "not attributed to any session. The capture itself is complete and its receipt is valid."),
+        "next_safe_actions": [
+            "For captures this conversation approved through a window, name their approval ids (from your own "
+            "objet-capture-batch results): object-storage-scope-list <archive-root> --approval-id <id> ... "
+            "--output <new private file outside the archive>, then object-storage-upload --object-list <that file> "
+            "--dry-run. The list is bound to verified capture receipts and claims; nothing is guessed.",
+            "Do not select by file name, by date, or by another conversation's session; a reviewed object list is "
+            "the only route for unmarked captures.",
+        ],
+        "private_values_echoed": False, "object_ids_echoed": False,
+    }
+
+
+def _session_owners(root, *, key_provider=None):
+    from . import archive_services as services
+    by_id = _verified_claims(root, key_provider)
+    owners: dict[str, set[str]] = {}
+    for oid, _approval_id, claim in _capture_attributions(root, by_id):
+        presenter = claim.get("session_presenter") or {}
+        owner = presenter.get("work_session_ref")
+        if isinstance(owner, str) and SESSION.fullmatch(owner):
+            owners.setdefault(oid, set()).add(owner)
     _add_zet_usage_owners(root, by_id, owners, key_provider=key_provider)
     return owners
 
@@ -206,18 +300,31 @@ def _add_zet_usage_owners(root, by_id, owners, *, key_provider=None):
             continue
 
 
-def export_scope_list(root, *, output, sessions=(), object_lists=(), this_session=False, key_provider=None):
+_APPROVAL_ID = re.compile(r"approval_[0-9a-f]{32}\Z")
+
+
+def export_scope_list(root, *, output, sessions=(), object_lists=(), this_session=False, approval_ids=(),
+                      key_provider=None):
     from . import archive_services as services
     root = services.require_existing_archive_root(Path(root))
     chosen_sessions = set(sessions)
-    if this_session or not (sessions or object_lists):
+    if this_session or not (sessions or object_lists or approval_ids):
         chosen_sessions.add(os.environ.get("WOM_WORK_SESSION_REF"))
     if any(not isinstance(s, str) or not SESSION.fullmatch(s) for s in chosen_sessions):
         raise ObjectStorageScopeError("object_storage_session_scope_required")
+    approval_ids = tuple(dict.fromkeys(approval_ids))
+    if any(not isinstance(a, str) or not _APPROVAL_ID.fullmatch(a) for a in approval_ids):
+        raise ObjectStorageScopeError("object_storage_scope_approval_id_invalid")
     owners = _session_owners(root, key_provider=key_provider)
     available = {r["object_id"] for r in services.load_manifest_records(root)
                  if isinstance(r, dict) and OID.fullmatch(str(r.get("object_id") or ""))}
     selected = {oid for oid, sessions_for_oid in owners.items() if chosen_sessions & sessions_for_oid}
+    # v0.4.67 (beta letter 185): captures approved through a window have no
+    # session mark; the person names the exact approvals instead.
+    approval_facts = {}
+    if approval_ids:
+        by_approval, approval_facts = _approval_objects(root, approval_ids, key_provider=key_provider)
+        selected.update(by_approval)
     for name in object_lists:
         selected.update(resolve_scope(root, object_list=name).object_ids)
     if not selected <= available:
@@ -232,12 +339,26 @@ def export_scope_list(root, *, output, sessions=(), object_lists=(), this_sessio
             handle.write(payload)
             handle.flush()
             os.fsync(handle.fileno())
-    return {"schema": "wom-kit/object-storage-scope-list/v1", "ok": bool(selected),
+    result = {"schema": "wom-kit/object-storage-scope-list/v1", "ok": bool(selected),
             "selected_object_count": len(selected), "other_session_excluded_count": len((set(owners) & available) - selected),
             "shared_object_count": sum(len(owners.get(oid, ())) > 1 for oid in selected),
             "unattributed_object_count": len(available - set(owners)), "evidence_scan_complete": True,
             "list_written": bool(selected), "list_sha256": "sha256:" + hashlib.sha256(payload).hexdigest(),
             "private_values_echoed": False, "next_command": "object-storage-upload --object-list <private-list> --dry-run"}
+    if approval_ids:
+        result["approvals"] = {
+            "named_count": len(approval_ids),
+            "found_count": sum(f["found"] for f in approval_facts.values()),
+            "succeeded_capture_count": sum(f["found"] and f["capture_operation"] and f["succeeded"]
+                                           for f in approval_facts.values()),
+            "without_session_mark_count": sum(f["found"] and not f["session_marked"] for f in approval_facts.values()),
+            "object_count": sum(f["object_count"] for f in approval_facts.values()),
+            "approvals_with_no_valid_capture_receipt_count": sum(
+                f["found"] and f["capture_operation"] and f["succeeded"] and f["object_count"] == 0
+                for f in approval_facts.values()),
+            "selection_basis": "verified_capture_receipt_naming_a_mac_verified_succeeded_capture_claim",
+        }
+    return result
 
 
 def resolve_scope(root, *, only=None, object_list=None, captured_by_session=None,

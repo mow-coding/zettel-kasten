@@ -1,5 +1,18 @@
 # 업그레이드 가이드
 
+## v0.4.67 막힌 업로드 미리보기의 이유 설명과 승인창 등록의 정확한 선택 경로
+
+공개된 뒤 기존 프로젝트는 공식 업데이트 절차를 쓰세요. writer_unavailable로 끝난 업로드 미리보기가 저장소 라벨 원인을 네 가지 중 하나로 알려 주고 등록된 라벨을 보여 줍니다. 승인창으로 승인한 등록은 object-storage-scope-list --approval-id로 승인 번호를 적어 정확히 고를 수 있습니다. 설치만으로 archive는 바뀌지 않습니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0467-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.67/wom_kit-0.4.67-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
 ## v0.4.66 대화별 Git 백업에 그 대화의 제텔-오브제 연결 포함
 
 공개된 뒤 기존 프로젝트는 공식 업데이트 절차를 쓰세요. 대화별 Git 백업이 그 대화의 제텔-오브제 연결 산출물을 고릅니다. 연결 영수증, 연결 전 사본, 사용 기록, 그리고 남은 변경이 정확히 그 연결뿐인 제텔입니다. 공유 오브제 장부는 계속 보관함 전체 백업으로만 올립니다. 설치만으로 archive는 바뀌지 않습니다.
