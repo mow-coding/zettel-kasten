@@ -4,6 +4,11 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.4.67 - 2026-10-06
+
+- Beta letter 185: an `object-storage-upload --dry-run` that ends `writer_unavailable` carries `writer_unavailable_explained` (one of four store-label categories, what it is not, that scope and manifest were not evaluated, plain sentences) and `preservation_relation` (a Git backup never holds objet bytes; the remote preservation state is its own fact).
+- `object-storage-scope-list --approval-id <id>` (repeatable) adds the objets captured under exactly those approvals, also when the approval was given through a window and carries no session mark; the result counts found, succeeded, unmarked and receipt-less approvals. When `--this-session` selects nothing, the upload refusal counts the captures without a session mark and gives this route.
+
 ## v0.4.66 - 2026-10-06
 
 - Beta letter 184, part 2: a session-scoped Git backup selects the session's own zettel-objet link outputs (producer `session_claimed_zettel_objet_link_output`, scope schema v5): the link receipt, the before-snapshot, the MAC'd session-object-usage record, and the changed zettel when Git's HEAD is the recorded preimage, the worktree is exactly that session's chain of links and the parsed difference is only the appended assets and `updated_at`.

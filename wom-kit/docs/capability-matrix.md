@@ -1,9 +1,9 @@
 ﻿# WOM-kit Capability Matrix
 
-Current v0.4.66 candidate: a conversation's zettel-objet links in its own Git backup (letter 184): a session-scoped Git backup that selects the session's own zettel-objet link outputs: the changed zettel when it is exactly those links, the link receipt, the before-snapshot and the usage record. [Release scope](releases/v0.4.66.md). Other ongoing requests are not included in this claim.
-Version: v0.4.66 implementation and release scope
+Current v0.4.67 candidate: a blocked upload preview says why, and window-approved captures get an exact route (letter 185): an upload preview that names which of four store-label causes made the writer unavailable and keeps Git backup apart from remote preservation, and object-storage-scope-list --approval-id for captures approved through a window. [Release scope](releases/v0.4.67.md). Other ongoing requests are not included in this claim.
+Version: v0.4.67 implementation and release scope
 
-Status: v0.4.66 candidate: a conversation's zettel-objet links in its own Git backup (letter 184); [release scope](releases/v0.4.66.md).
+Status: v0.4.67 candidate: a blocked upload preview says why, and window-approved captures get an exact route (letter 185); [release scope](releases/v0.4.67.md).
 
 Status: v0.4.36 no-dialog grants, letter-168, and session-owned writes truth
 Date: 2026-09-04

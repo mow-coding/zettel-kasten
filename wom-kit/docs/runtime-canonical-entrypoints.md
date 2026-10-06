@@ -1,7 +1,7 @@
 # Runtime Canonical Entry Points
 
-Current v0.4.66 candidate: a conversation's zettel-objet links in its own Git backup (letter 184): a session-scoped Git backup that selects the session's own zettel-objet link outputs: the changed zettel when it is exactly those links, the link receipt, the before-snapshot and the usage record. [Release scope](releases/v0.4.66.md). Other ongoing requests are not included in this claim.
-Status: v0.4.66 candidate: a conversation's zettel-objet links in its own Git backup (letter 184); [release scope](releases/v0.4.66.md).
+Current v0.4.67 candidate: a blocked upload preview says why, and window-approved captures get an exact route (letter 185): an upload preview that names which of four store-label causes made the writer unavailable and keeps Git backup apart from remote preservation, and object-storage-scope-list --approval-id for captures approved through a window. [Release scope](releases/v0.4.67.md). Other ongoing requests are not included in this claim.
+Status: v0.4.67 candidate: a blocked upload preview says why, and window-approved captures get an exact route (letter 185); [release scope](releases/v0.4.67.md).
 
 Status: v0.4.36 no-dialog grants, letter-168, and session-owned writes truth
 
@@ -384,17 +384,17 @@ environment:
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0466-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0467-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.66/wom_kit-0.4.66-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.67/wom_kit-0.4.67-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-Require exactly `archive 0.4.66` from a new process. This does not update the
+Require exactly `archive 0.4.67` from a new process. This does not update the
 project-local WOM-kit source mirror or change a project pin. Those effects
 require the separate reviewed `project-version-update` plan and native
 approval, or its authenticated same-context resume after interruption.
