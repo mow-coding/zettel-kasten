@@ -20,6 +20,10 @@
 
 `object-storage-scope-list <archive-root> --this-session --output <private-list-outside-archive>`로 정확한 객체 목록을 만든다. 다른 세션과 기존 목록도 명시적으로 추가할 수 있다. 새 목록은 기존 파일을 덮어쓰지 않는다. 개인 목록과 원본 피드백은 공개 저장소에 올리지 않는다.
 
+승인창으로 승인한 등록(권한 부여 전)은 세션 표시가 없어 어느 세션에도 귀속되지 않는다. 이때는 `--approval-id <등록 승인 번호>`를 반복해 적어 그 승인의 등록 영수증에 결속된 객체만 목록에 넣는다(v0.4.67). 결과의 `approvals`에 찾은 승인 수, 성공한 등록 수, 세션 표시 없는 수, 객체 수가 나온다. `--this-session`이 아무것도 고르지 못하면 업로드 결과의 `next_safe_actions`가 세션 표시 없는 등록 건수와 이 경로를 알려 준다.
+
+업로드 미리보기가 `writer_unavailable`로 끝나면 저장소 라벨 검사에서 멈춘 것이다. `writer_unavailable_explained.category`가 네 가지 중 무엇인지(전송 없는 공급자, 안전하지 않은 라벨, 라벨 미등록, 등록 정보 불일치)와 `registered_store_refs`(등록된 라벨)를 읽고 등록된 라벨로 다시 실행한다. writer 미설치, 다른 writer 실행 중, 잠금, 자격증명, 세션 범위 문제가 아니다. `preservation_relation`은 Git 백업과 원본 원격 보존이 별개임을 보여 준다.
+
 업로드를 완료하면 `offload_handoff`에 업로드한 동일 객체 목록과 지문이 나온다. 이 목록으로 `object-storage-offload --object-list <private-list> --dry-run`을 확인한 뒤 별도로 실행한다. 업로드만 요청하면 로컬 파일을 삭제하지 않는다. 기본 `--min-age-days 0`은 날짜 필터 없음이며 날짜 미상도 포함한다. 사용자가 직접 지정한 나이 필터와 다른 보존 조건은 결과의 제외 건수로 확인한다.
 
 원격 보존은 전체 다운로드 SHA·크기와 같은 응답의 강한 ETag를 결합한다. 다음 검사는 조건부 HEAD로 같은 바이트 세대인지 확인한다. 약한 ETag나 옛 증거는 필요할 때 한 번 스트리밍 검증하며 원본을 로컬로 복원하지 않는다. 같은 활동 실행의 하위 업로드·비우기는 검증 근거를 공유한다. 연결 실패·원격 변경은 삭제 성공으로 처리하지 않는다. [R2 공식 API](https://developers.cloudflare.com/r2/api/s3/api/#implemented-object-level-operations)

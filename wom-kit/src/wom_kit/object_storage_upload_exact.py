@@ -438,6 +438,43 @@ class ObjectStorageUploadPlan:
             "review_required": ["object_storage_upload_review_required"],
         }[state]
         next_safe_actions: list[str] = []
+        # v0.4.67 (beta letter 185): writer_unavailable has exactly four
+        # causes, none of which is a missing writer, a running writer, a lock,
+        # a credential or the session; say which one and what to do.
+        writer_explanations = {
+            "provider_unsupported": (
+                "provider_kind_has_no_live_transport",
+                "The --provider-kind has no live transport in this version; only cloudflare-r2 and generic-s3 can upload."),
+            "store_ref_invalid": (
+                "store_label_not_a_safe_label",
+                "The --store-ref is not a safe store label (letters, digits, dot, dash, underscore)."),
+            "store_setup_missing": (
+                "no_store_registration_under_this_label",
+                "No store registration exists under this --store-ref for this provider kind. A label seen in the "
+                "ledger is not necessarily the registered one; the registered labels are listed in registered_store_refs."),
+            "store_setup_mismatch": (
+                "store_registration_exists_but_its_facts_differ",
+                "A registration exists under this label but its recorded facts do not match this provider kind or "
+                "label; inspect it with archive object-storage <archive-root> --dry-run before anything else."),
+        }
+        if state == "writer_unavailable":
+            category, meaning = writer_explanations.get(
+                self.writer_unavailable_reason or "", ("unknown", "The writer line failed for an unlisted reason."))
+            writer_block = {
+                "category": category, "reason": self.writer_unavailable_reason, "meaning": meaning,
+                "is_not": ["writer_not_installed", "another_writer_running", "lock_held", "credential_problem",
+                           "session_scope_problem", "manifest_or_index_problem"],
+                "checked_before_the_writer_line": False, "scope_evaluated": False, "manifest_read": False,
+                "plain_summary": [
+                    "The upload preview stopped at the first check, the store label. " + meaning,
+                    "Nothing after that was evaluated: not this conversation's object selection, not the ledger, "
+                    "not the credentials. No upload, no credential read and no deletion happened.",
+                    "The Git backup you may have completed is separate: a Git backup never holds objet bytes, so "
+                    "their remote preservation has not started.",
+                ],
+            }
+        else:
+            writer_block = None
         if state == "writer_unavailable" and self.writer_unavailable_reason == "store_setup_missing":
             # v0.4.36 (beta letter 168 ②): the registration may exist under
             # another label; say so instead of "register the store".
@@ -465,6 +502,17 @@ class ObjectStorageUploadPlan:
             **(self.scope.summary(int(self.inventory.get("unique_object_count") or 0)) if self.scope else {"scope_kind": "legacy_all_sessions"}),
             "ok": self.approveable,
             "state": state,
+            "writer_unavailable_explained": writer_block,
+            # v0.4.67 (beta letter 185): Git backup completion and remote
+            # preservation of objet bytes are two different facts.
+            "preservation_relation": {
+                "git_backup_covers_objet_bytes": False,
+                "remote_preservation_state": ("blocked_before_plan" if state == "writer_unavailable"
+                                              else "planned_not_performed" if self.approveable
+                                              else "nothing_to_upload" if state == "no_new_bytes_to_upload"
+                                              else "review_required"),
+                "remote_preservation_performed_by_this_command": False,
+            },
             "reason_codes": reason_codes,
             "writer_state": self.writer_state,
             "writer_unavailable_reason": self.writer_unavailable_reason,
