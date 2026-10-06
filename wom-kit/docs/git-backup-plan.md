@@ -257,7 +257,7 @@ as unavailable in v0.4.2 even when a human can access it through another Git
 client. Do not weaken the observer or place a token in the URL to work around
 that boundary.
 
-Since v0.4.65 `git-backup-plan` itself defaults to `--credential-mode stored`
+Since v0.4.66 `git-backup-plan` itself defaults to `--credential-mode stored`
 (letter 177: the anonymous default reported every private backup remote as
 not observable); pass `--credential-mode anonymous` for a public repository.
 When the remote cannot be read, the plan's `next_safe_actions` names the next
@@ -456,13 +456,17 @@ documents or prove source/objet byte custody. No eligible outputs is a completed
 classification, not a successful backup. Do not use metadata backup to justify
 source deletion or whole-archive completion.
 
-Since v0.4.65 a CLI preview also carries `session_backup_coverage`: the
+Since v0.4.66 a CLI preview also carries `session_backup_coverage`: the
 selected outputs by kind, the roles of every Git-changed path (fixed labels,
 never a path), and this session's own succeeded approvals by operation with
 whether their Git-managed changes are `session_ownership_provable`,
 `no_git_managed_output` or `not_provable_as_session_owned_yet`. Objet
-registration and zettel-objet links are in the last group: their changed
-zettels, ledger rows and receipts stay uncommitted and are not selected. The
+registration is in the last group: its ledger rows and capture receipts stay
+uncommitted and are not selected. Since v0.4.66 a session's zettel-objet
+links are selected: the link receipt, the before-snapshot, the usage record,
+and the changed zettel when Git's HEAD is the recorded preimage and the
+worktree is exactly that session's links. A zettel with any other pending
+edit or another conversation's link stays unselected. The
 objet ledger is shared by every conversation and is left out by design; it
 is backed up only by the archive-wide `git-backup-plan`, after the person
 agrees to include every conversation's pending changes. `long_run_guidance`

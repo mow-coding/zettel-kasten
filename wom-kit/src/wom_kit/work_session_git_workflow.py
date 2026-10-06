@@ -291,9 +291,16 @@ def _partition_producer_proofs(prepared):
             intake.append(proof)
         elif proof["producer"] == "authenticated_local_recovery_document_output":
             documents.append(proof)
+        elif proof["producer"] == "session_claimed_zettel_objet_link_output":
+            continue  # v0.4.66: handled by _link_producer_proofs
         else:
             raise WorkSessionGitWorkflowError("work_session_git_original_evidence_invalid")
     return human, intake, documents
+
+
+def _link_producer_proofs(prepared):
+    return [proof for proof in prepared.session_scope.document()["producer_proofs"]
+            if proof["producer"] == "session_claimed_zettel_objet_link_output"]
 
 
 def _private_proof_changes(prepared):
@@ -347,6 +354,16 @@ def _authenticate_proofs(prepared, store, claim, held):
             store.root, held=held, proofs=documents, private_changes=_private_proof_changes(prepared), claim=claim,
         )
         if observed != documents:
+            raise WorkSessionGitWorkflowError("work_session_git_original_evidence_invalid")
+    links = _link_producer_proofs(prepared)
+    if links:
+        # v0.4.66 (letter 184): the Git claim itself re-audits every original
+        # link claim and usage record, and the zettel bytes, before a write.
+        from . import work_session_link_git_provenance as link_provenance
+        observed = link_provenance._revalidate_link_proofs_with_claim_held(
+            store.root, held=held, proofs=links, private_changes=_private_proof_changes(prepared), claim=claim,
+        )
+        if observed != links:
             raise WorkSessionGitWorkflowError("work_session_git_original_evidence_invalid")
 
 
@@ -622,6 +639,24 @@ def _finish(prepared, context, claim, held, *, completed):
             # ownership of any other file, revision or unrelated change.
             document_provenance_evaluated=bool(documents),
             whole_document_ownership_verified=bool(selected_documents),
+        )
+    links = [proof for proof in _link_producer_proofs(frozen) if proof["change_ref"] in selected_refs]
+    if links:
+        # v0.4.66 (letter 184): committed link outputs of this session. The
+        # commit covers exactly those files; the shared objet ledger and the
+        # objet bytes are not part of it.
+        linked_zettels = sum(proof["output_kind"] == "linked_zettel_document" for proof in links)
+        non_receipts = sum(proof["output_kind"] in ("linked_zettel_document", "zettel_link_before_snapshot")
+                           for proof in links)
+        result.update(
+            status="session_documents_backed_up" if linked_zettels or result["status"] == "session_documents_backed_up"
+                   else "session_outputs_backed_up",
+            selected_output_count=len(selected_refs),
+            selected_receipt_count=result["selected_receipt_count"] - non_receipts,
+            selected_link_output_count=len(links), selected_linked_zettel_count=linked_zettels,
+            receipt_only=result.get("receipt_only", True) and not non_receipts,
+            document_provenance_evaluated=True,
+            source_bytes_backed_up=False, artifact_capture_performed=False,
         )
     return result
 
@@ -901,6 +936,12 @@ def _original_git_proof_image_held(prepared, store, held):
         images.extend(("document", *image) for image in
             document_provenance._original_document_proof_images_held(
                 store.root, held=held, proofs=documents, private_changes=_private_proof_changes(prepared)))
+    links = _link_producer_proofs(prepared)
+    if links:
+        from . import work_session_link_git_provenance as link_provenance
+        images.extend(("link", *image) for image in
+            link_provenance._original_link_proof_images_held(
+                store.root, held=held, proofs=links, private_changes=_private_proof_changes(prepared)))
     return tuple(images)
 
 
@@ -936,6 +977,13 @@ def _authenticate_original_git_review_proofs_held(prepared, store, routing, sele
         observed = document_provenance._revalidate_document_proofs_held(
             store.root, held=held, proofs=documents, private_changes=private_changes, key_provider=key_provider)
         if observed != documents:
+            raise WorkSessionGitWorkflowError("work_session_git_original_evidence_invalid")
+    links = _link_producer_proofs(prepared)
+    if links:
+        from . import work_session_link_git_provenance as link_provenance
+        observed = link_provenance._revalidate_link_proofs_held(
+            store.root, held=held, proofs=links, private_changes=private_changes, key_provider=key_provider)
+        if observed != links:
             raise WorkSessionGitWorkflowError("work_session_git_original_evidence_invalid")
     if _original_git_proof_image_held(prepared, store, held) != image:
         raise WorkSessionGitWorkflowError("work_session_git_changed")

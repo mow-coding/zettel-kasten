@@ -72,18 +72,19 @@ class CoverageBlockTests(unittest.TestCase):
         self.assertEqual(block["changed_paths_by_role"]["objet_ledger"], 1)
         self.assertEqual(block["changed_path_total"], 87)
         rows = {row["operation"]: row for row in block["session_operations"]["operations"]}
+        # v0.4.66: zettel-objet links are provable; objet registration is not yet.
         self.assertEqual(rows["zettel_objet_link"],
                          {"operation": "zettel_objet_link", "succeeded_approval_count": 43,
-                          "git_changes": "not_provable_as_session_owned_yet"})
+                          "git_changes": "session_ownership_provable"})
         self.assertEqual(rows["objet_capture_batch"]["git_changes"], "not_provable_as_session_owned_yet")
         self.assertEqual(rows["source_intake_batch"]["git_changes"], "session_ownership_provable")
         self.assertEqual(rows["git_backup"]["git_changes"], "no_git_managed_output")
-        self.assertEqual(block["session_operations"]["approval_count_whose_git_changes_are_not_selected"], 64)
+        self.assertEqual(block["session_operations"]["approval_count_whose_git_changes_are_not_selected"], 21)
         self.assertEqual(block["session_operations"]["reason_code"],
                          "no_session_bound_whole_file_proof_for_this_operation")
         text = " ".join(block["plain_summary"])
         self.assertIn("21 objet_capture_batch", text)
-        self.assertIn("43 zettel_objet_link", text)
+        self.assertNotIn("43 zettel_objet_link", text)
         self.assertIn("NOT in this selection", text)
         self.assertIn("Objet bytes are never part of a Git backup", text)
         self.assertFalse(block["object_bytes"]["included_in_git_backup"])

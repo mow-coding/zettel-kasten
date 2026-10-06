@@ -188,6 +188,9 @@ def _project_mcp_git_backup_result(result, *, mode):
         "authenticated_intake_original_count", "unverified_intake_context_count", "commit_count",
         "selected_document_count", "document_control_count", "authenticated_recovery_count",
         "unverified_document_control_count", "overlapping_document_count",
+        "selected_link_output_count", "selected_linked_zettel_count",
+        "authenticated_link_approval_count", "accepted_link_receipt_count",
+        "linked_zettel_candidate_count", "linked_zettel_not_selected_count",
     ):
         item = value.get(key)
         if type(item) is int and 0 <= item <= 100000:

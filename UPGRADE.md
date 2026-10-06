@@ -1,5 +1,18 @@
 # Upgrade Guide
 
+## v0.4.66 a conversation's zettel-objet links in its own Git backup
+
+After publication, use the official project update flow. A session-scoped Git backup now selects that conversation's zettel-objet link outputs: the link receipt, the saved copy from before the link, the usage record, and the changed zettel when its pending change is exactly those links. The shared objet ledger stays archive-wide. No archive changes on install.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0466-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.66/wom_kit-0.4.66-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
 ## v0.4.65 what a conversation's Git backup preview covers
 
 After publication, use the official project update flow. A session-scoped Git backup preview now explains what it selected, which of the conversation's operations are outside the selection (objet registration and zettel-objet links today), and how far a long preview has got. No archive changes on install.

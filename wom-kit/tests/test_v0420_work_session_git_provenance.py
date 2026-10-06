@@ -208,7 +208,9 @@ class ReceiptGitProvenanceTests(unittest.TestCase):
         self.assert_partition(snapshot, selection)
         self.assertEqual(selection.public_summary()["selected_receipt_count"], 1)
         self.assertEqual(selection.public_summary()["unverified_receipt_candidate_count"], 0)
-        self.assertEqual(self.key.create_if_missing, [False])
+        # v0.4.66: the link-output adapter uses the same explicit provider once more.
+        self.assertEqual(set(self.key.create_if_missing), {False})
+        self.assertGreaterEqual(len(self.key.create_if_missing), 1)
         self.assertFalse(self.key.in_consumer)
         self.assertEqual(self.native.calls, native_calls)
         self.assertEqual(self.evidence_bytes(), before)

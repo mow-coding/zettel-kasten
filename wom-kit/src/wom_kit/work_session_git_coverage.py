@@ -33,6 +33,9 @@ PROVEN_OPERATIONS = {
     "source_intake_batch": "authenticated_source_intake_batch_output",
     "source_intake_record": "authenticated_source_intake_record_output",
     "local_recovery": "authenticated_local_recovery_document_output",
+    # v0.4.66: the changed zettel, link receipt, before-snapshot and usage
+    # record. The objet ledger stays archive-wide by design.
+    "zettel_objet_link": "session_claimed_zettel_objet_link_output",
 }
 # Operations that write no Git-managed archive file of their own, or whose
 # effects are remote or outside the archive tree.

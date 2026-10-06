@@ -1,6 +1,6 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.4.65",
+  "version": "0.4.66",
   "source_of_truth": "wom-kit source resource directories",
   "file_count": 180,
   "files": [
@@ -823,8 +823,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/storage-scope.md",
       "packaged": "templates/ai-runtime/wom-archive/references/storage-scope.md",
-      "bytes": 11071,
-      "sha256": "3d60f16b37e479efc47ff20fdf391bf8093ab6d20427060db39b29782249685b"
+      "bytes": 11209,
+      "sha256": "91253b8fb884f4387c4e6e1d4ba301c4764f146a874ea1645b3bb87ce187e2c9"
     },
     {
       "source": "templates/company/AGENTS.md",
@@ -1079,10 +1079,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.4.65.md",
-      "packaged": "release-notes/v0.4.65.md",
-      "bytes": 2692,
-      "sha256": "c10ffb90ff076cf31ee28d9be45cbd865a0d3dfccb38f3d82bae6fa55415816f"
+      "source": "docs/releases/v0.4.66.md",
+      "packaged": "release-notes/v0.4.66.md",
+      "bytes": 2751,
+      "sha256": "faa5fee55ea8781c26a9f9978678b7ac245c12c1fdf2ae41be3e37443d85c254"
     }
   ]
 }

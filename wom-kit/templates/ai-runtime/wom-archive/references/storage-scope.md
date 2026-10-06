@@ -36,7 +36,9 @@
   file is this session's output. Read `session_backup_coverage`: what was
   selected by kind, the roles of all changed paths, and this session's own
   approvals whose Git changes are `not_provable_as_session_owned_yet`
-  (objet registration, zettel-objet links and others). Report its
+  (objet registration and others). Since v0.4.66 this session's
+  zettel-objet links are selected: the changed zettel only when it has no
+  other pending edit and no other conversation's link. Report its
   `plain_summary`. A small selected count is not a backup of the whole
   conversation and not an error; the rest stays uncommitted. Do not rerun
   the preview to get a different answer, and do not commit by hand. Git
