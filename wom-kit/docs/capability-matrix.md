@@ -1,9 +1,9 @@
 ﻿# WOM-kit Capability Matrix
 
-Current v0.4.67 candidate: a blocked upload preview says why, and window-approved captures get an exact route (letter 185): an upload preview that names which of four store-label causes made the writer unavailable and keeps Git backup apart from remote preservation, and object-storage-scope-list --approval-id for captures approved through a window. [Release scope](releases/v0.4.67.md). Other ongoing requests are not included in this claim.
-Version: v0.4.67 implementation and release scope
+Current v0.4.68 candidate: capture receipts are read where the approval really is (letter 186): objet-capture receipts attributed by their nested approval reference, so --approval-id and --this-session select captured objets, with every rejected receipt counted by a fixed reason. [Release scope](releases/v0.4.68.md). Other ongoing requests are not included in this claim.
+Version: v0.4.68 implementation and release scope
 
-Status: v0.4.67 candidate: a blocked upload preview says why, and window-approved captures get an exact route (letter 185); [release scope](releases/v0.4.67.md).
+Status: v0.4.68 candidate: capture receipts are read where the approval really is (letter 186); [release scope](releases/v0.4.68.md).
 
 Status: v0.4.36 no-dialog grants, letter-168, and session-owned writes truth
 Date: 2026-09-04
