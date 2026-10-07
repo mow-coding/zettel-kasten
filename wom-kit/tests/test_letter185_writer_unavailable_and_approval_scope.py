@@ -40,9 +40,9 @@ class _Fixture(scope_fixture.ScopeTests):
         claim = self._capture_receipt(raw, owner or A, number)
         receipt_dir = self.root / "receipts" / "objet-capture"
         path = next(p for p in receipt_dir.glob("*.json") if json.loads(p.read_text(encoding="utf-8"))
-                    ["exact_human_approval"]["approval_id"] == str(number))
+                    ["exact_human_approval"]["exact_human_approval"]["approval_id"] == str(number))
         document = json.loads(path.read_text(encoding="utf-8"))
-        document["exact_human_approval"]["approval_id"] = approval_id
+        document["exact_human_approval"]["exact_human_approval"]["approval_id"] = approval_id
         path.write_text(json.dumps(document), encoding="utf-8")
         claim["approval_id"] = approval_id
         claim["operation"] = "objet_capture_batch"
@@ -139,6 +139,7 @@ class ApprovalScopeListTests(_Fixture):
         self.assertEqual(result["approvals"], {
             "named_count": 1, "found_count": 1, "succeeded_capture_count": 1, "without_session_mark_count": 1,
             "object_count": 1, "approvals_with_no_valid_capture_receipt_count": 0,
+            "receipt_count_naming_named_approvals": 1, "rejections": {},
             "selection_basis": "verified_capture_receipt_naming_a_mac_verified_succeeded_capture_claim"})
         self.assertEqual(output.read_text(encoding="utf-8").split(), [up._oid(self.a)])
         self.assertNotIn(up._oid(self.a), json.dumps(result))
