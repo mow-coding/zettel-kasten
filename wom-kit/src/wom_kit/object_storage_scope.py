@@ -95,13 +95,41 @@ def _verified_claims(root, key_provider=None):
     return {c["approval_id"]: c for c in listing["claims"]}
 
 
-def _capture_attributions(root, by_id):
+REJECTION_REASONS = ("envelope_invalid", "approval_reference_missing", "claim_not_found", "claim_context_mismatch",
+                     "claim_not_succeeded_capture", "item_not_completed")
+
+
+def _approval_reference(receipt):
+    """The approval reference of an objet-capture receipt.
+
+    v0.4.68 (beta letter 186): a real receipt carries the operation approval
+    receipt, whose reference is NESTED (exact_human_approval.exact_human_approval).
+    The flat shape is accepted for synthetic or future receipts. Before this
+    fix the nested reference was read as absent, so no real capture receipt
+    was ever attributed, by session or by approval."""
+    outer = receipt.get("exact_human_approval")
+    if not isinstance(outer, dict):
+        return None
+    inner = outer.get("exact_human_approval")
+    reference = inner if isinstance(inner, dict) else outer
+    approval_id, context = reference.get("approval_id"), reference.get("context_sha256")
+    if not isinstance(approval_id, str) or not isinstance(context, str):
+        return None
+    if isinstance(inner, dict) and outer.get("operation") not in CAPTURE_OPERATIONS:
+        return None
+    return {"approval_id": approval_id, "context_sha256": context}
+
+
+def _capture_attributions(root, by_id, *, rejections=None, by_approval=None):
     """(object_id, approval_id, claim) for every valid capture receipt item whose
     approval is a MAC-verified succeeded capture claim with the same context.
 
     v0.4.67 (beta letter 185): shared by the session selector and the
     approval selector. A claim approved through a window has no session mark
-    but is still this exact approval; it is attributable by approval id."""
+    but is still this exact approval; it is attributable by approval id.
+    v0.4.68 (beta letter 186): ``rejections`` collects why receipts or their
+    items were not attributed, as counts by fixed reason; ``by_approval``
+    collects per-approval receipt facts."""
     from . import archive_services as services
 
     documents, _names, complete, _authorities = services._staged_cleanup_receipt_documents(
@@ -110,18 +138,34 @@ def _capture_attributions(root, by_id):
         raise ObjectStorageScopeError("object_storage_scope_evidence_incomplete")
     archive_id = services.read_archive_id(root)
     rows = []
+
+    def reject(reason, approval_id=None):
+        if rejections is not None:
+            rejections[reason] = rejections.get(reason, 0) + 1
+        if by_approval is not None and approval_id is not None:
+            entry = by_approval.setdefault(approval_id, {"receipts": 0, "rejected": {}})
+            entry["rejected"][reason] = entry["rejected"].get(reason, 0) + 1
+
     for filename, receipt in documents:
         if not services._staged_cleanup_valid_objet_receipt_envelope(receipt, filename=filename, archive_id=archive_id):
+            reject("envelope_invalid")
             continue
-        reference = receipt.get("exact_human_approval") or {}
-        if not isinstance(reference, dict):
+        reference = _approval_reference(receipt)
+        if reference is None:
+            reject("approval_reference_missing")
             continue
-        approval_id = reference.get("approval_id")
-        if not isinstance(approval_id, str):
-            continue
+        approval_id = reference["approval_id"]
+        if by_approval is not None:
+            by_approval.setdefault(approval_id, {"receipts": 0, "rejected": {}})["receipts"] += 1
         claim = by_id.get(approval_id)
-        if (not claim or claim.get("operation") not in CAPTURE_OPERATIONS
-                or claim.get("status") != "succeeded" or claim["context_sha256"] != reference.get("context_sha256")):
+        if not claim:
+            reject("claim_not_found", approval_id)
+            continue
+        if claim.get("context_sha256") != reference["context_sha256"]:
+            reject("claim_context_mismatch", approval_id)
+            continue
+        if claim.get("operation") not in CAPTURE_OPERATIONS or claim.get("status") != "succeeded":
+            reject("claim_not_succeeded_capture", approval_id)
             continue
         for item in receipt["items"]:
             oid = item.get("object_id")
@@ -131,6 +175,8 @@ def _capture_attributions(root, by_id):
                     and item.get("logical_key") == f"objects/sha256/{oid[7:9]}/{oid[7:]}"
                     and _CAPTURE_ACTIONS.get(item.get("planned_action")) == item.get("action")):
                 rows.append((oid, approval_id, claim))
+            else:
+                reject("item_not_completed", approval_id)
     return rows
 
 
@@ -138,16 +184,20 @@ def _approval_objects(root, approval_ids, *, key_provider=None):
     """Objects captured under exactly these approvals, by approval, with the
     claim facts that matter for the person: found, succeeded capture, session mark."""
     by_id = _verified_claims(root, key_provider)
-    attributions = _capture_attributions(root, by_id)
+    rejections, per_approval = {}, {}
+    attributions = _capture_attributions(root, by_id, rejections=rejections, by_approval=per_approval)
     objects, facts = {}, {}
     for approval_id in approval_ids:
         claim = by_id.get(approval_id)
+        seen = per_approval.get(approval_id, {"receipts": 0, "rejected": {}})
         facts[approval_id] = {
             "found": claim is not None,
             "capture_operation": bool(claim and claim.get("operation") in CAPTURE_OPERATIONS),
             "succeeded": bool(claim and claim.get("status") == "succeeded"),
             "session_marked": bool(claim and isinstance(claim.get("session_presenter"), dict)),
             "object_count": 0,
+            "receipt_count": seen["receipts"],
+            "rejections": dict(sorted(seen["rejected"].items())),
         }
     for oid, approval_id, _claim in attributions:
         if approval_id in facts:
@@ -166,7 +216,8 @@ def session_scope_diagnosis(root, session_ref, *, key_provider=None):
 
     root = services.require_existing_archive_root(Path(root))
     by_id = _verified_claims(root, key_provider)
-    attributions = _capture_attributions(root, by_id)
+    rejections = {}
+    attributions = _capture_attributions(root, by_id, rejections=rejections)
     this_session, other_sessions, unmarked_objects, unmarked_approvals = set(), set(), set(), set()
     for oid, approval_id, claim in attributions:
         presenter = claim.get("session_presenter") or {}
@@ -189,6 +240,7 @@ def session_scope_diagnosis(root, session_ref, *, key_provider=None):
         "captured_without_session_mark_count": len(unmarked_objects - this_session - other_sessions),
         "capture_approvals_without_session_mark_count": len(unmarked_approvals),
         "objects_without_valid_capture_receipt_count": len(manifest - attributed),
+        "capture_receipt_rejections": dict(sorted(rejections.items())),
         "session_mark_meaning": ("A capture approved through a window, before a grant, carries no session mark; it is "
                                  "not attributed to any session. The capture itself is complete and its receipt is valid."),
         "next_safe_actions": [
@@ -303,6 +355,14 @@ def _add_zet_usage_owners(root, by_id, owners, *, key_provider=None):
 _APPROVAL_ID = re.compile(r"approval_[0-9a-f]{32}\Z")
 
 
+def _sum_rejections(mappings):
+    total = {}
+    for mapping in mappings:
+        for reason, count in mapping.items():
+            total[reason] = total.get(reason, 0) + count
+    return dict(sorted(total.items()))
+
+
 def export_scope_list(root, *, output, sessions=(), object_lists=(), this_session=False, approval_ids=(),
                       key_provider=None):
     from . import archive_services as services
@@ -356,6 +416,10 @@ def export_scope_list(root, *, output, sessions=(), object_lists=(), this_sessio
             "approvals_with_no_valid_capture_receipt_count": sum(
                 f["found"] and f["capture_operation"] and f["succeeded"] and f["object_count"] == 0
                 for f in approval_facts.values()),
+            # v0.4.68 (beta letter 186): why a named approval yielded nothing,
+            # as counts by fixed reason, summed over the named approvals.
+            "receipt_count_naming_named_approvals": sum(f["receipt_count"] for f in approval_facts.values()),
+            "rejections": _sum_rejections(f["rejections"] for f in approval_facts.values()),
             "selection_basis": "verified_capture_receipt_naming_a_mac_verified_succeeded_capture_claim",
         }
     return result

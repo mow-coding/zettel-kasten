@@ -115,7 +115,16 @@ class ScopeTests(unittest.TestCase):
                    "selection_manifest_id": "selection:synthetic", "selection_manifest_sha256": "sha256:" + "d" * 64,
                    "items": items, "summary": archive_services.objet_capture_summary(items, approve=True),
                    "blockers": [], "warnings": [],
-                   "exact_human_approval": {"approval_id": str(number), "context_sha256": "sha256:" + "c" * 64}}
+                   # v0.4.68 (letter 186): the real receipt nests the reference inside the
+                   # operation approval receipt; the flat shape never existed in production.
+                   "exact_human_approval": {"schema_version": "wom-kit/operation-exact-human-approval/v0.1",
+                                            "operation": "objet_capture_batch",
+                                            "plan_sha256": "sha256:" + "e" * 64,
+                                            "target_binding_sha256": "sha256:" + "f" * 64,
+                                            "exact_human_approval": {
+                                                "schema_version": "wom-kit/exact-human-approval-reference/v0.1",
+                                                "approval_id": str(number), "context_sha256": "sha256:" + "c" * 64,
+                                                "approval_authority_sha256": "sha256:" + "a" * 64, "one_use": True}}}
         directory = self.root / archive_services.OBJET_CAPTURE_RECEIPTS_DIR
         directory.mkdir(parents=True, exist_ok=True)
         (directory / filename).write_text(json.dumps(receipt), encoding="utf-8")

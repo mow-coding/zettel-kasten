@@ -4,6 +4,11 @@ All notable public releases of `zettel-kasten`, `zet`, and `ZET` should be docum
 
 This project uses semantic versioning for public compatibility checkpoints.
 
+## v0.4.68 - 2026-10-07
+
+- Beta letter 186: a real objet-capture receipt keeps its approval reference inside the operation approval receipt (`exact_human_approval.exact_human_approval`); the selector read one level too high and attributed no real capture receipt, by approval (v0.4.67 route) or by session (since the session selector was written). The nested reference is now read; `object-storage-scope-list --approval-id` and `--this-session` attribute captured objets.
+- Every receipt or item that is not attributed is counted by a fixed reason (`envelope_invalid`, `approval_reference_missing`, `claim_not_found`, `claim_context_mismatch`, `claim_not_succeeded_capture`, `item_not_completed`) in the scope-list result and the session diagnosis; no id is echoed. The scope tests' synthetic receipt now has the real shape, and a new module verifies with receipts from the real capture writer.
+
 ## v0.4.67 - 2026-10-06
 
 - Beta letter 185: an `object-storage-upload --dry-run` that ends `writer_unavailable` carries `writer_unavailable_explained` (one of four store-label categories, what it is not, that scope and manifest were not evaluated, plain sentences) and `preservation_relation` (a Git backup never holds objet bytes; the remote preservation state is its own fact).

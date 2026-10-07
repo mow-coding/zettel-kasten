@@ -1,5 +1,18 @@
 # Upgrade Guide
 
+## v0.4.68 capture receipts are read where the approval really is
+
+After publication, use the official project update flow. Objet-capture receipts are now attributed by their nested approval reference, so object-storage-scope-list --approval-id and --this-session select the captured objets, and every rejected receipt is counted by reason. Nothing in the archive is rewritten. No archive changes on install.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0468-$womBootstrapNonce"
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.68/wom_kit-0.4.68-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
 ## v0.4.67 a blocked upload preview says why, and window-approved captures get an exact route
 
 After publication, use the official project update flow. A writer_unavailable upload preview now names its store-label cause and lists the registered labels; captures approved through a window can be selected by their approval ids with object-storage-scope-list --approval-id. No archive changes on install.
